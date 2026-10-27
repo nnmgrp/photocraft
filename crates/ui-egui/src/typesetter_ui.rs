@@ -1875,6 +1875,9 @@ impl TypesetterUi {
     fn render_settings_tab(&mut self, ui: &mut egui::Ui) {
         let t = Tokens::get(ui.ctx());
 
+        // В узком доке подписи и длинные пути должны переноситься, а не обрезаться.
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+
         ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
             ui.label(RichText::new(tl!("TYPESETTER BEHAVIOR")).size(11.0).color(t.text_dim).strong());
 
@@ -1912,9 +1915,9 @@ impl TypesetterUi {
             ui.label(RichText::new(tl!("GEOMETRY & CENTERING")).size(11.0).color(t.text_dim).strong());
 
             let avail_w = ui.available_width();
+            let slider_w = (ui.available_width() * 0.45).clamp(60.0, 130.0);
             if avail_w < 340.0 {
                 ui.label(RichText::new(tl!("Baseline shift:")).color(t.text));
-                let slider_w = (ui.available_width() - 8.0).max(120.0);
                 if ui.add_sized(
                     [slider_w, 20.0],
                     egui::Slider::new(&mut self.state.options.optical_baseline_factor, 0.0..=0.6)
@@ -1927,7 +1930,6 @@ impl TypesetterUi {
             } else {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(tl!("Baseline shift:")).color(t.text));
-                    let slider_w = (ui.available_width() - 8.0).max(120.0);
                     if ui.add_sized(
                         [slider_w, 20.0],
                         egui::Slider::new(&mut self.state.options.optical_baseline_factor, 0.0..=0.6)

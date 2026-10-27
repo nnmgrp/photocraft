@@ -488,6 +488,21 @@ pub struct Panels {
     /// floating window rather than a modal so the canvas stays usable while a gradient is edited.
     #[serde(default)]
     pub gradient_editor: bool,
+    /// Window > Canvas Capsule: floating contextual bar on the canvas.
+    #[serde(default = "yes")]
+    pub canvas_capsule: bool,
+    /// Window > TypeR Manga: manga typesetter and dialogue style presets.
+    #[serde(default = "yes")]
+    pub typesetter: bool,
+    /// Window > Pages: manga chapter pages manager and navigator.
+    #[serde(default = "yes")]
+    pub pages: bool,
+    /// Window > Left Dock: secondary panel dock on the left side beside toolbar.
+    #[serde(default = "yes")]
+    pub left_dock: bool,
+    /// Window > Bottom Dock: horizontal panel dock along the bottom.
+    #[serde(default = "yes")]
+    pub bottom_dock: bool,
 }
 
 impl Default for Panels {
@@ -511,6 +526,11 @@ impl Default for Panels {
             rail: true,
             menu_bar: true,
             gradient_editor: false,
+            canvas_capsule: true,
+            typesetter: true,
+            pages: true,
+            left_dock: true,
+            bottom_dock: true,
         }
     }
 }
@@ -1377,6 +1397,10 @@ pub struct UiState {
     /// Preferences ▸ Type ▸ Recent Fonts; de-duplicated.
     #[serde(default)]
     pub recent_fonts: Vec<String>,
+    #[serde(default)]
+    pub favorite_fonts: Vec<String>,
+    #[serde(default)]
+    pub chapter_folder_name: Option<String>,
     /// Inline type editing session, if any.
     #[serde(default)]
     pub text_edit: Option<TextEdit>,
@@ -1501,6 +1525,10 @@ pub struct UiState {
     /// Preset panels (Gradients, Patterns, Styles, Shapes, Tool Presets, Clone Source).
     #[serde(default)]
     pub presets_ui: crate::preset_panels::PresetUi,
+    #[serde(default)]
+    pub screentone_ui: crate::screentone_panel::ScreentoneUi,
+    #[serde(default)]
+    pub canvas_capsule: crate::canvas_capsule::CanvasCapsuleState,
     /// Character/Paragraph Styles, Glyphs and Check Spelling (see `type_panels_ui`).
     #[serde(default)]
     pub type_panels: crate::type_panels_ui::TypePanelsUi,
@@ -1533,6 +1561,8 @@ pub struct UiState {
     pub theme: crate::theme::ThemeKind,
     pub workspace: String,
     pub palette_open: bool,
+    #[serde(default)]
+    pub layer_search_open: bool,
     pub dock_tabs: DockTabs,
     /// Right-dock group order, heights and collapsed groups (see `dock`).
     #[serde(default)]
@@ -1540,6 +1570,10 @@ pub struct UiState {
     /// Authoritative custom panel membership and placement; legacy fields are compatibility projections.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub docking: Option<craft_ui::docking::Layout<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub docking_left: Option<craft_ui::docking::Layout<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub docking_bottom: Option<craft_ui::docking::Layout<String>>,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub docking_hidden: std::collections::BTreeMap<String, craft_ui::docking::Location<String>>,
     /// Invalidates in-flight gestures when a workspace is replaced.
@@ -1629,6 +1663,8 @@ impl Default for UiState {
             spring: None,
             recent_files: Vec::new(),
             recent_fonts: Vec::new(),
+            favorite_fonts: Vec::new(),
+            chapter_folder_name: None,
             text_edit: None,
             caret_blink_time: 0.0,
             text_edit_return_tool: None,
@@ -1658,6 +1694,8 @@ impl Default for UiState {
             actions: Default::default(),
             layer_comp_selected: None,
             presets_ui: Default::default(),
+            screentone_ui: Default::default(),
+            canvas_capsule: Default::default(),
             type_panels: Default::default(),
             analysis: Default::default(),
             timeline: Default::default(),
@@ -1684,9 +1722,12 @@ impl Default for UiState {
             theme: crate::theme::ThemeKind::ProMedium,
             workspace: "Essentials".into(),
             palette_open: false,
+            layer_search_open: false,
             dock_tabs: DockTabs::default(),
             dock: Default::default(),
             docking: None,
+            docking_left: None,
+            docking_bottom: None,
             docking_hidden: Default::default(),
             docking_generation: 0,
             docking_collapsed: Vec::new(),

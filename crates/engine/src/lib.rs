@@ -107,6 +107,8 @@ pub mod render_cmds;
 pub mod retouch_cmds;
 pub mod sample_cmds;
 pub mod sampler_cmds;
+pub mod screentone_cmds;
+pub mod typesetter;
 pub mod select_extra_cmds;
 pub mod select_mask_edits;
 pub mod selection_cmds;

@@ -51,6 +51,12 @@ mod camera_raw_scope_ui;
 pub mod camera_raw_ui;
 pub mod canvas;
 pub mod canvas_autoscroll;
+pub mod canvas_capsule;
+pub mod layer_search;
+pub mod pages_panel;
+pub mod screentone_gizmo;
+pub mod screentone_panel;
+pub mod typesetter_ui;
 mod canvas_popup;
 pub mod canvas_tool_menu;
 pub mod cas_transform;
@@ -693,6 +699,10 @@ pub struct PhotocraftApp {
     pub session: Session,
     pub ui: UiState,
     pub services: Services,
+    pub typesetter: typesetter_ui::TypesetterUi,
+    pub pages: pages_panel::PagesPanelState,
+    pub pages_thumbnails: HashMap<photocraft_doc::DocId, (u64, egui::TextureHandle)>,
+    pub(crate) screentone_gizmo: screentone_gizmo::Gizmo,
     /// Canvas caches per (document, display): CPU textures hold monitor values; the GPU
     /// canvas state is shared (`canvas::GPU_OUTPUT`).
     canvases: HashMap<(DocId, u32), canvas::CanvasCache>,
@@ -1022,6 +1032,10 @@ impl PhotocraftApp {
     pub fn new(mut session: Session, mut services: Services) -> Self {
         session.updates.check = services.check_updates.take();
         let mut app = Self {
+            typesetter: typesetter_ui::TypesetterUi::new(),
+            pages: pages_panel::PagesPanelState::new(),
+            pages_thumbnails: HashMap::new(),
+            screentone_gizmo: screentone_gizmo::Gizmo::default(),
             session,
             ui: UiState::default(),
             services,
@@ -1264,6 +1278,331 @@ impl PhotocraftApp {
         self.control_rx = Some(rx);
         self
     }
+
+    /// Обработка действий тайпсеттера: создание текстового слоя на активном холсте.
+    pub(crate) fn handle_typesetter_action(&mut self, action: typesetter_ui::TypesetterAction) {
+        let Some(st) = self.session.active() else {
+            self.ui.status = "Откройте или создайте документ для вставки текста".into();
+            self.ui.status_error = true;
+            return;
+        };
+
+        // 1. Приоритет: оптический центр выделенной области
+        let selection_center = st.doc.selection.as_ref().and_then(|sel| {
+            let bounds = sel.content_bounds();
+            if !bounds.is_empty() {
+                let cx = bounds.x0 as f32 + bounds.width() as f32 * 0.5;
+                // Сдвиг базовой линии вниз на ~0.35 размера шрифта для точной вертикальной центровки
+                let cy = bounds.y0 as f32 + bounds.height() as f32 * 0.5 + (action.preset.font_size * 0.35);
+                Some((cx, cy))
+            } else {
+                None
+            }
+        });
+
+        // 2. Если выделения нет: курсор мыши
+        // 3. Если курсор вне холста: геометрический центр документа
+        let (x, y) = if let Some(center) = selection_center {
+            center
+        } else if let Some([hx, hy]) = self.hover_doc {
+            (hx as f32, hy as f32)
+        } else {
+            (st.doc.size.width as f32 * 0.5, st.doc.size.height as f32 * 0.5)
+        };
+
+        // Готовим финальный текст (применяем ALL_CAPS если задано в стиле TypeR)
+        let final_text = if action.preset.all_caps {
+            action.text.to_uppercase()
+        } else {
+            action.text
+        };
+
+        // Разрешаем семейство шрифта: проверяем наличие на машине, иначе пробуем разрешить через PostScript
+        let resolved_family = {
+            let mut shared = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
+            if !action.preset.font_family.is_empty() && shared.fonts.has_family(&action.preset.font_family) {
+                action.preset.font_family.clone()
+            } else if !action.preset.font_postscript.is_empty() {
+                let r = shared.fonts.resolve_postscript(&action.preset.font_postscript);
+                if shared.fonts.has_family(&r.family) {
+                    r.family
+                } else if !action.preset.font_family.is_empty() {
+                    action.preset.font_family.clone()
+                } else {
+                    "Kurai Voice 2".to_string()
+                }
+            } else if !action.preset.font_family.is_empty() {
+                action.preset.font_family.clone()
+            } else {
+                "Kurai Voice 2".to_string()
+            }
+        };
+
+        let is_bold_style = action.preset.font_style.to_lowercase().contains("bold");
+        let is_italic_style = action.preset.font_style.to_lowercase().contains("italic")
+            || action.preset.font_style.to_lowercase().contains("oblique");
+
+        let style_name = if !action.preset.font_style.is_empty() && action.preset.font_style != "Regular" {
+            action.preset.font_style.clone()
+        } else if action.preset.bold && action.preset.italic {
+            "Bold Italic".to_string()
+        } else if action.preset.bold {
+            "Bold".to_string()
+        } else if action.preset.italic {
+            "Italic".to_string()
+        } else {
+            "Regular".to_string()
+        };
+
+        let faux_bold = action.preset.bold && !is_bold_style;
+        let faux_italic = action.preset.italic && !is_italic_style;
+        let weight = if action.preset.bold { 700 } else { 400 };
+
+        let mut type_params = serde_json::json!({
+            "x": x,
+            "y": y,
+            "text": final_text,
+            "size": action.preset.font_size,
+            "font": resolved_family,
+            "fontStyle": style_name,
+            "weight": weight,
+            "italic": action.preset.italic,
+            "fauxBold": faux_bold,
+            "fauxItalic": faux_italic,
+            "align": "center",
+            "verticalAlign": "center",
+            "tracking": action.preset.tracking,
+            "leading": action.preset.leading
+        });
+
+        if !action.preset.font_postscript.is_empty() {
+            type_params["postscriptName"] = serde_json::Value::String(action.preset.font_postscript.clone());
+        }
+
+        let res = self.run("type.create", type_params);
+
+        if let Ok(v) = res {
+            if let Some(layer_id) = v.get("layer").and_then(serde_json::Value::as_u64) {
+                if action.preset.stroke_width > 0.0 {
+                    let hex_color = format!(
+                        "#{:02x}{:02x}{:02x}",
+                        action.preset.stroke_color[0],
+                        action.preset.stroke_color[1],
+                        action.preset.stroke_color[2]
+                    );
+                    let _ = self.run(
+                        "layer.layerStyle.stroke",
+                        serde_json::json!({
+                            "layer": layer_id,
+                            "size": action.preset.stroke_width,
+                            "position": "outside",
+                            "color": hex_color,
+                            "opacity": (action.preset.stroke_color[3] as f32 / 2.55).round() as u32
+                        }),
+                    );
+                }
+            }
+            // Снимаем активное выделение (Deselect / Ctrl+D), чтобы сразу можно было выделить следующий баббл
+            let _ = self.run("select.deselect", serde_json::json!({}));
+        }
+    }
+
+    /// Отрисовка встроенной панели страниц главы (Pages Panel).
+    pub(crate) fn render_pages_panel(&mut self, ui: &mut egui::Ui) -> Option<pages_panel::PagesPanelAction> {
+        let active_doc_idx = self.session.active_index();
+        let total_docs = self.session.documents().len();
+        let ctx = ui.ctx().clone();
+
+        let mut items = Vec::with_capacity(total_docs);
+        for idx in 0..total_docs {
+            let (title, path, is_dirty, dimensions, doc_id, doc_rev) = {
+                let doc_state = match self.session.documents().get(idx) {
+                    Some(s) => s,
+                    None => continue,
+                };
+                (
+                    doc_state.doc.name.clone(),
+                    doc_state.path.as_deref().map(std::path::PathBuf::from),
+                    doc_state.is_dirty(),
+                    Some((doc_state.doc.size.width, doc_state.doc.size.height)),
+                    doc_state.doc.id,
+                    doc_state.revision,
+                )
+            };
+
+            // Get or create thumbnail texture (cached by document revision)
+            let thumbnail_texture = if let Some((cached_rev, handle)) = self.pages_thumbnails.get(&doc_id) {
+                if *cached_rev == doc_rev {
+                    Some(handle.id())
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            let thumbnail_texture = match thumbnail_texture {
+                Some(id) => Some(id),
+                None => {
+                    if let Some(doc_state) = self.session.documents().get(idx) {
+                        let buf = photocraft_compose::thumbnail_buffer(&doc_state.doc, 256);
+                        let (display, _) = canvas::canvas_display(self, &doc_state.doc, None);
+                        let img = canvas::display_image(display.as_deref(), &buf);
+                        let handle = ctx.load_texture(
+                            format!("pages-thumb-{}", doc_id.0),
+                            img,
+                            egui::TextureOptions::LINEAR,
+                        );
+                        let tex_id = handle.id();
+                        self.pages_thumbnails.insert(doc_id, (doc_rev, handle));
+                        Some(tex_id)
+                    } else {
+                        None
+                    }
+                }
+            };
+
+            let is_active = Some(idx) == active_doc_idx;
+            let mut info = pages_panel::PageItemInfo::new(idx, title, path, is_active);
+            info.is_dirty = is_dirty;
+            info.dimensions = dimensions;
+            info.thumbnail_texture = thumbnail_texture;
+
+            let page_num = info.detected_page;
+            info.total_lines = self.typesetter.state.lines.iter().filter(|l| l.page == page_num).count();
+            info.applied_lines = self.typesetter.state.lines.iter().filter(|l| l.page == page_num && l.is_applied).count();
+
+            items.push(info);
+        }
+
+        let chapter_folder_name = self.ui.chapter_folder_name.clone();
+        let is_left_dock_split = self.ui.docking_left.as_ref().map_or(false, |l| {
+            l.root.as_ref().map_or(false, |r| panel_docking::count_dock_panes(r) > 1)
+        });
+        let view_info = pages_panel::PagesViewInfo {
+            items,
+            active_doc_index: active_doc_idx,
+            chapter_folder_name,
+            is_left_dock_split,
+        };
+
+        self.pages.render_embedded(ui, &view_info)
+    }
+
+    /// Обработка пользовательских действий в панели страниц (выбор, закрытие, сортировка, открытие главы).
+    pub(crate) fn handle_pages_action(&mut self, action: pages_panel::PagesPanelAction) {
+        match action {
+            pages_panel::PagesPanelAction::SelectPage(idx) => {
+                if self.session.active_index() != Some(idx) {
+                    self.session.set_active(idx);
+                }
+                if self.pages.auto_sync_typer {
+                    if let Some(doc_state) = self.session.documents().get(idx) {
+                        let path = doc_state.path.as_deref().map(std::path::PathBuf::from);
+                        let title = &doc_state.doc.name;
+                        let target_page = path
+                            .as_deref()
+                            .and_then(|p| p.file_name())
+                            .and_then(|n| n.to_str())
+                            .and_then(pages_panel::parse_page_number_from_name)
+                            .or_else(|| pages_panel::parse_page_number_from_name(title))
+                            .unwrap_or(idx.saturating_add(1));
+
+                        if self.typesetter.state.current_page != target_page {
+                            self.typesetter.state.current_page = target_page;
+                            if let Some(pos) = self.typesetter.state.lines.iter().position(|l| l.page == target_page) {
+                                self.typesetter.state.current_line_idx = pos;
+                            }
+                        }
+                    }
+                }
+            }
+            pages_panel::PagesPanelAction::ClosePage(idx) => {
+                let _ = self.run("file.close", serde_json::json!({"document": idx}));
+            }
+            pages_panel::PagesPanelAction::OpenChapterFolder => {
+                if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                    let folder_name = folder.file_name().and_then(|n| n.to_str()).unwrap_or("Chapter").to_string();
+                    self.ui.chapter_folder_name = Some(folder_name);
+
+                    if let Ok(entries) = std::fs::read_dir(&folder) {
+                        let mut image_paths: Vec<std::path::PathBuf> = Vec::new();
+                        for entry in entries.flatten() {
+                            let p = entry.path();
+                            if p.is_file() {
+                                if let Some(ext) = p.extension().and_then(|e| e.to_str()) {
+                                    let ext_lower = ext.to_lowercase();
+                                    if matches!(ext_lower.as_str(), "png" | "jpg" | "jpeg" | "webp" | "psd" | "tif" | "tiff") {
+                                        image_paths.push(p);
+                                    }
+                                }
+                            }
+                        }
+                        pages_panel::natural_sort_paths(&mut image_paths);
+                        let path_strs: Vec<String> = image_paths.iter().filter_map(|p| p.to_str().map(|s| s.to_string())).collect();
+                        if !path_strs.is_empty() {
+                            self.open_paths(&path_strs);
+                        }
+                    }
+                }
+            }
+            pages_panel::PagesPanelAction::AddPages => {
+                if let Some(files) = rfd::FileDialog::new()
+                    .add_filter("Images", &["png", "jpg", "jpeg", "webp", "psd", "tif", "tiff"])
+                    .pick_files()
+                {
+                    let mut file_paths: Vec<std::path::PathBuf> = files;
+                    pages_panel::natural_sort_paths(&mut file_paths);
+                    let path_strs: Vec<String> = file_paths.iter().filter_map(|p| p.to_str().map(|s| s.to_string())).collect();
+                    if !path_strs.is_empty() {
+                        self.open_paths(&path_strs);
+                    }
+                }
+            }
+            pages_panel::PagesPanelAction::ReorderPages { from_idx, to_idx } => {
+                let _ = self.session.move_document(from_idx, to_idx);
+            }
+            pages_panel::PagesPanelAction::ToggleAutoSync(flag) => {
+                self.pages.auto_sync_typer = flag;
+            }
+            pages_panel::PagesPanelAction::RevealInExplorer(path) => {
+                #[cfg(target_os = "windows")]
+                {
+                    let _ = std::process::Command::new("explorer").arg("/select,").arg(&path).spawn();
+                }
+                #[cfg(target_os = "macos")]
+                {
+                    let _ = std::process::Command::new("open").arg("-R").arg(&path).spawn();
+                }
+                #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+                {
+                    if let Some(parent) = path.parent() {
+                        let _ = std::process::Command::new("xdg-open").arg(parent).spawn();
+                    }
+                }
+            }
+            pages_panel::PagesPanelAction::SortPagesNaturally => {
+                let count = self.session.documents().len();
+                if count > 1 {
+                    let mut indexed: Vec<(usize, String)> = self.session.documents().iter().enumerate().map(|(i, d)| (i, d.doc.name.clone())).collect();
+                    indexed.sort_by(|a, b| pages_panel::natural_cmp_str(&a.1, &b.1));
+
+                    for target_pos in 0..count {
+                        if let Some(current_pos) = indexed.iter().position(|&(orig_idx, _)| orig_idx == target_pos) {
+                            if current_pos != target_pos {
+                                self.session.move_document(current_pos, target_pos);
+                                indexed.swap(current_pos, target_pos);
+                            }
+                        }
+                    }
+                }
+            }
+            pages_panel::PagesPanelAction::ToggleSplitDock => {
+                panel_docking::toggle_split_left_dock(self);
+            }
+        }
+    }
+
 
     /// Run an engine command, reporting errors in the status bar.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
@@ -2420,6 +2759,14 @@ impl eframe::App for PhotocraftApp {
         // Preferences ▸ Type ▸ Recent Fonts: a smaller cap (or 0) trims the existing list at
         // once, not only after the next pick.
         self.sync_recent_fonts();
+        if self.ui.favorite_fonts.is_empty() && !self.typesetter.favorite_fonts.is_empty() {
+            self.ui.favorite_fonts = self.typesetter.favorite_fonts.clone();
+        }
+        if let Some(updated) = type_tool::sync_favorite_fonts(&ctx, &self.ui.favorite_fonts) {
+            self.ui.favorite_fonts = updated.clone();
+            self.typesetter.favorite_fonts = updated;
+            self.typesetter.auto_save();
+        }
         paint_mouse::sync_tool_brush(self);
         // A unit typed into a value field (`1in` in a px field) converts at the active document's
         // resolution, as in Photoshop.
@@ -2465,8 +2812,32 @@ impl eframe::App for PhotocraftApp {
         if (chrome && self.ui.panels.toolbar) || tabbed_in {
             panels::toolbar(self, ui);
         }
+        if (chrome && self.ui.panels.left_dock) || tabbed_in {
+            let t = gpu_canvas::now_ms();
+            panels::left_dock(self, ui);
+            self.perf.span("ui: left dock", gpu_canvas::now_ms() - t);
+        }
         if (chrome && self.ui.panels.dock) || tabbed_in {
             panels::right_dock(self, ui);
+        }
+        if (chrome && self.ui.panels.bottom_dock) || tabbed_in {
+            let t = gpu_canvas::now_ms();
+            panels::bottom_dock(self, ui);
+            self.perf.span("ui: bottom dock", gpu_canvas::now_ms() - t);
+        }
+        let typesetter_action = if self.ui.panels.typesetter {
+            let act = self.typesetter.show(ui);
+            self.ui.panels.typesetter = self.typesetter.is_open;
+            act
+        } else {
+            self.typesetter.is_open = false;
+            None
+        };
+        if let Some(action) = typesetter_action {
+            self.handle_typesetter_action(action);
+        }
+        if self.ui.layer_search_open {
+            layer_search::show(self, &ctx);
         }
         let t = theme::Tokens::get(&ctx);
         let backdrop = if chrome { prefs_ui::pasteboard_color(self).unwrap_or(t.canvas) } else { egui::Color32::BLACK };

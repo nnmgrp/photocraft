@@ -90,6 +90,15 @@ fn tool_flyout_release(row: Rect, pointer: Option<Pos2>, released: bool, from_bu
     released && from_button && pointer.is_some_and(|p| row.contains(p))
 }
 
+pub(crate) fn toolbar_width(pro: bool, double: bool) -> f32 {
+    let (w1, bx) = if pro { (40.0, 30.0) } else { (50.0, 36.0) };
+    if double { w1 + bx + 2.0 } else { w1 }
+}
+
+pub(crate) fn toolbar_docked(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    toolbar(app, ui);
+}
+
 pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let (w1, bx, m) = if t.pro { (40.0, 30.0, 5i8) } else { (50.0, 36.0, 7i8) };
@@ -1730,6 +1739,53 @@ pub fn status_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 // ----------------------------------------------------------------------------- dock
 
+pub fn left_dock(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    if !app.ui.panels.left_dock {
+        return;
+    }
+    let typesetter_in_tree = app
+        .ui
+        .docking_left
+        .as_ref()
+        .is_some_and(|l| l.root.is_some() && l.contains(&"typesetter".to_string()));
+    let typesetter_here = app.ui.panels.typesetter
+        && app.typesetter.is_open
+        && app.typesetter.dock_mode == crate::typesetter_ui::TypesetterDockMode::DockLeft
+        && !typesetter_in_tree;
+    let has_layout_panels = app
+        .ui
+        .docking_left
+        .as_ref()
+        .is_some_and(|l| l.root.is_some());
+    if !typesetter_here && !has_layout_panels {
+        return;
+    }
+    let t = Tokens::get(ui.ctx());
+    let default_w = if t.pro { 280.0 } else { 300.0 };
+    egui::Panel::left("shared-left-dock")
+        .default_size(default_w)
+        .size_range(200.0..=650.0)
+        .resizable(true)
+        .frame(egui::Frame::NONE.fill(t.card))
+        .show(ui, |ui| {
+            if let Some(layout) = app.ui.docking_left.clone()
+                && layout.root.is_some()
+            {
+                crate::panel_docking::show_side_dock(
+                    app,
+                    ui,
+                    &layout,
+                    crate::panel_docking::DockSide::Left,
+                );
+            }
+            if typesetter_here {
+                if let Some(action) = app.typesetter.render_embedded(ui) {
+                    app.handle_typesetter_action(action);
+                }
+            }
+        });
+}
+
 pub fn right_dock(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // Even legacy destinations must discard gestures captured by an earlier workspace.
     let customized = crate::panel_docking::show(app, ui);
@@ -1779,6 +1835,53 @@ pub fn right_dock(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     crate::dock::persist(app, ui.ctx());
 }
+
+pub fn bottom_dock(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    if !app.ui.panels.bottom_dock {
+        return;
+    }
+    let typesetter_in_tree = app
+        .ui
+        .docking_bottom
+        .as_ref()
+        .is_some_and(|l| l.root.is_some() && l.contains(&"typesetter".to_string()));
+    let typesetter_here = app.ui.panels.typesetter
+        && app.typesetter.is_open
+        && app.typesetter.dock_mode == crate::typesetter_ui::TypesetterDockMode::DockBottom
+        && !typesetter_in_tree;
+    let has_layout_panels = app
+        .ui
+        .docking_bottom
+        .as_ref()
+        .is_some_and(|l| l.root.is_some());
+    if !typesetter_here && !has_layout_panels {
+        return;
+    }
+    let t = Tokens::get(ui.ctx());
+    egui::Panel::bottom("shared-bottom-dock")
+        .default_size(240.0)
+        .size_range(140.0..=480.0)
+        .resizable(true)
+        .frame(egui::Frame::NONE.fill(t.card))
+        .show(ui, |ui| {
+            if let Some(layout) = app.ui.docking_bottom.clone()
+                && layout.root.is_some()
+            {
+                crate::panel_docking::show_side_dock(
+                    app,
+                    ui,
+                    &layout,
+                    crate::panel_docking::DockSide::Bottom,
+                );
+            }
+            if typesetter_here {
+                if let Some(action) = app.typesetter.render_embedded(ui) {
+                    app.handle_typesetter_action(action);
+                }
+            }
+        });
+}
+
 
 /// The dock's narrowest width (points). It is the right dock, on the left in a right-to-left UI.
 pub(crate) const DOCK_MIN_WIDTH: f32 = 250.0;
@@ -1843,6 +1946,7 @@ pub(crate) fn dock_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, group: crate
     match (group, tab) {
         (Group::Color, 2) => crate::preset_panels::gradients_panel(app, ui),
         (Group::Color, 3) => crate::preset_panels::patterns_panel(app, ui),
+        (Group::Color, 4) => crate::screentone_panel::panel(app, ui),
         // The Color tab is the same in every theme, in the mode picked from its panel menu
         // (#6000); only the tab order differs between themes.
         (Group::Color, tab) if group.tabs(pro).get(tab) == Some(&"Color") => crate::color_panel_ui::panel(app, ui),

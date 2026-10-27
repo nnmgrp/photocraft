@@ -588,6 +588,10 @@ fn shift_shown(doc: &Document, l: &mut Layer, dx: i32, dy: i32) {
             }
             g.children.iter_mut().for_each(|c| shift_shown(doc, c, dx, dy));
         }
+        LayerContent::Screentone(s) => {
+            s.surface = translate_surface(&s.surface, dx, dy);
+            s.origin = (s.origin.0 + dx as f32, s.origin.1 + dy as f32);
+        }
         LayerContent::Adjustment(_) | LayerContent::Fill(_) => {}
     }
 }

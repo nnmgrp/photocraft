@@ -501,32 +501,47 @@ impl PagesPanelState {
     ) -> Option<PagesPanelAction> {
         let mut action: Option<PagesPanelAction> = None;
 
-        // Строка 1: Главные кнопки управления главой
-        ui.horizontal(|ui| {
-            let avail_w = ui.available_width();
-            let btn_width = ((avail_w - 6.0) * 0.5).max(80.0);
+        // При узком доке (<180px) кнопки показывают только компактные иконки, а полное
+        // описание действия остаётся в подсказке. Сам тулбар переносит строки.
+        let narrow = ui.available_width() < 180.0;
 
-            let open_chapter_btn = egui::Button::new(
-                RichText::new("📂 Открыть главу…").size(12.5).strong(),
-            )
-            .min_size(Vec2::new(btn_width, 26.0));
+        // Строка 1: Главные кнопки управления главой
+        ui.horizontal_wrapped(|ui| {
+            let btn_width = if narrow {
+                30.0
+            } else {
+                ((ui.available_width() - 6.0) * 0.5).max(80.0)
+            };
+
+            let open_label = if narrow {
+                RichText::new("📂").size(13.0)
+            } else {
+                RichText::new("📂 Открыть главу…").size(12.5).strong()
+            };
+            let open_tip = "Открыть главу: выбрать папку с изображениями (автоматическая натуральная сортировка)";
+
+            let open_chapter_btn = egui::Button::new(open_label)
+                .min_size(Vec2::new(btn_width, 26.0));
 
             if ui
                 .add(open_chapter_btn)
-                .on_hover_text("Выбрать папку с изображениями главы (автоматическая натуральная сортировка)")
+                .on_hover_text(open_tip)
                 .clicked()
             {
                 action = Some(PagesPanelAction::OpenChapterFolder);
             }
 
-            let add_pages_btn = egui::Button::new(
-                RichText::new("➕ Добавить листы").size(12.5),
-            )
-            .min_size(Vec2::new(btn_width, 26.0));
+            let add_label = if narrow {
+                RichText::new("➕").size(13.0)
+            } else {
+                RichText::new("➕ Добавить листы").size(12.5)
+            };
+            let add_pages_btn = egui::Button::new(add_label)
+                .min_size(Vec2::new(btn_width, 26.0));
 
             if ui
                 .add(add_pages_btn)
-                .on_hover_text("Добавить отдельные файлы страниц в текущую сессию")
+                .on_hover_text("Добавить листы: добавить отдельные файлы страниц в текущую сессию")
                 .clicked()
             {
                 action = Some(PagesPanelAction::AddPages);
@@ -534,12 +549,13 @@ impl PagesPanelState {
         });
 
         // Строка 2: Переключатель вида (Список / Сетка), Сортировка и тумблер Автосинхронизации TypeR
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             // Кнопка режима 1 колонки
             let is_list = self.view_mode == PagesViewMode::SingleColumnList;
+            let list_label = if narrow { "☰" } else { "☰ Список" };
             if ui
-                .selectable_label(is_list, "☰ Список")
-                .on_hover_text("Подробный вид в одну колонку")
+                .selectable_label(is_list, list_label)
+                .on_hover_text("Список: подробный вид в одну колонку")
                 .clicked()
             {
                 self.view_mode = PagesViewMode::SingleColumnList;
@@ -547,26 +563,33 @@ impl PagesPanelState {
 
             // Кнопка режима 2-колоночной сетки
             let is_grid = self.view_mode == PagesViewMode::TwoColumnGrid;
+            let grid_label = if narrow { "⊞" } else { "⊞ Сетка" };
             if ui
-                .selectable_label(is_grid, "⊞ Сетка")
-                .on_hover_text("Компактная двухколоночная сетка миниатюр")
+                .selectable_label(is_grid, grid_label)
+                .on_hover_text("Миниатюры: компактная двухколоночная сетка миниатюр")
                 .clicked()
             {
                 self.view_mode = PagesViewMode::TwoColumnGrid;
             }
 
             // Кнопка натуральной сортировки открытых листов
+            let sort_label = if narrow { "⇅" } else { "🔃 А-Я" };
             if view_info.items.len() > 1
                 && ui
-                    .button("🔃 А-Я")
-                    .on_hover_text("Отсортировать открытые страницы по номерам (1, 2, 10...)")
+                    .button(sort_label)
+                    .on_hover_text("Natural Sort: отсортировать открытые страницы по номерам (1, 2, 10...)")
                     .clicked()
             {
                 action = Some(PagesPanelAction::SortPagesNaturally);
             }
 
             // Кнопка быстрого дробления левого контейнера на 2 дока (Страницы + TypeR)
-            let split_label = if view_info.is_left_dock_split { "⬍ Слить" } else { "⬍ 2 дока" };
+            let split_label = match (narrow, view_info.is_left_dock_split) {
+                (true, true) => "⇉",
+                (true, false) => "⇄",
+                (false, true) => "⬍ Слить",
+                (false, false) => "⬍ 2 дока",
+            };
             let split_tip = if view_info.is_left_dock_split {
                 "Объединить панели в один док с вкладками"
             } else {
@@ -576,26 +599,38 @@ impl PagesPanelState {
                 action = Some(PagesPanelAction::ToggleSplitDock);
             }
 
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            // Тумблер автосинхронизации TypeR: справа в широком доке, в общем потоке в узком.
+            let sync_tip = "Автоматически переключать таблицу реплик TypeR при выборе страницы";
+            if narrow {
                 let mut sync_flag = self.auto_sync_typer;
                 if ui
-                    .checkbox(&mut sync_flag, RichText::new("🔗 TypeR").size(12.0))
-                    .on_hover_text(
-                        "Автоматически переключать таблицу реплик TypeR при выборе страницы",
-                    )
+                    .checkbox(&mut sync_flag, RichText::new("🔗").size(12.0))
+                    .on_hover_text(sync_tip)
                     .changed()
                 {
                     self.auto_sync_typer = sync_flag;
                     action = Some(PagesPanelAction::ToggleAutoSync(sync_flag));
                 }
-            });
+            } else {
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let mut sync_flag = self.auto_sync_typer;
+                    if ui
+                        .checkbox(&mut sync_flag, RichText::new("🔗 TypeR").size(12.0))
+                        .on_hover_text(sync_tip)
+                        .changed()
+                    {
+                        self.auto_sync_typer = sync_flag;
+                        action = Some(PagesPanelAction::ToggleAutoSync(sync_flag));
+                    }
+                });
+            }
         });
 
         // Строка 3: Быстрый поиск и фильтр по статусу
         ui.horizontal(|ui| {
             let search_edit = egui::TextEdit::singleline(&mut self.search_query)
                 .hint_text("🔍 Номер или имя файла…")
-                .desired_width(ui.available_width() - 92.0);
+                .desired_width((ui.available_width() - 92.0).max(60.0));
 
             ui.add(search_edit);
 

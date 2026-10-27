@@ -266,6 +266,11 @@ pub enum ContentM {
     Fill {
         fill: Fill,
     },
+    Screentone {
+        spec: photocraft_tone::ScreentoneSpec,
+        origin: (f32, f32),
+        surface: SurfaceM,
+    },
     Text {
         text: String,
         font_family: String,

@@ -67,6 +67,7 @@ pub mod render2;
 pub mod resample;
 pub mod retouch;
 pub mod scancrop;
+pub mod screentone;
 pub mod seam;
 pub mod segment;
 pub mod selection;
@@ -89,6 +90,7 @@ pub use artistic::{GALLERY_CATEGORIES, GalleryEffect, GalleryFilter, GalleryPara
 pub use distort::MAX_WAVE_GENERATORS;
 pub use image::{Edge, Image};
 pub use params_ext::*;
+pub use screentone::{DotShape, PatternType, ScreentoneBackend, ScreentoneGradientType, ScreentoneMode, ScreentonePreset, ScreentoneSpec};
 
 mod params_ext;
 
@@ -556,6 +558,10 @@ pub enum FilterParams {
     FilterGallery {
         effects: Vec<GalleryEffect>,
     },
+    /// Manga & comic screentone generator (GenTonik engine).
+    Screentone {
+        spec: ScreentoneSpec,
+    },
 }
 
 impl FilterParams {
@@ -615,7 +621,12 @@ impl FilterParams {
     /// the reference bounds even where the layer is transparent, as Photoshop's does on an
     /// empty layer, while still reading no neighbourhood.
     pub fn renders_from_nothing(&self) -> bool {
-        matches!(self, FilterParams::Fibers { .. } | FilterParams::Clouds { difference: false, .. })
+        match self {
+            FilterParams::Fibers { .. } => true,
+            FilterParams::Clouds { difference: false, .. } => true,
+            FilterParams::Screentone { spec } => !spec.use_source_luminance,
+            _ => false,
+        }
     }
 
     /// Whether the filter places and sizes its pattern by the canvas even with a selection
@@ -692,6 +703,7 @@ impl FilterParams {
                 [one] => one.filter.name(),
                 _ => "Filter Gallery",
             },
+            FilterParams::Screentone { .. } => "Screentone",
         }
     }
 }
@@ -700,6 +712,7 @@ impl FilterParams {
 fn halo_ext(p: &FilterParams) -> Halo {
     let r = |v: f32| Halo::Radius((v.max(0.0).ceil() as i32).saturating_add(1));
     match p {
+        FilterParams::Screentone { spec } => Halo::Radius(spec.halo_radius()),
         FilterParams::ColorHalftone { max_radius, .. } => r(max_radius * 3.0),
         FilterParams::Crystallize { cell_size, .. } => r(cell_size.max(1.0) * 3.0),
         FilterParams::Pointillize { cell_size, .. } => r(cell_size.max(1.0) * 2.0),
@@ -926,6 +939,7 @@ pub fn kernel(params: &FilterParams, src: &Image, out: Rect, ctx: &Ctx) -> Vec<f
         FilterParams::DeInterlace { eliminate_even, interpolate } => video::deinterlace(src, out, ctx, *eliminate_even, *interpolate),
         FilterParams::NtscColors => video::ntsc(src, out, ctx),
         FilterParams::FilterGallery { effects } => artistic_fx::run(effects, src, out, ctx),
+        FilterParams::Screentone { spec } => screentone::screentone(src, out, ctx, spec),
     }
 }
 

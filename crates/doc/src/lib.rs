@@ -40,6 +40,7 @@ pub use pattern::Pattern;
 pub use photocraft_color::{BlendMode, Color, ColorMode, PixelFormat, SampleType};
 pub use photocraft_geom::{Affine, Rect, Size};
 pub use photocraft_raster::Surface;
+pub use photocraft_tone::{DotShape, PatternType, ScreentoneBackend, ScreentoneGradientType, ScreentoneMode, ScreentoneSpec};
 use serde::{Deserialize, Serialize};
 pub use slices::{Slice, SliceKind, SliceOrigin, Slices};
 pub use text_styles::TextStyles;
@@ -96,6 +97,9 @@ pub struct Locks {
     pub position: bool,
     pub artboard: bool,
     pub all: bool,
+    /// PhotoCraft\'s Lock Selection: clicks on the canvas pass through.
+    #[serde(default)]
+    pub selection: bool,
 }
 
 impl Locks {
@@ -115,14 +119,19 @@ impl Locks {
             "position" => self.position = on,
             "artboard" => self.artboard = on,
             "all" => self.all = on,
+            "selection" => self.selection = on,
             _ => return false,
         }
         true
     }
 
     /// Whether any lock is set: Photoshop then shows the lock icon on the layer's row.
+    pub fn unpickable(self) -> bool {
+        self.all || self.selection
+    }
+
     pub fn any(self) -> bool {
-        self.transparency || self.pixels || self.position || self.artboard || self.all
+        self.transparency || self.pixels || self.position || self.artboard || self.all || self.selection
     }
 
     pub fn union(self, o: Locks) -> Locks {
@@ -132,6 +141,7 @@ impl Locks {
             position: self.position || o.position,
             artboard: self.artboard || o.artboard,
             all: self.all || o.all,
+            selection: self.selection || o.selection,
         }
     }
 }
@@ -432,6 +442,10 @@ impl Default for TextLayer {
 }
 
 impl TextLayer {
+    /// Effective vertical alignment inside a paragraph box (from the first paragraph run).
+    pub fn vertical_align(&self) -> text::VerticalAlign {
+        self.paragraphs.first().map_or(text::VerticalAlign::Top, |r| r.style.vertical_align)
+    }
     /// Character runs covering exactly `text.len()` bytes, each on a char boundary.
     pub fn char_runs(&self) -> Vec<text::TextRun> {
         let base = text::CharStyle { font_family: self.font_family.clone(), size_pt: self.size_pt, color: self.color, ..Default::default() };
@@ -578,6 +592,22 @@ pub struct FillCache {
     pub surface: Surface,
 }
 
+/// A live procedural screentone.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ScreentoneLayer {
+    pub spec: ScreentoneSpec,
+    /// Document-space anchor of the lattice origin.
+    pub origin: (f32, f32),
+    /// Rendered appearance in document coordinates.
+    pub surface: Surface,
+}
+
+impl ScreentoneLayer {
+    pub fn new(spec: ScreentoneSpec, origin: (f32, f32), surface: Surface) -> Self {
+        Self { spec, origin, surface }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum LayerContent {
     Raster(Surface),
@@ -587,9 +617,14 @@ pub enum LayerContent {
     Text(TextLayer),
     Shape(ShapeLayer),
     Smart(SmartObject),
+    Screentone(ScreentoneLayer),
 }
 
 impl LayerContent {
+    pub fn is_procedural(&self) -> bool {
+        matches!(self, LayerContent::Screentone(_))
+    }
+
     pub fn kind_name(&self) -> &'static str {
         match self {
             LayerContent::Raster(_) => "Pixel",
@@ -599,6 +634,7 @@ impl LayerContent {
             LayerContent::Text(_) => "Type",
             LayerContent::Shape(_) => "Shape",
             LayerContent::Smart(_) => "Smart Object",
+            LayerContent::Screentone(_) => "Screentone",
         }
     }
 
@@ -666,6 +702,9 @@ pub struct Layer {
 }
 
 impl Layer {
+    pub fn is_screentone(&self) -> bool {
+        matches!(self.content, LayerContent::Screentone(_))
+    }
     /// Whether the layer has the Background's own properties: an unclipped pixel layer with
     /// transparency and position locked. Only the bottom layer of a document with them is the
     /// Background: use [`Document::background`] / [`Document::is_background`] to identify it.
@@ -1188,6 +1227,22 @@ impl Document {
     }
 
     /// Insert `layer` directly below the layer `below` (or at the bottom of the root if None).
+        /// Insert a new `layer` where Photoshop puts one for the selected layer `active`.
+    pub fn insert_new(&mut self, active: Option<LayerId>, layer: Layer) -> LayerId {
+        let into = active.filter(|&a| {
+            let open = matches!(self.layer(a).map(|l| &l.content), Some(LayerContent::Group(g)) if g.expanded);
+            open && self.path_of(a).is_some_and(|p| p.len().saturating_add(nested_depth(&layer)) <= MAX_GROUP_DEPTH)
+        });
+        match into.and_then(|a| self.layer_mut(a)).and_then(Layer::children_mut) {
+            Some(children) => {
+                let id = layer.id;
+                children.push(layer);
+                id
+            }
+            None => self.insert_above(active, layer),
+        }
+    }
+
     pub fn insert_below(&mut self, below: Option<LayerId>, layer: Layer) -> LayerId {
         let id = layer.id;
         match below.and_then(|b| self.path_of(b)).and_then(|path| self.siblings_mut(&path)) {
@@ -1244,6 +1299,19 @@ impl Document {
     pub fn top_layer(&self) -> Option<LayerId> {
         self.layers.last().map(|l| l.id)
     }
+}
+
+fn nested_depth(layer: &Layer) -> usize {
+    let mut max = 0;
+    let mut stack: Vec<(&[Layer], usize)> = layer.children().map(|c| vec![(c, 1)]).unwrap_or_default();
+    while let Some((layers, depth)) = stack.pop() {
+        if layers.is_empty() {
+            continue;
+        }
+        max = max.max(depth);
+        stack.extend(layers.iter().filter_map(|l| l.children()).map(|c| (c, depth + 1)));
+    }
+    max
 }
 
 #[cfg(test)]

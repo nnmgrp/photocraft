@@ -115,7 +115,7 @@ fn layer_supported(l: &Layer, clipped: &[Layer], depth: u32) -> bool {
         // A stroked shape with clipped layers draws its stroke above them (the compositor's
         // split path), which this path doesn't do.
         LayerContent::Shape(sh) if sh.stroke.is_some() && clipped.iter().any(|c| c.visible) => false,
-        LayerContent::Raster(_) | LayerContent::Text(_) | LayerContent::Shape(_) | LayerContent::Smart(_) | LayerContent::Fill(_) => {
+        LayerContent::Raster(_) | LayerContent::Text(_) | LayerContent::Shape(_) | LayerContent::Smart(_) | LayerContent::Fill(_) | LayerContent::Screentone(_) => {
             cmyk_pixels(l) && separable(l.blend)
         }
         LayerContent::Group(g) => {

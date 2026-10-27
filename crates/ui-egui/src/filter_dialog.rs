@@ -1019,7 +1019,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
 
 /// A new seed for a dialog's Random button: 0..=30000 (what the field takes), never `current`.
 /// `entropy` varies per click (the input time); the process's random hasher keys mix it.
-fn random_seed(entropy: u64, current: i64) -> i64 {
+pub(crate) fn random_seed(entropy: u64, current: i64) -> i64 {
     use std::hash::BuildHasher;
     let h = std::collections::hash_map::RandomState::new().hash_one(entropy);
     let seed = (h % 30_001) as i64;

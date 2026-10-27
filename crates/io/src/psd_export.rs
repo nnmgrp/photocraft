@@ -718,7 +718,7 @@ impl Ex {
             // Photoshop's) reopen the layer as that kind and discard the pixels. A shape stroke
             // (`vstk`) beside a vector mask makes a shape too; without one, Photoshop keeps it on
             // pixel layers, so it stays. A vector mask (`vmsk`/`vsms`, `vogk`) stays.
-            LayerContent::Raster(_) => {
+            LayerContent::Raster(_) | LayerContent::Screentone(_) => {
                 let masked = l.vector_mask.is_some();
                 raw.retain(|(k, _)| !(RASTER_STALE_KEYS.contains(&k) || adjust_map::ADJUSTMENT_KEYS.contains(&k) || k == b"CgEd" || (k == b"vstk" && masked)));
             }
@@ -1157,7 +1157,7 @@ impl Ex {
                     let r = self.record(l, std::iter::once(lsct).chain(extra).collect(), None);
                     self.records.push(r);
                 }
-                LayerContent::Raster(s) => {
+                LayerContent::Raster(s) | LayerContent::Screentone(photocraft_doc::ScreentoneLayer { surface: s, .. }) => {
                     let r = self.record(l, extra, Some(s));
                     self.records.push(r);
                 }

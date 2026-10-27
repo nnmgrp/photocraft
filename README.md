@@ -39,6 +39,17 @@
   <a href="https://getartcraft.com/apps">All Crafting Apps</a>
 </p>
 
+## About this fork
+
+> [!NOTE]
+> Это независимый форк PhotoCraft для верстальщиков комиксов и манги от верстальщиков комиксов. Мы сделали удобный тайп (выключка текста по вертикали и горизонтали, контекстные текстовые рамки Canvas Capsule на холсте), аппаратное наложение скринтонов в реальном времени на GPU, многостраничный менеджер глав и встроенный манга-тайпсеттер TypeR.
+>
+> Коммиты от людей: **FGSFDS** (`nnmgrp`), **SnowE22**, **NanoNik** и **wilwal2020**, при участии и совместном кодинге с нейросетями в средах **Antigravity** (Gemini, Claude), **OpenCode** (DeepSeek 4.1-Flash, GLM-5.3-Flash), поиске через **Z.AI** и консультациях ChatGPT.
+>
+> 📖 Подробности, архитектура, статус функций и история разработки — в документе [docs/community-fork.md](docs/community-fork.md). *(Примечание: встроенного проброса туннеля для нейросетей пока нет, а визуальные стили GenTonik и элементы интерфейса ещё могут быть скорректированы в будущих обновлениях).*
+
+---
+
 <br>
 
 <p align="center">
@@ -260,7 +271,7 @@ The desktop app also offers an authenticated, loopback-only control channel (`ph
 ## Get started
 
 ```sh
-git clone https://github.com/storytold/photocraft
+git clone https://github.com/nnmgrp/photocraft
 cd photocraft
 cargo run --release -p photocraft -- image.psd   # the desktop app
 cargo test --workspace                           # the test suite

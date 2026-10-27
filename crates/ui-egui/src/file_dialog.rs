@@ -156,7 +156,6 @@ impl PhotocraftApp {
         if suggested.parent().is_some_and(|p| p.as_os_str().is_empty())
             && let Some(dir) = doc
                 .and_then(|d| self.save_dirs.get(&d).cloned())
-                .or_else(|| self.session.prefs().export.last_export_dir.as_ref().map(std::path::PathBuf::from))
                 .or_else(|| self.session.active().and_then(|d| d.path.as_deref()).and_then(|p| std::path::Path::new(p).parent()).map(Path::to_path_buf))
         {
             suggested = dir.join(suggested);

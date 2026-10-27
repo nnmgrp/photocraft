@@ -4557,3 +4557,118 @@ cameraRaw	Dehaze	Odstranění oparu
 	Remove what is selected with Nano Banana ({key})	Odstranit vybrané pomocí Nano Banana ({key})
 	Pin to Top	Připnout nahoru
 	Unpin from Top	Odepnout shora
+
+# TypeR script editor, Pages and export (v0.14)
+	(end of script)	(konec scénáře)
+	(no script loaded — see 'Script' tab)	(není načten žádný scénář — viz karta „Scénář“)
+	+ Folder	+ Složka
+	+ Style	+ Styl
+	Auto-advance to next page	Automaticky přejít na další stránku
+	Automatically advance script to the next page	Automaticky posunout scénář na další stránku
+	Baseline shift:	Posun účaří:
+	Chapter Pages…	Stránky kapitol…
+	Choose TypeR styles file	Vybrat soubor stylů TypeR
+	Choose a custom directory to store typesetter presets and state	Vybrat vlastní složku pro ukládání přednastavení a stavu sazeče
+	Choose presets folder	Vybrat složku přednastavení
+	Choose script file	Vybrat soubor scénáře
+	Clear entire script	Vymazat celý scénář
+	Clear script	Vymazat scénář
+	Delete this style	Odstranit tento styl
+	Duplicate folder	Duplikovat složku
+	Duplicate this style	Duplikovat tento styl
+	Each line becomes a separate dialogue entry. [Page 1] tags split pages.	Každý řádek se stane samostatnou replikou. Značky [Page 1] rozdělují stránky.
+	Editor	Editor
+	Engine:	Vykreslovací jádro:
+	Enter in Editor	Zadat v editoru
+	Enter script manually	Zadat scénář ručně
+	Enter: Jump • Shift+Enter: Peek • Esc: Close	Enter: přejít • Shift+Enter: nahlédnout • Esc: zavřít
+	Exact reference CPU engine	Přesné referenční jádro CPU
+	Export TypeR JSON…	Exportovat TypeR JSON…
+	Export TypeR styles	Exportovat styly TypeR
+	Export error	Chyba exportu
+	Favorite font	Oblíbené písmo
+	Find layer or text across open pages (@text, #group)...	Najít vrstvu nebo text na otevřených stránkách (@text, #group)...
+	Folder duplicated	Složka duplikována
+	Folder name	Název složky
+	Font Settings	Nastavení písma
+	GEOMETRY & CENTERING	GEOMETRIE A CENTROVÁNÍ
+	GPU on large canvases, CPU on small	GPU na velkých plátnech, CPU na malých
+	Go to current line/page	Přejít na aktuální řádek/stránku
+	Horizontal scale (%)	Vodorovné měřítko (%)
+	Import TypeR JSON…	Importovat TypeR JSON…
+	Import error	Chyba importu
+	Insert current line into selection/bubble (Enter)	Vložit aktuální řádek do výběru/bubliny (Enter)
+	Insert this line into bubble (Enter)	Vložit tento řádek do bubliny (Enter)
+	Load .txt	Načíst .txt
+	Load file (.txt)…	Načíst soubor (.txt)…
+	Load from file	Načíst ze souboru
+	Load into typesetter	Načíst do sazeče
+	Load script file (.txt)	Načíst soubor scénáře (.txt)
+	Load script file (.txt)…	Načíst soubor scénáře (.txt)…
+	Loaded dialogues	Načtené repliky
+	Loaded styles	Načtené styly
+	Make this line current	Nastavit tento řádek jako aktuální
+	Manga Script (Full Text)	Manga scénář (plný text)
+	Manga Workflow	Pracovní postup pro mangu
+	New Folder	Nová složka
+	Next line (↓)	Další řádek (↓)
+	Next page	Další stránka
+	No folder	Žádná složka
+	No matching layers or text in open pages	Na otevřených stránkách neodpovídá žádná vrstva ani text
+	No outline	Bez obrysu
+	No script loaded	Není načten žádný scénář
+	Open .txt	Otevřít .txt
+	Open presets folder in file manager	Otevřít složku přednastavení ve správci souborů
+	Open script in separate window	Otevřít scénář v samostatném okně
+	Open script text editor	Otevřít textový editor scénáře
+	PRESET STORAGE	ÚLOŽIŠTĚ PŘEDNASTAVENÍ
+	Page	Stránka
+	Paste / Edit script…	Vložit / upravit scénář…
+	Paste copied text from clipboard	Vložit zkopírovaný text ze schránky
+	Paste from Clipboard	Vložit ze schránky
+	Paste from Clipboard (Ctrl+V)	Vložit ze schránky (Ctrl+V)
+	Paste script from clipboard (Ctrl+V)	Vložit scénář ze schránky (Ctrl+V)
+	Paste script text from clipboard (Ctrl+V)	Vložit text scénáře ze schránky (Ctrl+V)
+	Paste script text here (Ctrl+V) or write dialogues…	Sem vložte text scénáře (Ctrl+V) nebo piště repliky…
+	Presets loaded from file	Přednastavení načtena ze souboru
+	Presets saved	Přednastavení uložena
+	Previous line (↑)	Předchozí řádek (↑)
+	Previous page	Předchozí stránka
+	Read error	Chyba čtení
+	Reset folder	Obnovit složku
+	Reset presets storage to default AppData directory	Obnovit úložiště přednastavení na výchozí složku AppData
+	Save now	Uložit nyní
+	Script	Scénář
+	Script Editor	Editor scénáře
+	Shifting the baseline down ensures precise visual vertical centering inside bubbles.	Posun účaří dolů zajistí přesné vizuální svislé vystředění uvnitř bublin.
+	Show current page dialogues only	Zobrazit pouze repliky aktuální stránky
+	Size (pt)	Velikost (pt)
+	Split Left Dock (Pages + TypeR)…	Rozdělit levý dok (Stránky + TypeR)…
+	Storage folder reset to default	Složka úložiště obnovena na výchozí
+	Storage folder set	Složka úložiště nastavena
+	Strip character names	Odstranit jména postav
+	Strip character names at start of line ('HERO: Text')	Odstranit jména postav na začátku řádku ('HERO: Text')
+	Strip leading dashes	Odstranit úvodní pomlčky
+	Strip leading dashes ('- Text', '— Text')	Odstranit úvodní pomlčky ('- Text', '— Text')
+	Style name	Název stylu
+	Styles successfully exported	Styly úspěšně exportovány
+	Sync line spacing	Synchronizovat proklad
+	Sync line spacing with font size	Synchronizovat proklad s velikostí písma
+	TYPESETTER BEHAVIOR	CHOVÁNÍ SAZEČE
+	Text Outline	Obrys textu
+	Thickness (px)	Tloušťka (px)
+	Toggle Chapter Pages panel	Přepnout panel stránek kapitol
+	TypeR Styles	Styly TypeR
+	Typography Size (Line Spacing Sync)	Velikost typografie (synchronizace prokladu)
+	Typography and Font	Typografie a písmo
+	Ultra-fast real-time rendering for giant files	Extrémně rychlé vykreslování v reálném čase pro obří soubory
+	Write error	Chyba zápisu
+	left	zbývá
+	line	řádek
+	size	velikost
+	style	styl
+	⚙ CPU	⚙ CPU
+	⚡ GPU	⚡ GPU
+	Pages	Stránky
+	Find in Open Pages…	Najít na otevřených stránkách…
+	Last export dir	Poslední složka exportu

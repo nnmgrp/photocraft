@@ -4854,3 +4854,118 @@ shape	Appearance	Apparence
 	Remove what is selected with Nano Banana ({key})	Supprimer la sélection avec Nano Banana ({key})
 	Pin to Top	Épingler en haut
 	Unpin from Top	Ne plus épingler en haut
+
+# TypeR script editor, Pages and export (v0.14)
+	(end of script)	(fin du script)
+	(no script loaded — see 'Script' tab)	(aucun script chargé — voir l'onglet 'Script')
+	+ Folder	+ Dossier
+	+ Style	+ Style
+	Auto-advance to next page	Passer automatiquement à la page suivante
+	Automatically advance script to the next page	Fait passer automatiquement le script à la page suivante
+	Baseline shift:	Décalage de la ligne de base :
+	Chapter Pages…	Pages de chapitre…
+	Choose TypeR styles file	Choisir le fichier de styles TypeR
+	Choose a custom directory to store typesetter presets and state	Choisir un dossier personnalisé pour stocker les préréglages et l'état du composeur
+	Choose presets folder	Choisir le dossier des préréglages
+	Choose script file	Choisir le fichier de script
+	Clear entire script	Effacer tout le script
+	Clear script	Effacer le script
+	Delete this style	Supprimer ce style
+	Duplicate folder	Dupliquer le dossier
+	Duplicate this style	Dupliquer ce style
+	Each line becomes a separate dialogue entry. [Page 1] tags split pages.	Chaque ligne devient une réplique distincte. Les balises [Page 1] séparent les pages.
+	Editor	Éditeur
+	Engine:	Moteur :
+	Enter in Editor	Saisir dans l'éditeur
+	Enter script manually	Saisir le script manuellement
+	Enter: Jump • Shift+Enter: Peek • Esc: Close	Enter: Aller • Shift+Enter: Aperçu • Esc: Fermer
+	Exact reference CPU engine	Moteur CPU exact de référence
+	Export TypeR JSON…	Exporter le JSON TypeR…
+	Export TypeR styles	Exporter les styles TypeR
+	Export error	Erreur d'exportation
+	Favorite font	Police favorite
+	Find layer or text across open pages (@text, #group)...	Rechercher un calque ou du texte dans les pages ouvertes (@text, #group)...
+	Folder duplicated	Dossier dupliqué
+	Folder name	Nom du dossier
+	Font Settings	Paramètres de police
+	GEOMETRY & CENTERING	GÉOMÉTRIE ET CENTRAGE
+	GPU on large canvases, CPU on small	GPU sur les grands canevas, CPU sur les petits
+	Go to current line/page	Aller à la ligne/page actuelle
+	Horizontal scale (%)	Échelle horizontale (%)
+	Import TypeR JSON…	Importer le JSON TypeR…
+	Import error	Erreur d'importation
+	Insert current line into selection/bubble (Enter)	Insérer la ligne actuelle dans la sélection/bulle (Enter)
+	Insert this line into bubble (Enter)	Insérer cette ligne dans la bulle (Enter)
+	Load .txt	Charger un .txt
+	Load file (.txt)…	Charger un fichier (.txt)…
+	Load from file	Charger depuis un fichier
+	Load into typesetter	Charger dans le composeur
+	Load script file (.txt)	Charger un fichier de script (.txt)
+	Load script file (.txt)…	Charger un fichier de script (.txt)…
+	Loaded dialogues	Dialogues chargés
+	Loaded styles	Styles chargés
+	Make this line current	Définir comme ligne actuelle
+	Manga Script (Full Text)	Script manga (texte intégral)
+	Manga Workflow	Flux de travail manga
+	New Folder	Nouveau dossier
+	Next line (↓)	Ligne suivante (↓)
+	Next page	Page suivante
+	No folder	Aucun dossier
+	No matching layers or text in open pages	Aucun calque ni texte correspondant dans les pages ouvertes
+	No outline	Aucun contour
+	No script loaded	Aucun script chargé
+	Open .txt	Ouvrir un .txt
+	Open presets folder in file manager	Ouvrir le dossier des préréglages dans le gestionnaire de fichiers
+	Open script in separate window	Ouvrir le script dans une fenêtre séparée
+	Open script text editor	Ouvrir l'éditeur de texte du script
+	PRESET STORAGE	STOCKAGE DES PRÉRÉGLAGES
+	Page	Page
+	Paste / Edit script…	Coller / modifier le script…
+	Paste copied text from clipboard	Coller le texte copié depuis le presse-papiers
+	Paste from Clipboard	Coller depuis le presse-papiers
+	Paste from Clipboard (Ctrl+V)	Coller depuis le presse-papiers (Ctrl+V)
+	Paste script from clipboard (Ctrl+V)	Coller le script depuis le presse-papiers (Ctrl+V)
+	Paste script text from clipboard (Ctrl+V)	Coller le texte du script depuis le presse-papiers (Ctrl+V)
+	Paste script text here (Ctrl+V) or write dialogues…	Collez le texte du script ici (Ctrl+V) ou saisissez les répliques…
+	Presets loaded from file	Préréglages chargés depuis le fichier
+	Presets saved	Préréglages enregistrés
+	Previous line (↑)	Ligne précédente (↑)
+	Previous page	Page précédente
+	Read error	Erreur de lecture
+	Reset folder	Réinitialiser le dossier
+	Reset presets storage to default AppData directory	Rétablir le stockage des préréglages dans le dossier AppData par défaut
+	Save now	Enregistrer maintenant
+	Script	Script
+	Script Editor	Éditeur de script
+	Shifting the baseline down ensures precise visual vertical centering inside bubbles.	Le fait d'abaisser la ligne de base garantit un centrage vertical visuel précis dans les bulles.
+	Show current page dialogues only	Afficher uniquement les répliques de la page actuelle
+	Size (pt)	Taille (pt)
+	Split Left Dock (Pages + TypeR)…	Diviser l'ancrage gauche (Pages + TypeR)…
+	Storage folder reset to default	Dossier de stockage rétabli par défaut
+	Storage folder set	Dossier de stockage défini
+	Strip character names	Supprimer les noms de personnages
+	Strip character names at start of line ('HERO: Text')	Supprime les noms de personnages en début de ligne ('HERO: Text')
+	Strip leading dashes	Supprimer les tirets en début de ligne
+	Strip leading dashes ('- Text', '— Text')	Supprime les tirets en début de ligne ('- Texte', '— Texte')
+	Style name	Nom du style
+	Styles successfully exported	Styles exportés avec succès
+	Sync line spacing	Synchroniser l'interlignage
+	Sync line spacing with font size	Synchroniser l'interlignage avec la taille de police
+	TYPESETTER BEHAVIOR	COMPORTEMENT DU COMPOSEUR
+	Text Outline	Contour du texte
+	Thickness (px)	Épaisseur (px)
+	Toggle Chapter Pages panel	Afficher/masquer le panneau Pages de chapitre
+	TypeR Styles	Styles TypeR
+	Typography Size (Line Spacing Sync)	Taille typographique (interlignage synchronisé)
+	Typography and Font	Typographie et police
+	Ultra-fast real-time rendering for giant files	Rendu en temps réel ultra-rapide pour les fichiers géants
+	Write error	Erreur d'écriture
+	left	restant
+	line	Ligne
+	size	Taille
+	style	Style
+	⚙ CPU	⚙ CPU
+	⚡ GPU	⚡ GPU
+	Pages	Pages
+	Find in Open Pages…	Rechercher dans les pages ouvertes…
+	Last export dir	Dernier dossier d'exportation

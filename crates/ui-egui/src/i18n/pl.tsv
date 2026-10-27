@@ -4432,3 +4432,118 @@ curves	Smooth	Wygładź
 	Remove what is selected with Nano Banana ({key})	Usuń zaznaczenie za pomocą Nano Banana ({key})
 	Pin to Top	Przypnij na górze
 	Unpin from Top	Odepnij z góry
+
+# TypeR script editor, Pages and export (v0.14)
+	(end of script)	(koniec scenariusza)
+	(no script loaded — see 'Script' tab)	(nie wczytano scenariusza — patrz karta „Scenariusz”)
+	+ Folder	+ Folder
+	+ Style	+ Styl
+	Auto-advance to next page	Automatyczne przejście do następnej strony
+	Automatically advance script to the next page	Automatycznie przechodź do następnej strony scenariusza
+	Baseline shift:	Przesunięcie linii bazowej:
+	Chapter Pages…	Strony rozdziału…
+	Choose TypeR styles file	Wybierz plik stylów TypeR
+	Choose a custom directory to store typesetter presets and state	Wybierz własny folder do przechowywania ustawień wstępnych i stanu składacza
+	Choose presets folder	Wybierz folder ustawień wstępnych
+	Choose script file	Wybierz plik scenariusza
+	Clear entire script	Wyczyść cały scenariusz
+	Clear script	Wyczyść scenariusz
+	Delete this style	Usuń ten styl
+	Duplicate folder	Duplikuj folder
+	Duplicate this style	Duplikuj ten styl
+	Each line becomes a separate dialogue entry. [Page 1] tags split pages.	Każdy wiersz staje się osobną kwestią. Znaczniki [Page 1] dzielą strony.
+	Editor	Edytor
+	Engine:	Silnik:
+	Enter in Editor	Wpisz w edytorze
+	Enter script manually	Wprowadź scenariusz ręcznie
+	Enter: Jump • Shift+Enter: Peek • Esc: Close	Enter: przejdź • Shift+Enter: podgląd • Esc: zamknij
+	Exact reference CPU engine	Dokładny referencyjny silnik CPU
+	Export TypeR JSON…	Eksportuj TypeR JSON…
+	Export TypeR styles	Eksportuj style TypeR
+	Export error	Błąd eksportu
+	Favorite font	Ulubiona czcionka
+	Find layer or text across open pages (@text, #group)...	Szukaj warstwy lub tekstu na otwartych stronach (@text, #group)...
+	Folder duplicated	Folder zduplikowany
+	Folder name	Nazwa folderu
+	Font Settings	Ustawienia czcionki
+	GEOMETRY & CENTERING	GEOMETRIA I WYŚRODKOWANIE
+	GPU on large canvases, CPU on small	GPU na dużych płótnach, CPU na małych
+	Go to current line/page	Przejdź do bieżącego wiersza/strony
+	Horizontal scale (%)	Skala pozioma (%)
+	Import TypeR JSON…	Importuj TypeR JSON…
+	Import error	Błąd importu
+	Insert current line into selection/bubble (Enter)	Wstaw bieżący wiersz do zaznaczenia/dymka (Enter)
+	Insert this line into bubble (Enter)	Wstaw ten wiersz do dymka (Enter)
+	Load .txt	Wczytaj .txt
+	Load file (.txt)…	Wczytaj plik (.txt)…
+	Load from file	Wczytaj z pliku
+	Load into typesetter	Wczytaj do składacza
+	Load script file (.txt)	Wczytaj plik scenariusza (.txt)
+	Load script file (.txt)…	Wczytaj plik scenariusza (.txt)…
+	Loaded dialogues	Wczytane kwestie
+	Loaded styles	Wczytane style
+	Make this line current	Ustaw ten wiersz jako bieżący
+	Manga Script (Full Text)	Scenariusz mangi (pełny tekst)
+	Manga Workflow	Przepływ pracy mangi
+	New Folder	Nowy folder
+	Next line (↓)	Następny wiersz (↓)
+	Next page	Następna strona
+	No folder	Brak folderu
+	No matching layers or text in open pages	Brak pasujących warstw lub tekstu na otwartych stronach
+	No outline	Bez obrysu
+	No script loaded	Nie wczytano scenariusza
+	Open .txt	Otwórz .txt
+	Open presets folder in file manager	Otwórz folder ustawień wstępnych w menedżerze plików
+	Open script in separate window	Otwórz scenariusz w osobnym oknie
+	Open script text editor	Otwórz edytor tekstu scenariusza
+	PRESET STORAGE	MIEJSCE USTAWIEŃ WSTĘPNYCH
+	Page	Strona
+	Paste / Edit script…	Wklej / edytuj scenariusz…
+	Paste copied text from clipboard	Wklej skopiowany tekst ze schowka
+	Paste from Clipboard	Wklej ze schowka
+	Paste from Clipboard (Ctrl+V)	Wklej ze schowka (Ctrl+V)
+	Paste script from clipboard (Ctrl+V)	Wklej scenariusz ze schowka (Ctrl+V)
+	Paste script text from clipboard (Ctrl+V)	Wklej tekst scenariusza ze schowka (Ctrl+V)
+	Paste script text here (Ctrl+V) or write dialogues…	Wklej tu tekst scenariusza (Ctrl+V) lub napisz kwestie…
+	Presets loaded from file	Wczytano ustawienia wstępne z pliku
+	Presets saved	Zapisano ustawienia wstępne
+	Previous line (↑)	Poprzedni wiersz (↑)
+	Previous page	Poprzednia strona
+	Read error	Błąd odczytu
+	Reset folder	Resetuj folder
+	Reset presets storage to default AppData directory	Przywróć domyślny folder AppData dla ustawień wstępnych
+	Save now	Zapisz teraz
+	Script	Scenariusz
+	Script Editor	Edytor scenariusza
+	Shifting the baseline down ensures precise visual vertical centering inside bubbles.	Przesunięcie linii bazowej w dół zapewnia dokładne wizualne wyśrodkowanie w pionie wewnątrz dymków.
+	Show current page dialogues only	Pokaż tylko kwestie z bieżącej strony
+	Size (pt)	Rozmiar (pt)
+	Split Left Dock (Pages + TypeR)…	Podziel lewy dok (Strony + TypeR)…
+	Storage folder reset to default	Przywrócono domyślny folder przechowywania
+	Storage folder set	Ustawiono folder przechowywania
+	Strip character names	Usuwaj imiona postaci
+	Strip character names at start of line ('HERO: Text')	Usuwaj imiona postaci na początku wiersza ('HERO: Text')
+	Strip leading dashes	Usuwaj początkowe myślniki
+	Strip leading dashes ('- Text', '— Text')	Usuwaj początkowe myślniki ('- Text', '— Text')
+	Style name	Nazwa stylu
+	Styles successfully exported	Pomyślnie wyeksportowano style
+	Sync line spacing	Synchronizuj interlinie
+	Sync line spacing with font size	Synchronizuj interlinie z rozmiarem czcionki
+	TYPESETTER BEHAVIOR	ZACHOWANIE SKŁADACZA
+	Text Outline	Obrys tekstu
+	Thickness (px)	Grubość (px)
+	Toggle Chapter Pages panel	Przełącz panel stron rozdziału
+	TypeR Styles	Style TypeR
+	Typography Size (Line Spacing Sync)	Rozmiar typografii (synchronizacja interlinii)
+	Typography and Font	Typografia i czcionka
+	Ultra-fast real-time rendering for giant files	Ekstremalnie szybkie renderowanie w czasie rzeczywistym dla ogromnych plików
+	Write error	Błąd zapisu
+	left	pozostało
+	line	wiersz
+	size	rozmiar
+	style	styl
+	⚙ CPU	⚙ CPU
+	⚡ GPU	⚡ GPU
+	Pages	Strony
+	Find in Open Pages…	Znajdź na otwartych stronach…
+	Last export dir	Ostatni folder eksportu

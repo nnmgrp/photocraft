@@ -4502,6 +4502,120 @@ curves	Smooth	スムーズ
 	White Cutoff:	白のカットオフ:
 # Color Range recorded in an action: the sampled colours (2026-10-23)
 	Sample: recorded colours	サンプル: 記録された色
+# TypeR, Pages and export (v0.14 Comic-alpha)
+	Find in Open Pages…	開いているページ内を検索…
+	Pages	ページ
+	Last export dir	最後の書き出し先
+	(end of script)	(台本の終わり)
+	(no script loaded — see 'Script' tab)	(台本が読み込まれていません — 「台本」タブを参照)
+	+ Folder	+ フォルダー
+	+ Style	+ スタイル
+	Auto-advance to next page	次のページへ自動送り
+	Automatically advance script to the next page	台本を次のページへ自動的に進めます
+	Baseline shift:	ベースラインシフト:
+	Chapter Pages…	章のページ…
+	Choose TypeR styles file	TypeRスタイルファイルを選択
+	Choose a custom directory to store typesetter presets and state	タイプセッターのプリセットと状態を保存するフォルダーを選択
+	Choose presets folder	プリセットフォルダーを選択
+	Choose script file	台本ファイルを選択
+	Clear entire script	台本をすべて消去
+	Clear script	台本を消去
+	Delete this style	このスタイルを削除
+	Duplicate folder	フォルダーを複製
+	Duplicate this style	このスタイルを複製
+	Each line becomes a separate dialogue entry. [Page 1] tags split pages.	各行が1つのセリフになります。[Page 1] タグでページを分割します。
+	Editor	エディター
+	Engine:	エンジン:
+	Enter in Editor	エディターで入力
+	Enter script manually	台本を手動入力
+	Enter: Jump • Shift+Enter: Peek • Esc: Close	Enter: ジャンプ • Shift+Enter: のぞく • Esc: 閉じる
+	Exact reference CPU engine	正確なリファレンスCPUエンジン
+	Export TypeR JSON…	TypeR JSONを書き出し…
+	Export TypeR styles	TypeRスタイルを書き出し
+	Export error	書き出しエラー
+	Favorite font	お気に入りフォント
+	Find layer or text across open pages (@text, #group)...	開いているページのレイヤーやテキストを検索 (@text, #group)...
+	Folder duplicated	フォルダーを複製しました
+	Folder name	フォルダー名
+	Font Settings	フォント設定
+	GEOMETRY & CENTERING	ジオメトリと中央揃え
+	GPU on large canvases, CPU on small	大きなキャンバスではGPU、小さい場合はCPU
+	Go to current line/page	現在の行/ページへ移動
+	Horizontal scale (%)	水平方向の拡大率 (%)
+	Import TypeR JSON…	TypeR JSONを読み込み…
+	Import error	読み込みエラー
+	Insert current line into selection/bubble (Enter)	現在の行を選択範囲/フキダシに挿入 (Enter)
+	Insert this line into bubble (Enter)	この行をフキダシに挿入 (Enter)
+	Load .txt	.txtを読み込み
+	Load file (.txt)…	ファイルを読み込み (.txt)…
+	Load from file	ファイルから読み込み
+	Load into typesetter	タイプセッターに読み込み
+	Load script file (.txt)	台本ファイルを読み込み (.txt)
+	Load script file (.txt)…	台本ファイルを読み込み (.txt)…
+	Loaded dialogues	読み込んだセリフ
+	Loaded styles	読み込んだスタイル
+	Make this line current	この行を現在行にする
+	Manga Script (Full Text)	漫画台本 (全文)
+	Manga Workflow	漫画ワークフロー
+	New Folder	新しいフォルダー
+	Next line (↓)	次の行 (↓)
+	Next page	次のページ
+	No folder	フォルダーなし
+	No matching layers or text in open pages	開いているページに一致するレイヤーやテキストがありません
+	No outline	アウトラインなし
+	No script loaded	台本が読み込まれていません
+	Open .txt	.txtを開く
+	Open presets folder in file manager	プリセットフォルダーをファイルマネージャーで開く
+	Open script in separate window	台本を別ウィンドウで開く
+	Open script text editor	台本テキストエディターを開く
+	PRESET STORAGE	プリセットの保存先
+	Page	ページ
+	Paste / Edit script…	台本を貼り付け/編集…
+	Paste copied text from clipboard	コピーしたテキストをクリップボードから貼り付け
+	Paste from Clipboard	クリップボードから貼り付け
+	Paste from Clipboard (Ctrl+V)	クリップボードから貼り付け (Ctrl+V)
+	Paste script from clipboard (Ctrl+V)	台本をクリップボードから貼り付け (Ctrl+V)
+	Paste script text from clipboard (Ctrl+V)	台本テキストをクリップボードから貼り付け (Ctrl+V)
+	Paste script text here (Ctrl+V) or write dialogues…	ここに台本テキストを貼り付ける (Ctrl+V) か、セリフを入力…
+	Presets loaded from file	プリセットをファイルから読み込みました
+	Presets saved	プリセットを保存しました
+	Previous line (↑)	前の行 (↑)
+	Previous page	前のページ
+	Read error	読み込みエラー
+	Reset folder	フォルダーをリセット
+	Reset presets storage to default AppData directory	プリセットの保存先を既定のAppDataフォルダーに戻す
+	Save now	今すぐ保存
+	Script	台本
+	Script Editor	台本エディター
+	Shifting the baseline down ensures precise visual vertical centering inside bubbles.	ベースラインを下げると、フキダシ内で視覚的に正確な垂直中央揃えになります。
+	Show current page dialogues only	現在のページのセリフのみ表示
+	Size (pt)	サイズ (pt)
+	Split Left Dock (Pages + TypeR)…	左ドックを分割 (ページ + TypeR)…
+	Storage folder reset to default	保存先フォルダーを既定に戻しました
+	Storage folder set	保存先フォルダーを設定しました
+	Strip character names	キャラクター名を除去
+	Strip character names at start of line ('HERO: Text')	行頭のキャラクター名を除去 ('HERO: テキスト')
+	Strip leading dashes	先頭のダッシュを除去
+	Strip leading dashes ('- Text', '— Text')	先頭のダッシュを除去 ('- テキスト', '— テキスト')
+	Style name	スタイル名
+	Styles successfully exported	スタイルを書き出しました
+	Sync line spacing	行間を同期
+	Sync line spacing with font size	行間をフォントサイズと同期
+	TYPESETTER BEHAVIOR	タイプセッターの動作
+	Text Outline	テキストのアウトライン
+	Thickness (px)	太さ (px)
+	Toggle Chapter Pages panel	章のページパネルを切り替え
+	TypeR Styles	TypeRスタイル
+	Typography Size (Line Spacing Sync)	文字サイズ (行間同期)
+	Typography and Font	組版とフォント
+	Ultra-fast real-time rendering for giant files	巨大ファイル向けの超高速リアルタイムレンダリング
+	Write error	書き込みエラー
+	left	左
+	line	行
+	size	サイズ
+	style	スタイル
+	⚙ CPU	⚙ CPU
+	⚡ GPU	⚡ GPU
 # Remove tool AI Remove; pinned brush group (2026-10-23)
 	AI Remove	AI 削除
 	Remove what is selected with Nano Banana ({key})	選択範囲を Nano Banana で削除 ({key})

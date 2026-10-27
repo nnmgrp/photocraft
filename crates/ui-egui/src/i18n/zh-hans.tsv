@@ -3482,3 +3482,118 @@ curves	Smooth	平滑
 	Remove what is selected with Nano Banana ({key})	用 Nano Banana 移除所选内容 ({key})
 	Pin to Top	固定到顶部
 	Unpin from Top	取消固定到顶部
+
+# TypeR script editor, Pages and export (v0.14)
+	(end of script)	（脚本结束）
+	(no script loaded — see 'Script' tab)	（未载入脚本 — 请参见“脚本”选项卡）
+	+ Folder	+ 文件夹
+	+ Style	+ 样式
+	Auto-advance to next page	自动前进到下一页
+	Automatically advance script to the next page	自动将脚本推进到下一页
+	Baseline shift:	基线偏移：
+	Chapter Pages…	章节页面…
+	Choose TypeR styles file	选择 TypeR 样式文件
+	Choose a custom directory to store typesetter presets and state	选择用于存储排版器预设和状态的自定义目录
+	Choose presets folder	选择预设文件夹
+	Choose script file	选择脚本文件
+	Clear entire script	清空整个脚本
+	Clear script	清空脚本
+	Delete this style	删除此样式
+	Duplicate folder	复制文件夹
+	Duplicate this style	复制此样式
+	Each line becomes a separate dialogue entry. [Page 1] tags split pages.	每一行都会成为一个独立的对白条目。[Page 1] 标记用于拆分页面。
+	Editor	编辑器
+	Engine:	引擎：
+	Enter in Editor	在编辑器中按 Enter
+	Enter script manually	手动输入脚本
+	Enter: Jump • Shift+Enter: Peek • Esc: Close	Enter：跳转 • Shift+Enter：预览 • Esc：关闭
+	Exact reference CPU engine	精确参考 CPU 引擎
+	Export TypeR JSON…	导出 TypeR JSON…
+	Export TypeR styles	导出 TypeR 样式
+	Export error	导出错误
+	Favorite font	收藏字体
+	Find layer or text across open pages (@text, #group)...	在打开的页面中查找图层或文本 (@text、#group)...
+	Folder duplicated	文件夹已复制
+	Folder name	文件夹名称
+	Font Settings	字体设置
+	GEOMETRY & CENTERING	几何与居中
+	GPU on large canvases, CPU on small	大画布使用 GPU，小画布使用 CPU
+	Go to current line/page	转到当前行/页面
+	Horizontal scale (%)	水平缩放 (%)
+	Import TypeR JSON…	导入 TypeR JSON…
+	Import error	导入错误
+	Insert current line into selection/bubble (Enter)	将当前行插入选区/气泡（Enter）
+	Insert this line into bubble (Enter)	将此行插入气泡（Enter）
+	Load .txt	载入 .txt
+	Load file (.txt)…	载入文件（.txt）…
+	Load from file	从文件载入
+	Load into typesetter	载入到排版器
+	Load script file (.txt)	载入脚本文件（.txt）
+	Load script file (.txt)…	载入脚本文件（.txt）…
+	Loaded dialogues	已载入对白
+	Loaded styles	已载入样式
+	Make this line current	将此行设为当前行
+	Manga Script (Full Text)	漫画脚本（全文）
+	Manga Workflow	漫画工作流
+	New Folder	新建文件夹
+	Next line (↓)	下一行（↓）
+	Next page	下一页
+	No folder	无文件夹
+	No matching layers or text in open pages	打开的页面中没有匹配的图层或文本
+	No outline	无描边
+	No script loaded	未载入脚本
+	Open .txt	打开 .txt
+	Open presets folder in file manager	在文件管理器中打开预设文件夹
+	Open script in separate window	在单独窗口中打开脚本
+	Open script text editor	打开脚本文本编辑器
+	PRESET STORAGE	预设存储
+	Page	页面
+	Paste / Edit script…	粘贴/编辑脚本…
+	Paste copied text from clipboard	从剪贴板粘贴复制的文本
+	Paste from Clipboard	从剪贴板粘贴
+	Paste from Clipboard (Ctrl+V)	从剪贴板粘贴 (Ctrl+V)
+	Paste script from clipboard (Ctrl+V)	从剪贴板粘贴脚本 (Ctrl+V)
+	Paste script text from clipboard (Ctrl+V)	从剪贴板粘贴脚本文本 (Ctrl+V)
+	Paste script text here (Ctrl+V) or write dialogues…	在此粘贴脚本文本 (Ctrl+V) 或编写对白…
+	Presets loaded from file	已从文件载入预设
+	Presets saved	预设已保存
+	Previous line (↑)	上一行（↑）
+	Previous page	上一页
+	Read error	读取错误
+	Reset folder	重置文件夹
+	Reset presets storage to default AppData directory	将预设存储重置为默认 AppData 目录
+	Save now	立即保存
+	Script	脚本
+	Script Editor	脚本编辑器
+	Shifting the baseline down ensures precise visual vertical centering inside bubbles.	将基线向下移动可确保气泡内精确的视觉垂直居中。
+	Show current page dialogues only	仅显示当前页面的对白
+	Size (pt)	大小 (pt)
+	Split Left Dock (Pages + TypeR)…	拆分左侧停靠区（页面 + TypeR）…
+	Storage folder reset to default	存储文件夹已重置为默认
+	Storage folder set	存储文件夹已设置
+	Strip character names	去除角色名
+	Strip character names at start of line ('HERO: Text')	去除行首的角色名（'HERO: Text'）
+	Strip leading dashes	去除开头的破折号
+	Strip leading dashes ('- Text', '— Text')	去除开头的破折号（'- Text'、'— Text'）
+	Style name	样式名称
+	Styles successfully exported	样式已成功导出
+	Sync line spacing	同步行距
+	Sync line spacing with font size	使行距与字号同步
+	TYPESETTER BEHAVIOR	排版器行为
+	Text Outline	文字描边
+	Thickness (px)	粗细 (px)
+	Toggle Chapter Pages panel	切换章节页面面板
+	TypeR Styles	TypeR 样式
+	Typography Size (Line Spacing Sync)	排版大小（行距同步）
+	Typography and Font	排版与字体
+	Ultra-fast real-time rendering for giant files	为超大文件提供超快实时渲染
+	Write error	写入错误
+	left	左
+	line	行
+	size	大小
+	style	样式
+	⚙ CPU	⚙ CPU
+	⚡ GPU	⚡ GPU
+	Pages	页面
+	Find in Open Pages…	在打开的页面中查找…
+	Last export dir	上次导出目录

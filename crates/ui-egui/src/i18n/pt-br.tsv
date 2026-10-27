@@ -4749,3 +4749,118 @@ layerLabel	No Color	Sem cor
 	Remove what is selected with Nano Banana ({key})	Remover a seleção com o Nano Banana ({key})
 	Pin to Top	Fixar no topo
 	Unpin from Top	Desafixar do topo
+
+# TypeR script editor, Pages and export (v0.14)
+	(end of script)	(fim do roteiro)
+	(no script loaded — see 'Script' tab)	(nenhum roteiro carregado — consulte a aba “Roteiro”)
+	+ Folder	+ Pasta
+	+ Style	+ Estilo
+	Auto-advance to next page	Avançar automaticamente para a próxima página
+	Automatically advance script to the next page	Avançar o roteiro automaticamente para a próxima página
+	Baseline shift:	Deslocamento da linha de base:
+	Chapter Pages…	Páginas de capítulo…
+	Choose TypeR styles file	Escolher arquivo de estilos TypeR
+	Choose a custom directory to store typesetter presets and state	Escolher uma pasta personalizada para armazenar as predefinições e o estado do diagramador
+	Choose presets folder	Escolher pasta de predefinições
+	Choose script file	Escolher arquivo de roteiro
+	Clear entire script	Limpar todo o roteiro
+	Clear script	Limpar roteiro
+	Delete this style	Excluir este estilo
+	Duplicate folder	Duplicar pasta
+	Duplicate this style	Duplicar este estilo
+	Each line becomes a separate dialogue entry. [Page 1] tags split pages.	Cada linha se torna uma entrada de diálogo separada. As tags [Page 1] dividem as páginas.
+	Editor	Editor
+	Engine:	Mecanismo:
+	Enter in Editor	Enter no editor
+	Enter script manually	Inserir o roteiro manualmente
+	Enter: Jump • Shift+Enter: Peek • Esc: Close	Enter: Ir • Shift+Enter: Espiar • Esc: Fechar
+	Exact reference CPU engine	Mecanismo de CPU de referência exata
+	Export TypeR JSON…	Exportar JSON do TypeR…
+	Export TypeR styles	Exportar estilos TypeR
+	Export error	Erro de exportação
+	Favorite font	Fonte favorita
+	Find layer or text across open pages (@text, #group)...	Localizar camada ou texto nas páginas abertas (@text, #group)...
+	Folder duplicated	Pasta duplicada
+	Folder name	Nome da pasta
+	Font Settings	Configurações de fonte
+	GEOMETRY & CENTERING	GEOMETRIA E CENTRALIZAÇÃO
+	GPU on large canvases, CPU on small	GPU em telas grandes, CPU em telas pequenas
+	Go to current line/page	Ir para a linha/página atual
+	Horizontal scale (%)	Escala horizontal (%)
+	Import TypeR JSON…	Importar JSON do TypeR…
+	Import error	Erro de importação
+	Insert current line into selection/bubble (Enter)	Inserir a linha atual na seleção/balão (Enter)
+	Insert this line into bubble (Enter)	Inserir esta linha no balão (Enter)
+	Load .txt	Carregar .txt
+	Load file (.txt)…	Carregar arquivo (.txt)…
+	Load from file	Carregar do arquivo
+	Load into typesetter	Carregar no diagramador
+	Load script file (.txt)	Carregar arquivo de roteiro (.txt)
+	Load script file (.txt)…	Carregar arquivo de roteiro (.txt)…
+	Loaded dialogues	Diálogos carregados
+	Loaded styles	Estilos carregados
+	Make this line current	Tornar esta linha atual
+	Manga Script (Full Text)	Roteiro de mangá (texto completo)
+	Manga Workflow	Fluxo de trabalho de mangá
+	New Folder	Nova pasta
+	Next line (↓)	Próxima linha (↓)
+	Next page	Próxima página
+	No folder	Sem pasta
+	No matching layers or text in open pages	Nenhuma camada ou texto correspondente nas páginas abertas
+	No outline	Sem contorno
+	No script loaded	Nenhum roteiro carregado
+	Open .txt	Abrir .txt
+	Open presets folder in file manager	Abrir a pasta de predefinições no gerenciador de arquivos
+	Open script in separate window	Abrir o roteiro em uma janela separada
+	Open script text editor	Abrir o editor de texto do roteiro
+	PRESET STORAGE	ARMAZENAMENTO DE PREDEFINIÇÕES
+	Page	Página
+	Paste / Edit script…	Colar ou editar o roteiro…
+	Paste copied text from clipboard	Colar o texto copiado da área de transferência
+	Paste from Clipboard	Colar da área de transferência
+	Paste from Clipboard (Ctrl+V)	Colar da área de transferência (Ctrl+V)
+	Paste script from clipboard (Ctrl+V)	Colar o roteiro da área de transferência (Ctrl+V)
+	Paste script text from clipboard (Ctrl+V)	Colar o texto do roteiro da área de transferência (Ctrl+V)
+	Paste script text here (Ctrl+V) or write dialogues…	Cole aqui o texto do roteiro (Ctrl+V) ou escreva os diálogos…
+	Presets loaded from file	Predefinições carregadas do arquivo
+	Presets saved	Predefinições salvas
+	Previous line (↑)	Linha anterior (↑)
+	Previous page	Página anterior
+	Read error	Erro de leitura
+	Reset folder	Redefinir pasta
+	Reset presets storage to default AppData directory	Redefinir o armazenamento de predefinições para o diretório AppData padrão
+	Save now	Salvar agora
+	Script	Roteiro
+	Script Editor	Editor de roteiro
+	Shifting the baseline down ensures precise visual vertical centering inside bubbles.	Deslocar a linha de base para baixo garante uma centralização vertical visual precisa dentro dos balões.
+	Show current page dialogues only	Mostrar apenas os diálogos da página atual
+	Size (pt)	Tamanho (pt)
+	Split Left Dock (Pages + TypeR)…	Dividir o painel acoplado esquerdo (Páginas + TypeR)…
+	Storage folder reset to default	Pasta de armazenamento redefinida para o padrão
+	Storage folder set	Pasta de armazenamento definida
+	Strip character names	Remover os nomes dos personagens
+	Strip character names at start of line ('HERO: Text')	Remover os nomes dos personagens no início da linha (“HERO: Text”)
+	Strip leading dashes	Remover os travessões iniciais
+	Strip leading dashes ('- Text', '— Text')	Remover os travessões iniciais (“- Text”, “— Text”)
+	Style name	Nome do estilo
+	Styles successfully exported	Estilos exportados com sucesso
+	Sync line spacing	Sincronizar o espaçamento entre linhas
+	Sync line spacing with font size	Sincronizar o espaçamento entre linhas com o tamanho da fonte
+	TYPESETTER BEHAVIOR	COMPORTAMENTO DO DIAGRAMADOR
+	Text Outline	Contorno do texto
+	Thickness (px)	Espessura (px)
+	Toggle Chapter Pages panel	Alternar o painel Páginas de capítulo
+	TypeR Styles	Estilos TypeR
+	Typography Size (Line Spacing Sync)	Tamanho da tipografia (sincronização do espaçamento entre linhas)
+	Typography and Font	Tipografia e fonte
+	Ultra-fast real-time rendering for giant files	Renderização em tempo real ultrarrápida para arquivos gigantes
+	Write error	Erro de gravação
+	left	esquerda
+	line	linha
+	size	tamanho
+	style	estilo
+	⚙ CPU	⚙ CPU
+	⚡ GPU	⚡ GPU
+	Pages	Páginas
+	Find in Open Pages…	Localizar nas páginas abertas…
+	Last export dir	Última pasta de exportação

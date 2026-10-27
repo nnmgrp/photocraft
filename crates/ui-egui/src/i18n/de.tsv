@@ -3830,3 +3830,118 @@ curves	Smooth	Glätten
 	Remove what is selected with Nano Banana ({key})	Auswahl mit Nano Banana entfernen ({key})
 	Pin to Top	Oben anheften
 	Unpin from Top	Oben lösen
+
+# TypeR script editor, Pages and export (v0.14)
+	(end of script)	(Ende des Skripts)
+	(no script loaded — see 'Script' tab)	(kein Skript geladen — siehe Tab 'Skript')
+	+ Folder	+ Ordner
+	+ Style	+ Stil
+	Auto-advance to next page	Automatisch zur nächsten Seite wechseln
+	Automatically advance script to the next page	Skript automatisch zur nächsten Seite weiterschalten
+	Baseline shift:	Grundlinienverschiebung:
+	Chapter Pages…	Kapitelseiten…
+	Choose TypeR styles file	TypeR-Stildatei wählen
+	Choose a custom directory to store typesetter presets and state	Eigenen Ordner für Vorgaben und Status des Schriftsetzers wählen
+	Choose presets folder	Vorgabenordner wählen
+	Choose script file	Skriptdatei wählen
+	Clear entire script	Gesamtes Skript löschen
+	Clear script	Skript löschen
+	Delete this style	Diesen Stil löschen
+	Duplicate folder	Ordner duplizieren
+	Duplicate this style	Diesen Stil duplizieren
+	Each line becomes a separate dialogue entry. [Page 1] tags split pages.	Jede Zeile wird zu einem eigenen Dialogeintrag. Tags [Page 1] trennen die Seiten.
+	Editor	Editor
+	Engine:	Engine:
+	Enter in Editor	Im Editor eingeben
+	Enter script manually	Skript manuell eingeben
+	Enter: Jump • Shift+Enter: Peek • Esc: Close	Enter: Springen • Shift+Enter: Vorschau • Esc: Schließen
+	Exact reference CPU engine	Exakte Referenz-Engine auf der CPU
+	Export TypeR JSON…	TypeR-JSON exportieren…
+	Export TypeR styles	TypeR-Stile exportieren
+	Export error	Fehler beim Exportieren
+	Favorite font	Favoritenschrift
+	Find layer or text across open pages (@text, #group)...	Ebene oder Text in geöffneten Seiten suchen (@text, #group)...
+	Folder duplicated	Ordner dupliziert
+	Folder name	Ordnername
+	Font Settings	Schrifteinstellungen
+	GEOMETRY & CENTERING	GEOMETRIE & ZENTRIERUNG
+	GPU on large canvases, CPU on small	GPU bei großen Zeichenflächen, CPU bei kleinen
+	Go to current line/page	Zur aktuellen Zeile/Seite springen
+	Horizontal scale (%)	Horizontale Skalierung (%)
+	Import TypeR JSON…	TypeR-JSON importieren…
+	Import error	Fehler beim Importieren
+	Insert current line into selection/bubble (Enter)	Aktuelle Zeile in Auswahl/Sprechblase einfügen (Enter)
+	Insert this line into bubble (Enter)	Diese Zeile in die Sprechblase einfügen (Enter)
+	Load .txt	.txt laden
+	Load file (.txt)…	Datei laden (.txt)…
+	Load from file	Aus Datei laden
+	Load into typesetter	In den Schriftsetzer laden
+	Load script file (.txt)	Skriptdatei laden (.txt)
+	Load script file (.txt)…	Skriptdatei laden (.txt)…
+	Loaded dialogues	Dialoge geladen
+	Loaded styles	Stile geladen
+	Make this line current	Diese Zeile zur aktuellen machen
+	Manga Script (Full Text)	Manga-Skript (Volltext)
+	Manga Workflow	Manga-Workflow
+	New Folder	Neuer Ordner
+	Next line (↓)	Nächste Zeile (↓)
+	Next page	Nächste Seite
+	No folder	Kein Ordner
+	No matching layers or text in open pages	Keine passenden Ebenen oder Texte in geöffneten Seiten
+	No outline	Keine Kontur
+	No script loaded	Kein Skript geladen
+	Open .txt	.txt öffnen
+	Open presets folder in file manager	Vorgabenordner im Dateimanager öffnen
+	Open script in separate window	Skript in separatem Fenster öffnen
+	Open script text editor	Skript-Texteditor öffnen
+	PRESET STORAGE	VORGABENSPEICHER
+	Page	Seite
+	Paste / Edit script…	Skript einfügen / bearbeiten…
+	Paste copied text from clipboard	Kopierten Text aus der Zwischenablage einfügen
+	Paste from Clipboard	Aus Zwischenablage einfügen
+	Paste from Clipboard (Ctrl+V)	Aus Zwischenablage einfügen (Ctrl+V)
+	Paste script from clipboard (Ctrl+V)	Skript aus der Zwischenablage einfügen (Ctrl+V)
+	Paste script text from clipboard (Ctrl+V)	Skripttext aus der Zwischenablage einfügen (Ctrl+V)
+	Paste script text here (Ctrl+V) or write dialogues…	Skripttext hier einfügen (Ctrl+V) oder Dialoge schreiben…
+	Presets loaded from file	Vorgaben aus Datei geladen
+	Presets saved	Vorgaben gespeichert
+	Previous line (↑)	Vorherige Zeile (↑)
+	Previous page	Vorherige Seite
+	Read error	Fehler beim Lesen
+	Reset folder	Ordner zurücksetzen
+	Reset presets storage to default AppData directory	Vorgabenspeicher auf das Standard-AppData-Verzeichnis zurücksetzen
+	Save now	Jetzt speichern
+	Script	Skript
+	Script Editor	Skript-Editor
+	Shifting the baseline down ensures precise visual vertical centering inside bubbles.	Ein Verschieben der Grundlinie nach unten sorgt für exakte optische vertikale Zentrierung in Sprechblasen.
+	Show current page dialogues only	Nur Dialoge der aktuellen Seite anzeigen
+	Size (pt)	Größe (pt)
+	Split Left Dock (Pages + TypeR)…	Linkes Dock teilen (Seiten + TypeR)…
+	Storage folder reset to default	Speicherordner auf Standard zurückgesetzt
+	Storage folder set	Speicherordner festgelegt
+	Strip character names	Figurennamen entfernen
+	Strip character names at start of line ('HERO: Text')	Entfernt Figurennamen am Zeilenanfang ('HERO: Text')
+	Strip leading dashes	Führende Striche entfernen
+	Strip leading dashes ('- Text', '— Text')	Entfernt führende Striche ('- Text', '— Text')
+	Style name	Name des Stils
+	Styles successfully exported	Stile erfolgreich exportiert
+	Sync line spacing	Zeilenabstand synchronisieren
+	Sync line spacing with font size	Zeilenabstand mit der Schriftgröße synchronisieren
+	TYPESETTER BEHAVIOR	VERHALTEN DES SCHRIFTSETZERS
+	Text Outline	Textkontur
+	Thickness (px)	Dicke (px)
+	Toggle Chapter Pages panel	Bedienfeld „Kapitelseiten“ ein-/ausblenden
+	TypeR Styles	TypeR-Stile
+	Typography Size (Line Spacing Sync)	Typografiegröße (Zeilenabstand synchronisiert)
+	Typography and Font	Typografie und Schrift
+	Ultra-fast real-time rendering for giant files	Ultraschnelles Echtzeit-Rendering für riesige Dateien
+	Write error	Fehler beim Schreiben
+	left	übrig
+	line	Zeile
+	size	Größe
+	style	Stil
+	⚙ CPU	⚙ CPU
+	⚡ GPU	⚡ GPU
+	Pages	Seiten
+	Find in Open Pages…	In geöffneten Seiten suchen…
+	Last export dir	Letzter Exportordner

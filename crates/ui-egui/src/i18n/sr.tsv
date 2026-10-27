@@ -4882,3 +4882,118 @@ shape	Appearance	Izgled
 	Remove what is selected with Nano Banana ({key})	Ukloni izabrano pomoću Nano Banana ({key})
 	Pin to Top	Zakači na vrh
 	Unpin from Top	Otkači sa vrha
+
+# TypeR script editor, Pages and export (v0.14)
+	(end of script)	(kraj scenarija)
+	(no script loaded — see 'Script' tab)	(nema učitanog scenarija — pogledajte karticu „Scenario”)
+	+ Folder	+ Fascikla
+	+ Style	+ Stil
+	Auto-advance to next page	Automatski pređi na sledeću stranicu
+	Automatically advance script to the next page	Automatski pređi scenario na sledeću stranicu
+	Baseline shift:	Pomeranje osnovne linije:
+	Chapter Pages…	Stranice poglavlja…
+	Choose TypeR styles file	Izaberi datoteku TypeR stilova
+	Choose a custom directory to store typesetter presets and state	Izaberi prilagođenu fasciklu za čuvanje šablona i stanja slagača
+	Choose presets folder	Izaberi fasciklu šablona
+	Choose script file	Izaberi datoteku scenarija
+	Clear entire script	Obriši ceo scenario
+	Clear script	Očisti scenario
+	Delete this style	Obriši ovaj stil
+	Duplicate folder	Dupliraj fasciklu
+	Duplicate this style	Dupliraj ovaj stil
+	Each line becomes a separate dialogue entry. [Page 1] tags split pages.	Svaki red postaje zasebna replika. Oznake [Page 1] dele tekst na stranice.
+	Editor	Editor
+	Engine:	Motor:
+	Enter in Editor	Unos u editoru
+	Enter script manually	Unesi scenario ručno
+	Enter: Jump • Shift+Enter: Peek • Esc: Close	Enter: skok • Shift+Enter: zaviri • Esc: zatvori
+	Exact reference CPU engine	Tačan referentni CPU motor
+	Export TypeR JSON…	Izvezi TypeR JSON…
+	Export TypeR styles	Izvezi TypeR stilove
+	Export error	Greška pri izvozu
+	Favorite font	Omiljeni font
+	Find layer or text across open pages (@text, #group)...	Nađi sloj ili tekst na otvorenim stranicama (@text, #group)...
+	Folder duplicated	Fascikla duplirana
+	Folder name	Ime fascikle
+	Font Settings	Podešavanja fonta
+	GEOMETRY & CENTERING	GEOMETRIJA I CENTRIRANJE
+	GPU on large canvases, CPU on small	GPU na velikim platnima, CPU na malim
+	Go to current line/page	Idi na tekući red/stranicu
+	Horizontal scale (%)	Horizontalna razmera (%)
+	Import TypeR JSON…	Uvezi TypeR JSON…
+	Import error	Greška pri uvozu
+	Insert current line into selection/bubble (Enter)	Umetni tekući red u selekciju/oblačić (Enter)
+	Insert this line into bubble (Enter)	Umetni ovaj red u oblačić (Enter)
+	Load .txt	Učitaj .txt
+	Load file (.txt)…	Učitaj datoteku (.txt)…
+	Load from file	Učitaj iz datoteke
+	Load into typesetter	Učitaj u slagača
+	Load script file (.txt)	Učitaj datoteku scenarija (.txt)
+	Load script file (.txt)…	Učitaj datoteku scenarija (.txt)…
+	Loaded dialogues	Učitane replike
+	Loaded styles	Učitani stilovi
+	Make this line current	Postavi ovaj red kao tekući
+	Manga Script (Full Text)	Manga scenario (ceo tekst)
+	Manga Workflow	Manga radni tok
+	New Folder	Nova fascikla
+	Next line (↓)	Sledeći red (↓)
+	Next page	Sledeća stranica
+	No folder	Bez fascikle
+	No matching layers or text in open pages	Nema odgovarajućih slojeva ili teksta na otvorenim stranicama
+	No outline	Bez obrisa
+	No script loaded	Nema učitanog scenarija
+	Open .txt	Otvori .txt
+	Open presets folder in file manager	Otvori fasciklu šablona u upravljaču datoteka
+	Open script in separate window	Otvori scenario u zasebnom prozoru
+	Open script text editor	Otvori uređivač teksta scenarija
+	PRESET STORAGE	SKLADIŠTE ŠABLONA
+	Page	Stranica
+	Paste / Edit script…	Nalepi / uredi scenario…
+	Paste copied text from clipboard	Nalepi kopirani tekst iz ostave
+	Paste from Clipboard	Nalepi iz ostave
+	Paste from Clipboard (Ctrl+V)	Nalepi iz ostave (Ctrl+V)
+	Paste script from clipboard (Ctrl+V)	Nalepi scenario iz ostave (Ctrl+V)
+	Paste script text from clipboard (Ctrl+V)	Nalepi tekst scenarija iz ostave (Ctrl+V)
+	Paste script text here (Ctrl+V) or write dialogues…	Nalepi tekst scenarija ovde (Ctrl+V) ili upiši replike…
+	Presets loaded from file	Šabloni učitani iz datoteke
+	Presets saved	Šabloni sačuvani
+	Previous line (↑)	Prethodni red (↑)
+	Previous page	Prethodna stranica
+	Read error	Greška pri čitanju
+	Reset folder	Resetuj fasciklu
+	Reset presets storage to default AppData directory	Vrati skladište šablona na podrazumevanu AppData fasciklu
+	Save now	Sačuvaj sada
+	Script	Scenario
+	Script Editor	Uređivač scenarija
+	Shifting the baseline down ensures precise visual vertical centering inside bubbles.	Pomeranje osnovne linije nadole obezbeđuje precizno vizuelno vertikalno centriranje unutar oblačića.
+	Show current page dialogues only	Prikaži samo replike tekuće stranice
+	Size (pt)	Veličina (pt)
+	Split Left Dock (Pages + TypeR)…	Podeli levi dok (Stranice + TypeR)…
+	Storage folder reset to default	Fascikla skladišta vraćena na podrazumevanu
+	Storage folder set	Fascikla skladišta postavljena
+	Strip character names	Ukloni imena likova
+	Strip character names at start of line ('HERO: Text')	Ukloni imena likova na početku reda ('HERO: Text')
+	Strip leading dashes	Ukloni vodeće crte
+	Strip leading dashes ('- Text', '— Text')	Ukloni vodeće crte ('- Text', '— Text')
+	Style name	Ime stila
+	Styles successfully exported	Stilovi su uspešno izvezeni
+	Sync line spacing	Uskladi prored
+	Sync line spacing with font size	Uskladi prored sa veličinom fonta
+	TYPESETTER BEHAVIOR	PONAŠANJE SLAGAČA
+	Text Outline	Obris teksta
+	Thickness (px)	Debljina (px)
+	Toggle Chapter Pages panel	Uključi/isključi panel stranica poglavlja
+	TypeR Styles	TypeR stilovi
+	Typography Size (Line Spacing Sync)	Veličina tipografije (usklađivanje proreda)
+	Typography and Font	Tipografija i font
+	Ultra-fast real-time rendering for giant files	Ultrabrzo renderovanje u realnom vremenu za ogromne datoteke
+	Write error	Greška pri upisu
+	left	preostalo
+	line	red
+	size	veličina
+	style	stil
+	⚙ CPU	⚙ CPU
+	⚡ GPU	⚡ GPU
+	Pages	Stranice
+	Find in Open Pages…	Nađi na otvorenim stranicama…
+	Last export dir	Poslednji folder izvoza

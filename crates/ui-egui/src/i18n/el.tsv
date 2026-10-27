@@ -4511,3 +4511,118 @@ curves	Smooth	Εξομάλυνση
 	Remove what is selected with Nano Banana ({key})	Αφαίρεση της επιλογής με το Nano Banana ({key})
 	Pin to Top	Καρφίτσωμα στην κορυφή
 	Unpin from Top	Ξεκαρφίτσωμα από την κορυφή
+
+# TypeR script editor, Pages and export (v0.14)
+	(end of script)	(τέλος σεναρίου)
+	(no script loaded — see 'Script' tab)	(δεν έχει φορτωθεί σενάριο — δείτε την καρτέλα 'Σενάριο')
+	+ Folder	+ Φάκελος
+	+ Style	+ Στυλ
+	Auto-advance to next page	Αυτόματη μετάβαση στην επόμενη σελίδα
+	Automatically advance script to the next page	Αυτόματη προώθηση του σεναρίου στην επόμενη σελίδα
+	Baseline shift:	Μετατόπιση γραμμής βάσης:
+	Chapter Pages…	Σελίδες κεφαλαίου…
+	Choose TypeR styles file	Επιλογή αρχείου στυλ TypeR
+	Choose a custom directory to store typesetter presets and state	Επιλογή προσαρμοσμένου φακέλου για την αποθήκευση προεπιλογών και κατάστασης του στοιχειοθετητή
+	Choose presets folder	Επιλογή φακέλου προεπιλογών
+	Choose script file	Επιλογή αρχείου σεναρίου
+	Clear entire script	Εκκαθάριση ολόκληρου του σεναρίου
+	Clear script	Εκκαθάριση σεναρίου
+	Delete this style	Διαγραφή αυτού του στυλ
+	Duplicate folder	Δημιουργία αντιγράφου φακέλου
+	Duplicate this style	Δημιουργία αντιγράφου αυτού του στυλ
+	Each line becomes a separate dialogue entry. [Page 1] tags split pages.	Κάθε γραμμή γίνεται ξεχωριστή καταχώριση διαλόγου. Οι ετικέτες [Page 1] χωρίζουν τις σελίδες.
+	Editor	Επεξεργαστής
+	Engine:	Μηχανή:
+	Enter in Editor	Enter στον επεξεργαστή
+	Enter script manually	Χειροκίνητη εισαγωγή σεναρίου
+	Enter: Jump • Shift+Enter: Peek • Esc: Close	Enter: Μετάβαση • Shift+Enter: Προεπισκόπηση • Esc: Κλείσιμο
+	Exact reference CPU engine	Ακριβής μηχανή αναφοράς CPU
+	Export TypeR JSON…	Εξαγωγή TypeR JSON…
+	Export TypeR styles	Εξαγωγή στυλ TypeR
+	Export error	Σφάλμα εξαγωγής
+	Favorite font	Αγαπημένη γραμματοσειρά
+	Find layer or text across open pages (@text, #group)...	Εύρεση επιπέδου ή κειμένου σε ανοιχτές σελίδες (@text, #group)...
+	Folder duplicated	Ο φάκελος αντιγράφηκε
+	Folder name	Όνομα φακέλου
+	Font Settings	Ρυθμίσεις γραμματοσειράς
+	GEOMETRY & CENTERING	ΓΕΩΜΕΤΡΙΑ & ΚΕΝΤΡΑΡΙΣΜΑ
+	GPU on large canvases, CPU on small	GPU σε μεγάλους καμβάδες, CPU σε μικρούς
+	Go to current line/page	Μετάβαση στην τρέχουσα γραμμή/σελίδα
+	Horizontal scale (%)	Οριζόντια κλίμακα (%)
+	Import TypeR JSON…	Εισαγωγή TypeR JSON…
+	Import error	Σφάλμα εισαγωγής
+	Insert current line into selection/bubble (Enter)	Εισαγωγή τρέχουσας γραμμής στην επιλογή/συννεφάκι (Enter)
+	Insert this line into bubble (Enter)	Εισαγωγή αυτής της γραμμής στο συννεφάκι (Enter)
+	Load .txt	Φόρτωση .txt
+	Load file (.txt)…	Φόρτωση αρχείου (.txt)…
+	Load from file	Φόρτωση από αρχείο
+	Load into typesetter	Φόρτωση στον στοιχειοθετητή
+	Load script file (.txt)	Φόρτωση αρχείου σεναρίου (.txt)
+	Load script file (.txt)…	Φόρτωση αρχείου σεναρίου (.txt)…
+	Loaded dialogues	Φορτωμένοι διάλογοι
+	Loaded styles	Φορτωμένα στυλ
+	Make this line current	Ορισμός αυτής της γραμμής ως τρέχουσας
+	Manga Script (Full Text)	Σενάριο μάνγκα (πλήρες κείμενο)
+	Manga Workflow	Ροή εργασίας μάνγκα
+	New Folder	Νέος φάκελος
+	Next line (↓)	Επόμενη γραμμή (↓)
+	Next page	Επόμενη σελίδα
+	No folder	Χωρίς φάκελο
+	No matching layers or text in open pages	Δεν βρέθηκαν αντίστοιχα επίπεδα ή κείμενο στις ανοιχτές σελίδες
+	No outline	Χωρίς περίγραμμα
+	No script loaded	Δεν έχει φορτωθεί σενάριο
+	Open .txt	Άνοιγμα .txt
+	Open presets folder in file manager	Άνοιγμα φακέλου προεπιλογών στη διαχείριση αρχείων
+	Open script in separate window	Άνοιγμα σεναρίου σε ξεχωριστό παράθυρο
+	Open script text editor	Άνοιγμα επεξεργαστή κειμένου σεναρίου
+	PRESET STORAGE	ΑΠΟΘΗΚΕΥΣΗ ΠΡΟΕΠΙΛΟΓΩΝ
+	Page	Σελίδα
+	Paste / Edit script…	Επικόλληση / Επεξεργασία σεναρίου…
+	Paste copied text from clipboard	Επικόλληση αντιγραμμένου κειμένου από το πρόχειρο
+	Paste from Clipboard	Επικόλληση από το πρόχειρο
+	Paste from Clipboard (Ctrl+V)	Επικόλληση από το πρόχειρο (Ctrl+V)
+	Paste script from clipboard (Ctrl+V)	Επικόλληση σεναρίου από το πρόχειρο (Ctrl+V)
+	Paste script text from clipboard (Ctrl+V)	Επικόλληση κειμένου σεναρίου από το πρόχειρο (Ctrl+V)
+	Paste script text here (Ctrl+V) or write dialogues…	Επικολλήστε εδώ το κείμενο του σεναρίου (Ctrl+V) ή γράψτε διαλόγους…
+	Presets loaded from file	Οι προεπιλογές φορτώθηκαν από αρχείο
+	Presets saved	Οι προεπιλογές αποθηκεύτηκαν
+	Previous line (↑)	Προηγούμενη γραμμή (↑)
+	Previous page	Προηγούμενη σελίδα
+	Read error	Σφάλμα ανάγνωσης
+	Reset folder	Επαναφορά φακέλου
+	Reset presets storage to default AppData directory	Επαναφορά της αποθήκευσης προεπιλογών στον προεπιλεγμένο φάκελο AppData
+	Save now	Αποθήκευση τώρα
+	Script	Σενάριο
+	Script Editor	Επεξεργαστής σεναρίου
+	Shifting the baseline down ensures precise visual vertical centering inside bubbles.	Η μετατόπιση της γραμμής βάσης προς τα κάτω εξασφαλίζει ακριβές οπτικό κατακόρυφο κεντράρισμα μέσα στα συννεφάκια.
+	Show current page dialogues only	Εμφάνιση μόνο των διαλόγων της τρέχουσας σελίδας
+	Size (pt)	Μέγεθος (pt)
+	Split Left Dock (Pages + TypeR)…	Διαχωρισμός αριστερού πλαισίου (Σελίδες + TypeR)…
+	Storage folder reset to default	Ο φάκελος αποθήκευσης επαναφέρθηκε στην προεπιλογή
+	Storage folder set	Ορίστηκε φάκελος αποθήκευσης
+	Strip character names	Αφαίρεση ονομάτων χαρακτήρων
+	Strip character names at start of line ('HERO: Text')	Αφαίρεση ονομάτων χαρακτήρων στην αρχή της γραμμής ('HERO: Κείμενο')
+	Strip leading dashes	Αφαίρεση αρχικών παυλών
+	Strip leading dashes ('- Text', '— Text')	Αφαίρεση αρχικών παυλών ('- Κείμενο', '— Κείμενο')
+	Style name	Όνομα στυλ
+	Styles successfully exported	Τα στυλ εξήχθησαν με επιτυχία
+	Sync line spacing	Συγχρονισμός διάστιχου
+	Sync line spacing with font size	Συγχρονισμός διάστιχου με το μέγεθος γραμματοσειράς
+	TYPESETTER BEHAVIOR	ΣΥΜΠΕΡΙΦΟΡΑ ΣΤΟΙΧΕΙΟΘΕΤΗ
+	Text Outline	Περίγραμμα κειμένου
+	Thickness (px)	Πάχος (px)
+	Toggle Chapter Pages panel	Εναλλαγή πλαισίου «Σελίδες κεφαλαίου»
+	TypeR Styles	Στυλ TypeR
+	Typography Size (Line Spacing Sync)	Μέγεθος τυπογραφίας (συγχρονισμός διάστιχου)
+	Typography and Font	Τυπογραφία και γραμματοσειρά
+	Ultra-fast real-time rendering for giant files	Υπεργρήγορη απόδοση σε πραγματικό χρόνο για τεράστια αρχεία
+	Write error	Σφάλμα εγγραφής
+	left	Αριστερά
+	line	Γραμμή
+	size	Μέγεθος
+	style	Στυλ
+	⚙ CPU	⚙ CPU
+	⚡ GPU	⚡ GPU
+	Pages	Σελίδες
+	Find in Open Pages…	Εύρεση σε ανοιχτές σελίδες…
+	Last export dir	Τελευταίος φάκελος εξαγωγής

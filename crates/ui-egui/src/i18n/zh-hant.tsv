@@ -3446,3 +3446,118 @@ curves	Smooth	平滑
 	Remove what is selected with Nano Banana ({key})	用 Nano Banana 移除所選內容 ({key})
 	Pin to Top	釘選到頂端
 	Unpin from Top	取消釘選到頂端
+
+# TypeR script editor, Pages and export (v0.14)
+	(end of script)	（指令碼結束）
+	(no script loaded — see 'Script' tab)	（未載入指令碼 — 請參閱「指令碼」索引標籤）
+	+ Folder	+ 資料夾
+	+ Style	+ 樣式
+	Auto-advance to next page	自動前進至下一頁
+	Automatically advance script to the next page	自動將指令碼推進至下一頁
+	Baseline shift:	基線位移：
+	Chapter Pages…	章節頁面…
+	Choose TypeR styles file	選擇 TypeR 樣式檔案
+	Choose a custom directory to store typesetter presets and state	選擇自訂目錄以儲存排版器預設集與狀態
+	Choose presets folder	選擇預設集資料夾
+	Choose script file	選擇指令碼檔案
+	Clear entire script	清除整個指令碼
+	Clear script	清除指令碼
+	Delete this style	刪除此樣式
+	Duplicate folder	複製資料夾
+	Duplicate this style	複製此樣式
+	Each line becomes a separate dialogue entry. [Page 1] tags split pages.	每一行都會成為一個獨立的對白項目。[Page 1] 標籤會分割頁面。
+	Editor	編輯器
+	Engine:	引擎：
+	Enter in Editor	在編輯器中按 Enter
+	Enter script manually	手動輸入指令碼
+	Enter: Jump • Shift+Enter: Peek • Esc: Close	Enter：跳轉 • Shift+Enter：預覽 • Esc：關閉
+	Exact reference CPU engine	精確參照 CPU 引擎
+	Export TypeR JSON…	匯出 TypeR JSON…
+	Export TypeR styles	匯出 TypeR 樣式
+	Export error	匯出錯誤
+	Favorite font	收藏字體
+	Find layer or text across open pages (@text, #group)...	在開啟的頁面中尋找圖層或文字 (@text、#group)...
+	Folder duplicated	資料夾已複製
+	Folder name	資料夾名稱
+	Font Settings	字體設定
+	GEOMETRY & CENTERING	幾何與置中
+	GPU on large canvases, CPU on small	大型畫布使用 GPU，小型畫布使用 CPU
+	Go to current line/page	移至目前行/頁面
+	Horizontal scale (%)	水平縮放 (%)
+	Import TypeR JSON…	匯入 TypeR JSON…
+	Import error	匯入錯誤
+	Insert current line into selection/bubble (Enter)	將目前行插入選取範圍/氣泡（Enter）
+	Insert this line into bubble (Enter)	將此行插入氣泡（Enter）
+	Load .txt	載入 .txt
+	Load file (.txt)…	載入檔案 (.txt)…
+	Load from file	從檔案載入
+	Load into typesetter	載入至排版器
+	Load script file (.txt)	載入指令碼檔案 (.txt)
+	Load script file (.txt)…	載入指令碼檔案 (.txt)…
+	Loaded dialogues	已載入對白
+	Loaded styles	已載入樣式
+	Make this line current	將此行設為目前行
+	Manga Script (Full Text)	漫畫指令碼（全文）
+	Manga Workflow	漫畫工作流程
+	New Folder	新增資料夾
+	Next line (↓)	下一行 (↓)
+	Next page	下一頁
+	No folder	無資料夾
+	No matching layers or text in open pages	開啟的頁面中沒有符合的圖層或文字
+	No outline	無外框
+	No script loaded	未載入指令碼
+	Open .txt	開啟 .txt
+	Open presets folder in file manager	在檔案管理員中開啟預設集資料夾
+	Open script in separate window	在獨立視窗中開啟指令碼
+	Open script text editor	開啟指令碼文字編輯器
+	PRESET STORAGE	預設集儲存
+	Page	頁面
+	Paste / Edit script…	貼上/編輯指令碼…
+	Paste copied text from clipboard	從剪貼簿貼上複製的文字
+	Paste from Clipboard	從剪貼簿貼上
+	Paste from Clipboard (Ctrl+V)	從剪貼簿貼上 (Ctrl+V)
+	Paste script from clipboard (Ctrl+V)	從剪貼簿貼上指令碼 (Ctrl+V)
+	Paste script text from clipboard (Ctrl+V)	從剪貼簿貼上指令碼文字 (Ctrl+V)
+	Paste script text here (Ctrl+V) or write dialogues…	在此貼上指令碼文字 (Ctrl+V) 或撰寫對白…
+	Presets loaded from file	已從檔案載入預設集
+	Presets saved	預設集已儲存
+	Previous line (↑)	上一行 (↑)
+	Previous page	上一頁
+	Read error	讀取錯誤
+	Reset folder	重設資料夾
+	Reset presets storage to default AppData directory	將預設集儲存位置重設為預設 AppData 目錄
+	Save now	立即儲存
+	Script	指令碼
+	Script Editor	指令碼編輯器
+	Shifting the baseline down ensures precise visual vertical centering inside bubbles.	將基線向下移動可確保氣泡內精確的視覺垂直置中。
+	Show current page dialogues only	僅顯示目前頁面的對白
+	Size (pt)	大小 (pt)
+	Split Left Dock (Pages + TypeR)…	分割左側停靠區（頁面 + TypeR）…
+	Storage folder reset to default	儲存資料夾已重設為預設
+	Storage folder set	儲存資料夾已設定
+	Strip character names	去除角色名稱
+	Strip character names at start of line ('HERO: Text')	去除行首的角色名稱（'HERO: Text'）
+	Strip leading dashes	去除開頭的破折號
+	Strip leading dashes ('- Text', '— Text')	去除開頭的破折號（'- Text'、'— Text'）
+	Style name	樣式名稱
+	Styles successfully exported	樣式已成功匯出
+	Sync line spacing	同步行距
+	Sync line spacing with font size	使行距與字體大小同步
+	TYPESETTER BEHAVIOR	排版器行為
+	Text Outline	文字外框
+	Thickness (px)	粗細 (px)
+	Toggle Chapter Pages panel	切換章節頁面面板
+	TypeR Styles	TypeR 樣式
+	Typography Size (Line Spacing Sync)	排版大小（行距同步）
+	Typography and Font	排版與字體
+	Ultra-fast real-time rendering for giant files	為巨型檔案提供超快速即時轉譯
+	Write error	寫入錯誤
+	left	左
+	line	行
+	size	大小
+	style	樣式
+	⚙ CPU	⚙ CPU
+	⚡ GPU	⚡ GPU
+	Pages	頁面
+	Find in Open Pages…	在開啟的頁面中尋找…
+	Last export dir	上次匯出資料夾

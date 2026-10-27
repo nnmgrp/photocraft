@@ -3833,3 +3833,118 @@ curves	Smooth	Haluskan
 	Remove what is selected with Nano Banana ({key})	Hapus yang dipilih dengan Nano Banana ({key})
 	Pin to Top	Sematkan di Atas
 	Unpin from Top	Lepas Sematan
+
+# TypeR script editor, Pages and export (v0.14)
+	(end of script)	(akhir skrip)
+	(no script loaded — see 'Script' tab)	(skrip belum dimuat — lihat tab 'Skrip')
+	+ Folder	+ Folder
+	+ Style	+ Gaya
+	Auto-advance to next page	Maju otomatis ke halaman berikutnya
+	Automatically advance script to the next page	Otomatis majukan skrip ke halaman berikutnya
+	Baseline shift:	Geser baseline:
+	Chapter Pages…	Halaman Bab…
+	Choose TypeR styles file	Pilih berkas gaya TypeR
+	Choose a custom directory to store typesetter presets and state	Pilih direktori khusus untuk menyimpan preset dan status penata huruf
+	Choose presets folder	Pilih folder preset
+	Choose script file	Pilih berkas skrip
+	Clear entire script	Hapus seluruh skrip
+	Clear script	Hapus skrip
+	Delete this style	Hapus gaya ini
+	Duplicate folder	Duplikat folder
+	Duplicate this style	Duplikat gaya ini
+	Each line becomes a separate dialogue entry. [Page 1] tags split pages.	Setiap baris menjadi entri dialog terpisah. Tag [Page 1] memisahkan halaman.
+	Editor	Editor
+	Engine:	Mesin:
+	Enter in Editor	Enter di Editor
+	Enter script manually	Masukkan skrip secara manual
+	Enter: Jump • Shift+Enter: Peek • Esc: Close	Enter: Lompat • Shift+Enter: Intip • Esc: Tutup
+	Exact reference CPU engine	Mesin CPU referensi yang presisi
+	Export TypeR JSON…	Ekspor TypeR JSON…
+	Export TypeR styles	Ekspor gaya TypeR
+	Export error	Gagal mengekspor
+	Favorite font	Font favorit
+	Find layer or text across open pages (@text, #group)...	Cari layer atau teks di seluruh halaman terbuka (@text, #group)...
+	Folder duplicated	Folder diduplikat
+	Folder name	Nama folder
+	Font Settings	Pengaturan Font
+	GEOMETRY & CENTERING	GEOMETRI & PEMUSATAN
+	GPU on large canvases, CPU on small	GPU pada kanvas besar, CPU pada kanvas kecil
+	Go to current line/page	Pergi ke baris/halaman saat ini
+	Horizontal scale (%)	Skala horizontal (%)
+	Import TypeR JSON…	Impor TypeR JSON…
+	Import error	Gagal mengimpor
+	Insert current line into selection/bubble (Enter)	Sisipkan baris saat ini ke seleksi/balon (Enter)
+	Insert this line into bubble (Enter)	Sisipkan baris ini ke balon (Enter)
+	Load .txt	Muat .txt
+	Load file (.txt)…	Muat berkas (.txt)…
+	Load from file	Muat dari berkas
+	Load into typesetter	Muat ke penata huruf
+	Load script file (.txt)	Muat berkas skrip (.txt)
+	Load script file (.txt)…	Muat berkas skrip (.txt)…
+	Loaded dialogues	Dialog dimuat
+	Loaded styles	Gaya dimuat
+	Make this line current	Jadikan baris ini aktif
+	Manga Script (Full Text)	Skrip Manga (Teks Lengkap)
+	Manga Workflow	Alur Kerja Manga
+	New Folder	Folder Baru
+	Next line (↓)	Baris berikutnya (↓)
+	Next page	Halaman berikutnya
+	No folder	Tanpa folder
+	No matching layers or text in open pages	Tidak ada layer atau teks yang cocok di halaman terbuka
+	No outline	Tanpa garis luar
+	No script loaded	Skrip belum dimuat
+	Open .txt	Buka .txt
+	Open presets folder in file manager	Buka folder preset di pengelola berkas
+	Open script in separate window	Buka skrip di jendela terpisah
+	Open script text editor	Buka editor teks skrip
+	PRESET STORAGE	PENYIMPANAN PRESET
+	Page	Halaman
+	Paste / Edit script…	Tempel / Edit skrip…
+	Paste copied text from clipboard	Tempel teks yang disalin dari clipboard
+	Paste from Clipboard	Tempel dari Clipboard
+	Paste from Clipboard (Ctrl+V)	Tempel dari Clipboard (Ctrl+V)
+	Paste script from clipboard (Ctrl+V)	Tempel skrip dari clipboard (Ctrl+V)
+	Paste script text from clipboard (Ctrl+V)	Tempel teks skrip dari clipboard (Ctrl+V)
+	Paste script text here (Ctrl+V) or write dialogues…	Tempel teks skrip di sini (Ctrl+V) atau tulis dialog…
+	Presets loaded from file	Preset dimuat dari berkas
+	Presets saved	Preset disimpan
+	Previous line (↑)	Baris sebelumnya (↑)
+	Previous page	Halaman sebelumnya
+	Read error	Gagal membaca
+	Reset folder	Reset folder
+	Reset presets storage to default AppData directory	Reset penyimpanan preset ke direktori AppData default
+	Save now	Simpan sekarang
+	Script	Skrip
+	Script Editor	Editor Skrip
+	Shifting the baseline down ensures precise visual vertical centering inside bubbles.	Menggeser baseline ke bawah memastikan pemusatan vertikal visual yang presisi di dalam balon.
+	Show current page dialogues only	Tampilkan hanya dialog halaman saat ini
+	Size (pt)	Ukuran (pt)
+	Split Left Dock (Pages + TypeR)…	Bagi Dock Kiri (Halaman + TypeR)…
+	Storage folder reset to default	Folder penyimpanan direset ke default
+	Storage folder set	Folder penyimpanan diatur
+	Strip character names	Buang nama karakter
+	Strip character names at start of line ('HERO: Text')	Buang nama karakter di awal baris ('HERO: Text')
+	Strip leading dashes	Buang tanda hubung di awal
+	Strip leading dashes ('- Text', '— Text')	Buang tanda hubung di awal ('- Text', '— Text')
+	Style name	Nama gaya
+	Styles successfully exported	Gaya berhasil diekspor
+	Sync line spacing	Sinkronkan jarak baris
+	Sync line spacing with font size	Sinkronkan jarak baris dengan ukuran font
+	TYPESETTER BEHAVIOR	PERILAKU PENATA HURUF
+	Text Outline	Garis Luar Teks
+	Thickness (px)	Ketebalan (px)
+	Toggle Chapter Pages panel	Alihkan panel Halaman Bab
+	TypeR Styles	Gaya TypeR
+	Typography Size (Line Spacing Sync)	Ukuran Tipografi (Sinkron Jarak Baris)
+	Typography and Font	Tipografi dan Font
+	Ultra-fast real-time rendering for giant files	Render real-time ultracepat untuk berkas raksasa
+	Write error	Gagal menulis
+	left	tersisa
+	line	Baris
+	size	Ukuran
+	style	Gaya
+	⚙ CPU	⚙ CPU
+	⚡ GPU	⚡ GPU
+	Pages	Halaman
+	Find in Open Pages…	Cari di Halaman Terbuka…
+	Last export dir	Folder ekspor terakhir

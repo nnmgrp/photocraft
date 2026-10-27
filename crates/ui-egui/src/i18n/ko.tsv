@@ -4076,3 +4076,118 @@ curves	Smooth	매끄럽게
 	Remove what is selected with Nano Banana ({key})	Nano Banana로 선택 영역 제거 ({key})
 	Pin to Top	맨 위에 고정
 	Unpin from Top	맨 위 고정 해제
+
+# TypeR script editor, Pages and export (v0.14)
+	(end of script)	(스크립트 끝)
+	(no script loaded — see 'Script' tab)	(불러온 스크립트 없음 — '스크립트' 탭 참조)
+	+ Folder	+ 폴더
+	+ Style	+ 스타일
+	Auto-advance to next page	다음 페이지로 자동 이동
+	Automatically advance script to the next page	스크립트를 다음 페이지로 자동 진행
+	Baseline shift:	기준선 이동:
+	Chapter Pages…	챕터 페이지…
+	Choose TypeR styles file	TypeR 스타일 파일 선택
+	Choose a custom directory to store typesetter presets and state	식자 도구 사전 설정과 상태를 저장할 사용자 지정 디렉터리 선택
+	Choose presets folder	사전 설정 폴더 선택
+	Choose script file	스크립트 파일 선택
+	Clear entire script	전체 스크립트 지우기
+	Clear script	스크립트 지우기
+	Delete this style	이 스타일 삭제
+	Duplicate folder	폴더 복제
+	Duplicate this style	이 스타일 복제
+	Each line becomes a separate dialogue entry. [Page 1] tags split pages.	각 줄이 별도의 대사 항목이 됩니다. [Page 1] 태그로 페이지를 나눕니다.
+	Editor	편집기
+	Engine:	엔진:
+	Enter in Editor	편집기에서 Enter
+	Enter script manually	스크립트 직접 입력
+	Enter: Jump • Shift+Enter: Peek • Esc: Close	Enter: 이동 • Shift+Enter: 미리 보기 • Esc: 닫기
+	Exact reference CPU engine	정확한 참조 CPU 엔진
+	Export TypeR JSON…	TypeR JSON 내보내기…
+	Export TypeR styles	TypeR 스타일 내보내기
+	Export error	내보내기 오류
+	Favorite font	즐겨찾는 글꼴
+	Find layer or text across open pages (@text, #group)...	열린 페이지에서 레이어 또는 텍스트 찾기(@text, #group)...
+	Folder duplicated	폴더를 복제했습니다
+	Folder name	폴더 이름
+	Font Settings	글꼴 설정
+	GEOMETRY & CENTERING	기하 및 가운데 맞춤
+	GPU on large canvases, CPU on small	큰 캔버스에는 GPU, 작은 캔버스에는 CPU
+	Go to current line/page	현재 줄/페이지로 이동
+	Horizontal scale (%)	가로 비율 (%)
+	Import TypeR JSON…	TypeR JSON 가져오기…
+	Import error	가져오기 오류
+	Insert current line into selection/bubble (Enter)	현재 줄을 선택 영역/말풍선에 삽입(Enter)
+	Insert this line into bubble (Enter)	이 줄을 말풍선에 삽입(Enter)
+	Load .txt	.txt 불러오기
+	Load file (.txt)…	파일 불러오기(.txt)…
+	Load from file	파일에서 불러오기
+	Load into typesetter	식자 도구로 불러오기
+	Load script file (.txt)	스크립트 파일(.txt) 불러오기
+	Load script file (.txt)…	스크립트 파일(.txt) 불러오기…
+	Loaded dialogues	불러온 대사
+	Loaded styles	불러온 스타일
+	Make this line current	이 줄을 현재 줄로 설정
+	Manga Script (Full Text)	만화 스크립트(전체 텍스트)
+	Manga Workflow	만화 작업 흐름
+	New Folder	새 폴더
+	Next line (↓)	다음 줄(↓)
+	Next page	다음 페이지
+	No folder	폴더 없음
+	No matching layers or text in open pages	열린 페이지에 일치하는 레이어나 텍스트가 없음
+	No outline	외곽선 없음
+	No script loaded	불러온 스크립트 없음
+	Open .txt	.txt 열기
+	Open presets folder in file manager	파일 관리자에서 사전 설정 폴더 열기
+	Open script in separate window	별도 창에서 스크립트 열기
+	Open script text editor	스크립트 텍스트 편집기 열기
+	PRESET STORAGE	사전 설정 저장소
+	Page	페이지
+	Paste / Edit script…	스크립트 붙여넣기/편집…
+	Paste copied text from clipboard	클립보드에서 복사한 텍스트 붙여넣기
+	Paste from Clipboard	클립보드에서 붙여넣기
+	Paste from Clipboard (Ctrl+V)	클립보드에서 붙여넣기(Ctrl+V)
+	Paste script from clipboard (Ctrl+V)	클립보드에서 스크립트 붙여넣기(Ctrl+V)
+	Paste script text from clipboard (Ctrl+V)	클립보드에서 스크립트 텍스트 붙여넣기(Ctrl+V)
+	Paste script text here (Ctrl+V) or write dialogues…	여기에 스크립트 텍스트를 붙여넣거나(Ctrl+V) 대사를 작성하세요…
+	Presets loaded from file	파일에서 사전 설정을 불러왔습니다
+	Presets saved	사전 설정을 저장했습니다
+	Previous line (↑)	이전 줄(↑)
+	Previous page	이전 페이지
+	Read error	읽기 오류
+	Reset folder	폴더 초기화
+	Reset presets storage to default AppData directory	사전 설정 저장소를 기본 AppData 디렉터리로 초기화
+	Save now	지금 저장
+	Script	스크립트
+	Script Editor	스크립트 편집기
+	Shifting the baseline down ensures precise visual vertical centering inside bubbles.	기준선을 아래로 이동하면 말풍선 안에서 시각적으로 정확한 세로 가운데 정렬을 보장합니다.
+	Show current page dialogues only	현재 페이지의 대사만 표시
+	Size (pt)	크기(pt)
+	Split Left Dock (Pages + TypeR)…	왼쪽 도크 분할(페이지 + TypeR)…
+	Storage folder reset to default	저장 폴더를 기본값으로 초기화했습니다
+	Storage folder set	저장 폴더를 설정했습니다
+	Strip character names	캐릭터 이름 제거
+	Strip character names at start of line ('HERO: Text')	줄 시작 부분의 캐릭터 이름 제거('HERO: Text')
+	Strip leading dashes	앞의 대시 제거
+	Strip leading dashes ('- Text', '— Text')	앞의 대시 제거('- Text', '— Text')
+	Style name	스타일 이름
+	Styles successfully exported	스타일을 성공적으로 내보냈습니다
+	Sync line spacing	줄 간격 동기화
+	Sync line spacing with font size	글꼴 크기와 줄 간격 동기화
+	TYPESETTER BEHAVIOR	식자 도구 동작
+	Text Outline	텍스트 외곽선
+	Thickness (px)	두께(px)
+	Toggle Chapter Pages panel	챕터 페이지 패널 전환
+	TypeR Styles	TypeR 스타일
+	Typography Size (Line Spacing Sync)	타이포그래피 크기(줄 간격 동기화)
+	Typography and Font	타이포그래피 및 글꼴
+	Ultra-fast real-time rendering for giant files	거대한 파일을 위한 초고속 실시간 렌더링
+	Write error	쓰기 오류
+	left	왼쪽
+	line	줄
+	size	크기
+	style	스타일
+	⚙ CPU	⚙ CPU
+	⚡ GPU	⚡ GPU
+	Pages	페이지
+	Find in Open Pages…	열린 페이지에서 찾기…
+	Last export dir	마지막 내보내기 폴더

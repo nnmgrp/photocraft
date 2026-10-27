@@ -4525,3 +4525,118 @@ curves	Smooth	Згладити
 	Remove what is selected with Nano Banana ({key})	Видалити виділене за допомогою Nano Banana ({key})
 	Pin to Top	Закріпити вгорі
 	Unpin from Top	Відкріпити згори
+
+# TypeR script editor, Pages and export (v0.14)
+	(end of script)	(кінець сценарію)
+	(no script loaded — see 'Script' tab)	(сценарій не завантажено — див. вкладку «Сценарій»)
+	+ Folder	+ Тека
+	+ Style	+ Стиль
+	Auto-advance to next page	Автоперехід на наступну сторінку
+	Automatically advance script to the next page	Автоматично переходити до наступної сторінки сценарію
+	Baseline shift:	Зсув базової лінії:
+	Chapter Pages…	Сторінки розділу…
+	Choose TypeR styles file	Виберіть файл стилів TypeR
+	Choose a custom directory to store typesetter presets and state	Виберіть довільну теку для збереження наборів і стану тайпсеттера
+	Choose presets folder	Виберіть теку наборів
+	Choose script file	Виберіть файл сценарію
+	Clear entire script	Очистити весь сценарій
+	Clear script	Очистити сценарій
+	Delete this style	Видалити цей стиль
+	Duplicate folder	Дублювати теку
+	Duplicate this style	Дублювати цей стиль
+	Each line becomes a separate dialogue entry. [Page 1] tags split pages.	Кожен рядок стає окремою реплікою. Теги [Page 1] розділяють сторінки.
+	Editor	Редактор
+	Engine:	Рушій:
+	Enter in Editor	Ввести в редакторі
+	Enter script manually	Ввести сценарій вручну
+	Enter: Jump • Shift+Enter: Peek • Esc: Close	Enter: перейти • Shift+Enter: підглянути • Esc: закрити
+	Exact reference CPU engine	Точний еталонний рушій CPU
+	Export TypeR JSON…	Експорт TypeR JSON…
+	Export TypeR styles	Експорт стилів TypeR
+	Export error	Помилка експорту
+	Favorite font	Улюблений шрифт
+	Find layer or text across open pages (@text, #group)...	Пошук шару або тексту на відкритих сторінках (@text, #group)...
+	Folder duplicated	Теку продубльовано
+	Folder name	Назва теки
+	Font Settings	Налаштування шрифту
+	GEOMETRY & CENTERING	ГЕОМЕТРІЯ ТА ЦЕНТРУВАННЯ
+	GPU on large canvases, CPU on small	GPU на великих полотнах, CPU на малих
+	Go to current line/page	Перейти до поточного рядка/сторінки
+	Horizontal scale (%)	Горизонтальний масштаб (%)
+	Import TypeR JSON…	Імпорт TypeR JSON…
+	Import error	Помилка імпорту
+	Insert current line into selection/bubble (Enter)	Вставити поточний рядок у виділення/бульбашку (Enter)
+	Insert this line into bubble (Enter)	Вставити цей рядок у бульбашку (Enter)
+	Load .txt	Завантажити .txt
+	Load file (.txt)…	Завантажити файл (.txt)…
+	Load from file	Завантажити з файлу
+	Load into typesetter	Завантажити в тайпсеттер
+	Load script file (.txt)	Завантажити файл сценарію (.txt)
+	Load script file (.txt)…	Завантажити файл сценарію (.txt)…
+	Loaded dialogues	Завантажені репліки
+	Loaded styles	Завантажені стилі
+	Make this line current	Зробити цей рядок поточним
+	Manga Script (Full Text)	Сценарій манги (повний текст)
+	Manga Workflow	Робочий процес манги
+	New Folder	Нова тека
+	Next line (↓)	Наступний рядок (↓)
+	Next page	Наступна сторінка
+	No folder	Без теки
+	No matching layers or text in open pages	Немає відповідних шарів або тексту на відкритих сторінках
+	No outline	Без обведення
+	No script loaded	Сценарій не завантажено
+	Open .txt	Відкрити .txt
+	Open presets folder in file manager	Відкрити теку наборів у файловому менеджері
+	Open script in separate window	Відкрити сценарій в окремому вікні
+	Open script text editor	Відкрити редактор тексту сценарію
+	PRESET STORAGE	СХОВИЩЕ НАБОРІВ
+	Page	Сторінка
+	Paste / Edit script…	Вставити / редагувати сценарій…
+	Paste copied text from clipboard	Вставити скопійований текст із буфера обміну
+	Paste from Clipboard	Вставити з буфера обміну
+	Paste from Clipboard (Ctrl+V)	Вставити з буфера обміну (Ctrl+V)
+	Paste script from clipboard (Ctrl+V)	Вставити сценарій із буфера обміну (Ctrl+V)
+	Paste script text from clipboard (Ctrl+V)	Вставити текст сценарію з буфера обміну (Ctrl+V)
+	Paste script text here (Ctrl+V) or write dialogues…	Вставте сюди текст сценарію (Ctrl+V) або напишіть репліки…
+	Presets loaded from file	Набори завантажено з файлу
+	Presets saved	Набори збережено
+	Previous line (↑)	Попередній рядок (↑)
+	Previous page	Попередня сторінка
+	Read error	Помилка читання
+	Reset folder	Скинути теку
+	Reset presets storage to default AppData directory	Скинути сховище наборів до типової теки AppData
+	Save now	Зберегти зараз
+	Script	Сценарій
+	Script Editor	Редактор сценарію
+	Shifting the baseline down ensures precise visual vertical centering inside bubbles.	Зсув базової лінії вниз забезпечує точне візуальне вертикальне центрування всередині бульбашок.
+	Show current page dialogues only	Показувати лише репліки поточної сторінки
+	Size (pt)	Розмір (pt)
+	Split Left Dock (Pages + TypeR)…	Розділити лівий док (Сторінки + TypeR)…
+	Storage folder reset to default	Теку збереження скинуто до типової
+	Storage folder set	Теку збереження задано
+	Strip character names	Прибирати імена персонажів
+	Strip character names at start of line ('HERO: Text')	Прибирати імена персонажів на початку рядка ('HERO: Text')
+	Strip leading dashes	Прибирати провідні тире
+	Strip leading dashes ('- Text', '— Text')	Прибирати провідні тире ('- Text', '— Text')
+	Style name	Назва стилю
+	Styles successfully exported	Стилі успішно експортовано
+	Sync line spacing	Синхронізувати інтерліньяж
+	Sync line spacing with font size	Синхронізувати інтерліньяж із розміром шрифту
+	TYPESETTER BEHAVIOR	ПОВЕДІНКА ТАЙПСЕТТЕРА
+	Text Outline	Обведення тексту
+	Thickness (px)	Товщина (px)
+	Toggle Chapter Pages panel	Перемкнути панель сторінок розділу
+	TypeR Styles	Стилі TypeR
+	Typography Size (Line Spacing Sync)	Розмір типографіки (синхронізація інтерліньяжу)
+	Typography and Font	Типографіка та шрифт
+	Ultra-fast real-time rendering for giant files	Надшвидкий рендеринг у реальному часі для гігантських файлів
+	Write error	Помилка запису
+	left	залишилось
+	line	рядок
+	size	розмір
+	style	стиль
+	⚙ CPU	⚙ CPU
+	⚡ GPU	⚡ GPU
+	Pages	Сторінки
+	Find in Open Pages…	Знайти на відкритих сторінках…
+	Last export dir	Остання папка експорту

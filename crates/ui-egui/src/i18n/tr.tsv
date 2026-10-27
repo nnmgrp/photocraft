@@ -4540,3 +4540,118 @@ cameraData	Lens	Lens
 	Remove what is selected with Nano Banana ({key})	Seçili alanı Nano Banana ile kaldır ({key})
 	Pin to Top	Üste Sabitle
 	Unpin from Top	Üstten Sabitlemeyi Kaldır
+
+# TypeR script editor, Pages and export (v0.14)
+	(end of script)	(senaryo sonu)
+	(no script loaded — see 'Script' tab)	(senaryo yüklenmedi — 'Senaryo' sekmesine bakın)
+	+ Folder	+ Klasör
+	+ Style	+ Stil
+	Auto-advance to next page	Sonraki sayfaya otomatik geç
+	Automatically advance script to the next page	Senaryoyu otomatik olarak sonraki sayfaya geçir
+	Baseline shift:	Taban çizgisi kaydırması:
+	Chapter Pages…	Bölüm Sayfaları…
+	Choose TypeR styles file	TypeR stil dosyasını seç
+	Choose a custom directory to store typesetter presets and state	Dizgi aracı ön ayarlarını ve durumunu saklamak için özel bir klasör seç
+	Choose presets folder	Ön ayar klasörünü seç
+	Choose script file	Senaryo dosyasını seç
+	Clear entire script	Tüm senaryoyu temizle
+	Clear script	Senaryoyu temizle
+	Delete this style	Bu stili sil
+	Duplicate folder	Klasörü çoğalt
+	Duplicate this style	Bu stili çoğalt
+	Each line becomes a separate dialogue entry. [Page 1] tags split pages.	Her satır ayrı bir replik olur. [Page 1] etiketleri sayfaları böler.
+	Editor	Düzenleyici
+	Engine:	Motor:
+	Enter in Editor	Düzenleyicide Enter
+	Enter script manually	Senaryoyu elle gir
+	Enter: Jump • Shift+Enter: Peek • Esc: Close	Enter: Atla • Shift+Enter: Göz at • Esc: Kapat
+	Exact reference CPU engine	Tam referans CPU motoru
+	Export TypeR JSON…	TypeR JSON dışa aktar…
+	Export TypeR styles	TypeR stillerini dışa aktar
+	Export error	Dışa aktarma hatası
+	Favorite font	Favori yazı tipi
+	Find layer or text across open pages (@text, #group)...	Açık sayfalarda katman veya metin bul (@text, #group)...
+	Folder duplicated	Klasör çoğaltıldı
+	Folder name	Klasör adı
+	Font Settings	Yazı Tipi Ayarları
+	GEOMETRY & CENTERING	GEOMETRİ VE ORTALAMA
+	GPU on large canvases, CPU on small	Büyük tuvallerde GPU, küçüklerde CPU
+	Go to current line/page	Geçerli satıra/sayfaya git
+	Horizontal scale (%)	Yatay ölçek (%)
+	Import TypeR JSON…	TypeR JSON içe aktar…
+	Import error	İçe aktarma hatası
+	Insert current line into selection/bubble (Enter)	Geçerli satırı seçime/balona ekle (Enter)
+	Insert this line into bubble (Enter)	Bu satırı balona ekle (Enter)
+	Load .txt	.txt yükle
+	Load file (.txt)…	Dosya yükle (.txt)…
+	Load from file	Dosyadan yükle
+	Load into typesetter	Dizgi aracına yükle
+	Load script file (.txt)	Senaryo dosyası yükle (.txt)
+	Load script file (.txt)…	Senaryo dosyası yükle (.txt)…
+	Loaded dialogues	Yüklenen replikler
+	Loaded styles	Yüklenen stiller
+	Make this line current	Bu satırı geçerli yap
+	Manga Script (Full Text)	Manga Senaryosu (Tam Metin)
+	Manga Workflow	Manga İş Akışı
+	New Folder	Yeni Klasör
+	Next line (↓)	Sonraki satır (↓)
+	Next page	Sonraki sayfa
+	No folder	Klasör yok
+	No matching layers or text in open pages	Açık sayfalarda eşleşen katman veya metin yok
+	No outline	Kontur yok
+	No script loaded	Senaryo yüklenmedi
+	Open .txt	.txt aç
+	Open presets folder in file manager	Ön ayar klasörünü dosya yöneticisinde aç
+	Open script in separate window	Senaryoyu ayrı pencerede aç
+	Open script text editor	Senaryo metin düzenleyicisini aç
+	PRESET STORAGE	ÖN AYAR DEPOSU
+	Page	Sayfa
+	Paste / Edit script…	Senaryoyu yapıştır / düzenle…
+	Paste copied text from clipboard	Kopyalanan metni panodan yapıştır
+	Paste from Clipboard	Panodan yapıştır
+	Paste from Clipboard (Ctrl+V)	Panodan yapıştır (Ctrl+V)
+	Paste script from clipboard (Ctrl+V)	Senaryoyu panodan yapıştır (Ctrl+V)
+	Paste script text from clipboard (Ctrl+V)	Senaryo metnini panodan yapıştır (Ctrl+V)
+	Paste script text here (Ctrl+V) or write dialogues…	Senaryo metnini buraya yapıştırın (Ctrl+V) veya replikleri yazın…
+	Presets loaded from file	Ön ayarlar dosyadan yüklendi
+	Presets saved	Ön ayarlar kaydedildi
+	Previous line (↑)	Önceki satır (↑)
+	Previous page	Önceki sayfa
+	Read error	Okuma hatası
+	Reset folder	Klasörü sıfırla
+	Reset presets storage to default AppData directory	Ön ayar deposunu varsayılan AppData klasörüne sıfırla
+	Save now	Şimdi kaydet
+	Script	Senaryo
+	Script Editor	Senaryo Düzenleyici
+	Shifting the baseline down ensures precise visual vertical centering inside bubbles.	Taban çizgisini aşağı kaydırmak, balonların içinde kesin görsel dikey ortalama sağlar.
+	Show current page dialogues only	Yalnızca geçerli sayfanın repliklerini göster
+	Size (pt)	Boyut (pt)
+	Split Left Dock (Pages + TypeR)…	Sol Paneli Böl (Sayfalar + TypeR)…
+	Storage folder reset to default	Depolama klasörü varsayılana sıfırlandı
+	Storage folder set	Depolama klasörü ayarlandı
+	Strip character names	Karakter adlarını kaldır
+	Strip character names at start of line ('HERO: Text')	Satır başındaki karakter adlarını kaldır ('HERO: Metin')
+	Strip leading dashes	Baştaki tireleri kaldır
+	Strip leading dashes ('- Text', '— Text')	Baştaki tireleri kaldır ('- Metin', '— Metin')
+	Style name	Stil adı
+	Styles successfully exported	Stiller başarıyla dışa aktarıldı
+	Sync line spacing	Satır aralığını eşitle
+	Sync line spacing with font size	Satır aralığını yazı tipi boyutuyla eşitle
+	TYPESETTER BEHAVIOR	DİZGİ ARACI DAVRANIŞI
+	Text Outline	Metin Konturu
+	Thickness (px)	Kalınlık (px)
+	Toggle Chapter Pages panel	Bölüm Sayfaları panelini aç/kapat
+	TypeR Styles	TypeR Stilleri
+	Typography Size (Line Spacing Sync)	Tipografi Boyutu (Satır Aralığı Eşitlemesi)
+	Typography and Font	Tipografi ve Yazı Tipi
+	Ultra-fast real-time rendering for giant files	Dev dosyalar için ultra hızlı gerçek zamanlı işleme
+	Write error	Yazma hatası
+	left	Sol
+	line	Hat
+	size	Boyut
+	style	Stil
+	⚙ CPU	⚙ CPU
+	⚡ GPU	⚡ GPU
+	Pages	Sayfalar
+	Find in Open Pages…	Açık Sayfalarda Bul…
+	Last export dir	Son dışa aktarma klasörü

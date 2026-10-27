@@ -4570,3 +4570,118 @@ curves	Smooth	Vloeiend maken
 	Remove what is selected with Nano Banana ({key})	Selectie verwijderen met Nano Banana ({key})
 	Pin to Top	Bovenaan vastzetten
 	Unpin from Top	Losmaken van bovenaan
+
+# TypeR script editor, Pages and export (v0.14)
+	(end of script)	(einde van het script)
+	(no script loaded — see 'Script' tab)	(geen script geladen — zie tab 'Script')
+	+ Folder	+ Map
+	+ Style	+ Stijl
+	Auto-advance to next page	Automatisch naar de volgende pagina gaan
+	Automatically advance script to the next page	Laat het script automatisch naar de volgende pagina gaan
+	Baseline shift:	Basislijnverschuiving:
+	Chapter Pages…	Hoofdstukpagina's…
+	Choose TypeR styles file	TypeR-stijlbestand kiezen
+	Choose a custom directory to store typesetter presets and state	Kies een eigen map voor de voorinstellingen en status van de zetter
+	Choose presets folder	Map voor voorinstellingen kiezen
+	Choose script file	Scriptbestand kiezen
+	Clear entire script	Hele script wissen
+	Clear script	Script wissen
+	Delete this style	Deze stijl verwijderen
+	Duplicate folder	Map dupliceren
+	Duplicate this style	Deze stijl dupliceren
+	Each line becomes a separate dialogue entry. [Page 1] tags split pages.	Elke regel wordt een apart dialoogitem. Tags [Page 1] splitsen de pagina's.
+	Editor	Editor
+	Engine:	Engine:
+	Enter in Editor	Invoeren in editor
+	Enter script manually	Script handmatig invoeren
+	Enter: Jump • Shift+Enter: Peek • Esc: Close	Enter: Springen • Shift+Enter: Voorbeeld • Esc: Sluiten
+	Exact reference CPU engine	Exacte referentierendering op de CPU
+	Export TypeR JSON…	TypeR-JSON exporteren…
+	Export TypeR styles	TypeR-stijlen exporteren
+	Export error	Fout bij exporteren
+	Favorite font	Favoriet lettertype
+	Find layer or text across open pages (@text, #group)...	Laag of tekst zoeken in geopende pagina's (@text, #group)...
+	Folder duplicated	Map gedupliceerd
+	Folder name	Mapnaam
+	Font Settings	Lettertype-instellingen
+	GEOMETRY & CENTERING	GEOMETRIE EN CENTRERING
+	GPU on large canvases, CPU on small	GPU bij grote canvassen, CPU bij kleine
+	Go to current line/page	Naar huidige regel/pagina gaan
+	Horizontal scale (%)	Horizontale schaal (%)
+	Import TypeR JSON…	TypeR-JSON importeren…
+	Import error	Fout bij importeren
+	Insert current line into selection/bubble (Enter)	Huidige regel in selectie/tekstballon invoegen (Enter)
+	Insert this line into bubble (Enter)	Deze regel in de tekstballon invoegen (Enter)
+	Load .txt	.txt laden
+	Load file (.txt)…	Bestand laden (.txt)…
+	Load from file	Uit bestand laden
+	Load into typesetter	In de zetter laden
+	Load script file (.txt)	Scriptbestand laden (.txt)
+	Load script file (.txt)…	Scriptbestand laden (.txt)…
+	Loaded dialogues	Dialogen geladen
+	Loaded styles	Stijlen geladen
+	Make this line current	Deze regel de huidige maken
+	Manga Script (Full Text)	Manga-script (volledige tekst)
+	Manga Workflow	Manga-workflow
+	New Folder	Nieuwe map
+	Next line (↓)	Volgende regel (↓)
+	Next page	Volgende pagina
+	No folder	Geen map
+	No matching layers or text in open pages	Geen overeenkomende lagen of tekst in geopende pagina's
+	No outline	Geen omtrek
+	No script loaded	Geen script geladen
+	Open .txt	.txt openen
+	Open presets folder in file manager	Map met voorinstellingen openen in de bestandsbeheerder
+	Open script in separate window	Script in apart venster openen
+	Open script text editor	Teksteditor voor het script openen
+	PRESET STORAGE	OPSLAG VAN VOORINSTELLINGEN
+	Page	Pagina
+	Paste / Edit script…	Script plakken / bewerken…
+	Paste copied text from clipboard	Gekopieerde tekst uit het klembord plakken
+	Paste from Clipboard	Plakken vanaf klembord
+	Paste from Clipboard (Ctrl+V)	Plakken vanaf klembord (Ctrl+V)
+	Paste script from clipboard (Ctrl+V)	Script vanaf klembord plakken (Ctrl+V)
+	Paste script text from clipboard (Ctrl+V)	Scripttekst vanaf klembord plakken (Ctrl+V)
+	Paste script text here (Ctrl+V) or write dialogues…	Plak hier scripttekst (Ctrl+V) of schrijf dialogen…
+	Presets loaded from file	Voorinstellingen uit bestand geladen
+	Presets saved	Voorinstellingen opgeslagen
+	Previous line (↑)	Vorige regel (↑)
+	Previous page	Vorige pagina
+	Read error	Fout bij lezen
+	Reset folder	Map herstellen
+	Reset presets storage to default AppData directory	Opslag van voorinstellingen terugzetten naar de standaardmap AppData
+	Save now	Nu opslaan
+	Script	Script
+	Script Editor	Scripteditor
+	Shifting the baseline down ensures precise visual vertical centering inside bubbles.	De basislijn naar beneden verschuiven zorgt voor een nauwkeurige visuele verticale centrering in tekstballonnen.
+	Show current page dialogues only	Alleen dialogen van de huidige pagina tonen
+	Size (pt)	Grootte (pt)
+	Split Left Dock (Pages + TypeR)…	Linkerdock splitsen (Pagina's + TypeR)…
+	Storage folder reset to default	Opslagmap teruggezet naar standaard
+	Storage folder set	Opslagmap ingesteld
+	Strip character names	Personagenamen verwijderen
+	Strip character names at start of line ('HERO: Text')	Verwijdert personagenamen aan het begin van de regel ('HERO: Text')
+	Strip leading dashes	Streepjes aan het begin verwijderen
+	Strip leading dashes ('- Text', '— Text')	Verwijdert streepjes aan het begin ('- Tekst', '— Tekst')
+	Style name	Naam van de stijl
+	Styles successfully exported	Stijlen met succes geëxporteerd
+	Sync line spacing	Interlinie synchroniseren
+	Sync line spacing with font size	Interlinie synchroniseren met de lettergrootte
+	TYPESETTER BEHAVIOR	GEDRAG VAN DE ZETTER
+	Text Outline	Tekstomtrek
+	Thickness (px)	Dikte (px)
+	Toggle Chapter Pages panel	Paneel Hoofdstukpagina's tonen/verbergen
+	TypeR Styles	TypeR-stijlen
+	Typography Size (Line Spacing Sync)	Typografieformaat (interlinie gesynchroniseerd)
+	Typography and Font	Typografie en lettertype
+	Ultra-fast real-time rendering for giant files	Ultrasnel realtime renderen voor enorme bestanden
+	Write error	Fout bij schrijven
+	left	resterend
+	line	Regel
+	size	Grootte
+	style	Stijl
+	⚙ CPU	⚙ CPU
+	⚡ GPU	⚡ GPU
+	Pages	Pagina's
+	Find in Open Pages…	Zoeken in geopende pagina's…
+	Last export dir	Laatste exportmap

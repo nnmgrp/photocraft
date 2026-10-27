@@ -4974,3 +4974,118 @@ shape	Appearance	Aspetto
 	Remove what is selected with Nano Banana ({key})	Rimuovi la selezione con Nano Banana ({key})
 	Pin to Top	Fissa in alto
 	Unpin from Top	Sblocca dall’alto
+
+# TypeR script editor, Pages and export (v0.14)
+	(end of script)	(fine della sceneggiatura)
+	(no script loaded — see 'Script' tab)	(nessuna sceneggiatura caricata — vedi la scheda “Sceneggiatura”)
+	+ Folder	+ Cartella
+	+ Style	+ Stile
+	Auto-advance to next page	Avanza automaticamente alla pagina successiva
+	Automatically advance script to the next page	Avanza automaticamente la sceneggiatura alla pagina successiva
+	Baseline shift:	Scostamento linea base:
+	Chapter Pages…	Pagine dei capitoli…
+	Choose TypeR styles file	Scegli il file degli stili TypeR
+	Choose a custom directory to store typesetter presets and state	Scegli una cartella personalizzata per archiviare i predefiniti e lo stato dell’impaginatore
+	Choose presets folder	Scegli la cartella dei predefiniti
+	Choose script file	Scegli il file di sceneggiatura
+	Clear entire script	Cancella tutta la sceneggiatura
+	Clear script	Cancella sceneggiatura
+	Delete this style	Elimina questo stile
+	Duplicate folder	Duplica cartella
+	Duplicate this style	Duplica questo stile
+	Each line becomes a separate dialogue entry. [Page 1] tags split pages.	Ogni riga diventa una voce di dialogo separata. I tag [Page 1] separano le pagine.
+	Editor	Editor
+	Engine:	Motore:
+	Enter in Editor	Invio nell’editor
+	Enter script manually	Inserisci la sceneggiatura manualmente
+	Enter: Jump • Shift+Enter: Peek • Esc: Close	Invio: Salta • Shift+Enter: Sbircia • Esc: Chiudi
+	Exact reference CPU engine	Motore CPU di riferimento esatto
+	Export TypeR JSON…	Esporta JSON di TypeR…
+	Export TypeR styles	Esporta stili TypeR
+	Export error	Errore di esportazione
+	Favorite font	Font preferito
+	Find layer or text across open pages (@text, #group)...	Trova livello o testo nelle pagine aperte (@text, #group)...
+	Folder duplicated	Cartella duplicata
+	Folder name	Nome della cartella
+	Font Settings	Impostazioni font
+	GEOMETRY & CENTERING	GEOMETRIA E CENTRATURA
+	GPU on large canvases, CPU on small	GPU su tele grandi, CPU su tele piccole
+	Go to current line/page	Vai alla riga/pagina corrente
+	Horizontal scale (%)	Scala orizzontale (%)
+	Import TypeR JSON…	Importa JSON di TypeR…
+	Import error	Errore di importazione
+	Insert current line into selection/bubble (Enter)	Inserisci la riga corrente nella selezione/fumetto (Invio)
+	Insert this line into bubble (Enter)	Inserisci questa riga nel fumetto (Invio)
+	Load .txt	Carica .txt
+	Load file (.txt)…	Carica file (.txt)…
+	Load from file	Carica da file
+	Load into typesetter	Carica nell’impaginatore
+	Load script file (.txt)	Carica file di sceneggiatura (.txt)
+	Load script file (.txt)…	Carica file di sceneggiatura (.txt)…
+	Loaded dialogues	Dialoghi caricati
+	Loaded styles	Stili caricati
+	Make this line current	Rendi corrente questa riga
+	Manga Script (Full Text)	Sceneggiatura manga (testo completo)
+	Manga Workflow	Flusso di lavoro manga
+	New Folder	Nuova cartella
+	Next line (↓)	Riga successiva (↓)
+	Next page	Pagina successiva
+	No folder	Nessuna cartella
+	No matching layers or text in open pages	Nessun livello o testo corrispondente nelle pagine aperte
+	No outline	Nessun contorno
+	No script loaded	Nessuna sceneggiatura caricata
+	Open .txt	Apri .txt
+	Open presets folder in file manager	Apri la cartella dei predefiniti nel gestore di file
+	Open script in separate window	Apri la sceneggiatura in una finestra separata
+	Open script text editor	Apri l’editor di testo della sceneggiatura
+	PRESET STORAGE	ARCHIVIAZIONE DEI PREDEFINITI
+	Page	Pagina
+	Paste / Edit script…	Incolla o modifica la sceneggiatura…
+	Paste copied text from clipboard	Incolla il testo copiato dagli appunti
+	Paste from Clipboard	Incolla dagli appunti
+	Paste from Clipboard (Ctrl+V)	Incolla dagli appunti (Ctrl+V)
+	Paste script from clipboard (Ctrl+V)	Incolla la sceneggiatura dagli appunti (Ctrl+V)
+	Paste script text from clipboard (Ctrl+V)	Incolla il testo della sceneggiatura dagli appunti (Ctrl+V)
+	Paste script text here (Ctrl+V) or write dialogues…	Incolla qui il testo della sceneggiatura (Ctrl+V) o scrivi i dialoghi…
+	Presets loaded from file	Predefiniti caricati dal file
+	Presets saved	Predefiniti salvati
+	Previous line (↑)	Riga precedente (↑)
+	Previous page	Pagina precedente
+	Read error	Errore di lettura
+	Reset folder	Ripristina cartella
+	Reset presets storage to default AppData directory	Ripristina l’archiviazione dei predefiniti nella cartella AppData predefinita
+	Save now	Salva ora
+	Script	Sceneggiatura
+	Script Editor	Editor di sceneggiatura
+	Shifting the baseline down ensures precise visual vertical centering inside bubbles.	Spostare verso il basso la linea base garantisce una centratura verticale visiva precisa all’interno dei fumetti.
+	Show current page dialogues only	Mostra solo i dialoghi della pagina corrente
+	Size (pt)	Dimensione (pt)
+	Split Left Dock (Pages + TypeR)…	Dividi il pannello ancorato sinistro (Pagine + TypeR)…
+	Storage folder reset to default	Cartella di archiviazione ripristinata a quella predefinita
+	Storage folder set	Cartella di archiviazione impostata
+	Strip character names	Rimuovi i nomi dei personaggi
+	Strip character names at start of line ('HERO: Text')	Rimuovi i nomi dei personaggi all’inizio della riga (“HERO: Text”)
+	Strip leading dashes	Rimuovi i trattini iniziali
+	Strip leading dashes ('- Text', '— Text')	Rimuovi i trattini iniziali (“- Text”, “— Text”)
+	Style name	Nome dello stile
+	Styles successfully exported	Stili esportati correttamente
+	Sync line spacing	Sincronizza l’interlinea
+	Sync line spacing with font size	Sincronizza l’interlinea con la dimensione del font
+	TYPESETTER BEHAVIOR	COMPORTAMENTO DELL’IMPAGINATORE
+	Text Outline	Contorno del testo
+	Thickness (px)	Spessore (px)
+	Toggle Chapter Pages panel	Alterna pannello Pagine dei capitoli
+	TypeR Styles	Stili TypeR
+	Typography Size (Line Spacing Sync)	Dimensione tipografia (sincronizzazione interlinea)
+	Typography and Font	Tipografia e font
+	Ultra-fast real-time rendering for giant files	Rendering in tempo reale ultrarapido per file enormi
+	Write error	Errore di scrittura
+	left	sinistra
+	line	riga
+	size	dimensione
+	style	stile
+	⚙ CPU	⚙ CPU
+	⚡ GPU	⚡ GPU
+	Pages	Pagine
+	Find in Open Pages…	Trova nelle pagine aperte…
+	Last export dir	Ultima cartella di esportazione

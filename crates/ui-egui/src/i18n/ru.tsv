@@ -5186,3 +5186,8 @@ shape	Appearance	Оформление
 	Ultra-fast real-time rendering for giant files	Сверхбыстрый рендеринг на видеокарте для гигантских файлов
 
 	Exact reference CPU engine	Точный эталонный расчет на процессоре
+
+# TypeR script editor, Pages and export (v0.14)
+	⚙ CPU	⚙ CPU
+	⚡ GPU	⚡ GPU
+	Last export dir	Последняя папка экспорта

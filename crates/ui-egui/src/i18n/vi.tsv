@@ -4309,3 +4309,118 @@ curves	Smooth	Làm mượt
 	Remove what is selected with Nano Banana ({key})	Xóa vùng chọn bằng Nano Banana ({key})
 	Pin to Top	Ghim lên đầu
 	Unpin from Top	Bỏ ghim khỏi đầu
+
+# TypeR script editor, Pages and export (v0.14)
+	(end of script)	(hết kịch bản)
+	(no script loaded — see 'Script' tab)	(chưa tải kịch bản — xem tab 'Kịch bản')
+	+ Folder	+ Thư mục
+	+ Style	+ Kiểu
+	Auto-advance to next page	Tự động chuyển sang trang tiếp theo
+	Automatically advance script to the next page	Tự động chuyển kịch bản sang trang tiếp theo
+	Baseline shift:	Dịch đường cơ sở:
+	Chapter Pages…	Trang chương…
+	Choose TypeR styles file	Chọn tệp kiểu TypeR
+	Choose a custom directory to store typesetter presets and state	Chọn thư mục tùy chỉnh để lưu thiết lập sẵn và trạng thái của trình dàn chữ
+	Choose presets folder	Chọn thư mục thiết lập sẵn
+	Choose script file	Chọn tệp kịch bản
+	Clear entire script	Xóa toàn bộ kịch bản
+	Clear script	Xóa kịch bản
+	Delete this style	Xóa kiểu này
+	Duplicate folder	Nhân bản thư mục
+	Duplicate this style	Nhân bản kiểu này
+	Each line becomes a separate dialogue entry. [Page 1] tags split pages.	Mỗi dòng thành một mục lời thoại riêng. Thẻ [Page 1] chia trang.
+	Editor	Trình soạn thảo
+	Engine:	Bộ máy:
+	Enter in Editor	Enter trong trình soạn thảo
+	Enter script manually	Nhập kịch bản thủ công
+	Enter: Jump • Shift+Enter: Peek • Esc: Close	Enter: Nhảy • Shift+Enter: Xem nhanh • Esc: Đóng
+	Exact reference CPU engine	Bộ máy CPU tham chiếu chính xác
+	Export TypeR JSON…	Xuất TypeR JSON…
+	Export TypeR styles	Xuất kiểu TypeR
+	Export error	Lỗi xuất
+	Favorite font	Phông chữ ưa thích
+	Find layer or text across open pages (@text, #group)...	Tìm lớp hoặc văn bản trong các trang đang mở (@text, #group)...
+	Folder duplicated	Đã nhân bản thư mục
+	Folder name	Tên thư mục
+	Font Settings	Cài đặt phông chữ
+	GEOMETRY & CENTERING	Hình học và căn giữa
+	GPU on large canvases, CPU on small	GPU trên canvas lớn, CPU trên canvas nhỏ
+	Go to current line/page	Đi đến dòng/trang hiện tại
+	Horizontal scale (%)	Tỷ lệ ngang (%)
+	Import TypeR JSON…	Nhập TypeR JSON…
+	Import error	Lỗi nhập
+	Insert current line into selection/bubble (Enter)	Chèn dòng hiện tại vào vùng chọn/bong bóng (Enter)
+	Insert this line into bubble (Enter)	Chèn dòng này vào bong bóng (Enter)
+	Load .txt	Tải .txt
+	Load file (.txt)…	Tải tệp (.txt)…
+	Load from file	Tải từ tệp
+	Load into typesetter	Tải vào trình dàn chữ
+	Load script file (.txt)	Tải tệp kịch bản (.txt)
+	Load script file (.txt)…	Tải tệp kịch bản (.txt)…
+	Loaded dialogues	Lời thoại đã tải
+	Loaded styles	Kiểu đã tải
+	Make this line current	Đặt dòng này làm hiện tại
+	Manga Script (Full Text)	Kịch bản manga (Toàn văn)
+	Manga Workflow	Quy trình manga
+	New Folder	Thư mục mới
+	Next line (↓)	Dòng sau (↓)
+	Next page	Trang sau
+	No folder	Không có thư mục
+	No matching layers or text in open pages	Không tìm thấy lớp hoặc văn bản khớp trong các trang đang mở
+	No outline	Không viền
+	No script loaded	Chưa tải kịch bản
+	Open .txt	Mở .txt
+	Open presets folder in file manager	Mở thư mục thiết lập sẵn trong trình quản lý tệp
+	Open script in separate window	Mở kịch bản trong cửa sổ riêng
+	Open script text editor	Mở trình soạn thảo văn bản kịch bản
+	PRESET STORAGE	Lưu trữ thiết lập sẵn
+	Page	Trang
+	Paste / Edit script…	Dán / Sửa kịch bản…
+	Paste copied text from clipboard	Dán văn bản đã sao chép từ bảng tạm
+	Paste from Clipboard	Dán từ bảng tạm
+	Paste from Clipboard (Ctrl+V)	Dán từ bảng tạm (Ctrl+V)
+	Paste script from clipboard (Ctrl+V)	Dán kịch bản từ bảng tạm (Ctrl+V)
+	Paste script text from clipboard (Ctrl+V)	Dán văn bản kịch bản từ bảng tạm (Ctrl+V)
+	Paste script text here (Ctrl+V) or write dialogues…	Dán văn bản kịch bản vào đây (Ctrl+V) hoặc viết lời thoại…
+	Presets loaded from file	Đã tải thiết lập sẵn từ tệp
+	Presets saved	Đã lưu thiết lập sẵn
+	Previous line (↑)	Dòng trước (↑)
+	Previous page	Trang trước
+	Read error	Lỗi đọc
+	Reset folder	Đặt lại thư mục
+	Reset presets storage to default AppData directory	Đặt lại nơi lưu thiết lập sẵn về thư mục AppData mặc định
+	Save now	Lưu ngay
+	Script	Kịch bản
+	Script Editor	Trình soạn thảo kịch bản
+	Shifting the baseline down ensures precise visual vertical centering inside bubbles.	Dịch đường cơ sở xuống giúp căn giữa dọc chính xác trong bong bóng.
+	Show current page dialogues only	Chỉ hiện lời thoại của trang hiện tại
+	Size (pt)	Kích thước (pt)
+	Split Left Dock (Pages + TypeR)…	Tách khung bên trái (Trang + TypeR)…
+	Storage folder reset to default	Đã đặt lại thư mục lưu trữ về mặc định
+	Storage folder set	Đã đặt thư mục lưu trữ
+	Strip character names	Bỏ tên nhân vật
+	Strip character names at start of line ('HERO: Text')	Bỏ tên nhân vật ở đầu dòng ('HERO: Văn bản')
+	Strip leading dashes	Bỏ dấu gạch ngang đầu dòng
+	Strip leading dashes ('- Text', '— Text')	Bỏ dấu gạch ngang đầu dòng ('- Văn bản', '— Văn bản')
+	Style name	Tên kiểu
+	Styles successfully exported	Đã xuất kiểu thành công
+	Sync line spacing	Đồng bộ giãn dòng
+	Sync line spacing with font size	Đồng bộ giãn dòng với cỡ chữ
+	TYPESETTER BEHAVIOR	Hành vi trình dàn chữ
+	Text Outline	Viền chữ
+	Thickness (px)	Độ dày (px)
+	Toggle Chapter Pages panel	Bật/tắt bảng Trang chương
+	TypeR Styles	Kiểu TypeR
+	Typography Size (Line Spacing Sync)	Cỡ chữ (Đồng bộ giãn dòng)
+	Typography and Font	Kiểu chữ và phông chữ
+	Ultra-fast real-time rendering for giant files	Kết xuất thời gian thực cực nhanh cho các tệp khổng lồ
+	Write error	Lỗi ghi
+	left	Trai
+	line	Đường
+	size	Kích thước
+	style	Kiểu
+	⚙ CPU	⚙ CPU
+	⚡ GPU	⚡ GPU
+	Pages	Trang
+	Find in Open Pages…	Tìm trong các trang đang mở…
+	Last export dir	Thư mục xuất gần nhất

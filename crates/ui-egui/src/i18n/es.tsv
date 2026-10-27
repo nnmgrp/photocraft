@@ -4819,3 +4819,118 @@ navigator	Zoom	Zoom
 	Remove what is selected with Nano Banana ({key})	Eliminar lo seleccionado con Nano Banana ({key})
 	Pin to Top	Fijar arriba
 	Unpin from Top	Dejar de fijar arriba
+
+# TypeR script editor, Pages and export (v0.14)
+	(end of script)	(fin del guion)
+	(no script loaded — see 'Script' tab)	(no hay ningún guion cargado — consulte la pestaña «Guion»)
+	+ Folder	+ Carpeta
+	+ Style	+ Estilo
+	Auto-advance to next page	Avanzar automáticamente a la página siguiente
+	Automatically advance script to the next page	Avanzar automáticamente el guion a la página siguiente
+	Baseline shift:	Desplazamiento de línea de base:
+	Chapter Pages…	Páginas de capítulo…
+	Choose TypeR styles file	Elegir archivo de estilos TypeR
+	Choose a custom directory to store typesetter presets and state	Elegir una carpeta personalizada para guardar los ajustes preestablecidos y el estado del maquetador
+	Choose presets folder	Elegir carpeta de ajustes preestablecidos
+	Choose script file	Elegir archivo de guion
+	Clear entire script	Borrar todo el guion
+	Clear script	Borrar guion
+	Delete this style	Eliminar este estilo
+	Duplicate folder	Duplicar carpeta
+	Duplicate this style	Duplicar este estilo
+	Each line becomes a separate dialogue entry. [Page 1] tags split pages.	Cada línea se convierte en una entrada de diálogo independiente. Las etiquetas [Page 1] separan las páginas.
+	Editor	Editor
+	Engine:	Motor:
+	Enter in Editor	Intro en el editor
+	Enter script manually	Introducir el guion manualmente
+	Enter: Jump • Shift+Enter: Peek • Esc: Close	Intro: Saltar • Shift+Enter: Ver • Esc: Cerrar
+	Exact reference CPU engine	Motor de CPU de referencia exacta
+	Export TypeR JSON…	Exportar JSON de TypeR…
+	Export TypeR styles	Exportar estilos TypeR
+	Export error	Error de exportación
+	Favorite font	Fuente favorita
+	Find layer or text across open pages (@text, #group)...	Buscar capa o texto en las páginas abiertas (@text, #group)...
+	Folder duplicated	Carpeta duplicada
+	Folder name	Nombre de la carpeta
+	Font Settings	Ajustes de fuente
+	GEOMETRY & CENTERING	GEOMETRÍA Y CENTRADO
+	GPU on large canvases, CPU on small	GPU en lienzos grandes, CPU en lienzos pequeños
+	Go to current line/page	Ir a la línea/página actual
+	Horizontal scale (%)	Escala horizontal (%)
+	Import TypeR JSON…	Importar JSON de TypeR…
+	Import error	Error de importación
+	Insert current line into selection/bubble (Enter)	Insertar la línea actual en la selección/bocadillo (Intro)
+	Insert this line into bubble (Enter)	Insertar esta línea en el bocadillo (Intro)
+	Load .txt	Cargar .txt
+	Load file (.txt)…	Cargar archivo (.txt)…
+	Load from file	Cargar desde archivo
+	Load into typesetter	Cargar en el maquetador
+	Load script file (.txt)	Cargar archivo de guion (.txt)
+	Load script file (.txt)…	Cargar archivo de guion (.txt)…
+	Loaded dialogues	Diálogos cargados
+	Loaded styles	Estilos cargados
+	Make this line current	Convertir esta línea en la actual
+	Manga Script (Full Text)	Guion de manga (texto completo)
+	Manga Workflow	Flujo de trabajo de manga
+	New Folder	Nueva carpeta
+	Next line (↓)	Línea siguiente (↓)
+	Next page	Página siguiente
+	No folder	Sin carpeta
+	No matching layers or text in open pages	No hay capas ni texto coincidentes en las páginas abiertas
+	No outline	Sin contorno
+	No script loaded	No hay ningún guion cargado
+	Open .txt	Abrir .txt
+	Open presets folder in file manager	Abrir la carpeta de ajustes preestablecidos en el gestor de archivos
+	Open script in separate window	Abrir el guion en una ventana aparte
+	Open script text editor	Abrir el editor de texto del guion
+	PRESET STORAGE	ALMACENAMIENTO DE AJUSTES PREESTABLECIDOS
+	Page	Página
+	Paste / Edit script…	Pegar o editar el guion…
+	Paste copied text from clipboard	Pegar el texto copiado del portapapeles
+	Paste from Clipboard	Pegar desde el portapapeles
+	Paste from Clipboard (Ctrl+V)	Pegar desde el portapapeles (Ctrl+V)
+	Paste script from clipboard (Ctrl+V)	Pegar el guion del portapapeles (Ctrl+V)
+	Paste script text from clipboard (Ctrl+V)	Pegar el texto del guion del portapapeles (Ctrl+V)
+	Paste script text here (Ctrl+V) or write dialogues…	Pegue aquí el texto del guion (Ctrl+V) o escriba los diálogos…
+	Presets loaded from file	Ajustes preestablecidos cargados desde el archivo
+	Presets saved	Ajustes preestablecidos guardados
+	Previous line (↑)	Línea anterior (↑)
+	Previous page	Página anterior
+	Read error	Error de lectura
+	Reset folder	Restablecer carpeta
+	Reset presets storage to default AppData directory	Restablecer el almacenamiento de ajustes preestablecidos en el directorio AppData predeterminado
+	Save now	Guardar ahora
+	Script	Guion
+	Script Editor	Editor de guion
+	Shifting the baseline down ensures precise visual vertical centering inside bubbles.	Bajar la línea de base garantiza un centrado vertical visual preciso dentro de los bocadillos.
+	Show current page dialogues only	Mostrar solo los diálogos de la página actual
+	Size (pt)	Tamaño (pt)
+	Split Left Dock (Pages + TypeR)…	Dividir el panel acoplado izquierdo (Páginas + TypeR)…
+	Storage folder reset to default	Carpeta de almacenamiento restablecida a la predeterminada
+	Storage folder set	Carpeta de almacenamiento establecida
+	Strip character names	Quitar los nombres de los personajes
+	Strip character names at start of line ('HERO: Text')	Quitar los nombres de los personajes al principio de la línea («HERO: Text»)
+	Strip leading dashes	Quitar los guiones iniciales
+	Strip leading dashes ('- Text', '— Text')	Quitar los guiones iniciales («- Text», «— Text»)
+	Style name	Nombre del estilo
+	Styles successfully exported	Estilos exportados correctamente
+	Sync line spacing	Sincronizar el interlineado
+	Sync line spacing with font size	Sincronizar el interlineado con el tamaño de la fuente
+	TYPESETTER BEHAVIOR	COMPORTAMIENTO DEL MAQUETADOR
+	Text Outline	Contorno del texto
+	Thickness (px)	Grosor (px)
+	Toggle Chapter Pages panel	Alternar el panel Páginas de capítulo
+	TypeR Styles	Estilos TypeR
+	Typography Size (Line Spacing Sync)	Tamaño de tipografía (sincronización del interlineado)
+	Typography and Font	Tipografía y fuente
+	Ultra-fast real-time rendering for giant files	Procesamiento en tiempo real ultrarrápido para archivos enormes
+	Write error	Error de escritura
+	left	izquierda
+	line	línea
+	size	tamaño
+	style	estilo
+	⚙ CPU	⚙ CPU
+	⚡ GPU	⚡ GPU
+	Pages	Páginas
+	Find in Open Pages…	Buscar en las páginas abiertas…
+	Last export dir	Última carpeta de exportación

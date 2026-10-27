@@ -4726,3 +4726,118 @@ cameraRaw	Yellow	Sárga
 	Remove what is selected with Nano Banana ({key})	A kijelölés eltávolítása a Nano Bananával ({key})
 	Pin to Top	Rögzítés felül
 	Unpin from Top	Rögzítés feloldása
+
+# TypeR script editor, Pages and export (v0.14)
+	(end of script)	(a forgatókönyv vége)
+	(no script loaded — see 'Script' tab)	(nincs betöltött forgatókönyv — lásd a „Forgatókönyv” lapot)
+	+ Folder	+ Mappa
+	+ Style	+ Stílus
+	Auto-advance to next page	Automatikus továbblépés a következő oldalra
+	Automatically advance script to the next page	A forgatókönyv automatikus léptetése a következő oldalra
+	Baseline shift:	Alapvonal-eltolás:
+	Chapter Pages…	Fejezetoldalak…
+	Choose TypeR styles file	TypeR-stílusfájl kiválasztása
+	Choose a custom directory to store typesetter presets and state	Egyéni mappa kiválasztása a szedő előbeállításainak és állapotának tárolásához
+	Choose presets folder	Előbeállítások mappájának kiválasztása
+	Choose script file	Forgatókönyvfájl kiválasztása
+	Clear entire script	A teljes forgatókönyv kiürítése
+	Clear script	Forgatókönyv kiürítése
+	Delete this style	Ennek a stílusnak a törlése
+	Duplicate folder	Mappa kettőzése
+	Duplicate this style	Ennek a stílusnak a kettőzése
+	Each line becomes a separate dialogue entry. [Page 1] tags split pages.	Minden sor külön párbeszédbejegyzés lesz. A [Page 1] címkék oldalakra bontják a szöveget.
+	Editor	Szerkesztő
+	Engine:	Motor:
+	Enter in Editor	Bevitel a szerkesztőben
+	Enter script manually	Forgatókönyv kézi beírása
+	Enter: Jump • Shift+Enter: Peek • Esc: Close	Enter: ugrás • Shift+Enter: betekintés • Esc: bezárás
+	Exact reference CPU engine	Pontos referenciamotor CPU-n
+	Export TypeR JSON…	TypeR JSON exportálása…
+	Export TypeR styles	TypeR-stílusok exportálása
+	Export error	Exportálási hiba
+	Favorite font	Kedvenc betűtípus
+	Find layer or text across open pages (@text, #group)...	Réteg vagy szöveg keresése a megnyitott oldalakon (@text, #group)...
+	Folder duplicated	Mappa kettőzve
+	Folder name	Mappa neve
+	Font Settings	Betűtípus-beállítások
+	GEOMETRY & CENTERING	GEOMETRIA ÉS KÖZPONTOSÍTÁS
+	GPU on large canvases, CPU on small	GPU a nagy vásznakon, CPU a kicsiken
+	Go to current line/page	Ugrás az aktuális sorra/oldalra
+	Horizontal scale (%)	Vízszintes méretarány (%)
+	Import TypeR JSON…	TypeR JSON importálása…
+	Import error	Importálási hiba
+	Insert current line into selection/bubble (Enter)	Az aktuális sor beszúrása a kijelölésbe/buborékba (Enter)
+	Insert this line into bubble (Enter)	A sor beszúrása a buborékba (Enter)
+	Load .txt	.txt betöltése
+	Load file (.txt)…	Fájl betöltése (.txt)…
+	Load from file	Betöltés fájlból
+	Load into typesetter	Betöltés a szedőbe
+	Load script file (.txt)	Forgatókönyvfájl betöltése (.txt)
+	Load script file (.txt)…	Forgatókönyvfájl betöltése (.txt)…
+	Loaded dialogues	Betöltött párbeszédek
+	Loaded styles	Betöltött stílusok
+	Make this line current	Ez a sor legyen az aktuális
+	Manga Script (Full Text)	Manga-forgatókönyv (teljes szöveg)
+	Manga Workflow	Manga-munkafolyamat
+	New Folder	Új mappa
+	Next line (↓)	Következő sor (↓)
+	Next page	Következő oldal
+	No folder	Nincs mappa
+	No matching layers or text in open pages	Nincs egyező réteg vagy szöveg a megnyitott oldalakon
+	No outline	Nincs körvonal
+	No script loaded	Nincs betöltött forgatókönyv
+	Open .txt	.txt megnyitása
+	Open presets folder in file manager	Előbeállítások mappájának megnyitása a fájlkezelőben
+	Open script in separate window	Forgatókönyv megnyitása külön ablakban
+	Open script text editor	A forgatókönyv szövegszerkesztőjének megnyitása
+	PRESET STORAGE	ELŐBEÁLLÍTÁSOK TÁROLÁSA
+	Page	Oldal
+	Paste / Edit script…	Beillesztés / forgatókönyv szerkesztése…
+	Paste copied text from clipboard	Másolt szöveg beillesztése a vágólapról
+	Paste from Clipboard	Beillesztés a vágólapról
+	Paste from Clipboard (Ctrl+V)	Beillesztés a vágólapról (Ctrl+V)
+	Paste script from clipboard (Ctrl+V)	Forgatókönyv beillesztése a vágólapról (Ctrl+V)
+	Paste script text from clipboard (Ctrl+V)	A forgatókönyv szövegének beillesztése a vágólapról (Ctrl+V)
+	Paste script text here (Ctrl+V) or write dialogues…	Illeszd ide a forgatókönyv szövegét (Ctrl+V), vagy írd be a párbeszédeket…
+	Presets loaded from file	Előbeállítások betöltve a fájlból
+	Presets saved	Előbeállítások mentve
+	Previous line (↑)	Előző sor (↑)
+	Previous page	Előző oldal
+	Read error	Olvasási hiba
+	Reset folder	Mappa visszaállítása
+	Reset presets storage to default AppData directory	Előbeállítások tárolásának visszaállítása az alapértelmezett AppData-mappára
+	Save now	Mentés most
+	Script	Forgatókönyv
+	Script Editor	Forgatókönyvszerkesztő
+	Shifting the baseline down ensures precise visual vertical centering inside bubbles.	Az alapvonal lefelé tolása pontos vizuális függőleges központosítást biztosít a buborékokban.
+	Show current page dialogues only	Csak az aktuális oldal párbeszédei jelenjenek meg
+	Size (pt)	Méret (pt)
+	Split Left Dock (Pages + TypeR)…	Bal oldali dok felosztása (Oldalak + TypeR)…
+	Storage folder reset to default	Tárolómappa visszaállítva az alapértelmezettre
+	Storage folder set	Tárolómappa beállítva
+	Strip character names	Karakternevek eltávolítása
+	Strip character names at start of line ('HERO: Text')	Karakternevek eltávolítása a sor elejéről ('HERO: Text')
+	Strip leading dashes	Kezdő gondolatjelek eltávolítása
+	Strip leading dashes ('- Text', '— Text')	Kezdő gondolatjelek eltávolítása ('- Text', '— Text')
+	Style name	Stílus neve
+	Styles successfully exported	A stílusok exportálása sikerült
+	Sync line spacing	Sorköz szinkronizálása
+	Sync line spacing with font size	Sorköz szinkronizálása a betűmérettel
+	TYPESETTER BEHAVIOR	SZEDŐ VISELKEDÉSE
+	Text Outline	Szöveg körvonala
+	Thickness (px)	Vastagság (px)
+	Toggle Chapter Pages panel	A fejezetoldalak panel be- és kikapcsolása
+	TypeR Styles	TypeR-stílusok
+	Typography Size (Line Spacing Sync)	Tipográfiai méret (sorközszinkron)
+	Typography and Font	Tipográfia és betűtípus
+	Ultra-fast real-time rendering for giant files	Ultragyors valós idejű megjelenítés óriási fájlokhoz
+	Write error	Írási hiba
+	left	hátralévő
+	line	sor
+	size	méret
+	style	stílus
+	⚙ CPU	⚙ CPU
+	⚡ GPU	⚡ GPU
+	Pages	Oldalak
+	Find in Open Pages…	Keresés a megnyitott oldalakon…
+	Last export dir	Utolsó exportmappa

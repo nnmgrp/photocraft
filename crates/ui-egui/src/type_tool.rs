@@ -3550,3 +3550,214 @@ mod tests {
 #[cfg(test)]
 #[path = "type_commit_tests.rs"]
 mod commit_tests;
+
+// =============================================================================
+// Community additions: favorite fonts, canvas capsule controls, vertical align
+// =============================================================================
+
+fn favorite_fonts_id() -> egui::Id {
+    egui::Id::new("favorite-fonts-cache")
+}
+
+fn favorite_fonts_dirty_id() -> egui::Id {
+    egui::Id::new("favorite-fonts-dirty")
+}
+
+pub fn sync_favorite_fonts(ctx: &egui::Context, favorites: &[String]) -> Option<Vec<String>> {
+    let updated = ctx.data_mut(|d| d.remove_temp::<Vec<String>>(favorite_fonts_dirty_id()));
+    let active = updated.as_deref().unwrap_or(favorites);
+    ctx.data_mut(|d| d.insert_temp(favorite_fonts_id(), active.to_vec()));
+    updated
+}
+
+pub fn toggle_favorite_font(ctx: &egui::Context, family: &str) -> bool {
+    let mut favorites: Vec<String> = ctx.data(|d| d.get_temp::<Vec<String>>(favorite_fonts_id())).unwrap_or_default();
+    let now_fav = if let Some(pos) = favorites.iter().position(|x| x == family) {
+        favorites.remove(pos);
+        false
+    } else {
+        favorites.push(family.to_string());
+        true
+    };
+    ctx.data_mut(|d| {
+        d.insert_temp(favorite_fonts_id(), favorites.clone());
+        d.insert_temp(favorite_fonts_dirty_id(), favorites);
+    });
+    now_fav
+}
+
+pub fn is_favorite_font(ctx: &egui::Context, family: &str) -> bool {
+    let favorites: Vec<String> = ctx.data(|d| d.get_temp::<Vec<String>>(favorite_fonts_id())).unwrap_or_default();
+    favorites.iter().any(|x| x == family)
+}
+
+pub(crate) fn capsule_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    ui.push_id("capsule_type_controls_scope", |ui| {
+        let t = crate::theme::Tokens::get(ui.ctx());
+        let shown = target(app).and_then(|(id, _)| {
+            let st = app.session.active()?;
+            let tl = text_layer(&st.doc, LayerId(id))?;
+            let run = tl.char_runs().into_iter().next().map(|r| r.style);
+            let size = styles_at(app).map_or(tl.size_pt, |(c, _)| c.size_pt) * shown_scale(app);
+            Some((tl.font_family.clone(), run.as_ref().map(selected_style).unwrap_or_default(), size, styles_at(app).map_or(tl.color, |(c, _)| c.color)))
+        });
+        let o = app.ui.tool_options.clone();
+        let (mut fam, mut style, size) = match &shown {
+            Some((f, s, z, _)) => (f.clone(), if s.is_empty() { "Regular".into() } else { s.clone() }, *z),
+            None => (o.type_font.clone(), o.type_style.clone(), o.type_size),
+        };
+
+        ui.label(egui::RichText::new("T").strong().color(t.text));
+
+        // Font family dropdown with dedicated capsule ID salt
+        if fonts_ready(ui, 120.0) {
+            if family_picker_in(ui, "capsule-type-font", &mut fam, 120.0, &families(), app.session.prefs().type_.font_preview, &app.ui.recent_fonts) {
+                app.note_recent_font(&fam);
+                app.ui.tool_options.type_font = fam.clone();
+                let st = styles(&fam);
+                style = if st.contains(&style) { style } else { st.first().cloned().unwrap_or_else(|| "Regular".into()) };
+                app.ui.tool_options.type_style = style.clone();
+                apply(app, ui.ctx(), json!({"font": fam}));
+            }
+        }
+
+        // Font size field
+        let (unit, label) = type_unit(app);
+        let mut display = size * unit;
+        if crate::widgets::value_field(ui, &mut display, unit..=1296.0 * unit, label, 58.0).changed() {
+            let new_size = display / unit;
+            app.ui.tool_options.type_size = new_size;
+            apply(app, ui.ctx(), json!({"size": new_size, "metricsAsShown": true}));
+        }
+
+        // Alignment buttons
+        ui.spacing_mut().item_spacing.x = 2.0;
+        for (align, icon, tip) in [
+            ("left", "align-left", tl!("Left align text")),
+            ("center", "align-center", tl!("Center text")),
+            ("right", "align-right", tl!("Right align text")),
+        ] {
+            if crate::icons::button(ui, icon, 18.0, o.type_align == align, tip).clicked() {
+                app.ui.tool_options.type_align = align.into();
+                apply(app, ui.ctx(), json!({"align": align}));
+            }
+        }
+        ui.spacing_mut().item_spacing.x = 6.0;
+        crate::widgets::vline(ui, 18.0);
+        ui.spacing_mut().item_spacing.x = 2.0;
+
+        let cur_valign = styles_at(app)
+            .map(|(_, p)| p.vertical_align)
+            .unwrap_or_else(|| default_styles(app).1.vertical_align);
+        for (key, tip, va) in vertical_align_items() {
+            if vertical_align_button(ui, va, cur_valign == va, tip, 18.0).clicked() {
+                apply_vertical_align(app, ui.ctx(), key);
+            }
+        }
+        ui.spacing_mut().item_spacing.x = 6.0;
+
+        // Commit / Cancel buttons if editing
+        if app.ui.text_edit.is_some() {
+            ui.separator();
+            if crate::icons::button(
+                ui,
+                "check",
+                18.0,
+                false,
+                &crate::i18n::fmt(tl!("Commit any current edits ({key})"), &[("key", &crate::shortcuts::pretty("Cmd+Enter"))]),
+            )
+            .clicked()
+            {
+                commit_with(app, ui.input(|i| i.modifiers));
+            }
+            if crate::icons::button(ui, "ban", 18.0, false, tl!("Cancel any current edits (Esc)")).clicked() {
+                cancel(app);
+            }
+        }
+    });
+}
+
+fn apply_vertical_align(app: &mut PhotocraftApp, ctx: &egui::Context, key: &str) {
+    apply_defaults(app, &json!({"verticalAlign": key}));
+    if let Some((id, _)) = target(app) {
+        if box_shape(app, LayerId(id)).is_none() {
+            if let Some((l, _, _)) = layout(app, LayerId(id)) {
+                if let Some([x0, y0, x1, y1]) = l.bounds() {
+                    let pad = 10.0;
+                    let w = ((x1 - x0) + pad * 2.0).max(60.0);
+                    let h = ((y1 - y0) + pad * 2.0).max(40.0);
+                    let bx = x0 - pad;
+                    let by = y0 - pad;
+                    apply(app, ctx, json!({"box": [bx, by, w, h], "verticalAlign": key}));
+                } else {
+                    apply(app, ctx, json!({"verticalAlign": key}));
+                }
+            } else {
+                apply(app, ctx, json!({"verticalAlign": key}));
+            }
+        } else {
+            apply(app, ctx, json!({"verticalAlign": key}));
+        }
+    }
+}
+
+fn vertical_align_items() -> [(&'static str, &'static str, photocraft_doc::text::VerticalAlign); 4] {
+    use photocraft_doc::text::VerticalAlign as V;
+    [
+        ("top", "Top align text", V::Top),
+        ("center", "Center text vertically", V::Center),
+        ("bottom", "Bottom align text", V::Bottom),
+        ("justify", "Justify text vertically", V::Justify),
+    ]
+}
+
+fn vertical_align_glyph(p: &egui::Painter, r: egui::Rect, a: photocraft_doc::text::VerticalAlign, c: Color32) {
+    use photocraft_doc::text::VerticalAlign as V;
+    let frame_stroke = Stroke::new(1.2, c);
+    let line_stroke = Stroke::new(1.5, c);
+    let (left, right) = (r.left(), r.right());
+    match a {
+        V::Top => {
+            p.line_segment([egui::pos2(left, r.top()), egui::pos2(right, r.top())], frame_stroke);
+            for (i, w) in [0.85, 0.55].iter().enumerate() {
+                let y = r.top() + 3.5 + i as f32 * 3.0;
+                p.line_segment([egui::pos2(left + 1.0, y), egui::pos2(left + 1.0 + (r.width() - 2.0) * w, y)], line_stroke);
+            }
+        }
+        V::Center => {
+            let cy = r.center().y;
+            p.line_segment([egui::pos2(left, r.top()), egui::pos2(right, r.top())], frame_stroke);
+            p.line_segment([egui::pos2(left, r.bottom()), egui::pos2(right, r.bottom())], frame_stroke);
+            for (dy, w) in [(-1.5, 0.85), (1.5, 0.55)] {
+                let len = (r.width() - 2.0) * w;
+                let x0 = r.center().x - len * 0.5;
+                p.line_segment([egui::pos2(x0, cy + dy), egui::pos2(x0 + len, cy + dy)], line_stroke);
+            }
+        }
+        V::Bottom => {
+            p.line_segment([egui::pos2(left, r.bottom()), egui::pos2(right, r.bottom())], frame_stroke);
+            for (i, w) in [0.85, 0.55].iter().enumerate() {
+                let y = r.bottom() - 6.5 + i as f32 * 3.0;
+                p.line_segment([egui::pos2(left + 1.0, y), egui::pos2(left + 1.0 + (r.width() - 2.0) * w, y)], line_stroke);
+            }
+        }
+        V::Justify => {
+            p.line_segment([egui::pos2(left, r.top()), egui::pos2(right, r.top())], frame_stroke);
+            p.line_segment([egui::pos2(left, r.bottom()), egui::pos2(right, r.bottom())], frame_stroke);
+            let h = r.height() - 2.0;
+            for i in 1..=3 {
+                let y = r.top() + 1.0 + h * (i as f32 / 4.0);
+                p.line_segment([egui::pos2(left + 1.0, y), egui::pos2(right - 1.0, y)], line_stroke);
+            }
+        }
+    }
+}
+
+fn vertical_align_button(ui: &mut egui::Ui, a: photocraft_doc::text::VerticalAlign, selected: bool, tip: &str, size: f32) -> egui::Response {
+    let (r, resp) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
+    let tint = crate::icons::button_chrome(ui, r, selected, resp.hovered());
+    vertical_align_glyph(ui.painter(), egui::Rect::from_center_size(r.center(), egui::vec2((size - 8.0).max(10.0), (size - 8.0).max(10.0))), a, tint);
+    let tip = tip.to_string();
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, &tip));
+    resp.on_hover_text(tip)
+}

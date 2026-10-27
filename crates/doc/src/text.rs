@@ -163,6 +163,38 @@ pub enum TextAlign {
     JustifyAll,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum VerticalAlign {
+    #[default]
+    Top,
+    Center,
+    Bottom,
+    Justify,
+}
+
+impl VerticalAlign {
+    pub const ALL: [Self; 4] = [Self::Top, Self::Center, Self::Bottom, Self::Justify];
+
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Top => "top",
+            Self::Center => "center",
+            Self::Bottom => "bottom",
+            Self::Justify => "justify",
+        }
+    }
+
+    pub fn from_id(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "top" => Some(Self::Top),
+            "center" | "middle" => Some(Self::Center),
+            "bottom" => Some(Self::Bottom),
+            "justify" => Some(Self::Justify),
+            _ => None,
+        }
+    }
+}
+
 impl TextAlign {
     pub fn is_justified(self) -> bool {
         matches!(self, Self::JustifyLeft | Self::JustifyCenter | Self::JustifyRight | Self::JustifyAll)
@@ -183,6 +215,8 @@ pub enum TextDirection {
 #[serde(default)]
 pub struct ParagraphStyle {
     pub align: TextAlign,
+    #[serde(default)]
+    pub vertical_align: VerticalAlign,
     pub first_line_indent_pt: f32,
     pub start_indent_pt: f32,
     pub end_indent_pt: f32,
@@ -201,6 +235,7 @@ impl Default for ParagraphStyle {
     fn default() -> Self {
         Self {
             align: TextAlign::Left,
+            vertical_align: VerticalAlign::Top,
             first_line_indent_pt: 0.0,
             start_indent_pt: 0.0,
             end_indent_pt: 0.0,

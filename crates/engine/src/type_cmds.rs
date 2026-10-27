@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use photocraft_color::{Color, PixelFormat};
 use photocraft_doc::text::{
+    VerticalAlign,
     AntiAlias, Caps, CharStyle, FontBaseline, FontFeature, FontVariation, Kerning, Orientation, ParagraphRun, ParagraphStyle, TextAlign, TextDirection,
     TextRun, TextShape,
 };
@@ -143,6 +144,11 @@ pub fn check_size_tracking(p: &Value) -> std::result::Result<(), String> {
         && !matches!(v.as_str(), Some("normal" | "superscript" | "subscript"))
     {
         return Err("baseline must be \"normal\", \"superscript\" or \"subscript\"".into());
+    }
+    if let Some(v) = p.get("verticalAlign")
+        && v.as_str().and_then(VerticalAlign::from_id).is_none()
+    {
+        return Err("verticalAlign must be \"top\", \"center\", \"bottom\" or \"justify\"".into());
     }
     for key in ["horizontalScale", "verticalScale"] {
         if let Some(v) = p.get(key) {
@@ -422,6 +428,9 @@ pub fn apply_char_props(s: &mut CharStyle, p: &Value) -> bool {
 
 /// Applies paragraph-style keys from JSON. Returns true if any key was present.
 pub fn apply_para_props(s: &mut ParagraphStyle, p: &Value) -> bool {
+    if let Some(v) = p.get("verticalAlign").and_then(Value::as_str).and_then(VerticalAlign::from_id) {
+        s.vertical_align = v;
+    }
     let mut any = false;
     if let Some(v) = p.get("align").and_then(Value::as_str) {
         s.align = match v {
@@ -829,6 +838,7 @@ fn info(s: &Session, p: &Value) -> Result<Value> {
         "transform": t.transform.m,
         "antialias": t.antialias,
         "orientation": t.orientation,
+        "verticalAlign": t.vertical_align(),
         "warp": t.warp,
         "runs": runs,
         "paragraphs": paragraphs,
@@ -913,6 +923,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 let bounds = s.active().and_then(|d| d.doc.layer(id)).and_then(|l| l.surface()).map(|c| c.content_bounds());
                 let mut out = json!({ "layer": id.0, "bounds": bounds.map(|r| [r.x0, r.y0, r.x1, r.y1]) });
                 if let Some(LayerContent::Text(t)) = s.active().and_then(|d| d.doc.layer(id)).map(|l| &l.content) {
+                    out["verticalAlign"] = json!(t.vertical_align());
                     let warnings = crate::type_extra_cmds::missing_font_warnings_for_layer(t);
                     if !warnings.is_empty() {
                         out["warnings"] = json!(warnings);
@@ -1070,6 +1081,11 @@ pub fn specs() -> Vec<CommandSpec> {
                     step_char_metrics(t, a, b, &props);
                     let mut pprobe = ParagraphStyle::default();
                     if apply_para_props(&mut pprobe, p) {
+                        if let Some(va) = p.get("verticalAlign").and_then(Value::as_str).and_then(VerticalAlign::from_id) {
+                            for pr in &mut t.paragraphs {
+                                pr.style.vertical_align = va;
+                            }
+                        }
                         style_paragraphs(t, a, b, &|st| {
                             apply_para_props(st, p);
                         });

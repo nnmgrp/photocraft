@@ -112,6 +112,7 @@ fn perturbed_char() -> CharStyle {
         variations: vec![FontVariation { axis: "\u{1}".into(), value: -1.0 }],
         language: Some("\u{1}".into()),
         style_sheet: None,
+        ..Default::default()
     }
 }
 
@@ -128,6 +129,7 @@ fn perturbed_para() -> ParagraphStyle {
         direction: TextDirection::Rtl,
         hyphenate: true,
         style_sheet: None,
+        ..Default::default()
     }
 }
 

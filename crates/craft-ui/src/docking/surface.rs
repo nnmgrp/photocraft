@@ -9,6 +9,14 @@ use crate::{
 
 use super::{Action, DockError, DropTarget, Layout, Node, Permissions, Placement, resolve_drop};
 
+/// Widest a dock tab's label may get before it is elided; keeps a crowded strip readable and
+/// leaves room for neighbouring tabs instead of letting one long title swallow the strip.
+const MAX_TAB_LABEL_WIDTH: f32 = 140.0;
+/// Horizontal padding inside a tab, split evenly on both sides of its label.
+const TAB_TEXT_PADDING: f32 = 16.0;
+/// Width of the soft fade painted over a label that had to be elided.
+const TAB_FADE_WIDTH: f32 = 10.0;
+
 /// Application-supplied chrome. Body renderers retain their own UI style and contents.
 #[derive(Clone, Debug)]
 pub struct DockStyle {
@@ -609,6 +617,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
                     .into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, self.style.font.clone())
                     .size()
                     .x
+                    .min(MAX_TAB_LABEL_WIDTH)
                     + 24.0
             })
             .collect();
@@ -671,20 +680,42 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         let policy = (self.permissions)(panel);
         let label = (self.label)(panel);
         let color = if active { self.style.text } else { self.style.inactive_text };
-        let galley = self.content.label(ui, panel, &label, &self.style.font, color).into_galley(
+        let text_width = (rect.width() - TAB_TEXT_PADDING - TAB_FADE_WIDTH).max(0.0);
+        let full = self.content.label(ui, panel, &label, &self.style.font, color).into_galley(
             ui,
             Some(egui::TextWrapMode::Extend),
             f32::INFINITY,
             self.style.font.clone(),
         );
+        // Elide the label at the tab's own width. Clipping alone would let glyphs run into the
+        // neighbouring tab when a strip is crowded (ТЗ 2.3).
+        let elided = full.size().x > text_width;
+        let galley = if elided {
+            self.content.label(ui, panel, &label, &self.style.font, color).into_galley(
+                ui,
+                Some(egui::TextWrapMode::Truncate),
+                text_width,
+                self.style.font.clone(),
+            )
+        } else {
+            full
+        };
         let response = tabs::Tab::new(self.id.with(("tab", panel)), &label, active)
             .sense(if policy.movable { Sense::click_and_drag() } else { Sense::click() })
             .focus_stroke(Stroke::new(1.0, self.style.accent))
             .show_at(ui, rect, |ui, response| {
                 let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
-                painter.rect_filled(rect, 0.0, if active || response.hovered() { self.style.active_background } else { self.style.tab_background });
-                painter.galley(rect.center() - galley.size() * 0.5, galley.clone(), color);
-            });
+                let background = if active || response.hovered() { self.style.active_background } else { self.style.tab_background };
+                painter.rect_filled(rect, 0.0, background);
+                // Left-aligned inside the tab, so the elision and the edge fade never overlap the
+                // neighbouring tab's glyphs.
+                let text_pos = pos2(rect.left() + TAB_TEXT_PADDING * 0.5, rect.center().y - galley.size().y * 0.5);
+                painter.galley(text_pos, galley.clone(), color);
+                if elided {
+                    fade_tab_edge(&painter, rect, background, TAB_FADE_WIDTH);
+                }
+            })
+            .on_hover_text(label.clone());
         self.register_interaction(ui.ctx(), response.id);
         if response.clicked() {
             self.output.actions.push(Action::Activate { panel: panel.clone() });
@@ -900,6 +931,24 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
             let rect = clamp_float(Rect::from_min_size(pointer - drag.grab.min(float_size), float_size), ctx.content_rect());
             painter.rect_stroke(rect, 0.0, Stroke::new(2.0, self.style.accent), StrokeKind::Inside);
         }
+    }
+}
+
+/// Paints a soft fade into `background` over the last `width` points of a tab, so an elided label
+/// dissolves instead of ending in a hard cut next to the following tab.
+fn fade_tab_edge(painter: &egui::Painter, rect: Rect, background: Color32, width: f32) {
+    let width = width.clamp(0.0, rect.width() * 0.5);
+    if width <= 0.0 {
+        return;
+    }
+    const STEPS: usize = 5;
+    let strip = width / STEPS as f32;
+    for i in 0..STEPS {
+        let alpha = (255.0 * ((i + 1) as f32 / STEPS as f32)).round() as u8;
+        let color = Color32::from_rgba_unmultiplied(background.r(), background.g(), background.b(), alpha);
+        let x0 = rect.right() - width + strip * i as f32;
+        let x1 = (x0 + strip).min(rect.right());
+        painter.rect_filled(Rect::from_min_max(pos2(x0, rect.top()), pos2(x1, rect.bottom())), 0.0, color);
     }
 }
 

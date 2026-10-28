@@ -1496,7 +1496,6 @@ impl PhotocraftApp {
         } else {
             None
         };
-        };
 
 
         let mut type_params = serde_json::json!({

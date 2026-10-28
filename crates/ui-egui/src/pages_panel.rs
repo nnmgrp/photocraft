@@ -1677,7 +1677,8 @@ mod tests {
         assert!(!app.session.active().unwrap().is_dirty());
 
         // Switch to Document 1 (007.png) via PagesPanelAction::SelectPage
-        app.handle_pages_action(PagesPanelAction::SelectPage(1));
+        let ctx = egui::Context::default();
+        app.handle_pages_action(&ctx, PagesPanelAction::SelectPage(1));
         assert_eq!(app.session.active_index(), Some(1));
         assert_eq!(app.session.active().unwrap().doc.name, "007.png");
 
@@ -1699,9 +1700,30 @@ mod tests {
         app.run("file.new", json!({"width": 10, "height": 10, "name": "2.png"})).unwrap();
         app.run("file.new", json!({"width": 10, "height": 10, "name": "1.png"})).unwrap();
 
-        app.handle_pages_action(PagesPanelAction::SortPagesNaturally);
+        app.handle_pages_action(&egui::Context::default(), PagesPanelAction::SortPagesNaturally);
 
         let names: Vec<String> = app.session.documents().iter().map(|d| d.doc.name.clone()).collect();
         assert_eq!(names, vec!["1.png", "2.png", "10.png"]);
+    }
+
+    #[test]
+    fn test_closing_dirty_page_opens_discard_prompt() {
+        use crate::{PhotocraftApp, Services};
+        use photocraft_engine::Session;
+        use serde_json::json;
+
+        let mut app = PhotocraftApp::new(Session::new(), Services::default());
+        app.run("file.new", json!({"width": 10, "height": 10, "name": "page_01.png"})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        assert!(app.session.active().unwrap().is_dirty());
+
+        app.handle_pages_action(&egui::Context::default(), PagesPanelAction::ClosePage(0));
+
+        assert!(app.discard.is_some(), "closing a dirty page must ask before discarding it");
+        assert_eq!(
+            app.session.documents().len(),
+            1,
+            "the document must stay open until the unsaved-changes prompt is answered"
+        );
     }
 }

@@ -1296,7 +1296,7 @@ fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: &str) {
     }
     if id == "pages" {
         if let Some(action) = app.render_pages_panel(ui) {
-            app.handle_pages_action(action);
+            app.handle_pages_action(ui.ctx(), action);
         }
         return;
     }
@@ -1710,7 +1710,7 @@ impl craft_ui::docking::DockContent<String> for PanelContent<'_> {
         }
         if id == "pages" {
             if let Some(action) = self.app.render_pages_panel(ui) {
-                self.app.handle_pages_action(action);
+                self.app.handle_pages_action(ui.ctx(), action);
             }
             return;
         }

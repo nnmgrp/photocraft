@@ -1473,6 +1473,20 @@ impl PhotocraftApp {
         let is_optical = action.preset.measurement_system.is_optical();
         let kerning_mode = if is_optical { "optical" } else { "metrics" };
         let auto_kern_val = if is_optical { "opticalKern" } else { "metricsKern" };
+        let caps_mode = if action.preset.all_caps {
+            "all"
+        } else if action.preset.small_caps {
+            "small"
+        } else {
+            "normal"
+        };
+        let baseline_mode = if action.preset.superscript {
+            "superscript"
+        } else if action.preset.subscript {
+            "subscript"
+        } else {
+            "normal"
+        };
 
         // Точка клика (или центр документа, если курсор вне холста) для Point Text.
         let (click_x, click_y) = if let Some([hx, hy]) = self.hover_doc {
@@ -1507,7 +1521,11 @@ impl PhotocraftApp {
             "italic": action.preset.italic,
             "fauxBold": faux_bold,
             "fauxItalic": faux_italic,
-            "align": "center",
+            "align": action.preset.align.as_str(),
+            "caps": caps_mode,
+            "baseline": baseline_mode,
+            "underline": action.preset.underline,
+            "strikethrough": action.preset.strikethrough,
             "tracking": action.preset.tracking,
             "leading": action.preset.leading,
             "horizontalScale": action.preset.horizontal_scale,
@@ -1649,7 +1667,7 @@ impl PhotocraftApp {
     }
 
     /// Обработка пользовательских действий в панели страниц (выбор, закрытие, сортировка, открытие главы).
-    pub(crate) fn handle_pages_action(&mut self, action: pages_panel::PagesPanelAction) {
+    pub(crate) fn handle_pages_action(&mut self, ctx: &egui::Context, action: pages_panel::PagesPanelAction) {
         match action {
             pages_panel::PagesPanelAction::SelectPage(idx) => {
                 if self.session.active_index() != Some(idx) {
@@ -1677,7 +1695,7 @@ impl PhotocraftApp {
                 }
             }
             pages_panel::PagesPanelAction::ClosePage(idx) => {
-                let _ = self.run("file.close", serde_json::json!({"document": idx}));
+                let _ = crate::menus::invoke(self, ctx, "file.close", serde_json::json!({"document": idx}));
             }
             pages_panel::PagesPanelAction::OpenChapterFolder => {
                 if let Some(folder) = rfd::FileDialog::new().pick_folder() {

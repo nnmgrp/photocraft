@@ -1,7 +1,14 @@
+use std::hash::{Hash, Hasher};
+
 use egui::{
     Align, Color32, CornerRadius, Frame, Layout, Margin, RichText, ScrollArea, Sense, Stroke,
     Window, vec2,
 };
+use photocraft_doc::text::{
+    AntiAlias, Caps, CharStyle, FontBaseline, ParagraphRun, ParagraphStyle, TextAlign, TextRun,
+    TextShape,
+};
+use photocraft_doc::{Color, TextLayer};
 use photocraft_engine::typesetter::{TextStylePreset, TypesetterState};
 use serde::{Deserialize, Serialize};
 
@@ -364,10 +371,17 @@ impl TypesetterUi {
             Window::new(title)
                 .collapsible(false)
                 .resizable(true)
-                .default_width(360.0)
-                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .default_width(480.0)
+                .default_height(620.0)
+                .min_width(430.0)
+                .pivot(egui::Align2::CENTER_CENTER)
+                .default_pos(ctx.content_rect().center())
                 .show(&ctx, |ui| {
-                    self.render_font_settings_modal(ui, edit_idx, &mut close_modal);
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            self.render_font_settings_modal(ui, edit_idx, &mut close_modal);
+                        });
                 });
 
             if close_modal {
@@ -1633,6 +1647,13 @@ impl TypesetterUi {
         let mut toggle_sync = false;
         let sync_leading = self.state.options.line_spacing_sync;
 
+        // The inline "new folder" field below the Folder combo, kept across frames in egui's
+        // memory: the preset borrow below must not also borrow `self` for it.
+        let new_folder_open_id = egui::Id::new("typesetter-modal-new-folder-open");
+        let new_folder_name_id = egui::Id::new("typesetter-modal-new-folder-name");
+        let mut new_folder_open = ui.data(|d| d.get_temp::<bool>(new_folder_open_id)).unwrap_or(false);
+        let mut new_folder_name = ui.data_mut(|d| d.get_temp::<String>(new_folder_name_id)).unwrap_or_default();
+
         if let Some(preset) = self.state.presets.get_mut(idx) {
             ui.horizontal(|ui| {
                 ui.label(RichText::new(format!("{}:", tl!("Style name"))).strong());
@@ -1643,30 +1664,54 @@ impl TypesetterUi {
 
             ui.horizontal(|ui| {
                 ui.label(format!("{}:", tl!("Folder")));
-                let mut folder_str = preset.folder.clone().unwrap_or_default();
+                let folder_str = preset.folder.clone().unwrap_or_default();
                 egui::ComboBox::from_id_salt("edit_preset_folder_combo")
                     .selected_text(if folder_str.is_empty() { tl!("No folder") } else { &folder_str })
+                    .width(300.0)
                     .show_ui(ui, |ui| {
                         if ui.selectable_label(folder_str.is_empty(), tl!("No folder")).clicked() {
                             preset.folder = None;
                             changed = true;
                         }
                         for f in &available_folders {
-                            if ui.selectable_label(&folder_str == f, f).clicked() {
+                            if ui.selectable_label(folder_str == *f, f).clicked() {
                                 preset.folder = Some(f.clone());
                                 changed = true;
                             }
                         }
+                        ui.separator();
+                        if ui.selectable_label(false, tl!("+ New folder...")).clicked() {
+                            new_folder_open = true;
+                            new_folder_name.clear();
+                        }
                     });
-                if ui.text_edit_singleline(&mut folder_str).changed() {
-                    preset.folder = if folder_str.trim().is_empty() {
-                        None
-                    } else {
-                        Some(folder_str.trim().to_string())
-                    };
-                    changed = true;
-                }
             });
+
+            if new_folder_open {
+                ui.horizontal(|ui| {
+                    ui.label(format!("{}:", tl!("Folder name")));
+                    let response = ui.add(
+                        egui::TextEdit::singleline(&mut new_folder_name)
+                            .desired_width(220.0)
+                            .hint_text(tl!("New folder name")),
+                    );
+                    let submit = ui.button("OK").clicked()
+                        || (response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
+                    if submit {
+                        let name = new_folder_name.trim();
+                        if !name.is_empty() {
+                            preset.folder = Some(name.to_string());
+                            changed = true;
+                        }
+                        new_folder_open = false;
+                        new_folder_name.clear();
+                    }
+                    if ui.button(tl!("Cancel")).clicked() {
+                        new_folder_open = false;
+                        new_folder_name.clear();
+                    }
+                });
+            }
 
             ui.separator();
 
@@ -1684,7 +1729,7 @@ impl TypesetterUi {
                 // Searchable font dropdown with pinned Favorites at the top!
                 let prev_fam = preset.font_family.clone();
                 let families = crate::type_tool::families();
-                if crate::type_tool::family_picker_in(ui, "typesetter-preset-font", &mut preset.font_family, 180.0, &families, photocraft_engine::prefs::FontPreview::Medium, &[]) {
+                if crate::type_tool::family_picker_in(ui, "typesetter-preset-font", &mut preset.font_family, 200.0, &families, photocraft_engine::prefs::FontPreview::Medium, &[]) {
                     changed = true;
                     if preset.font_family != prev_fam {
                         if let Some(engine) = photocraft_text::try_shared() {
@@ -1698,24 +1743,38 @@ impl TypesetterUi {
                         }
                     }
                 }
-                if ui.text_edit_singleline(&mut preset.font_family).changed() {
-                    changed = true;
-                }
             });
 
             ui.horizontal(|ui| {
                 ui.label("PostScript:");
-                if ui.text_edit_singleline(&mut preset.font_postscript).changed() {
+                if ui
+                    .add(egui::TextEdit::singleline(&mut preset.font_postscript).desired_width(130.0))
+                    .changed()
+                {
                     changed = true;
                 }
+                ui.add_space(6.0);
                 ui.label(format!("{}:", tl!("Style")));
-                if ui.text_edit_singleline(&mut preset.font_style).changed() {
+
+                // The faces the chosen family actually provides, so the style name always
+                // resolves to an installed face instead of a free-form duplicate.
+                let mut styles = crate::type_tool::styles(&preset.font_family);
+                if !preset.font_style.is_empty() && !styles.iter().any(|s| *s == preset.font_style) {
+                    styles.insert(0, preset.font_style.clone());
+                }
+                let options: Vec<(String, String)> =
+                    styles.iter().map(|s| (s.clone(), crate::type_tool::style_label(s))).collect();
+                let options_ref: Vec<(String, &str)> =
+                    options.iter().map(|(value, label)| (value.clone(), label.as_str())).collect();
+                if crate::widgets::dropdown_literal(ui, "typesetter-preset-style", &mut preset.font_style, &options_ref, 140.0) {
                     changed = true;
                 }
             });
 
-            ui.horizontal(|ui| {
-                if ui.checkbox(&mut preset.bold, tl!("Bold")).changed() {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(format!("{}:", tl!("Оформление")));
+
+                if character_toggle(ui, &mut preset.bold, "B", "Псевдожирный / Bold") {
                     if preset.bold && !preset.font_style.to_lowercase().contains("bold") {
                         preset.font_style = if preset.italic { "Bold Italic".into() } else { "Bold".into() };
                     } else if !preset.bold && preset.font_style.to_lowercase().contains("bold") {
@@ -1723,7 +1782,7 @@ impl TypesetterUi {
                     }
                     changed = true;
                 }
-                if ui.checkbox(&mut preset.italic, tl!("Italic")).changed() {
+                if character_toggle(ui, &mut preset.italic, "I", "Псевдокурсив / Italic") {
                     if preset.italic && !preset.font_style.to_lowercase().contains("italic") {
                         preset.font_style = if preset.bold { "Bold Italic".into() } else { "Italic".into() };
                     } else if !preset.italic && preset.font_style.to_lowercase().contains("italic") {
@@ -1731,14 +1790,61 @@ impl TypesetterUi {
                     }
                     changed = true;
                 }
-                if ui.checkbox(&mut preset.all_caps, "ALL CAPS").changed() {
+                if character_toggle(ui, &mut preset.all_caps, "TT", "Все прописные / All Caps") {
+                    if preset.all_caps {
+                        preset.small_caps = false;
+                    }
                     changed = true;
                 }
-                if ui.checkbox(&mut preset.hanging_punctuation, tl!("Компенсация знаков"))
-                    .on_hover_text("Оптическая компенсация знаков в строках (висячая пунктуация для кавычек, тире, многоточий и точек)")
-                    .changed()
-                {
+                if character_toggle(ui, &mut preset.small_caps, "Tт", "Капитель / Small Caps") {
+                    if preset.small_caps {
+                        preset.all_caps = false;
+                    }
                     changed = true;
+                }
+                if character_toggle(ui, &mut preset.superscript, "T¹", "Верхний индекс / Superscript") {
+                    if preset.superscript {
+                        preset.subscript = false;
+                    }
+                    changed = true;
+                }
+                if character_toggle(ui, &mut preset.subscript, "T₁", "Нижний индекс / Subscript") {
+                    if preset.subscript {
+                        preset.superscript = false;
+                    }
+                    changed = true;
+                }
+                if character_toggle(ui, &mut preset.underline, "U", "Подчёркивание / Underline") {
+                    changed = true;
+                }
+                if character_toggle(ui, &mut preset.strikethrough, "S", "Зачёркивание / Strikethrough") {
+                    changed = true;
+                }
+                if character_toggle(
+                    ui,
+                    &mut preset.hanging_punctuation,
+                    "«»",
+                    "Оптическая компенсация знаков в строках (висячая пунктуация для кавычек, тире, многоточий и точек)",
+                ) {
+                    changed = true;
+                }
+            });
+
+            ui.horizontal_wrapped(|ui| {
+                ui.label(format!("{}:", tl!("Alignment")));
+                for (value, label, tip) in [
+                    ("left", "≡ По левому", "Выравнивание по левому краю"),
+                    ("center", "≡ По центру", "Выравнивание по центру"),
+                    ("right", "≡ По правому", "Выравнивание по правому краю"),
+                ] {
+                    if ui
+                        .selectable_label(preset.align.as_str() == value, label)
+                        .on_hover_text(tip)
+                        .clicked()
+                    {
+                        preset.align = value.to_string();
+                        changed = true;
+                    }
                 }
             });
 
@@ -1823,7 +1929,7 @@ impl TypesetterUi {
                 }
                 if ui.small_button("A+").clicked() {
                     let new_sz = preset.font_size + 1.0;
-                    if self.state.options.line_spacing_sync {
+                    if sync_leading {
                         preset.sync_leading_with_size(new_sz);
                     } else {
                         preset.font_size = new_sz;
@@ -1840,9 +1946,8 @@ impl TypesetterUi {
                 if ui.selectable_label(sync_leading, link_icon).on_hover_text(link_tip).clicked() {
                     toggle_sync = true;
                 }
-            });
 
-            ui.horizontal(|ui| {
+                ui.add_space(8.0);
                 ui.label(format!("{}:", tl!("Leading")));
                 if ui.add(egui::DragValue::new(&mut preset.leading).speed(0.5).range(4.0..=300.0)).changed() {
                     changed = true;
@@ -1854,6 +1959,7 @@ impl TypesetterUi {
                 if ui.add(egui::DragValue::new(&mut preset.tracking).speed(1.0).range(-200..=1000)).changed() {
                     changed = true;
                 }
+                ui.add_space(8.0);
                 ui.label(format!("{}:", tl!("Horizontal scale (%)")));
                 if ui.add(egui::DragValue::new(&mut preset.horizontal_scale).speed(1.0).range(20.0..=300.0)).changed() {
                     changed = true;
@@ -1868,30 +1974,38 @@ impl TypesetterUi {
                 if ui.add(egui::DragValue::new(&mut preset.stroke_width).speed(0.2).range(0.0..=30.0)).changed() {
                     changed = true;
                 }
-                let desc = if preset.stroke_width > 0.0 { tl!("Enabled") } else { tl!("No outline") };
-                ui.label(RichText::new(desc).small().weak());
+                ui.add_space(8.0);
+                ui.label(format!("{}:", tl!("Color")));
+                let mut stroke_c = egui::Color32::from_rgba_unmultiplied(
+                    preset.stroke_color[0],
+                    preset.stroke_color[1],
+                    preset.stroke_color[2],
+                    preset.stroke_color[3],
+                );
+                if egui::color_picker::color_edit_button_srgba(
+                    ui,
+                    &mut stroke_c,
+                    egui::color_picker::Alpha::BlendOrAdditive,
+                ).changed() {
+                    preset.stroke_color = [stroke_c.r(), stroke_c.g(), stroke_c.b(), stroke_c.a()];
+                    changed = true;
+                }
+                ui.label(format!("#{:02X}{:02X}{:02X}{:02X}", preset.stroke_color[0], preset.stroke_color[1], preset.stroke_color[2], preset.stroke_color[3]));
             });
 
-            if preset.stroke_width > 0.0 {
-                ui.horizontal(|ui| {
-                    ui.label(format!("{}:", tl!("Color")));
-                    let mut stroke_c = egui::Color32::from_rgba_unmultiplied(
-                        preset.stroke_color[0],
-                        preset.stroke_color[1],
-                        preset.stroke_color[2],
-                        preset.stroke_color[3],
-                    );
-                    if egui::color_picker::color_edit_button_srgba(
-                        ui,
-                        &mut stroke_c,
-                        egui::color_picker::Alpha::BlendOrAdditive,
-                    ).changed() {
-                        preset.stroke_color = [stroke_c.r(), stroke_c.g(), stroke_c.b(), stroke_c.a()];
-                        changed = true;
-                    }
-                    ui.label(format!("#{:02X}{:02X}{:02X}{:02X}", preset.stroke_color[0], preset.stroke_color[1], preset.stroke_color[2], preset.stroke_color[3]));
+            ui.separator();
+
+            ui.label(RichText::new(tl!("Preview")).strong());
+            let t = Tokens::get(ui.ctx());
+            Frame::NONE
+                .fill(t.field)
+                .stroke(Stroke::new(1.0, t.field_border))
+                .corner_radius(CornerRadius::same(t.radius_sm as u8))
+                .inner_margin(Margin::same(8))
+                .show(ui, |ui| {
+                    ui.set_min_height(54.0);
+                    render_style_preview(ui, preset);
                 });
-            }
 
             ui.separator();
 
@@ -1909,6 +2023,11 @@ impl TypesetterUi {
                 });
             });
         }
+
+        ui.data_mut(|d| {
+            d.insert_temp(new_folder_open_id, new_folder_open);
+            d.insert_temp(new_folder_name_id, new_folder_name.clone());
+        });
 
         if toggle_sync {
             self.state.options.line_spacing_sync = !self.state.options.line_spacing_sync;
@@ -2104,6 +2223,253 @@ impl TypesetterUi {
     }
 }
 
+/// A compact Photoshop-style character toggle with a tooltip.
+fn character_toggle(ui: &mut egui::Ui, value: &mut bool, label: &str, tooltip: &str) -> bool {
+    let response = ui
+        .add(
+            egui::Button::new(RichText::new(label).strong())
+                .selected(*value)
+                .min_size(vec2(28.0, 22.0)),
+        )
+        .on_hover_text(tooltip);
+    if response.clicked() {
+        *value = !*value;
+        true
+    } else {
+        false
+    }
+}
+
+/// The sample shown in the style preview. The style name is part of it, so the preview also
+/// shows how the current face renders real words rather than only a font-menu sample.
+fn style_preview_text(preset: &TextStylePreset) -> String {
+    let name = preset.name.trim();
+    if name.is_empty() {
+        "Ах ты ж!.. Неужели это сработало?! 123".to_string()
+    } else {
+        format!("{name}: Ах ты ж!.. Неужели это сработало?! 123")
+    }
+}
+
+fn style_preview_weight(style: &str) -> u16 {
+    let s = style.to_ascii_lowercase();
+    if s.contains("thin") {
+        100
+    } else if s.contains("extra light") || s.contains("extralight") || s.contains("ultra light") || s.contains("ultralight") {
+        200
+    } else if s.contains("light") {
+        300
+    } else if s.contains("medium") {
+        500
+    } else if s.contains("semi bold") || s.contains("semibold") || s.contains("demi bold") || s.contains("demibold") {
+        600
+    } else if s.contains("extra bold") || s.contains("extrabold") || s.contains("ultra bold") || s.contains("ultrabold") {
+        800
+    } else if s.contains("black") || s.contains("heavy") {
+        900
+    } else if s.contains("bold") {
+        700
+    } else {
+        400
+    }
+}
+
+fn style_preview_antialias(value: &str) -> AntiAlias {
+    match value.to_ascii_lowercase().as_str() {
+        "none" => AntiAlias::None,
+        "sharp" => AntiAlias::Sharp,
+        "smooth" => AntiAlias::Smooth,
+        "strong" => AntiAlias::Strong,
+        _ => AntiAlias::Crisp,
+    }
+}
+
+/// Everything that changes the rendered preview, plus its pixel size. The texture is only
+/// rebuilt when this key changes.
+fn style_preview_key(preset: &TextStylePreset, width: f32, height: f32, scale: u32) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    style_preview_text(preset).hash(&mut h);
+    preset.font_family.hash(&mut h);
+    preset.font_postscript.hash(&mut h);
+    preset.font_style.hash(&mut h);
+    preset.font_size.to_bits().hash(&mut h);
+    preset.leading.to_bits().hash(&mut h);
+    preset.tracking.hash(&mut h);
+    preset.horizontal_scale.to_bits().hash(&mut h);
+    preset.bold.hash(&mut h);
+    preset.italic.hash(&mut h);
+    preset.all_caps.hash(&mut h);
+    preset.small_caps.hash(&mut h);
+    preset.superscript.hash(&mut h);
+    preset.subscript.hash(&mut h);
+    preset.underline.hash(&mut h);
+    preset.strikethrough.hash(&mut h);
+    preset.stroke_width.to_bits().hash(&mut h);
+    preset.stroke_color.hash(&mut h);
+    preset.text_color.hash(&mut h);
+    preset.align.hash(&mut h);
+    preset.anti_alias.hash(&mut h);
+    (width.round() as u32).hash(&mut h);
+    (height.round() as u32).hash(&mut h);
+    scale.hash(&mut h);
+    h.finish()
+}
+
+/// Rasterizes the style sample into a straight-alpha RGBA image: the faux outline in
+/// `stroke_color` under the glyphs tinted with `text_color`.
+fn style_preview_image(preset: &TextStylePreset, width: f32, height: f32, scale: u32) -> Option<egui::ColorImage> {
+    let w = (width * scale as f32).round().max(1.0) as usize;
+    let h = (height * scale as f32).round().max(1.0) as usize;
+    let sample = style_preview_text(preset);
+    let size = preset.font_size.clamp(10.0, 28.0);
+    let style_name = preset.font_style.to_ascii_lowercase();
+    let native_bold = style_preview_weight(&preset.font_style) >= 600;
+    let native_italic = style_name.contains("italic") || style_name.contains("oblique");
+    let char_style = CharStyle {
+        font_family: preset.font_family.clone(),
+        font_style: preset.font_style.clone(),
+        postscript_name: (!preset.font_postscript.is_empty()).then(|| preset.font_postscript.clone()),
+        weight: style_preview_weight(&preset.font_style),
+        italic: preset.italic || native_italic,
+        size_pt: size * scale as f32,
+        color: Color::WHITE,
+        tracking: preset.tracking as f32,
+        leading_pt: Some(preset.leading.clamp(4.0, 300.0) * scale as f32),
+        horizontal_scale: (preset.horizontal_scale / 100.0).clamp(0.2, 3.0),
+        underline: preset.underline,
+        strikethrough: preset.strikethrough,
+        faux_bold: preset.bold && !native_bold,
+        faux_italic: preset.italic && !native_italic,
+        caps: if preset.all_caps {
+            Caps::AllCaps
+        } else if preset.small_caps {
+            Caps::SmallCaps
+        } else {
+            Caps::Normal
+        },
+        baseline: if preset.superscript {
+            FontBaseline::Superscript
+        } else if preset.subscript {
+            FontBaseline::Subscript
+        } else {
+            FontBaseline::Normal
+        },
+        ..Default::default()
+    };
+    let paragraph = ParagraphStyle {
+        align: match preset.align.as_str() {
+            "left" => TextAlign::Left,
+            "right" => TextAlign::Right,
+            _ => TextAlign::Center,
+        },
+        ..Default::default()
+    };
+    let layer = TextLayer {
+        text: sample.clone(),
+        font_family: preset.font_family.clone(),
+        size_pt: size * scale as f32,
+        color: Color::WHITE,
+        runs: vec![TextRun { len: sample.len(), style: char_style }],
+        paragraphs: vec![ParagraphRun { len: sample.len(), style: paragraph }],
+        shape: TextShape::Box { x: 0.0, y: 0.0, width: w as f32, height: h as f32 },
+        antialias: style_preview_antialias(&preset.anti_alias),
+        ..Default::default()
+    };
+    let engine = photocraft_text::try_shared()?;
+    let mut engine = engine.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let layout = engine.layout(&layer, 72.0);
+    let bounds = layout.bounds()?;
+    let text_height = bounds[3] - bounds[1];
+    let transform = photocraft_geom::Affine::translate(0.0, f64::from((h as f32 - text_height) / 2.0 - bounds[1]));
+    // Reject oversized ink before the rasterizer allocates a surface (malformed fonts).
+    let ink = photocraft_text::render::ink_rect(&layout, &transform);
+    if ink.is_empty() || ink.width() > w as u32 * 4 || ink.height() > h as u32 * 4 {
+        return None;
+    }
+    let rendered = photocraft_text::render::rasterize(
+        &layout,
+        &transform,
+        photocraft_color::PixelFormat::new(photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8, true),
+        layer.antialias,
+    );
+    let mut pixels = vec![[0u8; 4]; w * h];
+    rendered.surface.read_rgba8_into(photocraft_geom::Rect::new(0, 0, w as i32, h as i32), &mut pixels);
+
+    let radius = preset.stroke_width.clamp(0.0, 30.0) * scale as f32;
+    let offsets: Vec<(i32, i32)> = if radius >= 0.5 && preset.stroke_color[3] > 0 {
+        (0..8)
+            .map(|i| {
+                let angle = i as f32 * std::f32::consts::TAU / 8.0;
+                ((radius * angle.cos()).round() as i32, (radius * angle.sin()).round() as i32)
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let stroke_a = preset.stroke_color[3] as f32 / 255.0;
+    let text_a = preset.text_color[3] as f32 / 255.0;
+    let stroke_rgb = [preset.stroke_color[0] as f32 / 255.0, preset.stroke_color[1] as f32 / 255.0, preset.stroke_color[2] as f32 / 255.0];
+    let text_rgb = [preset.text_color[0] as f32 / 255.0, preset.text_color[1] as f32 / 255.0, preset.text_color[2] as f32 / 255.0];
+    let mut out = vec![0u8; w * h * 4];
+    for y in 0..h {
+        for x in 0..w {
+            let idx = y * w + x;
+            let ta = pixels[idx][3] as f32 / 255.0 * text_a;
+            let mut sa = 0.0f32;
+            for (dx, dy) in &offsets {
+                let (sx, sy) = (x as i32 + dx, y as i32 + dy);
+                if sx >= 0 && sy >= 0 && sx < w as i32 && sy < h as i32 {
+                    sa = sa.max(pixels[sy as usize * w + sx as usize][3] as f32 / 255.0);
+                }
+            }
+            sa *= stroke_a;
+            let out_a = sa + ta * (1.0 - sa);
+            if out_a > 0.0 {
+                let text_weight = ta * (1.0 - sa);
+                let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+                let channel = |i: usize| q((stroke_rgb[i] * sa + text_rgb[i] * text_weight) / out_a);
+                let o = idx * 4;
+                out[o] = channel(0);
+                out[o + 1] = channel(1);
+                out[o + 2] = channel(2);
+                out[o + 3] = q(out_a);
+            }
+        }
+    }
+    Some(egui::ColorImage::from_rgba_unmultiplied([w, h], &out))
+}
+
+fn style_preview_texture(ctx: &egui::Context, preset: &TextStylePreset, width: f32, height: f32, scale: u32) -> Option<egui::TextureHandle> {
+    let key = style_preview_key(preset, width, height, scale);
+    let id = egui::Id::new("typesetter-style-preview");
+    if let Some((cached_key, texture)) = ctx.data(|d| d.get_temp::<(u64, egui::TextureHandle)>(id))
+        && cached_key == key
+    {
+        return Some(texture);
+    }
+    let image = style_preview_image(preset, width, height, scale)?;
+    let texture = ctx.load_texture("typesetter-style-preview", image, egui::TextureOptions::LINEAR);
+    ctx.data_mut(|d| d.insert_temp(id, (key, texture.clone())));
+    Some(texture)
+}
+
+/// Live preview of the preset's face and character settings, rendered by the same text engine
+/// as document text.
+fn render_style_preview(ui: &mut egui::Ui, preset: &TextStylePreset) {
+    let width = (ui.available_width() / 4.0).round().max(40.0) * 4.0;
+    let height = 72.0;
+    let scale = ui.ctx().pixels_per_point().ceil().clamp(1.0, 3.0) as u32;
+    match style_preview_texture(ui.ctx(), preset, width, height, scale) {
+        Some(texture) => {
+            ui.add(egui::Image::new((texture.id(), vec2(width, height))));
+        }
+        None => {
+            let t = Tokens::get(ui.ctx());
+            ui.label(RichText::new(tl!("Preview unavailable")).color(t.text_faint).small());
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2176,6 +2542,35 @@ mod tests {
         } else {
             panic!("Expected text layer");
         }
+    }
+
+    #[test]
+    fn typesetter_action_uses_preset_alignment_and_character_options() {
+        let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 400, "height": 400})).unwrap();
+
+        app.handle_typesetter_action(TypesetterAction {
+            text: "Left aligned".into(),
+            preset: TextStylePreset {
+                name: "Left aligned".into(),
+                align: "left".into(),
+                all_caps: false,
+                small_caps: true,
+                superscript: true,
+                underline: true,
+                strikethrough: true,
+                ..TextStylePreset::default()
+            },
+        });
+
+        let st = app.session.active().unwrap();
+        let layer = st.doc.layer(st.active_layer.unwrap()).unwrap();
+        let LayerContent::Text(t) = &layer.content else { panic!("Expected text layer") };
+        assert_eq!(t.paragraphs[0].style.align, TextAlign::Left);
+        assert_eq!(t.runs[0].style.caps, Caps::SmallCaps);
+        assert_eq!(t.runs[0].style.baseline, FontBaseline::Superscript);
+        assert!(t.runs[0].style.underline);
+        assert!(t.runs[0].style.strikethrough);
     }
 
     #[test]

@@ -42,6 +42,11 @@ pub fn default_true() -> bool {
     true
 }
 
+/// Default paragraph alignment of a text style preset: centered (Photoshop's TypeR default).
+pub fn default_align_center() -> String {
+    "center".to_string()
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TextStylePreset {
     pub name: String,
@@ -49,6 +54,8 @@ pub struct TextStylePreset {
     pub font_family: String,
     pub font_postscript: String,
     pub font_style: String,
+    #[serde(default = "default_align_center")]
+    pub align: String,
     pub font_size: f32,
     pub leading: f32,
     pub tracking: i32,
@@ -56,6 +63,16 @@ pub struct TextStylePreset {
     pub bold: bool,
     pub italic: bool,
     pub all_caps: bool,
+    #[serde(default)]
+    pub small_caps: bool,
+    #[serde(default)]
+    pub superscript: bool,
+    #[serde(default)]
+    pub subscript: bool,
+    #[serde(default)]
+    pub underline: bool,
+    #[serde(default)]
+    pub strikethrough: bool,
     pub stroke_width: f32,
     pub stroke_color: [u8; 4],
     #[serde(default = "default_text_color")]
@@ -80,6 +97,7 @@ impl Default for TextStylePreset {
             font_family: "Kurai Voice 2".to_string(),
             font_postscript: "KuraiVoice2".to_string(),
             font_style: "Regular".to_string(),
+            align: default_align_center(),
             font_size: 26.0,
             leading: 30.0,
             tracking: 0,
@@ -87,6 +105,11 @@ impl Default for TextStylePreset {
             bold: false,
             italic: false,
             all_caps: true,
+            small_caps: false,
+            superscript: false,
+            subscript: false,
+            underline: false,
+            strikethrough: false,
             stroke_width: 2.0,
             stroke_color: [255, 255, 255, 255],
             text_color: [0, 0, 0, 255],
@@ -407,10 +430,36 @@ impl TypesetterState {
             let bold = synthetic_bold || is_bold_style;
             let italic = synthetic_italic || is_italic_style;
 
-            let all_caps = text_style
+            let caps_value = text_style
                 .and_then(|ts| ts.get("fontCaps"))
                 .and_then(|v| v.as_str())
-                .map(|caps| caps == "allCaps" || caps == "all")
+                .or_else(|| item.get("caps").and_then(|v| v.as_str()));
+            let all_caps = matches!(caps_value, Some("allCaps" | "all"));
+            let small_caps = matches!(caps_value, Some("smallCaps" | "small"))
+                || item
+                    .get("smallCaps")
+                    .or_else(|| item.get("small_caps"))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+
+            let baseline = text_style
+                .and_then(|ts| ts.get("baseline"))
+                .and_then(|v| v.as_str())
+                .or_else(|| item.get("baseline").and_then(|v| v.as_str()));
+            let superscript = matches!(baseline, Some("superscript"))
+                || item.get("superscript").and_then(|v| v.as_bool()).unwrap_or(false);
+            let subscript = matches!(baseline, Some("subscript"))
+                || item.get("subscript").and_then(|v| v.as_bool()).unwrap_or(false);
+
+            let underline = text_style
+                .and_then(|ts| ts.get("underline"))
+                .and_then(|v| v.as_bool())
+                .or_else(|| item.get("underline").and_then(|v| v.as_bool()))
+                .unwrap_or(false);
+            let strikethrough = text_style
+                .and_then(|ts| ts.get("strikethrough"))
+                .and_then(|v| v.as_bool())
+                .or_else(|| item.get("strikethrough").and_then(|v| v.as_bool()))
                 .unwrap_or(false);
 
             let (stroke_width, stroke_color) = if let Some(stroke_obj) = item.get("stroke").and_then(|v| v.as_object()) {
@@ -482,6 +531,18 @@ impl TypesetterState {
                 true
             };
 
+            let align = para_style
+                .and_then(|ps| ps.get("alignment").or_else(|| ps.get("align")))
+                .and_then(|v| v.as_str())
+                .or_else(|| item.get("align").and_then(|v| v.as_str()))
+                .map(|a| match a.to_ascii_lowercase().as_str() {
+                    "right" | "justifyright" => "right",
+                    "left" | "justifyleft" | "justify" => "left",
+                    _ => "center",
+                })
+                .unwrap_or("center")
+                .to_string();
+
             let anti_alias = if let Some(aa) = item.get("antiAlias").or_else(|| item.get("anti_alias")).and_then(|v| v.as_str()) {
                 aa.to_string()
             } else if let Some(aa) = text_style.and_then(|ts| ts.get("antiAlias")).and_then(|v| v.as_str()) {
@@ -496,6 +557,7 @@ impl TypesetterState {
                 font_family,
                 font_postscript,
                 font_style,
+                align,
                 font_size,
                 leading,
                 tracking,
@@ -503,6 +565,11 @@ impl TypesetterState {
                 bold,
                 italic,
                 all_caps,
+                small_caps,
+                superscript,
+                subscript,
+                underline,
+                strikethrough,
                 stroke_width,
                 stroke_color,
                 text_color,
@@ -568,7 +635,10 @@ impl TypesetterState {
                                     "horizontalScale": preset.horizontal_scale,
                                     "syntheticBold": preset.bold && !preset.font_style.to_lowercase().contains("bold"),
                                     "syntheticItalic": preset.italic && !preset.font_style.to_lowercase().contains("italic"),
-                                    "fontCaps": if preset.all_caps { "allCaps" } else { "normal" },
+                                    "fontCaps": if preset.all_caps { "allCaps" } else if preset.small_caps { "smallCaps" } else { "normal" },
+                                    "baseline": if preset.superscript { "superscript" } else if preset.subscript { "subscript" } else { "normal" },
+                                    "underline": preset.underline,
+                                    "strikethrough": preset.strikethrough,
                                     "autoKern": if preset.measurement_system.is_optical() { "opticalKern" } else { "metricsKern" },
                                     "color": {
                                         "red": preset.text_color[0],
@@ -582,13 +652,16 @@ impl TypesetterState {
                         "paragraphStyleRange": [
                             {
                                 "paragraphStyle": {
-                                    "alignment": "center",
-                                    "autoLeadingPercentage": 1.2
+                                    "alignment": preset.align,
+                                    "autoLeadingPercentage": 1.2,
+                                    "hangingRoman": preset.hanging_punctuation
                                 }
                             }
                         ]
                     }
                 },
+                "antiAlias": preset.anti_alias,
+                "hangingPunctuation": preset.hanging_punctuation,
                 "stroke": {
                     "enabled": preset.stroke_width > 0.0,
                     "size": preset.stroke_width,
@@ -965,6 +1038,73 @@ mod tests {
             assert_eq!(new_state.presets[i].text_color, state.presets[i].text_color);
             assert_eq!(new_state.presets[i].measurement_system, state.presets[i].measurement_system);
         }
+    }
+
+    #[test]
+    fn test_export_import_keeps_alignment_antialias_and_hanging_punctuation() {
+        let mut state = TypesetterState {
+            presets: Vec::new(),
+            ..TypesetterState::default()
+        };
+        state.presets.push(TextStylePreset {
+            name: "Left aligned".into(),
+            align: "left".into(),
+            anti_alias: "sharp".into(),
+            hanging_punctuation: false,
+            all_caps: false,
+            small_caps: true,
+            underline: true,
+            strikethrough: true,
+            superscript: true,
+            ..TextStylePreset::default()
+        });
+
+        let exported = state.export_styles_json(None).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&exported).unwrap();
+        assert_eq!(
+            value["styles"][0]["textProps"]["layerText"]["paragraphStyleRange"][0]["paragraphStyle"]["alignment"],
+            "left"
+        );
+        assert_eq!(value["styles"][0]["antiAlias"], "sharp");
+        assert_eq!(value["styles"][0]["hangingPunctuation"], false);
+
+        let mut imported = TypesetterState {
+            presets: Vec::new(),
+            ..TypesetterState::default()
+        };
+        assert_eq!(imported.import_styles_json(&exported).unwrap(), 1);
+        let preset = &imported.presets[0];
+        assert_eq!(preset.align, "left");
+        assert_eq!(preset.anti_alias, "sharp");
+        assert!(!preset.hanging_punctuation);
+        assert!(preset.small_caps);
+        assert!(preset.underline);
+        assert!(preset.strikethrough);
+        assert!(preset.superscript);
+    }
+
+    #[test]
+    fn test_preset_saved_before_alignment_gets_centered() {
+        // A preset from a build before `align` existed keeps the new field's default.
+        let old = r#"{
+            "name": "Old",
+            "font_family": "Inter",
+            "font_postscript": "",
+            "font_style": "Regular",
+            "font_size": 24.0,
+            "leading": 28.0,
+            "tracking": 0,
+            "horizontal_scale": 100.0,
+            "bold": false,
+            "italic": false,
+            "all_caps": false,
+            "stroke_width": 0.0,
+            "stroke_color": [255, 255, 255, 255]
+        }"#;
+        let preset: TextStylePreset = serde_json::from_str(old).unwrap();
+        assert_eq!(preset.align, "center");
+        assert!(!preset.small_caps);
+        assert!(!preset.underline);
     }
 
     #[test]

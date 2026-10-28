@@ -2108,6 +2108,7 @@ impl TypesetterUi {
 mod tests {
     use super::*;
     use photocraft_doc::LayerContent;
+    use photocraft_doc::text::{TextShape, VerticalAlign};
     use photocraft_engine::typesetter::MeasurementSystem;
     use serde_json::json;
 
@@ -2175,5 +2176,78 @@ mod tests {
         } else {
             panic!("Expected text layer");
         }
+    }
+
+    #[test]
+    fn typesetter_without_selection_inserts_point_text_centered_at_high_dpi() {
+        let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 800, "height": 600, "resolution": 300})).unwrap();
+        app.hover_doc = Some([400.0, 300.0]);
+
+        let (font_size, leading) = (24.0, 30.0);
+        app.handle_typesetter_action(TypesetterAction {
+            text: "One two\nThree four\nFive six".into(),
+            preset: TextStylePreset {
+                name: "DPI".into(),
+                font_size,
+                leading,
+                all_caps: false,
+                ..TextStylePreset::default()
+            },
+        });
+
+        let st = app.session.active().unwrap();
+        let layer_id = st.active_layer.unwrap();
+        let layer = st.doc.layer(layer_id).unwrap();
+        let LayerContent::Text(t) = &layer.content else { panic!("Expected text layer") };
+        assert_eq!(t.shape, TextShape::Point, "no selection must not create an artificial box");
+
+        let dpi = st.doc.resolution_dpi;
+        let px_per_pt = dpi / 72.0;
+        let leading_px = leading * px_per_pt;
+        let expected_baseline = 300.0 - leading_px + font_size * px_per_pt * 0.7 * 0.5;
+
+        // The whole block is centered on the click, not hung from its first baseline.
+        assert!((t.transform.m[4] - 400.0).abs() < 0.01, "{:?}", t.transform.m);
+        assert!((t.transform.m[5] - f64::from(expected_baseline)).abs() < 0.01, "{:?}", t.transform.m);
+
+        // At 300 DPI all three lines survive: the old `leading * 10` box kept only two.
+        let layout = photocraft_text::shared().lock().unwrap().layout(t, dpi);
+        assert_eq!(layout.lines.len(), 3);
+        assert!((layout.lines[0].baseline - 0.0).abs() < 0.01);
+        assert!((layout.lines[2].baseline - 2.0 * leading_px).abs() < 0.01);
+    }
+
+    #[test]
+    fn typesetter_with_selection_keeps_box_text_and_uses_baseline_shift() {
+        let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 400, "height": 300, "resolution": 300})).unwrap();
+        app.run("select.all", json!({})).unwrap();
+
+        let font_size = 24.0;
+        let factor = app.typesetter.state.options.optical_baseline_factor;
+        app.handle_typesetter_action(TypesetterAction {
+            text: "Bubble".into(),
+            preset: TextStylePreset {
+                name: "Bubble".into(),
+                font_size,
+                leading: 30.0,
+                all_caps: false,
+                ..TextStylePreset::default()
+            },
+        });
+
+        let st = app.session.active().unwrap();
+        let layer_id = st.active_layer.unwrap();
+        let layer = st.doc.layer(layer_id).unwrap();
+        let LayerContent::Text(t) = &layer.content else { panic!("Expected text layer") };
+        assert_eq!(
+            t.shape,
+            TextShape::Box { x: 0.0, y: 0.0, width: 400.0, height: 300.0 },
+            "a selection keeps native paragraph text"
+        );
+        assert_eq!(t.paragraphs[0].style.vertical_align, VerticalAlign::Center);
+        // Positive Baseline Shift raises glyphs; the slider's value is "shift down".
+        assert!((t.runs[0].style.baseline_shift_pt + font_size * factor).abs() < 1e-4);
     }
 }

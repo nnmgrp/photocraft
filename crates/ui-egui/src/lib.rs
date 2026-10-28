@@ -1474,29 +1474,32 @@ impl PhotocraftApp {
         let kerning_mode = if is_optical { "optical" } else { "metrics" };
         let auto_kern_val = if is_optical { "opticalKern" } else { "metricsKern" };
 
-        // Рассчитываем оптический центр и базовую линию для Point Text
-        // Это обеспечивает 100% совместимость с Adobe Photoshop (исключает программный сбой при открытии PSD с Area Text)
-        let line_count = final_text.split('\n').count().max(1) as f32;
-        let leading = if action.preset.leading > 0.0 {
-            action.preset.leading
-        } else {
-            action.preset.font_size * 1.2
-        };
-
-        let (cx, cy) = if let Some([bx, by, bw, bh]) = selection_box {
-            (bx + bw * 0.5, by + bh * 0.5)
-        } else if let Some([hx, hy]) = self.hover_doc {
+        // Точка клика (или центр документа, если курсор вне холста) для Point Text.
+        let (click_x, click_y) = if let Some([hx, hy]) = self.hover_doc {
             (hx as f32, hy as f32)
         } else {
             (st.doc.size.width as f32 * 0.5, st.doc.size.height as f32 * 0.5)
         };
 
-        // Базовая линия первой строки так, чтобы центр всего блока строк пришелся на cy
-        let baseline_y = cy - (line_count - 1.0) * leading * 0.5 + action.preset.font_size * 0.225;
+        // Для Point Text y — базовая линия первой строки. Поднимаем её на половину
+        // высоты всего блока и опускаем на половину высоты заглавной буквы, чтобы
+        // многострочный текст центрировался вокруг точки клика, а не уходил вниз.
+        let point_baseline = if selection_box.is_none() {
+            let dpi = st.doc.resolution_dpi;
+            let px_per_pt = if dpi.is_finite() && dpi > 0.0 { dpi / 72.0 } else { 1.0 };
+            let leading_px = action.preset.leading * px_per_pt;
+            let font_size_px = action.preset.font_size * px_per_pt;
+            let line_count = final_text.lines().count().max(1);
+            let text_block_height_px = (line_count - 1) as f32 * leading_px;
+            let cap_height_px = font_size_px * 0.7;
+            Some(click_y - text_block_height_px * 0.5 + cap_height_px * 0.5)
+        } else {
+            None
+        };
+        };
+
 
         let mut type_params = serde_json::json!({
-            "x": cx,
-            "y": baseline_y,
             "text": final_text,
             "size": action.preset.font_size,
             "font": resolved_family,
@@ -1515,6 +1518,22 @@ impl PhotocraftApp {
             "hangingRoman": action.preset.hanging_punctuation,
             "antialias": action.preset.anti_alias
         });
+
+        if let Some([bx, by, bw, bh]) = selection_box {
+            // Выделение — это баббл: Box Text с нативным вертикальным центрированием.
+            type_params["box"] = serde_json::json!([bx, by, bw, bh]);
+            type_params["verticalAlign"] = serde_json::json!("center");
+            // Photoshop's positive baseline shift moves glyphs up, while the slider's
+            // positive value is documented as shifting them down inside the bubble.
+            let optical = action.preset.font_size * self.typesetter.state.options.optical_baseline_factor;
+            if optical != 0.0 {
+                type_params["baselineShift"] = serde_json::json!(-optical);
+            }
+        } else if let Some(baseline_y) = point_baseline {
+            // Без box движок не обрезает строки ни на 72, ни на 300–600 DPI.
+            type_params["x"] = serde_json::json!(click_x);
+            type_params["y"] = serde_json::json!(baseline_y);
+        }
 
         if !action.preset.font_postscript.is_empty() {
             type_params["postscriptName"] = serde_json::Value::String(action.preset.font_postscript.clone());

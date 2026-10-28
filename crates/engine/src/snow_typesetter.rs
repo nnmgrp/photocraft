@@ -124,6 +124,7 @@ pub struct TypesetterOptions {
     pub strip_character_names: bool,
     pub strip_dash_prefix: bool,
     pub optical_baseline_factor: f32,
+    #[serde(default = "default_true")]
     pub hanging_punctuation: bool,
 }
 
@@ -866,6 +867,23 @@ pub fn calculate_bubble_center(bounds: [f32; 4]) -> [f32; 2] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_typesetter_options_reads_state_saved_before_hanging_punctuation() {
+        // `typesetter_state.json` saved by a build before the option existed has five fields.
+        // Reading it must keep the new option's default instead of resetting the whole state.
+        let old = r#"{
+            "auto_page_switch": true,
+            "line_spacing_sync": false,
+            "strip_character_names": true,
+            "strip_dash_prefix": true,
+            "optical_baseline_factor": 0.35
+        }"#;
+        let options: TypesetterOptions = serde_json::from_str(old).unwrap();
+        assert!(options.hanging_punctuation, "old state keeps the new option's default");
+        assert_eq!(options.optical_baseline_factor, 0.35);
+        assert!(!options.line_spacing_sync);
+    }
 
     #[test]
     fn test_clean_script_line() {

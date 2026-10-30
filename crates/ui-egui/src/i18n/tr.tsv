@@ -4540,3 +4540,37 @@ cameraData	Lens	Lens
 	Remove what is selected with Nano Banana ({key})	Seçili alanı Nano Banana ile kaldır ({key})
 	Pin to Top	Üste Sabitle
 	Unpin from Top	Üstten Sabitlemeyi Kaldır
+
+# Font Settings v2: preview sample, geometry labels and accessibility tooltips.
+	Font Settings	Yazı Tipi Ayarları
+	Style name	Stil adı
+	No folder	Klasör yok
+	+ New folder...	+ Yeni klasör...
+	Folder name	Klasör adı
+	New folder name	Yeni klasör adı
+	Typography and Font	Tipografi ve Yazı Tipi
+	Favorite font	Favori yazı tipi
+	PostScript	PostScript
+	Formatting	Biçimlendirme
+	Faux bold	Sahte kalın
+	Faux italic	Sahte italik
+	Align Left	Sola hizala
+	Align Center	Ortala
+	Align Right	Sağa hizala
+	Typography Size (Line Spacing Sync)	Tipografi boyutları (satır aralığı eşitleme)
+	System type	Sistem
+	Use standard font metrics and the baseline	Metrik sistem: standart yazı tipi metrikleri ve taban çizgisi
+	Use visual kerning and bubble centering	Optik sistem: görsel kerning ve balon ortalama
+	Size (pt)	Boyut (pt)
+	Leading is linked to size	Satır aralığı boyuta bağlı
+	Leading is not linked to size	Satır aralığı boyuta bağlı değil
+	H-Scale (%)	Yatay ölçek (%)
+	Text Outline	Metin dış çizgisi
+	Thickness (px)	Kalınlık (px)
+	Preview sample	Önizleme
+	Preview text	Önizleme metni
+	Edit preview text	Önizleme metnini düzenle
+	Leave empty for the automatic sample	Otomatik örnek için boş bırakın
+	Preview unavailable	Önizleme kullanılamıyor
+	Duplicate this style	Bu stili çoğalt
+	Delete this style	Bu stili sil

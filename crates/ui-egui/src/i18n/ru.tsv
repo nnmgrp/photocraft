@@ -5186,3 +5186,25 @@ shape	Appearance	Оформление
 	Ultra-fast real-time rendering for giant files	Сверхбыстрый рендеринг на видеокарте для гигантских файлов
 
 	Exact reference CPU engine	Точный эталонный расчет на процессоре
+
+# Font Settings v2: preview sample, geometry labels and accessibility tooltips.
+	+ New folder...	+ Новая папка...
+	New folder name	Имя новой папки
+	PostScript	PostScript
+	Formatting	Оформление
+	Faux bold	Псевдожирный
+	Faux italic	Псевдокурсив
+	Align Left	По левому
+	Align Center	По центру
+	Align Right	По правому
+	System type	Система
+	Use standard font metrics and the baseline	Метрическая система: стандартные метрики шрифта и базовая линия
+	Use visual kerning and bubble centering	Оптическая система: визуальный оптический кернинг и центровка баббла
+	Leading is linked to size	Интерлиньяж связан с кеглем (меняется пропорционально)
+	Leading is not linked to size	Интерлиньяж не связан с кеглем (независим)
+	H-Scale (%)	H-Scale (%)
+	Preview sample	Предпросмотр
+	Preview text	Текст предпросмотра
+	Edit preview text	Изменить текст предпросмотра
+	Leave empty for the automatic sample	Оставьте пустым для автоматического образца
+	Preview unavailable	Предпросмотр недоступен

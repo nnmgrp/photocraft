@@ -460,16 +460,27 @@ impl TypesetterUi {
             // кадр, из-за чего заголовок не тянулся. Вместо этого центрируем только стартовую
             // позицию, а дальнейшие — запоминает egui по стабильному id (иначе id зависел от
             // имени стиля и позиция сбрасывалась при смене стиля).
+            let mut window_open = true;
             Window::new(title)
                 .id(egui::Id::new("typer_font_settings_window"))
+                .open(&mut window_open)
                 .collapsible(false)
-                .resizable(true)
-                .default_width(480.0)
-                .default_height(620.0)
-                .min_width(430.0)
+                // Photoshop's panel keeps a fixed width; only the height follows the content.
+                .resizable([false, true])
+                .default_width(585.0)
+                .min_width(585.0)
+                .max_width(585.0)
+                .default_height(685.0)
+                .min_height(685.0)
                 .pivot(egui::Align2::CENTER_CENTER)
                 .default_pos(ctx.content_rect().center())
                 .show(ctx, |ui| {
+                    // The mockup's window keeps a fixed 585-point width, scrollbar or not. egui
+                    // adds a floating scrollbar's allocated width to the scroll area's outer size
+                    // as soon as the content fills the width, so any reservation here would make
+                    // the window 2 points wider than the mockup. A floating bar needs no space:
+                    // it is drawn over the panel's edge, like in Photoshop.
+                    ui.spacing_mut().scroll.floating_allocated_width = 0.0;
                     egui::ScrollArea::vertical()
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
@@ -477,6 +488,18 @@ impl TypesetterUi {
                         });
                 });
 
+            if !window_open {
+                let pending =
+                    ctx.data_mut(|d| d.remove_temp::<PreviewEdit>(egui::Id::new("typesetter-preview-edit")));
+                if let Some(pending) = pending {
+                    if pending.idx == edit_idx {
+                        if let Some(preset) = self.state.presets.get_mut(edit_idx) {
+                            commit_preview_edit(preset, &pending.buffer, &pending.original);
+                        }
+                    }
+                }
+                close_modal = true;
+            }
             if close_modal {
                 self.editing_preset_idx = None;
                 self.auto_save();
@@ -1889,377 +1912,672 @@ impl TypesetterUi {
         // memory: the preset borrow below must not also borrow `self` for it.
         let new_folder_open_id = egui::Id::new("typesetter-modal-new-folder-open");
         let new_folder_name_id = egui::Id::new("typesetter-modal-new-folder-name");
+        let preview_edit_id = egui::Id::new("typesetter-preview-edit");
         let mut new_folder_open = ui.data(|d| d.get_temp::<bool>(new_folder_open_id)).unwrap_or(false);
         let mut new_folder_name = ui.data_mut(|d| d.get_temp::<String>(new_folder_name_id)).unwrap_or_default();
 
         if let Some(preset) = self.state.presets.get_mut(idx) {
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(format!("{}:", tl!("Style name"))).strong());
-                if ui.text_edit_singleline(&mut preset.name).changed() {
-                    changed = true;
-                }
-            });
-
-            ui.horizontal(|ui| {
-                ui.label(format!("{}:", tl!("Folder")));
-                let folder_str = preset.folder.clone().unwrap_or_default();
-                egui::ComboBox::from_id_salt("edit_preset_folder_combo")
-                    .selected_text(if folder_str.is_empty() { tl!("No folder") } else { &folder_str })
-                    .width(300.0)
-                    .show_ui(ui, |ui| {
-                        if ui.selectable_label(folder_str.is_empty(), tl!("No folder")).clicked() {
-                            preset.folder = None;
-                            changed = true;
-                        }
-                        for f in &available_folders {
-                            if ui.selectable_label(folder_str == *f, f).clicked() {
-                                preset.folder = Some(f.clone());
-                                changed = true;
-                            }
-                        }
-                        ui.separator();
-                        if ui.selectable_label(false, tl!("+ New folder...")).clicked() {
-                            new_folder_open = true;
-                            new_folder_name.clear();
-                        }
-                    });
-            });
-
-            if new_folder_open {
-                ui.horizontal(|ui| {
-                    ui.label(format!("{}:", tl!("Folder name")));
-                    let response = ui.add(
-                        egui::TextEdit::singleline(&mut new_folder_name)
-                            .desired_width(220.0)
-                            .hint_text(tl!("New folder name")),
-                    );
-                    let submit = ui.button("OK").clicked()
-                        || (response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
-                    if submit {
-                        let name = new_folder_name.trim();
-                        if !name.is_empty() {
-                            preset.folder = Some(name.to_string());
-                            changed = true;
-                        }
-                        new_folder_open = false;
-                        new_folder_name.clear();
-                    }
-                    if ui.button(tl!("Cancel")).clicked() {
-                        new_folder_open = false;
-                        new_folder_name.clear();
-                    }
-                });
-            }
-
-            ui.separator();
-
-            ui.label(RichText::new(tl!("Typography and Font")).strong());
-            ui.horizontal(|ui| {
-                ui.label(format!("{}:", tl!("Font")));
-                // Quick star toggle for current font
-                let is_fav = crate::type_tool::is_favorite_font(ui.ctx(), &preset.font_family);
-                let star_text = if is_fav { "★" } else { "☆" };
-                let star_color = if is_fav { egui::Color32::from_rgb(240, 190, 50) } else { ui.visuals().weak_text_color() };
-                if ui.button(RichText::new(star_text).color(star_color)).on_hover_text(tl!("Favorite font")).clicked() {
-                    toggle_fav_font = Some(preset.font_family.clone());
-                }
-
-                // Searchable font dropdown with pinned Favorites at the top!
-                let prev_fam = preset.font_family.clone();
-                let families = crate::type_tool::families();
-                if crate::type_tool::family_picker_in(ui, "typesetter-preset-font", &mut preset.font_family, 200.0, &families, photocraft_engine::prefs::FontPreview::Medium, &[]) {
-                    changed = true;
-                    if preset.font_family != prev_fam {
-                        if let Some(engine) = photocraft_text::try_shared() {
-                            let faces = engine.lock().unwrap_or_else(std::sync::PoisonError::into_inner).fonts.faces(&preset.font_family);
-                            if let Some(first_face) = faces.first() {
-                                if let Some(ps) = &first_face.postscript_name {
-                                    preset.font_postscript = ps.clone();
-                                }
-                                preset.font_style = first_face.style.clone();
-                            }
-                        }
-                    }
-                }
-            });
-
-            ui.horizontal(|ui| {
-                ui.label("PostScript:");
-                if ui
-                    .add(egui::TextEdit::singleline(&mut preset.font_postscript).desired_width(130.0))
-                    .changed()
-                {
-                    changed = true;
-                }
-                ui.add_space(6.0);
-                ui.label(format!("{}:", tl!("Style")));
-
-                // The faces the chosen family actually provides, so the style name always
-                // resolves to an installed face instead of a free-form duplicate.
-                let mut styles = crate::type_tool::styles(&preset.font_family);
-                if !preset.font_style.is_empty() && !styles.iter().any(|s| *s == preset.font_style) {
-                    styles.insert(0, preset.font_style.clone());
-                }
-                let options: Vec<(String, String)> =
-                    styles.iter().map(|s| (s.clone(), crate::type_tool::style_label(s))).collect();
-                let options_ref: Vec<(String, &str)> =
-                    options.iter().map(|(value, label)| (value.clone(), label.as_str())).collect();
-                if crate::widgets::dropdown_literal(ui, "typesetter-preset-style", &mut preset.font_style, &options_ref, 140.0) {
-                    changed = true;
-                }
-            });
-
-            ui.horizontal_wrapped(|ui| {
-                ui.label(format!("{}:", tl!("Оформление")));
-
-                if character_toggle(ui, &mut preset.bold, "B", "Псевдожирный / Bold") {
-                    if preset.bold && !preset.font_style.to_lowercase().contains("bold") {
-                        preset.font_style = if preset.italic { "Bold Italic".into() } else { "Bold".into() };
-                    } else if !preset.bold && preset.font_style.to_lowercase().contains("bold") {
-                        preset.font_style = if preset.italic { "Italic".into() } else { "Regular".into() };
-                    }
-                    changed = true;
-                }
-                if character_toggle(ui, &mut preset.italic, "I", "Псевдокурсив / Italic") {
-                    if preset.italic && !preset.font_style.to_lowercase().contains("italic") {
-                        preset.font_style = if preset.bold { "Bold Italic".into() } else { "Italic".into() };
-                    } else if !preset.italic && preset.font_style.to_lowercase().contains("italic") {
-                        preset.font_style = if preset.bold { "Bold".into() } else { "Regular".into() };
-                    }
-                    changed = true;
-                }
-                if character_toggle(ui, &mut preset.all_caps, "TT", "Все прописные / All Caps") {
-                    if preset.all_caps {
-                        preset.small_caps = false;
-                    }
-                    changed = true;
-                }
-                if character_toggle(ui, &mut preset.small_caps, "Tт", "Капитель / Small Caps") {
-                    if preset.small_caps {
-                        preset.all_caps = false;
-                    }
-                    changed = true;
-                }
-                if character_toggle(ui, &mut preset.superscript, "T¹", "Верхний индекс / Superscript") {
-                    if preset.superscript {
-                        preset.subscript = false;
-                    }
-                    changed = true;
-                }
-                if character_toggle(ui, &mut preset.subscript, "T₁", "Нижний индекс / Subscript") {
-                    if preset.subscript {
-                        preset.superscript = false;
-                    }
-                    changed = true;
-                }
-                if character_toggle(ui, &mut preset.underline, "U", "Подчёркивание / Underline") {
-                    changed = true;
-                }
-                if character_toggle(ui, &mut preset.strikethrough, "S", "Зачёркивание / Strikethrough") {
-                    changed = true;
-                }
-                if character_toggle(
-                    ui,
-                    &mut preset.hanging_punctuation,
-                    "«»",
-                    "Оптическая компенсация знаков в строках (висячая пунктуация для кавычек, тире, многоточий и точек)",
-                ) {
-                    changed = true;
-                }
-            });
-
-            ui.horizontal_wrapped(|ui| {
-                ui.label(format!("{}:", tl!("Alignment")));
-                for (value, label, tip) in [
-                    ("left", "≡ По левому", "Выравнивание по левому краю"),
-                    ("center", "≡ По центру", "Выравнивание по центру"),
-                    ("right", "≡ По правому", "Выравнивание по правому краю"),
-                ] {
-                    if ui
-                        .selectable_label(preset.align.as_str() == value, label)
-                        .on_hover_text(tip)
-                        .clicked()
-                    {
-                        preset.align = value.to_string();
-                        changed = true;
-                    }
-                }
-            });
-
-            ui.horizontal(|ui| {
-                ui.label(format!("{}:", tl!("Anti-aliasing")));
-                let cur_aa = preset.anti_alias.clone();
-                let aa_labels = [
-                    ("crisp", "Чёткий"),
-                    ("sharp", "Резкий"),
-                    ("smooth", "Плавный"),
-                    ("strong", "Жирный"),
-                    ("none", "Нет"),
-                ];
-                let display_label = aa_labels.iter().find(|(k, _)| *k == cur_aa).map(|(_, l)| *l).unwrap_or(cur_aa.as_str());
-                egui::ComboBox::from_id_salt("style_modal_aa")
-                    .selected_text(display_label)
-                    .show_ui(ui, |ui| {
-                        for (k, label) in aa_labels {
-                            if ui.selectable_label(cur_aa == k, label).clicked() {
-                                preset.anti_alias = k.to_string();
-                                changed = true;
-                            }
-                        }
-                    });
-            });
-
-            ui.horizontal(|ui| {
-                ui.label(format!("{}:", tl!("Color")));
-                let mut text_c = egui::Color32::from_rgba_unmultiplied(
-                    preset.text_color[0],
-                    preset.text_color[1],
-                    preset.text_color[2],
-                    preset.text_color[3],
-                );
-                if egui::color_picker::color_edit_button_srgba(
-                    ui,
-                    &mut text_c,
-                    egui::color_picker::Alpha::BlendOrAdditive,
-                ).changed() {
-                    preset.text_color = [text_c.r(), text_c.g(), text_c.b(), text_c.a()];
-                    changed = true;
-                }
-                ui.label(format!("#{:02X}{:02X}{:02X}{:02X}", preset.text_color[0], preset.text_color[1], preset.text_color[2], preset.text_color[3]));
-            });
-
-            ui.separator();
-
-            ui.label(RichText::new(tl!("Typography Size (Line Spacing Sync)")).strong());
-            ui.horizontal(|ui| {
-                ui.label("Система:");
-                let is_optical = preset.measurement_system.is_optical();
-                if ui.selectable_label(!is_optical, tl!("Metrics")).on_hover_text("Метрическая система: стандартные метрики шрифта и базовая линия").clicked() {
-                    preset.measurement_system = photocraft_engine::typesetter::MeasurementSystem::Metric;
-                    changed = true;
-                }
-                if ui.selectable_label(is_optical, tl!("Optical")).on_hover_text("Оптическая система: визуальный оптический кернинг и центровка баббла").clicked() {
-                    preset.measurement_system = photocraft_engine::typesetter::MeasurementSystem::Optical;
-                    changed = true;
-                }
-            });
-
-            ui.horizontal(|ui| {
-                ui.label(format!("{}:", tl!("Size (pt)")));
-                let mut size = preset.font_size;
-                if ui.add(egui::DragValue::new(&mut size).speed(0.5).range(4.0..=200.0)).changed() {
-                    if sync_leading {
-                        preset.sync_leading_with_size(size);
-                    } else {
-                        preset.font_size = size;
-                    }
-                    changed = true;
-                }
-
-                if ui.small_button("A-").clicked() {
-                    let new_sz = (preset.font_size - 1.0).max(4.0);
-                    if sync_leading {
-                        preset.sync_leading_with_size(new_sz);
-                    } else {
-                        preset.font_size = new_sz;
-                    }
-                    changed = true;
-                }
-                if ui.small_button("A+").clicked() {
-                    let new_sz = preset.font_size + 1.0;
-                    if sync_leading {
-                        preset.sync_leading_with_size(new_sz);
-                    } else {
-                        preset.font_size = new_sz;
-                    }
-                    changed = true;
-                }
-
-                let link_icon = if sync_leading { "🔗" } else { "⛓" };
-                let link_tip = if sync_leading {
-                    "Связка кегля и интерлиньяжа активна (Leading меняется пропорционально)"
-                } else {
-                    "Связка кегля и интерлиньяжа отключена (Leading независим)"
-                };
-                if ui.selectable_label(sync_leading, link_icon).on_hover_text(link_tip).clicked() {
-                    toggle_sync = true;
-                }
-
-                ui.add_space(8.0);
-                ui.label(format!("{}:", tl!("Leading")));
-                if ui.add(egui::DragValue::new(&mut preset.leading).speed(0.5).range(4.0..=300.0)).changed() {
-                    changed = true;
-                }
-            });
-
-            ui.horizontal(|ui| {
-                ui.label(format!("{}:", tl!("Tracking")));
-                if ui.add(egui::DragValue::new(&mut preset.tracking).speed(1.0).range(-200..=1000)).changed() {
-                    changed = true;
-                }
-                ui.add_space(8.0);
-                ui.label(format!("{}:", tl!("Horizontal scale (%)")));
-                if ui.add(egui::DragValue::new(&mut preset.horizontal_scale).speed(1.0).range(20.0..=300.0)).changed() {
-                    changed = true;
-                }
-            });
-
-            ui.separator();
-
-            ui.label(RichText::new(tl!("Text Outline")).strong());
-            ui.horizontal(|ui| {
-                ui.label(format!("{}:", tl!("Thickness (px)")));
-                if ui.add(egui::DragValue::new(&mut preset.stroke_width).speed(0.2).range(0.0..=30.0)).changed() {
-                    changed = true;
-                }
-                ui.add_space(8.0);
-                ui.label(format!("{}:", tl!("Color")));
-                let mut stroke_c = egui::Color32::from_rgba_unmultiplied(
-                    preset.stroke_color[0],
-                    preset.stroke_color[1],
-                    preset.stroke_color[2],
-                    preset.stroke_color[3],
-                );
-                if egui::color_picker::color_edit_button_srgba(
-                    ui,
-                    &mut stroke_c,
-                    egui::color_picker::Alpha::BlendOrAdditive,
-                ).changed() {
-                    preset.stroke_color = [stroke_c.r(), stroke_c.g(), stroke_c.b(), stroke_c.a()];
-                    changed = true;
-                }
-                ui.label(format!("#{:02X}{:02X}{:02X}{:02X}", preset.stroke_color[0], preset.stroke_color[1], preset.stroke_color[2], preset.stroke_color[3]));
-            });
-
-            ui.separator();
-
-            ui.label(RichText::new(tl!("Preview")).strong());
-            let t = Tokens::get(ui.ctx());
             Frame::NONE
-                .fill(t.field)
-                .stroke(Stroke::new(1.0, t.field_border))
-                .corner_radius(CornerRadius::same(t.radius_sm as u8))
-                .inner_margin(Margin::same(8))
+                .inner_margin(Margin { left: FORM_LEFT_INSET as i8, right: 0, top: 11, bottom: 4 })
                 .show(ui, |ui| {
-                    ui.set_min_height(54.0);
-                    render_style_preview(ui, preset);
-                });
+                    // The mockup has one caption column and one control axis. Vertical spacing is
+                    // explicit: the section rules and headers sit on fixed offsets from the first
+                    // row, not on the default item spacing.
+                    ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+                    ui.spacing_mut().interact_size.y = ROW_H;
+                    // The mockup's grid: 94 + 6 + 445 = 545 inside the form's 6-point inset.
+                    ui.set_width(LABEL_W + COL_GAP + RIGHT_W);
 
-            ui.separator();
+                    // 1. Style name
+                    form_row(ui, "Style name", |ui| {
+                        if ui
+                            .add_sized(
+                                [RIGHT_W, ROW_H],
+                                egui::TextEdit::singleline(&mut preset.name).vertical_align(Align::Center),
+                            )
+                            .changed()
+                        {
+                            changed = true;
+                        }
+                    });
 
-            ui.horizontal(|ui| {
-                if ui.button(tl!("Duplicate")).on_hover_text(tl!("Duplicate this style")).clicked() {
-                    to_duplicate = true;
-                }
-                if ui.button(tl!("Delete")).on_hover_text(tl!("Delete this style")).clicked() {
-                    to_delete = true;
-                }
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.button(tl!("Done")).clicked() {
-                        *close_modal = true;
+                    ui.add_space(5.0);
+
+                    // 2. Folder
+                    form_row(ui, "Folder", |ui| {
+                        let folder_str = preset.folder.clone().unwrap_or_default();
+                        egui::ComboBox::from_id_salt("edit_preset_folder_combo")
+                            .selected_text(if folder_str.is_empty() {
+                                tl!("No folder").to_string()
+                            } else {
+                                folder_str.clone()
+                            })
+                            .width(RIGHT_W)
+                            .show_ui(ui, |ui| {
+                                if ui.selectable_label(folder_str.is_empty(), tl!("No folder")).clicked() {
+                                    preset.folder = None;
+                                    changed = true;
+                                }
+                                for f in &available_folders {
+                                    if ui.selectable_label(folder_str == *f, f).clicked() {
+                                        preset.folder = Some(f.clone());
+                                        changed = true;
+                                    }
+                                }
+                                ui.separator();
+                                if ui.selectable_label(false, tl!("+ New folder...")).clicked() {
+                                    new_folder_open = true;
+                                    new_folder_name.clear();
+                                }
+                            });
+                    });
+
+                    if new_folder_open {
+                        ui.add_space(5.0);
+                        form_row(ui, "Folder name", |ui| {
+                            let response = ui.add_sized(
+                                [240.0, ROW_H],
+                                egui::TextEdit::singleline(&mut new_folder_name)
+                                    .hint_text(tl!("New folder name"))
+                                    .vertical_align(Align::Center),
+                            );
+                            ui.add_space(6.0);
+                            let submit = ui.add_sized([54.0, ROW_H], egui::Button::new(tl!("OK"))).clicked()
+                                || (response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
+                            ui.add_space(6.0);
+                            if submit {
+                                let name = new_folder_name.trim();
+                                if !name.is_empty() {
+                                    preset.folder = Some(name.to_string());
+                                    changed = true;
+                                }
+                                new_folder_open = false;
+                                new_folder_name.clear();
+                            }
+                            if ui.add_sized([72.0, ROW_H], egui::Button::new(tl!("Cancel"))).clicked() {
+                                new_folder_open = false;
+                                new_folder_name.clear();
+                            }
+                        });
+                        ui.add_space(5.0);
+                    } else {
+                        ui.add_space(10.0);
                     }
+
+                    section_header(ui, "Typography and Font", 6.0);
+                    ui.add_space(7.0);
+
+                    // 3. Font
+                    form_row(ui, "Font", |ui| {
+                        let is_fav = crate::type_tool::is_favorite_font(ui.ctx(), &preset.font_family);
+                        let star_text = if is_fav { "★" } else { "☆" };
+                        let star_color = if is_fav {
+                            egui::Color32::from_rgb(240, 190, 50)
+                        } else {
+                            ui.visuals().weak_text_color()
+                        };
+                        let star_btn = egui::Button::new(RichText::new(star_text).color(star_color).size(14.0))
+                            .min_size(vec2(43.0, ROW_H));
+                        if ui.add(star_btn).on_hover_text(tl!("Favorite font")).clicked() {
+                            toggle_fav_font = Some(preset.font_family.clone());
+                        }
+                        ui.add_space(6.0);
+
+                        let prev_fam = preset.font_family.clone();
+                        let families = crate::type_tool::families();
+                        let font_combo_w = RIGHT_W - 43.0 - 6.0;
+                        if crate::type_tool::family_picker_in(
+                            ui,
+                            "typesetter-preset-font",
+                            &mut preset.font_family,
+                            font_combo_w,
+                            &families,
+                            photocraft_engine::prefs::FontPreview::Medium,
+                            &[],
+                        ) {
+                            changed = true;
+                            if preset.font_family != prev_fam {
+                                if let Some(engine) = photocraft_text::try_shared() {
+                                    let faces = engine
+                                        .lock()
+                                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                        .fonts
+                                        .faces(&preset.font_family);
+                                    if let Some(first_face) = faces.first() {
+                                        if let Some(ps) = &first_face.postscript_name {
+                                            preset.font_postscript = ps.clone();
+                                        }
+                                        preset.font_style = first_face.style.clone();
+                                    }
+                                }
+                            }
+                        }
+                    });
+
+                    ui.add_space(7.0);
+
+                    // 4. PostScript + Style
+                    form_row(ui, "PostScript", |ui| {
+                        if ui
+                            .add_sized(
+                                [295.0, ROW_H],
+                                egui::TextEdit::singleline(&mut preset.font_postscript).vertical_align(Align::Center),
+                            )
+                            .changed()
+                        {
+                            changed = true;
+                        }
+
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            ui.spacing_mut().item_spacing.x = 0.0;
+                            let mut styles = crate::type_tool::styles(&preset.font_family);
+                            if !preset.font_style.is_empty() && !styles.iter().any(|s| *s == preset.font_style) {
+                                styles.insert(0, preset.font_style.clone());
+                            }
+                            let options: Vec<(String, String)> = styles
+                                .iter()
+                                .map(|s| (s.clone(), crate::type_tool::style_label(s)))
+                                .collect();
+                            let options_ref: Vec<(String, &str)> = options
+                                .iter()
+                                .map(|(value, label)| (value.clone(), label.as_str()))
+                                .collect();
+                            if crate::widgets::dropdown_literal(
+                                ui,
+                                "typesetter-preset-style",
+                                &mut preset.font_style,
+                                &options_ref,
+                                91.0,
+                            ) {
+                                changed = true;
+                            }
+                            ui.add_space(6.0);
+                            ui.label(format!("{}:", tl!("Style")));
+                        });
+                    });
+
+                    ui.add_space(7.0);
+
+                    // 5. Formatting (9 buttons evenly spanning RIGHT_W: 9 * 45 + 8 * 5 = 445)
+                    form_row(ui, "Formatting", |ui| {
+                        ui.spacing_mut().item_spacing.x = 5.0;
+
+                        if character_toggle(ui, &mut preset.bold, "B", tl!("Faux bold")) {
+                            if preset.bold && !preset.font_style.to_lowercase().contains("bold") {
+                                preset.font_style = if preset.italic { "Bold Italic".into() } else { "Bold".into() };
+                            } else if !preset.bold && preset.font_style.to_lowercase().contains("bold") {
+                                preset.font_style = if preset.italic { "Italic".into() } else { "Regular".into() };
+                            }
+                            changed = true;
+                        }
+                        if character_toggle(ui, &mut preset.italic, "I", tl!("Faux italic")) {
+                            if preset.italic && !preset.font_style.to_lowercase().contains("italic") {
+                                preset.font_style = if preset.bold { "Bold Italic".into() } else { "Italic".into() };
+                            } else if !preset.italic && preset.font_style.to_lowercase().contains("italic") {
+                                preset.font_style = if preset.bold { "Bold".into() } else { "Regular".into() };
+                            }
+                            changed = true;
+                        }
+                        if character_toggle(ui, &mut preset.all_caps, "TT", tl!("All Caps")) {
+                            if preset.all_caps {
+                                preset.small_caps = false;
+                            }
+                            changed = true;
+                        }
+                        if character_toggle(ui, &mut preset.small_caps, "Tт", tl!("Small Caps")) {
+                            if preset.small_caps {
+                                preset.all_caps = false;
+                            }
+                            changed = true;
+                        }
+                        if character_toggle(ui, &mut preset.superscript, "T¹", tl!("Superscript")) {
+                            if preset.superscript {
+                                preset.subscript = false;
+                            }
+                            changed = true;
+                        }
+                        if character_toggle(ui, &mut preset.subscript, "T₁", tl!("Subscript")) {
+                            if preset.subscript {
+                                preset.superscript = false;
+                            }
+                            changed = true;
+                        }
+                        if character_toggle(ui, &mut preset.underline, "U", tl!("Underline")) {
+                            changed = true;
+                        }
+                        if character_toggle(ui, &mut preset.strikethrough, "S", tl!("Strikethrough")) {
+                            changed = true;
+                        }
+                        if character_toggle(ui, &mut preset.hanging_punctuation, "«»", tl!("Hanging Punctuation")) {
+                            changed = true;
+                        }
+                    });
+
+                    ui.add_space(8.0);
+
+                    // 6. Alignment (3 buttons evenly spanning RIGHT_W: 3 * 145 + 2 * 5 = 445)
+                    form_row(ui, "Alignment", |ui| {
+                        ui.spacing_mut().item_spacing.x = 5.0;
+                        for value in ["left", "center", "right"] {
+                            let key = match value {
+                                "left" => "Align Left",
+                                "right" => "Align Right",
+                                _ => "Align Center",
+                            };
+                            let label = crate::i18n::t(key);
+                            if alignment_button(ui, value, label, label, preset.align.as_str() == value) {
+                                preset.align = value.to_string();
+                                changed = true;
+                            }
+                        }
+                    });
+
+                    ui.add_space(8.0);
+
+                    // 7. Anti-alias (217 wide, matching the Color swatch + hex row)
+                    form_row(ui, "Anti-alias", |ui| {
+                        let cur_aa = preset.anti_alias.clone();
+                        let display_label = anti_alias_label(&cur_aa);
+                        egui::ComboBox::from_id_salt("style_modal_aa")
+                            .selected_text(display_label)
+                            .width(217.0)
+                            .show_ui(ui, |ui| {
+                                for value in ["crisp", "sharp", "smooth", "strong", "none"] {
+                                    if ui.selectable_label(cur_aa == value, anti_alias_label(value)).clicked() {
+                                        preset.anti_alias = value.to_string();
+                                        changed = true;
+                                    }
+                                }
+                            });
+                    });
+
+                    ui.add_space(6.0);
+
+                    // 8. Color (43 swatch + 7 gap + 167 hex = 217)
+                    form_row(ui, "Color", |ui| {
+                        if color_swatch_with_hex_sized(
+                            ui,
+                            &mut preset.text_color,
+                            "typesetter-text-color",
+                            vec2(43.0, 24.0),
+                            7.0,
+                            167.0,
+                        ) {
+                            changed = true;
+                        }
+                    });
+
+                    ui.add_space(11.0);
+                    section_header(ui, "Typography Size (Line Spacing Sync)", 8.0);
+                    ui.add_space(8.0);
+
+                    // 9. System type (joined segmented control: 2 * 95 = 190, 0 gap)
+                    form_row(ui, "System type", |ui| {
+                        ui.spacing_mut().item_spacing.x = 0.0;
+                        let is_optical = preset.measurement_system.is_optical();
+                        // One joined 190-point control: only the outer corners are rounded.
+                        if ui
+                            .add(
+                                egui::Button::new(RichText::new(tl!("Metrics")).size(12.5))
+                                    .selected(!is_optical)
+                                    .corner_radius(CornerRadius { nw: 4, sw: 4, ne: 0, se: 0 })
+                                    .min_size(vec2(95.0, ROW_H)),
+                            )
+                            .on_hover_text(tl!("Use standard font metrics and the baseline"))
+                            .clicked()
+                        {
+                            preset.measurement_system = photocraft_engine::typesetter::MeasurementSystem::Metric;
+                            changed = true;
+                        }
+                        if ui
+                            .add(
+                                egui::Button::new(RichText::new(tl!("Optical")).size(12.5))
+                                    .selected(is_optical)
+                                    .corner_radius(CornerRadius { nw: 0, sw: 0, ne: 4, se: 4 })
+                                    .min_size(vec2(95.0, ROW_H)),
+                            )
+                            .on_hover_text(tl!("Use visual kerning and bubble centering"))
+                            .clicked()
+                        {
+                            preset.measurement_system = photocraft_engine::typesetter::MeasurementSystem::Optical;
+                            changed = true;
+                        }
+                    });
+
+                    ui.add_space(6.0);
+
+                    // 10. Size (pt) + A- / A+ / Link + Leading (right-aligned)
+                    form_row(ui, "Size (pt)", |ui| {
+                        let mut size = preset.font_size;
+                        if ui
+                            .add_sized(
+                                [86.0, ROW_H],
+                                egui::DragValue::new(&mut size).speed(0.5).range(4.0..=200.0).fixed_decimals(1),
+                            )
+                            .changed()
+                        {
+                            if sync_leading {
+                                preset.sync_leading_with_size(size);
+                            } else {
+                                preset.font_size = size;
+                            }
+                            changed = true;
+                        }
+
+                        ui.add_space(5.0);
+                        if ui.add_sized([45.0, ROW_H], egui::Button::new("A-")).clicked() {
+                            let new_sz = (preset.font_size - 1.0).max(4.0);
+                            if sync_leading {
+                                preset.sync_leading_with_size(new_sz);
+                            } else {
+                                preset.font_size = new_sz;
+                            }
+                            changed = true;
+                        }
+                        ui.add_space(5.0);
+                        if ui.add_sized([45.0, ROW_H], egui::Button::new("A+")).clicked() {
+                            let new_sz = preset.font_size + 1.0;
+                            if sync_leading {
+                                preset.sync_leading_with_size(new_sz);
+                            } else {
+                                preset.font_size = new_sz;
+                            }
+                            changed = true;
+                        }
+                        ui.add_space(5.0);
+
+                        let link_icon = if sync_leading { "🔗" } else { "⛓" };
+                        let link_tip = if sync_leading {
+                            tl!("Leading is linked to size")
+                        } else {
+                            tl!("Leading is not linked to size")
+                        };
+                        let link_btn = egui::Button::new(RichText::new(link_icon).size(12.5))
+                            .selected(sync_leading)
+                            .min_size(vec2(46.0, ROW_H));
+                        if ui.add(link_btn).on_hover_text(link_tip).clicked() {
+                            toggle_sync = true;
+                        }
+
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            ui.spacing_mut().item_spacing.x = 0.0;
+                            let leading_value = ui.add_sized(
+                                [86.0, ROW_H],
+                                egui::DragValue::new(&mut preset.leading)
+                                    .speed(0.5)
+                                    .range(4.0..=300.0)
+                                    .fixed_decimals(1),
+                            );
+                            remember_rect(ui, "leading-value", leading_value.rect);
+                            if leading_value.changed() {
+                                changed = true;
+                            }
+                            ui.add_space(6.0);
+                            ui.allocate_ui_with_layout(vec2(85.0, ROW_H), Layout::left_to_right(Align::Center), |ui| {
+                                // The fixed cell width keeps both captions on one axis, so the
+                                // Leading and H-Scale labels share their left edge.
+                                ui.set_min_size(vec2(85.0, ROW_H));
+                                ui.label(format!("{}:", tl!("Leading")));
+                            });
+                        });
+                    });
+
+                    ui.add_space(7.0);
+
+                    // 11. Tracking + H-Scale (%) (aligned with Size & Leading above)
+                    form_row(ui, "Tracking", |ui| {
+                        if ui
+                            .add_sized(
+                                [86.0, ROW_H],
+                                egui::DragValue::new(&mut preset.tracking).speed(1.0).range(-200..=1000),
+                            )
+                            .changed()
+                        {
+                            changed = true;
+                        }
+
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            ui.spacing_mut().item_spacing.x = 0.0;
+                            let hscale_value = ui.add_sized(
+                                [86.0, ROW_H],
+                                egui::DragValue::new(&mut preset.horizontal_scale)
+                                    .speed(1.0)
+                                    .range(20.0..=300.0)
+                                    .fixed_decimals(0),
+                            );
+                            remember_rect(ui, "hscale-value", hscale_value.rect);
+                            if hscale_value.changed() {
+                                changed = true;
+                            }
+                            ui.add_space(6.0);
+                            ui.allocate_ui_with_layout(vec2(85.0, ROW_H), Layout::left_to_right(Align::Center), |ui| {
+                                // The fixed cell width keeps both captions on one axis, so the
+                                // Leading and H-Scale labels share their left edge.
+                                ui.set_min_size(vec2(85.0, ROW_H));
+                                ui.label(format!("{}:", tl!("H-Scale (%)")));
+                            });
+                        });
+                    });
+
+                    ui.add_space(11.0);
+                    section_header(ui, "Text Outline", 8.0);
+                    ui.add_space(5.0);
+
+                    // 12. Thickness (px) + Color swatch and HEX (variant B: the Color label is a step)
+                    form_row(ui, "Thickness (px)", |ui| {
+                        if ui
+                            .add_sized(
+                                [116.0, ROW_H],
+                                egui::DragValue::new(&mut preset.stroke_width)
+                                    .speed(0.2)
+                                    .range(0.0..=30.0)
+                                    .fixed_decimals(1),
+                            )
+                            .changed()
+                        {
+                            changed = true;
+                        }
+
+                        ui.add_space(48.0);
+                        ui.allocate_ui_with_layout(vec2(43.0, ROW_H), Layout::left_to_right(Align::Center), |ui| {
+                            ui.label(format!("{}:", tl!("Color")));
+                        });
+                        ui.add_space(8.0);
+                        if color_swatch_with_hex_sized(
+                            ui,
+                            &mut preset.stroke_color,
+                            "typesetter-stroke-color",
+                            vec2(28.0, 24.0),
+                            8.0,
+                            194.0,
+                        ) {
+                            changed = true;
+                        }
+                    });
+
+                    ui.add_space(11.0);
+                    section_header(ui, "Preview sample", 8.0);
+                    ui.add_space(3.0);
+
+                    let t = Tokens::get(ui.ctx());
+                    let mut edit = ui
+                        .data(|d| d.get_temp::<PreviewEdit>(preview_edit_id))
+                        .filter(|e| e.idx == idx);
+                    let mut begin_edit = false;
+                    let frame = Frame::NONE
+                        .fill(t.field)
+                        .stroke(Stroke::new(1.0, t.field_border))
+                        .corner_radius(CornerRadius::same(6))
+                        // The mockup's frame is 545×40 with a 521×28 image inside: the 1-point
+                        // stroke counts on both sides, so the margins are 5 (vertical) and 11
+                        // (horizontal) around the 28-point content.
+                        .inner_margin(Margin { left: 11, right: 11, top: 5, bottom: 5 })
+                        .show(ui, |ui| {
+                            ui.set_min_height(PREVIEW_H);
+                            ui.set_max_height(PREVIEW_H);
+                            let mut cancel_edit = false;
+                            let mut commit_edit = false;
+                            if let Some(field) = edit.as_mut() {
+                                // The field is the frame's inner width and 26 high, vertically
+                                // centered in the 28-point band, like the mockup.
+                                let width = ui.available_width();
+                                let response = ui
+                                    .allocate_ui_with_layout(
+                                        vec2(width, PREVIEW_H),
+                                        Layout::left_to_right(Align::Center),
+                                        |ui| {
+                                            ui.add_sized(
+                                                [width, 26.0],
+                                                egui::TextEdit::singleline(&mut field.buffer)
+                                                    .hint_text(tl!("Leave empty for the automatic sample"))
+                                                    .vertical_align(Align::Center),
+                                            )
+                                        },
+                                    )
+                                    .inner;
+                                if field.request_focus {
+                                    response.request_focus();
+                                    if let Some(mut state) =
+                                        egui::TextEdit::load_state(ui.ctx(), response.id)
+                                    {
+                                        let all = egui::text::CCursorRange::two(
+                                            egui::text::CCursor::new(0),
+                                            egui::text::CCursor::new(field.buffer.chars().count()),
+                                        );
+                                        state.cursor.set_char_range(Some(all));
+                                        state.store(ui.ctx(), response.id);
+                                    }
+                                    field.request_focus = false;
+                                }
+                                let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
+                                let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                                cancel_edit = escape;
+                                commit_edit = !escape && (response.lost_focus() || enter);
+                            } else {
+                                render_style_preview(ui, preset);
+                            }
+                            if cancel_edit {
+                                edit = None;
+                            } else if commit_edit {
+                                if let Some(pending) = edit.take() {
+                                    if commit_preview_edit(
+                                        preset,
+                                        &pending.buffer,
+                                        &pending.original,
+                                    ) {
+                                        changed = true;
+                                    }
+                                }
+                            }
+                        });
+
+                    let frame_rect = frame.response.rect;
+                    // Geometry probe for the kittest suite: the mockup's preview frame is
+                    // 545×40 with a 521×28 image inside.
+                    ui.data_mut(|d| {
+                        d.insert_temp(egui::Id::new("typesetter-preview-frame-rect"), frame_rect)
+                    });
+                    if edit.is_none() {
+                        let frame_click = ui.interact(
+                            frame_rect,
+                            egui::Id::new(("typesetter-preview-frame", idx)),
+                            Sense::click(),
+                        );
+                        if frame_click.double_clicked() {
+                            begin_edit = true;
+                        }
+                        if ui.rect_contains_pointer(frame_rect) {
+                            let btn_rect = egui::Rect::from_min_size(
+                                egui::pos2(frame_rect.max.x - 22.0, frame_rect.min.y + 4.0),
+                                vec2(18.0, 18.0),
+                            );
+                            let btn = ui.interact(
+                                btn_rect,
+                                egui::Id::new(("typesetter-preview-edit", idx)),
+                                Sense::click(),
+                            );
+                            ui.painter().rect_filled(
+                                btn_rect,
+                                CornerRadius::same(4),
+                                if btn.hovered() { t.hover } else { t.field },
+                            );
+                            ui.painter().text(
+                                btn_rect.center(),
+                                egui::Align2::CENTER_CENTER,
+                                "✎",
+                                egui::FontId::proportional(12.0),
+                                t.text_dim,
+                            );
+                            if btn.on_hover_text(tl!("Edit preview text")).clicked() {
+                                begin_edit = true;
+                            }
+                        }
+                    }
+                    if begin_edit {
+                        let effective = style_preview_text(preset);
+                        edit = Some(PreviewEdit {
+                            idx,
+                            buffer: effective.clone(),
+                            original: effective,
+                            request_focus: true,
+                        });
+                    }
+                    ui.data_mut(|d| {
+                        if let Some(edit) = &edit {
+                            d.insert_temp(preview_edit_id, edit.clone());
+                        } else {
+                            d.remove_temp::<PreviewEdit>(preview_edit_id);
+                        }
+                    });
+
+                    ui.add_space(25.0);
+                    widgets::hairline(ui);
+                    ui.add_space(6.0);
+
+                    // 13. Footer buttons (Duplicate, Delete on left; Done on right)
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 8.0;
+                        if ui
+                            .add_sized([95.0, FOOTER_H], egui::Button::new(tl!("Duplicate")))
+                            .on_hover_text(tl!("Duplicate this style"))
+                            .clicked()
+                        {
+                            to_duplicate = true;
+                        }
+                        if ui
+                            .add_sized([85.0, FOOTER_H], egui::Button::new(tl!("Delete")))
+                            .on_hover_text(tl!("Delete this style"))
+                            .clicked()
+                        {
+                            to_delete = true;
+                        }
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            let done_btn = egui::Button::new(
+                                RichText::new(tl!("Done")).color(t.accent_text).strong(),
+                            )
+                            .fill(t.accent)
+                            .min_size(vec2(77.0, FOOTER_H));
+                            if ui.add(done_btn).clicked() {
+                                *close_modal = true;
+                            }
+                        });
+                    });
                 });
-            });
+        }
+
+        // Done and the window's own close button must persist the preview field before
+        // closing, even when the click did not move focus out of it first.
+        if *close_modal {
+            let pending = ui.data_mut(|d| d.remove_temp::<PreviewEdit>(preview_edit_id));
+            if let Some(pending) = pending {
+                if pending.idx == idx {
+                    if let Some(preset) = self.state.presets.get_mut(idx) {
+                        if commit_preview_edit(preset, &pending.buffer, &pending.original) {
+                            changed = true;
+                        }
+                    }
+                }
+            }
         }
 
         ui.data_mut(|d| {
@@ -2461,13 +2779,193 @@ impl TypesetterUi {
     }
 }
 
+// The Font Settings grid, measured from the mockup: a 545-point form, one 94-point caption
+// column, a 6-point gap and one 445-point control column. A row is 26 high.
+const FORM_LEFT_INSET: f32 = 6.0;
+const LABEL_W: f32 = 94.0;
+const COL_GAP: f32 = 6.0;
+const RIGHT_W: f32 = 445.0;
+const ROW_H: f32 = 26.0;
+const FOOTER_H: f32 = 30.0;
+const PREVIEW_H: f32 = 28.0;
+
+/// The inline editor of the style preview's sample text, kept in egui's temporary memory so the
+/// preset borrow that draws the form cannot own it.
+#[derive(Clone, Debug, Default)]
+struct PreviewEdit {
+    idx: usize,
+    buffer: String,
+    original: String,
+    request_focus: bool,
+}
+
+/// Cuts `s` to at most 200 characters on a `char` boundary, marking the cut with an ellipsis.
+fn truncate_chars(s: &mut String, max: usize) {
+    if s.chars().count() <= max {
+        return;
+    }
+    let mut cut = s.char_indices().nth(max).map_or(s.len(), |(i, _)| i);
+    // Count the ellipsis towards the limit, like the sample line in the mockup.
+    cut = s[..cut].char_indices().nth(max.saturating_sub(1)).map_or(0, |(i, _)| i);
+    s.truncate(cut);
+    s.push('…');
+}
+
+/// What the preview's inline editor commits: one line, trimmed, at most 200 characters. `None`
+/// means the user left the effective sample untouched, so an empty `preview_text` stays empty and
+/// keeps following the style name.
+fn preview_text_after_commit(buffer: &str, original: &str, current: &str) -> Option<String> {
+    // A CRLF pair is one line break, not two: collapse `\r\n` into a single space first, then
+    // turn any lone `\r`/`\n` into a space as well.
+    let mut normalized = buffer.trim().replace("\r\n", " ").replace(['\r', '\n'], " ");
+    truncate_chars(&mut normalized, 200);
+    if normalized == original || normalized == current {
+        None
+    } else {
+        Some(normalized)
+    }
+}
+
+fn commit_preview_edit(preset: &mut TextStylePreset, buffer: &str, original: &str) -> bool {
+    let Some(value) = preview_text_after_commit(buffer, original, &preset.preview_text) else {
+        return false;
+    };
+    preset.preview_text = value;
+    true
+}
+
+/// One caption cell of the form: fixed 94-point column, vertically centred, `tl!`-translated.
+fn form_label(ui: &mut egui::Ui, key: &str) {
+    ui.allocate_ui_with_layout(
+        vec2(LABEL_W, ROW_H),
+        Layout::left_to_right(Align::Center),
+        |ui| {
+            ui.set_min_size(vec2(LABEL_W, ROW_H));
+            ui.label(format!("{}:", tl!(key)));
+        },
+    );
+}
+
+/// Records a widget rect in egui's temporary memory so the kittest suite can assert the mockup
+/// geometry without reaching into private layout state.
+fn remember_rect(ui: &egui::Ui, name: &str, rect: egui::Rect) {
+    ui.data_mut(|d| d.insert_temp(egui::Id::new(("typesetter-ui-rect", name)), rect));
+}
+
+/// One form row: the shared caption column, the 6-point gutter and the caller's 445-point
+/// controls. Uses the parent's zero item spacing so the geometry does not drift.
+fn form_row(ui: &mut egui::Ui, key: &str, controls: impl FnOnce(&mut egui::Ui)) {
+    let row = ui.horizontal(|ui| {
+        form_label(ui, key);
+        ui.add_space(COL_GAP);
+        // The mockup's control *column* is the 445-point cell every row shares, not the widget
+        // that happens to sit in it: the 217-point Anti-alias combo still lives in the same
+        // column as a full-width field. Record the allocated cell so the rows line up.
+        let column = std::cell::Cell::new(None);
+        ui.allocate_ui_with_layout(
+            vec2(RIGHT_W, ROW_H),
+            Layout::left_to_right(Align::Center),
+            |ui| {
+                controls(ui);
+                column.set(Some(ui.max_rect()));
+            },
+        );
+        if let Some(rect) = column.get() {
+            remember_rect(ui, &format!("controls:{key}"), rect);
+        }
+    });
+    remember_rect(ui, &format!("row:{key}"), row.response.rect);
+}
+
+/// A section rule and its title. The caller controls the space before the rule and after the
+/// title, because the mockup pins each band to fixed offsets from the first row.
+fn section_header(ui: &mut egui::Ui, key: &str, line_gap: f32) {
+    widgets::hairline(ui);
+    ui.add_space(line_gap);
+    let title = ui.label(RichText::new(tl!(key)).strong().size(13.5));
+    remember_rect(ui, &format!("header:{key}"), title.rect);
+}
+
+/// The three-line alignment icon and caption inside a 145×26 button. Drawn by hand so the icon
+/// can sit flush with the text, while the accessibility label stays the translated caption.
+fn alignment_button(
+    ui: &mut egui::Ui,
+    value: &str,
+    label: &str,
+    tooltip: &str,
+    selected: bool,
+) -> bool {
+    let t = Tokens::get(ui.ctx());
+    let (rect, response) = ui.allocate_exact_size(vec2(145.0, ROW_H), Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), selected, label)
+    });
+    let response = response.on_hover_text(tooltip);
+    let hovered = response.hovered();
+    let (fill, border) = if selected {
+        (t.accent_soft, t.accent)
+    } else if hovered {
+        (t.hover, t.field_border)
+    } else {
+        (t.field, t.field_border)
+    };
+    ui.painter().rect(
+        rect,
+        CornerRadius::same(4),
+        fill,
+        Stroke::new(1.0, border),
+        egui::StrokeKind::Inside,
+    );
+
+    let icon = egui::Rect::from_min_size(
+        egui::pos2(rect.min.x + 9.0, rect.center().y - 6.0),
+        vec2(12.0, 12.0),
+    );
+    let stroke = Stroke::new(1.5, t.text);
+    for row in 0..3 {
+        let y = icon.min.y + 2.0 + row as f32 * 4.0;
+        let (x0, x1) = match value {
+            "left" => (icon.min.x, icon.min.x + 7.0),
+            "right" => (icon.max.x - 7.0, icon.max.x),
+            _ => (icon.center().x - 3.5, icon.center().x + 3.5),
+        };
+        ui.painter().line_segment([egui::pos2(x0, y), egui::pos2(x1, y)], stroke);
+    }
+    ui.painter().text(
+        egui::pos2(icon.max.x + 8.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        egui::FontId::proportional(12.5),
+        t.text,
+    );
+    response.clicked()
+}
+
+/// `Чёткий (crisp)` in Russian, `Crisp` in English: the key is shown in brackets only when the
+/// catalogue actually translated it.
+fn anti_alias_label(value: &str) -> String {
+    let key = match value {
+        "crisp" => "Crisp",
+        "sharp" => "Sharp",
+        "smooth" => "Smooth",
+        "strong" => "Strong",
+        _ => "None",
+    };
+    let translated = crate::i18n::t(key);
+    if translated == key {
+        translated.to_string()
+    } else {
+        format!("{translated} ({value})")
+    }
+}
+
 /// A compact Photoshop-style character toggle with a tooltip.
 fn character_toggle(ui: &mut egui::Ui, value: &mut bool, label: &str, tooltip: &str) -> bool {
     let response = ui
         .add(
             egui::Button::new(RichText::new(label).strong())
                 .selected(*value)
-                .min_size(vec2(28.0, 22.0)),
+                .min_size(vec2(45.0, ROW_H)),
         )
         .on_hover_text(tooltip);
     if response.clicked() {
@@ -2478,14 +2976,111 @@ fn character_toggle(ui: &mut egui::Ui, value: &mut bool, label: &str, tooltip: &
     }
 }
 
-/// The sample shown in the style preview. The style name is part of it, so the preview also
-/// shows how the current face renders real words rather than only a font-menu sample.
-fn style_preview_text(preset: &TextStylePreset) -> String {
+/// The colour swatch and the hex field of the mockup. The field shows the colour as
+/// `#RRGGBBAA` and applies whatever hex value is typed into it.
+fn color_swatch_with_hex_sized(
+    ui: &mut egui::Ui,
+    color: &mut [u8; 4],
+    id: &str,
+    swatch_size: egui::Vec2,
+    hex_gap: f32,
+    hex_width: f32,
+) -> bool {
+    let uid = egui::Id::new(id);
+    let hex_of = |c: &[u8; 4]| format!("#{:02X}{:02X}{:02X}{:02X}", c[0], c[1], c[2], c[3]);
+    let mut hex: String = ui.data_mut(|d| d.get_temp::<String>(uid.with("hex"))).unwrap_or_default();
+    let mut changed = false;
+
+    let mut swatch = egui::Color32::from_rgba_unmultiplied(color[0], color[1], color[2], color[3]);
+    // `color_edit_button_srgba` takes its footprint from `interact_size`; scaling it around the
+    // call is the supported way to get the mockup's 43×24 / 28×24 swatches.
+    let previous_interact_size = ui.spacing().interact_size;
+    ui.spacing_mut().interact_size = swatch_size;
+    let response = egui::color_picker::color_edit_button_srgba(
+        ui,
+        &mut swatch,
+        egui::color_picker::Alpha::BlendOrAdditive,
+    );
+    ui.spacing_mut().interact_size = previous_interact_size;
+    ui.add_space(hex_gap);
+    if response.changed() {
+        *color = [swatch.r(), swatch.g(), swatch.b(), swatch.a()];
+        hex = hex_of(color);
+        ui.data_mut(|d| d.insert_temp(uid.with("hex"), hex.clone()));
+        changed = true;
+    }
+
+    if hex.is_empty() {
+        hex = hex_of(color);
+        ui.data_mut(|d| d.insert_temp(uid.with("hex"), hex.clone()));
+    }
+
+    let text_edit = egui::TextEdit::singleline(&mut hex)
+        .char_limit(9)
+        .font(egui::TextStyle::Monospace)
+        .vertical_align(Align::Center);
+    let hex_resp = ui.add_sized([hex_width, 26.0], text_edit);
+    if hex_resp.changed() {
+        ui.data_mut(|d| d.insert_temp(uid.with("hex"), hex.clone()));
+        let trimmed = hex.trim();
+        let stripped = trimmed.strip_prefix('#').unwrap_or(trimmed);
+        if let Ok(val) = u32::from_str_radix(stripped, 16) {
+            match stripped.len() {
+                6 => {
+                    *color = [
+                        ((val >> 16) & 0xFF) as u8,
+                        ((val >> 8) & 0xFF) as u8,
+                        (val & 0xFF) as u8,
+                        color[3],
+                    ];
+                    changed = true;
+                }
+                8 => {
+                    *color = [
+                        ((val >> 24) & 0xFF) as u8,
+                        ((val >> 16) & 0xFF) as u8,
+                        ((val >> 8) & 0xFF) as u8,
+                        (val & 0xFF) as u8,
+                    ];
+                    changed = true;
+                }
+                _ => {}
+            }
+        }
+    } else if hex_resp.lost_focus() {
+        hex = hex_of(color);
+        ui.data_mut(|d| d.insert_temp(uid.with("hex"), hex));
+    }
+
+    changed
+}
+
+/// The demonstration phrase: sample glyphs, not a UI string, so it stays Russian in every
+/// language and is deliberately absent from the catalogues.
+const PREVIEW_SAMPLE: &str = "Ах ты ж!.. Неужели это сработало?! 123";
+
+/// The automatic sample: the style name and the demonstration phrase.
+fn style_preview_auto_text(preset: &TextStylePreset) -> String {
     let name = preset.name.trim();
-    if name.is_empty() {
-        "Ах ты ж!.. Неужели это сработало?! 123".to_string()
+    let mut sample = if name.is_empty() {
+        PREVIEW_SAMPLE.to_string()
     } else {
-        format!("{name}: Ах ты ж!.. Неужели это сработало?! 123")
+        format!("{name}: {PREVIEW_SAMPLE}")
+    };
+    truncate_chars(&mut sample, 200);
+    sample
+}
+
+/// The sample shown in the style preview: the preset's own [`TextStylePreset::preview_text`] when
+/// it has one, otherwise the automatic name + phrase sample.
+fn style_preview_text(preset: &TextStylePreset) -> String {
+    let custom = preset.preview_text.trim().replace(['\r', '\n'], " ");
+    if custom.is_empty() {
+        style_preview_auto_text(preset)
+    } else {
+        let mut sample = custom;
+        truncate_chars(&mut sample, 200);
+        sample
     }
 }
 
@@ -2553,13 +3148,11 @@ fn style_preview_key(preset: &TextStylePreset, width: f32, height: f32, scale: u
     h.finish()
 }
 
-/// Rasterizes the style sample into a straight-alpha RGBA image: the faux outline in
-/// `stroke_color` under the glyphs tinted with `text_color`.
-fn style_preview_image(preset: &TextStylePreset, width: f32, height: f32, scale: u32) -> Option<egui::ColorImage> {
-    let w = (width * scale as f32).round().max(1.0) as usize;
-    let h = (height * scale as f32).round().max(1.0) as usize;
-    let sample = style_preview_text(preset);
-    let size = preset.font_size.clamp(10.0, 28.0);
+/// The point-text layer of the sample: one line by construction, at the preset's own size
+/// clamped to the preview's 10–28 point range.
+fn style_preview_layer(preset: &TextStylePreset, scale: u32) -> TextLayer {
+    let sample = style_preview_text(preset).replace(['\r', '\n'], " ");
+    let size = preset.font_size.clamp(10.0, 28.0) * scale as f32;
     let style_name = preset.font_style.to_ascii_lowercase();
     let native_bold = style_preview_weight(&preset.font_style) >= 600;
     let native_italic = style_name.contains("italic") || style_name.contains("oblique");
@@ -2569,7 +3162,7 @@ fn style_preview_image(preset: &TextStylePreset, width: f32, height: f32, scale:
         postscript_name: (!preset.font_postscript.is_empty()).then(|| preset.font_postscript.clone()),
         weight: style_preview_weight(&preset.font_style),
         italic: preset.italic || native_italic,
-        size_pt: size * scale as f32,
+        size_pt: size,
         color: Color::WHITE,
         tracking: preset.tracking as f32,
         leading_pt: Some(preset.leading.clamp(4.0, 300.0) * scale as f32),
@@ -2602,23 +3195,60 @@ fn style_preview_image(preset: &TextStylePreset, width: f32, height: f32, scale:
         },
         ..Default::default()
     };
-    let layer = TextLayer {
+    TextLayer {
         text: sample.clone(),
         font_family: preset.font_family.clone(),
-        size_pt: size * scale as f32,
+        size_pt: size,
         color: Color::WHITE,
         runs: vec![TextRun { len: sample.len(), style: char_style }],
         paragraphs: vec![ParagraphRun { len: sample.len(), style: paragraph }],
-        shape: TextShape::Box { x: 0.0, y: 0.0, width: w as f32, height: h as f32 },
+        // Point text is one line by construction; a box would wrap a long sample onto a second
+        // line that the 28-point preview cannot show.
+        shape: TextShape::Point,
         antialias: style_preview_antialias(&preset.anti_alias),
         ..Default::default()
-    };
+    }
+}
+
+/// Rasterizes the style sample into a straight-alpha RGBA image: the faux outline in
+/// `stroke_color` under the glyphs tinted with `text_color`.
+fn style_preview_image(preset: &TextStylePreset, width: f32, height: f32, scale: u32) -> Option<egui::ColorImage> {
+    let w = (width * scale as f32).round().max(1.0) as usize;
+    let h = (height * scale as f32).round().max(1.0) as usize;
+    let layer = style_preview_layer(preset, scale);
     let engine = photocraft_text::try_shared()?;
     let mut engine = engine.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let layout = engine.layout(&layer, 72.0);
     let bounds = layout.bounds()?;
-    let text_height = bounds[3] - bounds[1];
-    let transform = photocraft_geom::Affine::translate(0.0, f64::from((h as f32 - text_height) / 2.0 - bounds[1]));
+    let text_w = bounds[2] - bounds[0];
+    let text_h = bounds[3] - bounds[1];
+    if !text_w.is_finite() || !text_h.is_finite() || text_w <= 0.0 || text_h <= 0.0 {
+        return None;
+    }
+    let pad = preset.stroke_width.clamp(0.0, 30.0) * scale as f32;
+    // Keep a small fixed safety margin for antialiased glyph edges. Fit only shrinks: a small
+    // point size is never blown up to the frame. The outline is clipped by the preview bounds
+    // instead of shrinking the text to make room for it.
+    let fit = ((w as f32 - 6.0) / text_w).min((h as f32 - 6.0) / text_h).min(1.0);
+    if !fit.is_finite() || fit <= 0.0 {
+        return None;
+    }
+    let cx = (bounds[0] + bounds[2]) / 2.0;
+    let cy = (bounds[1] + bounds[3]) / 2.0;
+    let centered_x = w as f32 / 2.0;
+    let edge_x = match preset.align.as_str() {
+        "left" => 1.0 - (bounds[0] - cx) * fit,
+        "right" => w as f32 - 1.0 - (bounds[2] - cx) * fit,
+        _ => centered_x,
+    };
+    // Keep left/right preview samples near the center instead of sending short labels across
+    // the whole field. This only positions the preview image; document text alignment is untouched.
+    let max_alignment_shift = w as f32 * 0.12;
+    let x = centered_x + (edge_x - centered_x).clamp(-max_alignment_shift, max_alignment_shift);
+    let y = (h as f32 - (bounds[1] + bounds[3]) * fit) / 2.0;
+    let transform = photocraft_geom::Affine::translate(f64::from(-cx), f64::from(-cy))
+        .then(&photocraft_geom::Affine::scale(f64::from(fit)))
+        .then(&photocraft_geom::Affine::translate(f64::from(x), f64::from(y)));
     // Reject oversized ink before the rasterizer allocates a surface (malformed fonts).
     let ink = photocraft_text::render::ink_rect(&layout, &transform);
     if ink.is_empty() || ink.width() > w as u32 * 4 || ink.height() > h as u32 * 4 {
@@ -2633,39 +3263,59 @@ fn style_preview_image(preset: &TextStylePreset, width: f32, height: f32, scale:
     let mut pixels = vec![[0u8; 4]; w * h];
     rendered.surface.read_rgba8_into(photocraft_geom::Rect::new(0, 0, w as i32, h as i32), &mut pixels);
 
-    let radius = preset.stroke_width.clamp(0.0, 30.0) * scale as f32;
-    let offsets: Vec<(i32, i32)> = if radius >= 0.5 && preset.stroke_color[3] > 0 {
-        (0..8)
-            .map(|i| {
-                let angle = i as f32 * std::f32::consts::TAU / 8.0;
-                ((radius * angle.cos()).round() as i32, (radius * angle.sin()).round() as i32)
-            })
-            .collect()
-    } else {
-        Vec::new()
-    };
+    // Keep the outline proportional when a long sample is fitted into the preview. The fit is
+    // intentionally independent of outline width, so this cannot shrink text to make room for it.
+    let radius = pad * fit;
+    // Dilate the glyphs with a filled circular structuring element. Sampling only a few points
+    // on the perimeter circle skipped the pixels between the rays and shredded the stroke into
+    // needle-shaped copies; a filled disk reaches every pixel the stroke must cover, and the
+    // coverage weight fades smoothly over the boundary pixel for anti-aliased edges.
+    // Entries are (dx, dy, coverage_weight), one per device pixel of the disk.
+    let mut offsets: Vec<(i32, i32, f32)> = Vec::new();
+    if radius >= 0.5 && preset.stroke_color[3] > 0 {
+        let r_ceil = radius.ceil() as i32;
+        for dy in -r_ceil..=r_ceil {
+            for dx in -r_ceil..=r_ceil {
+                let dist = ((dx * dx + dy * dy) as f32).sqrt();
+                if dist <= radius + 0.5 {
+                    let coverage = (radius + 0.5 - dist).clamp(0.0, 1.0);
+                    if coverage > 0.0 {
+                        offsets.push((dx, dy, coverage));
+                    }
+                }
+            }
+        }
+    }
     let stroke_a = preset.stroke_color[3] as f32 / 255.0;
     let text_a = preset.text_color[3] as f32 / 255.0;
     let stroke_rgb = [preset.stroke_color[0] as f32 / 255.0, preset.stroke_color[1] as f32 / 255.0, preset.stroke_color[2] as f32 / 255.0];
     let text_rgb = [preset.text_color[0] as f32 / 255.0, preset.text_color[1] as f32 / 255.0, preset.text_color[2] as f32 / 255.0];
     let mut out = vec![0u8; w * h * 4];
-    for y in 0..h {
-        for x in 0..w {
+    // Only ink produces text coverage and the disk reaches at most radius + 0.5 px beyond it,
+    // so scanning just the padded ink rect gives the same image while skipping empty margins.
+    let pad = if offsets.is_empty() { 0 } else { (radius + 0.5).ceil() as i32 };
+    let x_lo = (ink.x0 - pad).clamp(0, w as i32) as usize;
+    let x_hi = (ink.x1 + pad).clamp(0, w as i32) as usize;
+    let y_lo = (ink.y0 - pad).clamp(0, h as i32) as usize;
+    let y_hi = (ink.y1 + pad).clamp(0, h as i32) as usize;
+    for y in y_lo..y_hi {
+        for x in x_lo..x_hi {
             let idx = y * w + x;
             let ta = pixels[idx][3] as f32 / 255.0 * text_a;
             let mut sa = 0.0f32;
-            for (dx, dy) in &offsets {
+            for (dx, dy, weight) in &offsets {
                 let (sx, sy) = (x as i32 + dx, y as i32 + dy);
                 if sx >= 0 && sy >= 0 && sx < w as i32 && sy < h as i32 {
-                    sa = sa.max(pixels[sy as usize * w + sx as usize][3] as f32 / 255.0);
+                    let sample_a = pixels[sy as usize * w + sx as usize][3] as f32 / 255.0;
+                    sa = sa.max(sample_a * weight);
                 }
             }
             sa *= stroke_a;
-            let out_a = sa + ta * (1.0 - sa);
+            let stroke_weight = sa * (1.0 - ta);
+            let out_a = ta + stroke_weight;
             if out_a > 0.0 {
-                let text_weight = ta * (1.0 - sa);
                 let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
-                let channel = |i: usize| q((stroke_rgb[i] * sa + text_rgb[i] * text_weight) / out_a);
+                let channel = |i: usize| q((text_rgb[i] * ta + stroke_rgb[i] * stroke_weight) / out_a);
                 let o = idx * 4;
                 out[o] = channel(0);
                 out[o + 1] = channel(1);
@@ -2694,12 +3344,18 @@ fn style_preview_texture(ctx: &egui::Context, preset: &TextStylePreset, width: f
 /// Live preview of the preset's face and character settings, rendered by the same text engine
 /// as document text.
 fn render_style_preview(ui: &mut egui::Ui, preset: &TextStylePreset) {
-    let width = (ui.available_width() / 4.0).round().max(40.0) * 4.0;
-    let height = 72.0;
+    // The frame's 12-point inner margins already provide the mockup's padding; the image fills
+    // the remaining 521×28 points.
+    let width = ui.available_width().max(40.0);
+    let height = PREVIEW_H;
     let scale = ui.ctx().pixels_per_point().ceil().clamp(1.0, 3.0) as u32;
     match style_preview_texture(ui.ctx(), preset, width, height, scale) {
         Some(texture) => {
-            ui.add(egui::Image::new((texture.id(), vec2(width, height))));
+            let response = ui.add(egui::Image::new((texture.id(), vec2(width, height))));
+            // Geometry probe for the kittest suite: the 28-point image inside the 40-point frame.
+            ui.data_mut(|d| {
+                d.insert_temp(egui::Id::new("typesetter-preview-image-rect"), response.rect)
+            });
         }
         None => {
             let t = Tokens::get(ui.ctx());
@@ -2897,7 +3553,9 @@ mod tests {
         typer.is_open = true;
         typer.editing_preset_idx = Some(0);
         let mut frames = 0u32;
-        let mut h = Harness::builder().with_size(egui::vec2(900.0, 700.0)).build_ui_state(
+        // The window is 585×685, so a 700-point-tall harness leaves it pinned against the top
+        // edge and the drag cannot move it up. A 900×900 harness gives it room.
+        let mut h = Harness::builder().with_size(egui::vec2(900.0, 900.0)).build_ui_state(
             move |ui, typer: &mut TypesetterUi| {
                 crate::PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ALL[0]);
                 frames += 1;
@@ -2994,5 +3652,682 @@ mod tests {
         let json_str = serde_json::to_string(&persisted).unwrap();
         let loaded: TypesetterPersistedState = serde_json::from_str(&json_str).unwrap();
         assert_eq!(loaded.script_list_height, 240.0);
+    }
+
+    /// The character toggles must all fit on a single row, like the mockup: a wrapped row used
+    /// to push the last buttons onto a second line, and the panel then grew a scrollbar.
+    #[test]
+    fn font_settings_character_toggles_stay_on_one_row() {
+        use egui_kittest::Harness;
+        use egui_kittest::kittest::Queryable;
+
+        const TOGGLES: [&str; 9] = ["B", "I", "TT", "Tт", "T¹", "T₁", "U", "S", "«»"];
+
+        let mut typer = TypesetterUi::default();
+        if typer.state.presets.is_empty() {
+            typer.state.presets.push(TextStylePreset::default());
+        }
+        typer.is_open = true;
+        typer.editing_preset_idx = Some(0);
+        let mut frames = 0u32;
+        let mut h = Harness::builder().with_size(egui::vec2(900.0, 700.0)).build_ui_state(
+            move |ui, typer: &mut TypesetterUi| {
+                crate::PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ALL[0]);
+                frames += 1;
+                if frames < 2 {
+                    // The named font families reach the context one pass after installation.
+                    return;
+                }
+                typer.show(ui);
+            },
+            typer,
+        );
+        h.run_steps(3);
+        let id = egui::Id::new("typer_font_settings_window");
+        let area = h.ctx.memory(|m| m.area_rect(id)).expect("the style window is shown");
+
+        let mut rects = Vec::new();
+        for label in TOGGLES {
+            rects.push(h.get_by_label(label).rect());
+        }
+        let top = rects[0].top();
+        for (label, rect) in TOGGLES.iter().zip(&rects) {
+            assert!((rect.top() - top).abs() < 1.0, "the {label} toggle left the first row: {rect:?}");
+            assert!((rect.width() - 45.0).abs() <= 1.0, "the {label} toggle must be 45 points wide: {rect:?}");
+            assert!((rect.height() - 26.0).abs() <= 1.0, "the {label} toggle must be 26 points high: {rect:?}");
+            assert!(rect.left() >= area.left() && rect.right() <= area.right(), "the {label} toggle is outside the window: {rect:?} not in {area:?}");
+        }
+        // The panel keeps a fixed width, like Photoshop.
+        assert!((area.width() - 585.0).abs() < 2.0, "the style window must keep its fixed 585-point width: {area:?}");
+        assert!((area.height() - 685.0).abs() < 4.0, "the style window opens 685 points high: {area:?}");
+    }
+
+    /// The window is fixed in X and resizable in Y; the content grid is 545 wide.
+    #[test]
+    fn font_settings_window_is_585_wide() {
+        use egui_kittest::Harness;
+
+        let mut typer = TypesetterUi::default();
+        if typer.state.presets.is_empty() {
+            typer.state.presets.push(TextStylePreset::default());
+        }
+        typer.is_open = true;
+        typer.editing_preset_idx = Some(0);
+        let mut frames = 0u32;
+        let mut h = Harness::builder().with_size(egui::vec2(900.0, 900.0)).build_ui_state(
+            move |ui, typer: &mut TypesetterUi| {
+                crate::PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ALL[0]);
+                frames += 1;
+                if frames < 2 {
+                    return;
+                }
+                typer.show(ui);
+            },
+            typer,
+        );
+        h.run_steps(3);
+        let id = egui::Id::new("typer_font_settings_window");
+        let area = h.ctx.memory(|m| m.area_rect(id)).expect("the style window is shown");
+        assert!((area.width() - 585.0).abs() < 2.0, "fixed mockup width: {area:?}");
+        assert!((area.height() - 685.0).abs() < 4.0, "default mockup height: {area:?}");
+    }
+
+    /// The preview frame is 545×40 and the image inside is 521×28, exactly the mockup sizes.
+    #[test]
+    fn font_settings_preview_frame_is_40_high() {
+        use egui_kittest::Harness;
+
+        let mut typer = TypesetterUi::default();
+        if typer.state.presets.is_empty() {
+            typer.state.presets.push(TextStylePreset::default());
+        }
+        typer.is_open = true;
+        typer.editing_preset_idx = Some(0);
+        let mut frames = 0u32;
+        let mut h = Harness::builder().with_size(egui::vec2(900.0, 900.0)).build_ui_state(
+            move |ui, typer: &mut TypesetterUi| {
+                crate::PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ALL[0]);
+                frames += 1;
+                if frames < 2 {
+                    return;
+                }
+                typer.show(ui);
+            },
+            typer,
+        );
+        h.run_steps(3);
+
+        let frame = h
+            .ctx
+            .data(|d| d.get_temp::<egui::Rect>(egui::Id::new("typesetter-preview-frame-rect")))
+            .expect("the preview frame records its rect");
+        assert!((frame.width() - 545.0).abs() <= 2.0, "the preview frame spans the form: {frame:?}");
+        assert!((frame.height() - 40.0).abs() <= 1.0, "the preview frame is 40 high: {frame:?}");
+        let image = h
+            .ctx
+            .data(|d| d.get_temp::<egui::Rect>(egui::Id::new("typesetter-preview-image-rect")))
+            .expect("the preview image records its rect");
+        assert!((image.width() - 521.0).abs() <= 2.0, "the image fills the frame's inner width: {image:?}");
+        assert!((image.height() - 28.0).abs() <= 1.0, "the image is 28 high: {image:?}");
+        assert!(frame.contains_rect(image), "the image sits inside the frame: {image:?} in {frame:?}");
+    }
+
+    /// Duplicate/Delete are 95/85 wide, Done is 77 and flush with the form's right edge; all are
+    /// 30 high, as in the mockup.
+    #[test]
+    fn font_settings_footer_button_sizes() {
+        use egui_kittest::Harness;
+        use egui_kittest::kittest::Queryable;
+
+        let mut typer = TypesetterUi::default();
+        if typer.state.presets.is_empty() {
+            typer.state.presets.push(TextStylePreset::default());
+        }
+        typer.is_open = true;
+        typer.editing_preset_idx = Some(0);
+        let mut frames = 0u32;
+        let mut h = Harness::builder().with_size(egui::vec2(900.0, 900.0)).build_ui_state(
+            move |ui, typer: &mut TypesetterUi| {
+                crate::PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ALL[0]);
+                frames += 1;
+                if frames < 2 {
+                    return;
+                }
+                typer.show(ui);
+            },
+            typer,
+        );
+        h.run_steps(3);
+
+        let duplicate = h.get_by_label("Duplicate").rect();
+        let delete = h.get_by_label("Delete").rect();
+        let done = h.get_by_label("Done").rect();
+        assert!((duplicate.width() - 95.0).abs() <= 1.0, "Duplicate is 95 wide: {duplicate:?}");
+        assert!((delete.width() - 85.0).abs() <= 1.0, "Delete is 85 wide: {delete:?}");
+        assert!((done.width() - 77.0).abs() <= 1.0, "Done is 77 wide: {done:?}");
+        for (name, rect) in [("Duplicate", duplicate), ("Delete", delete), ("Done", done)] {
+            assert!((rect.height() - 30.0).abs() <= 1.0, "{name} is 30 high: {rect:?}");
+        }
+        let frame = h
+            .ctx
+            .data(|d| d.get_temp::<egui::Rect>(egui::Id::new("typesetter-preview-frame-rect")))
+            .expect("the preview frame records its rect");
+        assert!((done.right() - frame.right()).abs() <= 2.0, "Done is flush with the form's right edge: {done:?} vs {frame:?}");
+        assert!((duplicate.left() - frame.left()).abs() <= 2.0, "Duplicate starts at the form's left edge: {duplicate:?} vs {frame:?}");
+    }
+
+    /// Font Settings is fully routed through `tl!`/`i18n::t`: no raw Cyrillic remains in the modal
+    /// or its inline helpers. `Tт` is the small-caps glyph, not a UI string.
+    #[test]
+    fn font_settings_modal_has_no_raw_cyrillic() {
+        let source = include_str!("snow_typesetter_ui.rs");
+        let start = source.find("fn render_font_settings_modal").expect("the modal exists");
+        let rest = &source[start..];
+        let end = rest.find("\n    ///").unwrap_or(rest.len());
+        let modal = rest[..end].replace("\"Tт\"", "\"\"");
+        let offenders: Vec<(usize, &str)> = modal
+            .lines()
+            .enumerate()
+            .filter(|(_, line)| line.chars().any(|c| ('\u{0400}'..='\u{04FF}').contains(&c)))
+            .collect();
+        assert!(offenders.is_empty(), "raw Cyrillic UI strings in Font Settings: {offenders:?}");
+    }
+
+    /// `Чёткий (crisp)` in Russian, no redundant `Crisp (crisp)` in English, and the key in
+    /// brackets for translations that actually differ.
+    #[test]
+    fn anti_alias_labels_are_localized() {
+        use crate::i18n::{self, Lang};
+
+        let en = Lang::from_code("en").unwrap();
+        let ru = Lang::from_code("ru").unwrap();
+        let ja = Lang::from_code("ja").unwrap();
+        i18n::with_language(en, || {
+            assert_eq!(anti_alias_label("crisp"), "Crisp");
+            assert_eq!(anti_alias_label("none"), "None");
+        });
+        i18n::with_language(ru, || {
+            assert_eq!(anti_alias_label("crisp"), "Чёткий (crisp)");
+            assert_eq!(anti_alias_label("sharp"), "Резкий (sharp)");
+        });
+        i18n::with_language(ja, || {
+            assert_eq!(anti_alias_label("crisp"), "鮮明 (crisp)");
+        });
+    }
+
+    /// Every caption starts on one 94-point column, and the stroke `Color:` keeps the mockup's
+    /// stepped position left of the `Leading:`/`H-Scale (%)` axis.
+    #[test]
+    fn font_settings_rows_share_control_axis() {
+        use egui_kittest::Harness;
+        use egui_kittest::kittest::Queryable;
+
+        let mut typer = TypesetterUi::default();
+        if typer.state.presets.is_empty() {
+            typer.state.presets.push(TextStylePreset::default());
+        }
+        typer.is_open = true;
+        typer.editing_preset_idx = Some(0);
+        let mut frames = 0u32;
+        let mut h = Harness::builder().with_size(egui::vec2(900.0, 900.0)).build_ui_state(
+            move |ui, typer: &mut TypesetterUi| {
+                crate::PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ALL[0]);
+                frames += 1;
+                if frames < 2 {
+                    return;
+                }
+                typer.show(ui);
+            },
+            typer,
+        );
+        h.run_steps(3);
+
+        let labels = [
+            "Style name:", "Folder:", "Font:", "PostScript:", "Formatting:", "Alignment:",
+            "Anti-alias:", "Size (pt):", "Tracking:", "Thickness (px):",
+        ];
+        let x = h.get_by_label(labels[0]).rect().left();
+        for label in &labels[1..] {
+            let left = h.get_by_label(label).rect().left();
+            assert!((left - x).abs() <= 1.0, "the {label} caption must start at the shared axis: {left} vs {x}");
+        }
+
+        // Every control block is the same 445-point column with one left and one right edge.
+        let block = |key: &str| {
+            h.ctx
+                .data(|d| d.get_temp::<egui::Rect>(egui::Id::new(("typesetter-ui-rect", format!("controls:{key}")))))
+                .unwrap_or_else(|| panic!("the {key} row records its control block"))
+        };
+        let first = block("Style name");
+        assert!((first.width() - 445.0).abs() <= 1.0, "the control column is 445 wide: {first:?}");
+        for key in [
+            "Style name", "Folder", "Font", "PostScript", "Formatting", "Alignment",
+            "Anti-alias", "Color", "System type", "Size (pt)", "Tracking", "Thickness (px)",
+        ] {
+            let rect = block(key);
+            assert!((rect.left() - first.left()).abs() <= 1.0, "the {key} controls share the left axis: {rect:?} vs {first:?}");
+            assert!((rect.right() - first.right()).abs() <= 1.0, "the {key} controls share the right edge: {rect:?} vs {first:?}");
+        }
+
+        let colors: Vec<_> = h.get_all_by_label("Color:").map(|node| node.rect()).collect();
+        assert_eq!(colors.len(), 2, "text and stroke colour have separate captions");
+        assert!((colors[0].left() - x).abs() <= 1.0, "the text Color: caption sits on the shared axis: {:?}", colors[0]);
+        let leading = h.get_by_label("Leading:").rect().left();
+        // The mockup's stroke `Color:` caption stands 164 points into the control column: 290 in
+        // the mockup's own coordinates (126 + 164), right behind the 116-point thickness field and
+        // its 48-point gap. The step is measured against the column, because the mockup's window
+        // starts at x = 7 while the harness centres the window, so the absolute 290 of the
+        // mockup sheet is not a screen coordinate here.
+        let step = first.left() + 164.0;
+        assert!((colors[1].left() - step).abs() <= 3.0, "the stroke Color: caption keeps the mockup's step: {:?} vs {step}", colors[1]);
+        assert!((colors[1].left() - leading).abs() > 50.0, "the stroke Color: caption must not align with Leading: {:?} vs {leading}", colors[1]);
+    }
+
+    /// The form bands sit on the mockup's fixed offsets from the first row (±3 points).
+    #[test]
+    fn font_settings_vertical_offsets_match_mockup() {
+        use egui_kittest::Harness;
+        use egui_kittest::kittest::Queryable;
+
+        let mut typer = TypesetterUi::default();
+        if typer.state.presets.is_empty() {
+            typer.state.presets.push(TextStylePreset::default());
+        }
+        typer.is_open = true;
+        typer.editing_preset_idx = Some(0);
+        let mut frames = 0u32;
+        let mut h = Harness::builder().with_size(egui::vec2(900.0, 1000.0)).build_ui_state(
+            move |ui, typer: &mut TypesetterUi| {
+                crate::PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ALL[0]);
+                frames += 1;
+                if frames < 2 {
+                    return;
+                }
+                typer.show(ui);
+            },
+            typer,
+        );
+        h.run_steps(3);
+
+        let rect = |name: String| {
+            let id = egui::Id::new(("typesetter-ui-rect", name.clone()));
+            h.ctx
+                .data(|d| d.get_temp::<egui::Rect>(id))
+                .unwrap_or_else(|| panic!("the form records {name}"))
+        };
+        let base = rect("row:Style name".into()).top();
+        let targets = [
+            ("row:Folder".to_string(), 31.0),
+            ("header:Typography and Font".to_string(), 74.0),
+            ("row:Font".to_string(), 97.0),
+            ("row:PostScript".to_string(), 130.0),
+            ("row:Formatting".to_string(), 163.0),
+            ("row:Alignment".to_string(), 197.0),
+            ("row:Anti-alias".to_string(), 231.0),
+            ("row:Color".to_string(), 263.0),
+            ("header:Typography Size (Line Spacing Sync)".to_string(), 309.0),
+            ("row:System type".to_string(), 333.0),
+            ("row:Size (pt)".to_string(), 365.0),
+            ("row:Tracking".to_string(), 398.0),
+            ("header:Text Outline".to_string(), 444.0),
+            ("row:Thickness (px)".to_string(), 465.0),
+            ("header:Preview sample".to_string(), 511.0),
+        ];
+        for (name, y) in targets {
+            let actual = rect(name.clone()).top() - base;
+            assert!((actual - y).abs() <= 3.0, "{name} is at {actual} from the first row, expected {y}");
+        }
+
+        let frame = h
+            .ctx
+            .data(|d| d.get_temp::<egui::Rect>(egui::Id::new("typesetter-preview-frame-rect")))
+            .expect("the preview frame records its rect");
+        assert!((frame.top() - base - 530.0).abs() <= 3.0, "the preview frame starts at 530: {frame:?}");
+        let done = h.get_by_label("Done").rect();
+        assert!((done.top() - base - 602.0).abs() <= 3.0, "the footer starts at 602: {done:?}");
+    }
+
+    #[test]
+    fn style_preview_fits_a_long_sample_on_one_line() {
+        let mut preset = TextStylePreset::default();
+        preset.name = "Long style ".repeat(20);
+        let engine = photocraft_text::shared();
+
+        let layer = style_preview_layer(&preset, 1);
+        assert!(matches!(layer.shape, TextShape::Point), "the preview must be point text, not a wrapping box");
+        let layout = engine.lock().unwrap().layout(&layer, 72.0);
+        assert_eq!(layout.lines.len(), 1, "point text keeps a long sample on one line");
+
+        let image = style_preview_image(&preset, 180.0, 28.0, 1).expect("the long preview fits after shrinking");
+
+        assert_eq!(image.size, [180, 28]);
+        let [w, h] = image.size;
+        let mut ink = (w, h, 0usize, 0usize, 0usize);
+        for y in 0..h {
+            for x in 0..w {
+                if image.pixels[y * w + x].a() > 0 {
+                    ink.0 = ink.0.min(x);
+                    ink.1 = ink.1.min(y);
+                    ink.2 = ink.2.max(x);
+                    ink.3 = ink.3.max(y);
+                    ink.4 += 1;
+                }
+            }
+        }
+        assert!(ink.4 > 0, "the preview should contain rendered text");
+        assert!(ink.0 >= 1 && ink.1 >= 1, "the ink keeps a 1 px safety margin: {ink:?}");
+        assert!(ink.2 <= w - 2 && ink.3 <= h - 2, "the ink stays inside the image: {ink:?} for {w}×{h}");
+        assert!(ink.2 - ink.0 > w * 3 / 4, "a long sample is fitted across the preview width: {ink:?}");
+    }
+
+    #[test]
+    fn style_preview_alignment_moves_the_sample_without_wrapping() {
+        let _ = photocraft_text::shared();
+        let base = TextStylePreset {
+            preview_text: "Aa".into(),
+            font_size: 20.0,
+            stroke_width: 0.0,
+            ..TextStylePreset::default()
+        };
+        let bounds = |align: &str| {
+            let preset = TextStylePreset { align: align.into(), ..base.clone() };
+            let image = style_preview_image(&preset, 220.0, 48.0, 1).expect("preview image");
+            let [w, h] = image.size;
+            let mut left = w;
+            let mut right = 0;
+            for y in 0..h {
+                for x in 0..w {
+                    if image.pixels[y * w + x].a() > 0 {
+                        left = left.min(x);
+                        right = right.max(x);
+                    }
+                }
+            }
+            (left, right)
+        };
+        let left = bounds("left");
+        let center = bounds("center");
+        let right = bounds("right");
+        assert!(left.0 > 0, "left-aligned preview ink stays inside its image: {left:?}");
+        assert!(right.1 < 220, "right-aligned preview ink stays inside its image: {right:?}");
+        assert!(left.0 < center.0, "left alignment starts before center: {left:?} vs {center:?}");
+        assert!(right.1 > center.1, "right alignment ends after center: {right:?} vs {center:?}");
+        let left_center = (left.0 + left.1) / 2;
+        let right_center = (right.0 + right.1) / 2;
+        assert!(
+            right_center - left_center <= 220 * 25 / 100,
+            "alignment should nudge the sample without sending it across the whole preview: {left:?} vs {right:?}"
+        );
+    }
+
+    /// `preview_text` is the rendered sample and is part of the texture key, so editing it must
+    /// rebuild the preview rather than reuse the cached texture.
+    #[test]
+    fn style_preview_uses_preview_text_and_cache_key() {
+        let _ = photocraft_text::shared();
+        let base = TextStylePreset {
+            name: "Summary".into(),
+            font_size: 20.0,
+            ..TextStylePreset::default()
+        };
+        let custom = TextStylePreset {
+            preview_text: "A much longer custom sample that the style shows".into(),
+            ..base.clone()
+        };
+        assert_eq!(style_preview_text(&base), format!("Summary: {PREVIEW_SAMPLE}"), "an empty preview_text uses the automatic sample");
+        assert_eq!(style_preview_text(&custom), "A much longer custom sample that the style shows");
+
+        assert_ne!(
+            style_preview_key(&base, 180.0, 28.0, 1),
+            style_preview_key(&custom, 180.0, 28.0, 1),
+            "preview_text must enter the texture key"
+        );
+        let base_image = style_preview_image(&base, 180.0, 28.0, 1).expect("base preview");
+        let custom_image = style_preview_image(&custom, 180.0, 28.0, 1).expect("custom preview");
+        assert_ne!(base_image.pixels, custom_image.pixels, "the two samples render differently");
+    }
+
+    /// An untouched automatic sample stays automatic; edits are trimmed to one line and capped.
+    #[test]
+    fn preview_text_commits_on_enter_and_esc_restores() {
+        let mut preset = TextStylePreset {
+            name: "Summary".into(),
+            ..TextStylePreset::default()
+        };
+        let automatic = style_preview_text(&preset);
+
+        assert!(!commit_preview_edit(&mut preset, &automatic, &automatic), "leaving the automatic sample untouched keeps preview_text empty");
+        assert_eq!(preset.preview_text, "");
+
+        assert!(commit_preview_edit(&mut preset, "  Custom  ", &automatic));
+        assert_eq!(preset.preview_text, "Custom", "the commit trims the value");
+
+        // Esc never reaches `commit_preview_edit`; the buffer is simply dropped, so the preset and
+        // its original value stay as they were.
+        let original = preset.preview_text.clone();
+        let _cancel = preview_text_after_commit("Discarded", "Custom", &preset.preview_text);
+        assert_eq!(preset.preview_text, original);
+
+        // Clearing the field returns to the automatic sample.
+        assert!(commit_preview_edit(&mut preset, "  ", &automatic));
+        assert_eq!(preset.preview_text, "");
+
+        let long = "x".repeat(250);
+        assert!(commit_preview_edit(&mut preset, &long, &automatic));
+        assert_eq!(preset.preview_text.chars().count(), 200);
+        assert!(preset.preview_text.ends_with('…'));
+
+        let multiline = "One\r\nTwo";
+        assert!(commit_preview_edit(&mut preset, multiline, &automatic));
+        assert_eq!(preset.preview_text, "One Two");
+    }
+
+    #[test]
+    fn style_preview_porter_duff_text_over_stroke() {
+        let _ = photocraft_text::shared();
+        let preset = TextStylePreset {
+            name: "Aa".into(),
+            // A short explicit sample keeps `fit == 1.0`, so this test checks the stroke disk
+            // rather than the downscaling of a long automatic sample.
+            preview_text: "Aa".into(),
+            font_size: 20.0,
+            text_color: [0, 0, 0, 255], // Black text
+            stroke_width: 4.0,
+            stroke_color: [255, 255, 255, 255], // White stroke
+            ..TextStylePreset::default()
+        };
+
+        let image = style_preview_image(&preset, 120.0, 40.0, 1).expect("preview image");
+        let has_black_ink = image.pixels.iter().any(|p| p.r() < 30 && p.g() < 30 && p.b() < 30 && p.a() > 200);
+        assert!(has_black_ink, "black text with white stroke must render dark inner pixels, not pure white");
+        let has_white_stroke = image.pixels.iter().any(|p| p.r() > 220 && p.g() > 220 && p.b() > 220 && p.a() > 200);
+        assert!(has_white_stroke, "white stroke must render white outer pixels");
+    }
+
+    #[test]
+    fn style_preview_outline_does_not_scale_down_the_text() {
+        let _ = photocraft_text::shared();
+        let base = TextStylePreset {
+            preview_text: "Outline".into(),
+            font_size: 28.0,
+            text_color: [0, 0, 0, 255],
+            stroke_color: [255, 255, 255, 255],
+            ..TextStylePreset::default()
+        };
+        let without_outline = style_preview_image(&TextStylePreset { stroke_width: 0.0, ..base.clone() }, 220.0, 48.0, 1).expect("plain preview");
+        let with_outline = style_preview_image(&TextStylePreset { stroke_width: 30.0, ..base }, 220.0, 48.0, 1).expect("outlined preview");
+        let dark_pixel_bounds = |image: &egui::ColorImage| {
+            let [w, h] = image.size;
+            let mut bounds = (w, h, 0, 0, 0);
+            for y in 0..h {
+                for x in 0..w {
+                    let p = image.pixels[y * w + x];
+                    if p.a() == 255 && p.r() == 0 && p.g() == 0 && p.b() == 0 {
+                        bounds.0 = bounds.0.min(x);
+                        bounds.1 = bounds.1.min(y);
+                        bounds.2 = bounds.2.max(x);
+                        bounds.3 = bounds.3.max(y);
+                        bounds.4 += 1;
+                    }
+                }
+            }
+            bounds
+        };
+        assert_eq!(
+            dark_pixel_bounds(&with_outline),
+            dark_pixel_bounds(&without_outline),
+            "the outline may be clipped, but it must not change the text scale or glyph pixels"
+        );
+    }
+
+    #[test]
+    fn style_preview_outline_stays_proportional_when_the_sample_is_fitted() {
+        let _ = photocraft_text::shared();
+        let preset = TextStylePreset {
+            preview_text: "H".into(),
+            font_size: 28.0,
+            text_color: [0, 0, 0, 255],
+            stroke_width: 4.0,
+            stroke_color: [255, 255, 255, 255],
+            ..TextStylePreset::default()
+        };
+        let stroke_to_text_ratio = |height| {
+            let image = style_preview_image(&preset, 64.0, height, 1).expect("preview image");
+            let mut stroke_pixels = 0usize;
+            let mut text_pixels = 0usize;
+            for pixel in image.pixels {
+                if pixel.a() < 200 {
+                    continue;
+                }
+                if pixel.r() > 220 && pixel.g() > 220 && pixel.b() > 220 {
+                    stroke_pixels += 1;
+                } else if pixel.r() < 30 && pixel.g() < 30 && pixel.b() < 30 {
+                    text_pixels += 1;
+                }
+            }
+            stroke_pixels as f32 / text_pixels.max(1) as f32
+        };
+
+        let full_size_ratio = stroke_to_text_ratio(48.0);
+        let fitted_ratio = stroke_to_text_ratio(24.0);
+        assert!(
+            fitted_ratio <= full_size_ratio * 1.6,
+            "fitting the sample must scale its outline too, rather than turning it into a blob: {fitted_ratio:.2} vs {full_size_ratio:.2}"
+        );
+    }
+
+    /// Regression: the stroke must be a filled circular dilation of the glyphs. The previous
+    /// implementation sampled only eight points on the perimeter circle, so pixels between the
+    /// rays stayed transparent and the stroke looked like needle-shaped copies of the glyphs.
+    /// Anchors are only full-coverage pixels (pure black, alpha 255): for those the disk
+    /// guarantees every pixel within radius - 0.5 px to come out nearly opaque.
+    #[test]
+    fn style_preview_stroke_band_has_no_holes() {
+        let _ = photocraft_text::shared();
+        let preset = TextStylePreset {
+            name: "Aa".into(),
+            // See `style_preview_porter_duff_text_over_stroke`: the stroke band is measured at
+            // the preset's own size, so the sample must not force `fit < 1.0`.
+            preview_text: "Aa".into(),
+            font_size: 28.0, // large enough for full-coverage cores inside the glyph stems
+            text_color: [0, 0, 0, 255], // Black text
+            stroke_width: 4.0,
+            stroke_color: [255, 255, 255, 255], // White stroke
+            ..TextStylePreset::default()
+        };
+
+        let image = style_preview_image(&preset, 140.0, 48.0, 1).expect("preview image");
+        let [w, h] = image.size;
+        let at = |x: i32, y: i32| image.pixels[y as usize * w + x as usize];
+        let is_solid_ink = |p: egui::Color32| p.a() == 255 && p.r() == 0 && p.g() == 0 && p.b() == 0;
+
+        // Every pixel within radius - 0.5 of solid ink sits deep inside the stroke band: the
+        // disk centred on such a pixel covers that solid ink with weight 1, so the stroke must
+        // fill it. Eight-point perimeter sampling leaves exactly such pixels transparent.
+        let radius = preset.stroke_width;
+        let mut band = 0usize;
+        for y in 0..h as i32 {
+            for x in 0..w as i32 {
+                let p = at(x, y);
+                if is_solid_ink(p) {
+                    continue;
+                }
+                let mut near_ink = false;
+                'near: for dy in -4i32..=4 {
+                    for dx in -4i32..=4 {
+                        if ((dx * dx + dy * dy) as f32).sqrt() > radius - 0.5 {
+                            continue;
+                        }
+                        let (nx, ny) = (x + dx, y + dy);
+                        if nx >= 0 && ny >= 0 && nx < w as i32 && ny < h as i32 && is_solid_ink(at(nx, ny)) {
+                            near_ink = true;
+                            break 'near;
+                        }
+                    }
+                }
+                if near_ink {
+                    band += 1;
+                    assert!(p.a() >= 240, "hole in the stroke band at ({x},{y}): {p:?} must be covered by the stroke");
+                }
+            }
+        }
+        assert!(band >= 40, "expected a solid stroke band around the glyphs, found only {band} covered pixels");
+    }
+
+    /// The right column of the Typography Size rows must share one grid line: the Leading and
+    /// H-Scale (%) labels sit in equal 85 px cells in front of equal 86 px drag values that hug
+    /// the panel edge, so their left edges must coincide.
+    #[test]
+    fn font_settings_leading_and_hscale_columns_align() {
+        use egui_kittest::Harness;
+        use egui_kittest::kittest::Queryable;
+
+        let mut typer = TypesetterUi::default();
+        if typer.state.presets.is_empty() {
+            typer.state.presets.push(TextStylePreset::default());
+        }
+        typer.is_open = true;
+        typer.editing_preset_idx = Some(0);
+        let mut frames = 0u32;
+        let mut h = Harness::builder().with_size(egui::vec2(900.0, 1600.0)).build_ui_state(
+            move |ui, typer: &mut TypesetterUi| {
+                crate::PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ALL[0]);
+                frames += 1;
+                if frames < 2 {
+                    // The named font families reach the context one pass after installation.
+                    return;
+                }
+                typer.show(ui);
+            },
+            typer,
+        );
+        h.run_steps(3);
+
+        let leading = h.get_by_label(format!("{}:", tl!("Leading")).as_str()).rect();
+        let hscale = h.get_by_label("H-Scale (%):").rect();
+        assert!(
+            (leading.top() - hscale.top()).abs() > 4.0,
+            "expected the two labels on different rows: {leading:?} vs {hscale:?}"
+        );
+        assert!(
+            (leading.left() - hscale.left()).abs() < 1.0,
+            "the Leading label {leading:?} and the H-Scale label {hscale:?} must share one left edge"
+        );
+
+        let value = |name: &str| {
+            h.ctx
+                .data(|d| d.get_temp::<egui::Rect>(egui::Id::new(("typesetter-ui-rect", name))))
+                .unwrap_or_else(|| panic!("the {name} value records its rect"))
+        };
+        let leading_value = value("leading-value");
+        let hscale_value = value("hscale-value");
+        assert!((leading_value.width() - 86.0).abs() <= 1.0, "the Leading value is 86 wide: {leading_value:?}");
+        assert!((hscale_value.width() - 86.0).abs() <= 1.0, "the H-Scale value is 86 wide: {hscale_value:?}");
+        assert!((leading_value.right() - hscale_value.right()).abs() < 1.0, "both values hug the same right edge: {leading_value:?} vs {hscale_value:?}");
+        let leading_block = h
+            .ctx
+            .data(|d| d.get_temp::<egui::Rect>(egui::Id::new(("typesetter-ui-rect", "controls:Size (pt)".to_string()))))
+            .expect("the Size row records its block");
+        assert!((leading_value.right() - leading_block.right()).abs() <= 1.0, "the Leading value ends at the 445-point column's right edge: {leading_value:?} vs {leading_block:?}");
     }
 }

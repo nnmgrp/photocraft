@@ -4557,3 +4557,40 @@ cameraRaw	Dehaze	Odstranění oparu
 	Remove what is selected with Nano Banana ({key})	Odstranit vybrané pomocí Nano Banana ({key})
 	Pin to Top	Připnout nahoru
 	Unpin from Top	Odepnout shora
+
+# Font Settings v2: preview sample, geometry labels and accessibility tooltips.
+	Font Settings	Nastavení písma
+	Style name	Název stylu
+	No folder	Bez složky
+	+ New folder...	+ Nová složka...
+	Folder name	Název složky
+	New folder name	Název nové složky
+	Typography and Font	Typografie a písmo
+	Favorite font	Oblíbené písmo
+	PostScript	PostScript
+	Formatting	Formátování
+	Faux bold	Umělé tučné
+	Faux italic	Umělá kurzíva
+	Superscript	Horní index
+	Subscript	Dolní index
+	Hanging Punctuation	Předsazená interpunkce
+	Align Left	Zarovnat vlevo
+	Align Center	Zarovnat na střed
+	Align Right	Zarovnat vpravo
+	Typography Size (Line Spacing Sync)	Velikosti typografie (synchronizace řádkování)
+	System type	Systém
+	Use standard font metrics and the baseline	Metrický systém: standardní metriky písma a účaří
+	Use visual kerning and bubble centering	Optický systém: vizuální kerning a vycentrování bubliny
+	Size (pt)	Velikost (pt)
+	Leading is linked to size	Řádkování je svázáno s velikostí
+	Leading is not linked to size	Řádkování není svázáno s velikostí
+	H-Scale (%)	Vodorovné měřítko (%)
+	Text Outline	Obrys textu
+	Thickness (px)	Tloušťka (px)
+	Preview sample	Náhled
+	Preview text	Text náhledu
+	Edit preview text	Upravit text náhledu
+	Leave empty for the automatic sample	Ponechte prázdné pro automatický vzorek
+	Preview unavailable	Náhled není k dispozici
+	Duplicate this style	Duplikovat tento styl
+	Delete this style	Odstranit tento styl

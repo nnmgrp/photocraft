@@ -4854,3 +4854,37 @@ shape	Appearance	Apparence
 	Remove what is selected with Nano Banana ({key})	Supprimer la sélection avec Nano Banana ({key})
 	Pin to Top	Épingler en haut
 	Unpin from Top	Ne plus épingler en haut
+
+# Font Settings v2: preview sample, geometry labels and accessibility tooltips.
+	Font Settings	Réglages de police
+	Style name	Nom du style
+	No folder	Aucun dossier
+	+ New folder...	+ Nouveau dossier...
+	Folder name	Nom du dossier
+	New folder name	Nom du nouveau dossier
+	Typography and Font	Typographie et police
+	Favorite font	Police favorite
+	PostScript	PostScript
+	Formatting	Formatage
+	Faux bold	Gras simulé
+	Faux italic	Italique simulé
+	Align Left	Gauche
+	Align Center	Centré
+	Align Right	Droite
+	Typography Size (Line Spacing Sync)	Tailles de typographie (synchronisation de l'interlignage)
+	System type	Système
+	Use standard font metrics and the baseline	Système métrique : métriques de police standard et ligne de base
+	Use visual kerning and bubble centering	Système optique : crénage visuel et centrage des bulles
+	Size (pt)	Taille (pt)
+	Leading is linked to size	L'interlignage est lié à la taille
+	Leading is not linked to size	L'interlignage n'est pas lié à la taille
+	H-Scale (%)	Échelle H (%)
+	Text Outline	Contour du texte
+	Thickness (px)	Épaisseur (px)
+	Preview sample	Aperçu
+	Preview text	Texte de l'aperçu
+	Edit preview text	Modifier le texte de l'aperçu
+	Leave empty for the automatic sample	Laisser vide pour l'échantillon automatique
+	Preview unavailable	Aperçu indisponible
+	Duplicate this style	Dupliquer ce style
+	Delete this style	Supprimer ce style

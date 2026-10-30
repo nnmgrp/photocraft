@@ -4511,3 +4511,37 @@ curves	Smooth	Εξομάλυνση
 	Remove what is selected with Nano Banana ({key})	Αφαίρεση της επιλογής με το Nano Banana ({key})
 	Pin to Top	Καρφίτσωμα στην κορυφή
 	Unpin from Top	Ξεκαρφίτσωμα από την κορυφή
+
+# Font Settings v2: preview sample, geometry labels and accessibility tooltips.
+	Font Settings	Ρυθμίσεις γραμματοσειράς
+	Style name	Όνομα στυλ
+	No folder	Χωρίς φάκελο
+	+ New folder...	+ Νέος φάκελος...
+	Folder name	Όνομα φακέλου
+	New folder name	Όνομα νέου φακέλου
+	Typography and Font	Τυπογραφία και γραμματοσειρά
+	Favorite font	Αγαπημένη γραμματοσειρά
+	PostScript	PostScript
+	Formatting	Μορφοποίηση
+	Faux bold	Ψευδοέντονα
+	Faux italic	Ψευδοπλάγια
+	Align Left	Αριστερά
+	Align Center	Κέντρο
+	Align Right	Δεξιά
+	Typography Size (Line Spacing Sync)	Μεγέθη τυπογραφίας (συγχρονισμός διάστιχου)
+	System type	Σύστημα
+	Use standard font metrics and the baseline	Μετρικό σύστημα: τυπικές μετρικές γραμματοσειράς και γραμμή βάσης
+	Use visual kerning and bubble centering	Οπτικό σύστημα: οπτικό κέρνινγκ και κεντράρισμα συννεφάκι
+	Size (pt)	Μέγεθος (pt)
+	Leading is linked to size	Το διάστιχο είναι συνδεδεμένο με το μέγεθος
+	Leading is not linked to size	Το διάστιχο δεν είναι συνδεδεμένο με το μέγεθος
+	H-Scale (%)	Οριζόντια κλίμακα (%)
+	Text Outline	Περίγραμμα κειμένου
+	Thickness (px)	Πάχος (px)
+	Preview sample	Προεπισκόπηση
+	Preview text	Κείμενο προεπισκόπησης
+	Edit preview text	Επεξεργασία κειμένου προεπισκόπησης
+	Leave empty for the automatic sample	Αφήστε κενό για το αυτόματο δείγμα
+	Preview unavailable	Η προεπισκόπηση δεν είναι διαθέσιμη
+	Duplicate this style	Διπλασιασμός αυτού του στυλ
+	Delete this style	Διαγραφή αυτού του στυλ

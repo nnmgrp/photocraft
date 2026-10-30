@@ -50,6 +50,10 @@ pub fn default_align_center() -> String {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TextStylePreset {
     pub name: String,
+    /// Необязательный текст образца в окне Font Settings. Пустая строка — автоматический
+    /// образец из имени стиля и демонстрационной фразы.
+    #[serde(default)]
+    pub preview_text: String,
     pub folder: Option<String>,
     pub font_family: String,
     pub font_postscript: String,
@@ -93,6 +97,7 @@ impl Default for TextStylePreset {
     fn default() -> Self {
         Self {
             name: "Дефолт".to_string(),
+            preview_text: String::new(),
             folder: Some("Манга".to_string()),
             font_family: "Kurai Voice 2".to_string(),
             font_postscript: "KuraiVoice2".to_string(),
@@ -362,6 +367,12 @@ impl TypesetterState {
             let folder_id = item.get("folder").and_then(|v| v.as_str());
             let folder_name = folder_id.and_then(|id| folders_map.get(id)).cloned();
             let name = raw_name.to_string();
+            let preview_text = item
+                .get("preview_text")
+                .or_else(|| item.get("previewText"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
 
             // Разрешение вложенного пути TypeR: textProps -> layerText -> textStyleRange[0] -> textStyle
             let text_style = item.pointer("/textProps/layerText/textStyleRange/0/textStyle");
@@ -553,6 +564,7 @@ impl TypesetterState {
 
             self.presets.push(TextStylePreset {
                 name,
+                preview_text,
                 folder: folder_name,
                 font_family,
                 font_postscript,
@@ -620,6 +632,7 @@ impl TypesetterState {
 
             styles_arr.push(serde_json::json!({
                 "name": preset.name,
+                "preview_text": preset.preview_text,
                 "folder": folder_id,
                 "textProps": {
                     "layerText": {
@@ -1326,6 +1339,67 @@ mod tests {
         assert_eq!(reimported.presets[1].measurement_system, MeasurementSystem::Metric);
         assert_eq!(reimported.presets[2].text_color, state.presets[2].text_color);
         assert_eq!(reimported.presets[2].measurement_system, MeasurementSystem::Metric);
+    }
+
+    #[test]
+    fn preview_text_round_trips_in_preset_json_and_defaults_for_old_files() {
+        let preset = TextStylePreset {
+            name: "Custom".into(),
+            preview_text: "Свой образец".into(),
+            ..TextStylePreset::default()
+        };
+        let json = serde_json::to_string(&preset).unwrap();
+        assert!(json.contains("\"preview_text\""), "the field is serialized: {json}");
+        let parsed: TextStylePreset = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, preset);
+        assert_eq!(parsed.preview_text, "Свой образец");
+
+        // A .pcraft/state file saved before the field existed must still open.
+        let mut old = serde_json::to_value(&preset).unwrap();
+        old.as_object_mut().unwrap().remove("preview_text");
+        let parsed: TextStylePreset = serde_json::from_value(old).unwrap();
+        assert_eq!(parsed.preview_text, "");
+    }
+
+    #[test]
+    fn preview_text_survives_typer_export_import() {
+        let mut state = TypesetterState::default();
+        state.presets = vec![TextStylePreset {
+            name: "TypeR Custom".into(),
+            preview_text: "Экспортный образец".into(),
+            ..TextStylePreset::default()
+        }];
+        let exported = state.export_styles_json(None).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&exported).unwrap();
+        assert_eq!(value["styles"][0]["preview_text"], "Экспортный образец");
+        assert!(
+            value["styles"][0].get("previewText").is_none(),
+            "export writes only the documented snake_case field"
+        );
+
+        let mut reimported = TypesetterState {
+            presets: Vec::new(),
+            ..TypesetterState::default()
+        };
+        reimported.import_styles_json(&exported).unwrap();
+        assert_eq!(reimported.presets[0].preview_text, "Экспортный образец");
+
+        // The camelCase alias is accepted for styles exported by other tools.
+        let alias = r#"{"styles":[{"name":"Alias","previewText":"Alias sample"}]}"#;
+        let mut aliased = TypesetterState {
+            presets: Vec::new(),
+            ..TypesetterState::default()
+        };
+        aliased.import_styles_json(alias).unwrap();
+        assert_eq!(aliased.presets[0].preview_text, "Alias sample");
+
+        let missing = r#"{"styles":[{"name":"Missing"}]}"#;
+        let mut plain = TypesetterState {
+            presets: Vec::new(),
+            ..TypesetterState::default()
+        };
+        plain.import_styles_json(missing).unwrap();
+        assert_eq!(plain.presets[0].preview_text, "", "missing preview_text means the automatic sample");
     }
 
     #[test]

@@ -417,6 +417,7 @@ fn command_uses_ambient_path(id: &str, params: &Value) -> bool {
         | "brush.presets.importAbr"
         | "brush.presets.importImage"
         | "gradient.presets.importGrd"
+        | "style.presets.importAsl"
         | "plugin.install"
         | "swatches.import"
         | "layer.layerStyle.contours.load" => {
@@ -858,6 +859,7 @@ mod tests {
             ("brush.presets.importAbr", serde_json::json!({"path": "/outside/set.abr"})),
             ("brush.presets.importImage", serde_json::json!({"path": "/outside/tip.png"})),
             ("gradient.presets.importGrd", serde_json::json!({"path": "/outside/set.grd"})),
+            ("style.presets.importAsl", serde_json::json!({"path": "/outside/set.asl"})),
             ("plugin.install", serde_json::json!({"path": "/outside/plugin.wasm"})),
             ("plugin.reload", serde_json::json!({"path": "/outside/plugins"})),
             ("plugin.reload", serde_json::json!({})),
@@ -875,6 +877,7 @@ mod tests {
             ("brush.presets.importAbr", serde_json::json!({"data": "QUJD"})),
             ("brush.presets.importImage", serde_json::json!({"data": "QUJD"})),
             ("gradient.presets.importGrd", serde_json::json!({"data": "QUJD"})),
+            ("style.presets.importAsl", serde_json::json!({"data": "QUJD"})),
             ("plugin.install", serde_json::json!({"data": "QUJD"})),
             ("swatches.import", serde_json::json!({"data": "QUJD"})),
             ("swatches.export", serde_json::json!({"format": "ase"})),

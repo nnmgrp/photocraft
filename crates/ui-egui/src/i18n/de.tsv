@@ -3830,3 +3830,40 @@ curves	Smooth	Glätten
 	Remove what is selected with Nano Banana ({key})	Auswahl mit Nano Banana entfernen ({key})
 	Pin to Top	Oben anheften
 	Unpin from Top	Oben lösen
+
+# Font Settings v2: preview sample, geometry labels and accessibility tooltips.
+	Font Settings	Schrifteinstellungen
+	Style name	Stilname
+	No folder	Kein Ordner
+	+ New folder...	+ Neuer Ordner...
+	Folder name	Ordnername
+	New folder name	Name des neuen Ordners
+	Typography and Font	Typografie und Schrift
+	Favorite font	Favoritenschrift
+	PostScript	PostScript
+	Formatting	Formatierung
+	Faux bold	Unechtes Fett
+	Faux italic	Unechte Kursivschrift
+	Superscript	Hochgestellt
+	Subscript	Tiefgestellt
+	Hanging Punctuation	Hängende Interpunktion
+	Align Left	Linksbündig
+	Align Center	Zentriert
+	Align Right	Rechtsbündig
+	Typography Size (Line Spacing Sync)	Typografiegröße (Zeilenabstand-Sync)
+	System type	System
+	Use standard font metrics and the baseline	Metrisches System: Standardschriftmetriken und Grundlinie
+	Use visual kerning and bubble centering	Optisches System: visuelles Kerning und Sprechblasen-Zentrierung
+	Size (pt)	Größe (pt)
+	Leading is linked to size	Zeilenabstand ist mit der Größe verknüpft
+	Leading is not linked to size	Zeilenabstand ist nicht mit der Größe verknüpft
+	H-Scale (%)	H-Skalierung (%)
+	Text Outline	Textkontur
+	Thickness (px)	Stärke (px)
+	Preview sample	Vorschau
+	Preview text	Vorschautext
+	Edit preview text	Vorschautext bearbeiten
+	Leave empty for the automatic sample	Leer lassen für das automatische Beispiel
+	Preview unavailable	Vorschau nicht verfügbar
+	Duplicate this style	Diesen Stil duplizieren
+	Delete this style	Diesen Stil löschen

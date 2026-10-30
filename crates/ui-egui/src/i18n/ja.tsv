@@ -4507,3 +4507,37 @@ curves	Smooth	スムーズ
 	Remove what is selected with Nano Banana ({key})	選択範囲を Nano Banana で削除 ({key})
 	Pin to Top	上部に固定
 	Unpin from Top	上部への固定を解除
+
+# Font Settings v2: preview sample, geometry labels and accessibility tooltips.
+	Font Settings	フォント設定
+	Style name	スタイル名
+	No folder	フォルダーなし
+	+ New folder...	+ 新しいフォルダー...
+	Folder name	フォルダー名
+	New folder name	新しいフォルダー名
+	Typography and Font	タイポグラフィとフォント
+	Favorite font	お気に入りフォント
+	PostScript	PostScript
+	Formatting	書式
+	Faux bold	疑似ボールド
+	Faux italic	疑似イタリック
+	Align Left	左揃え
+	Align Center	中央揃え
+	Align Right	右揃え
+	Typography Size (Line Spacing Sync)	タイポグラフィサイズ（行送り同期）
+	System type	システム
+	Use standard font metrics and the baseline	メトリクスシステム：標準フォントメトリクスとベースライン
+	Use visual kerning and bubble centering	オプティカルシステム：視覚的カーニングと吹き出しの中央揃え
+	Size (pt)	サイズ (pt)
+	Leading is linked to size	行送りはサイズにリンクしています
+	Leading is not linked to size	行送りはサイズにリンクしていません
+	H-Scale (%)	横倍率 (%)
+	Text Outline	テキスト輪郭
+	Thickness (px)	太さ (px)
+	Preview sample	プレビュー
+	Preview text	プレビューテキスト
+	Edit preview text	プレビューテキストを編集
+	Leave empty for the automatic sample	空欄にすると自動サンプルになります
+	Preview unavailable	プレビューを利用できません
+	Duplicate this style	このスタイルを複製
+	Delete this style	このスタイルを削除

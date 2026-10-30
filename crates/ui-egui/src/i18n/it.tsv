@@ -4974,3 +4974,37 @@ shape	Appearance	Aspetto
 	Remove what is selected with Nano Banana ({key})	Rimuovi la selezione con Nano Banana ({key})
 	Pin to Top	Fissa in alto
 	Unpin from Top	Sblocca dall’alto
+
+# Font Settings v2: preview sample, geometry labels and accessibility tooltips.
+	Font Settings	Impostazioni carattere
+	Style name	Nome stile
+	No folder	Nessuna cartella
+	+ New folder...	+ Nuova cartella...
+	Folder name	Nome cartella
+	New folder name	Nome nuova cartella
+	Typography and Font	Tipografia e carattere
+	Favorite font	Carattere preferito
+	PostScript	PostScript
+	Formatting	Formattazione
+	Faux bold	Grassetto simulato
+	Faux italic	Corsivo simulato
+	Align Left	A sinistra
+	Align Center	Al centro
+	Align Right	A destra
+	Typography Size (Line Spacing Sync)	Dimensioni tipografia (sincronizzazione interlinea)
+	System type	Sistema
+	Use standard font metrics and the baseline	Sistema metrico: metriche standard del carattere e linea di base
+	Use visual kerning and bubble centering	Sistema ottico: crenatura visiva e centratura dei fumetti
+	Size (pt)	Dimensione (pt)
+	Leading is linked to size	L'interlinea è legata alla dimensione
+	Leading is not linked to size	L'interlinea non è legata alla dimensione
+	H-Scale (%)	Scala orizzontale (%)
+	Text Outline	Contorno testo
+	Thickness (px)	Spessore (px)
+	Preview sample	Anteprima
+	Preview text	Testo anteprima
+	Edit preview text	Modifica testo anteprima
+	Leave empty for the automatic sample	Lascia vuoto per il campione automatico
+	Preview unavailable	Anteprima non disponibile
+	Duplicate this style	Duplica questo stile
+	Delete this style	Elimina questo stile

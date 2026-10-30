@@ -3833,3 +3833,37 @@ curves	Smooth	Haluskan
 	Remove what is selected with Nano Banana ({key})	Hapus yang dipilih dengan Nano Banana ({key})
 	Pin to Top	Sematkan di Atas
 	Unpin from Top	Lepas Sematan
+
+# Font Settings v2: preview sample, geometry labels and accessibility tooltips.
+	Font Settings	Pengaturan Font
+	Style name	Nama gaya
+	No folder	Tanpa folder
+	+ New folder...	+ Folder baru...
+	Folder name	Nama folder
+	New folder name	Nama folder baru
+	Typography and Font	Tipografi dan Font
+	Favorite font	Font favorit
+	PostScript	PostScript
+	Formatting	Pemformatan
+	Faux bold	Tebal palsu
+	Faux italic	Miring palsu
+	Align Left	Rata kiri
+	Align Center	Rata tengah
+	Align Right	Rata kanan
+	Typography Size (Line Spacing Sync)	Ukuran tipografi (sinkronisasi spasi baris)
+	System type	Sistem
+	Use standard font metrics and the baseline	Sistem metrik: metrik font standar dan garis dasar
+	Use visual kerning and bubble centering	Sistem optik: kerning visual dan pemusatan balon
+	Size (pt)	Ukuran (pt)
+	Leading is linked to size	Spasi baris tertaut ke ukuran
+	Leading is not linked to size	Spasi baris tidak tertaut ke ukuran
+	H-Scale (%)	Skala H (%)
+	Text Outline	Garis luar teks
+	Thickness (px)	Ketebalan (px)
+	Preview sample	Pratinjau
+	Preview text	Teks pratinjau
+	Edit preview text	Edit teks pratinjau
+	Leave empty for the automatic sample	Kosongkan untuk contoh otomatis
+	Preview unavailable	Pratinjau tidak tersedia
+	Duplicate this style	Duplikat gaya ini
+	Delete this style	Hapus gaya ini

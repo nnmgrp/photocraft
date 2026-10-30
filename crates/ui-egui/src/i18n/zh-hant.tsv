@@ -3446,3 +3446,40 @@ curves	Smooth	平滑
 	Remove what is selected with Nano Banana ({key})	用 Nano Banana 移除所選內容 ({key})
 	Pin to Top	釘選到頂端
 	Unpin from Top	取消釘選到頂端
+
+# Font Settings v2: preview sample, geometry labels and accessibility tooltips.
+	Font Settings	字體設定
+	Style name	樣式名稱
+	No folder	無資料夾
+	+ New folder...	+ 新增資料夾...
+	Folder name	資料夾名稱
+	New folder name	新資料夾名稱
+	Typography and Font	排版與字體
+	Favorite font	收藏字體
+	PostScript	PostScript
+	Formatting	格式
+	Faux bold	仿粗體
+	Faux italic	仿斜體
+	Superscript	上標
+	Subscript	下標
+	Hanging Punctuation	懸掛標點
+	Align Left	靠左對齊
+	Align Center	置中對齊
+	Align Right	靠右對齊
+	Typography Size (Line Spacing Sync)	排版尺寸（行距同步）
+	System type	系統
+	Use standard font metrics and the baseline	度量系統：標準字體度量與基線
+	Use visual kerning and bubble centering	視覺系統：視覺字偶距與氣泡置中
+	Size (pt)	字級 (pt)
+	Leading is linked to size	行距與字級連動
+	Leading is not linked to size	行距不與字級連動
+	H-Scale (%)	水平縮放 (%)
+	Text Outline	文字描邊
+	Thickness (px)	粗細 (px)
+	Preview sample	預覽
+	Preview text	預覽文字
+	Edit preview text	編輯預覽文字
+	Leave empty for the automatic sample	留空以使用自動範例
+	Preview unavailable	預覽不可用
+	Duplicate this style	複製此樣式
+	Delete this style	刪除此樣式

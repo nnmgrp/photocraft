@@ -4882,3 +4882,37 @@ shape	Appearance	Izgled
 	Remove what is selected with Nano Banana ({key})	Ukloni izabrano pomoću Nano Banana ({key})
 	Pin to Top	Zakači na vrh
 	Unpin from Top	Otkači sa vrha
+
+# Font Settings v2: preview sample, geometry labels and accessibility tooltips.
+	Font Settings	Podešavanja fonta
+	Style name	Naziv stila
+	No folder	Bez fascikle
+	+ New folder...	+ Nova fascikla...
+	Folder name	Naziv fascikle
+	New folder name	Naziv nove fascikle
+	Typography and Font	Tipografija i font
+	Favorite font	Omiljeni font
+	PostScript	PostScript
+	Formatting	Formatiranje
+	Faux bold	Lažno podebljano
+	Faux italic	Lažna kurziva
+	Align Left	Levo
+	Align Center	Centar
+	Align Right	Desno
+	Typography Size (Line Spacing Sync)	Veličine tipografije (sinhronizacija proreda)
+	System type	Sistem
+	Use standard font metrics and the baseline	Metrički sistem: standardne metrike fonta i osnovna linija
+	Use visual kerning and bubble centering	Optički sistem: vizuelni kern i centriranje oblačića
+	Size (pt)	Veličina (pt)
+	Leading is linked to size	Prored je povezan sa veličinom
+	Leading is not linked to size	Prored nije povezan sa veličinom
+	H-Scale (%)	Horizontalna skala (%)
+	Text Outline	Obris teksta
+	Thickness (px)	Debljina (px)
+	Preview sample	Pregled
+	Preview text	Tekst pregleda
+	Edit preview text	Uredi tekst pregleda
+	Leave empty for the automatic sample	Ostavite prazno za automatski uzorak
+	Preview unavailable	Pregled nije dostupan
+	Duplicate this style	Dupliraj ovaj stil
+	Delete this style	Obriši ovaj stil

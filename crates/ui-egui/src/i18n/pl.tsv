@@ -4432,3 +4432,37 @@ curves	Smooth	Wygładź
 	Remove what is selected with Nano Banana ({key})	Usuń zaznaczenie za pomocą Nano Banana ({key})
 	Pin to Top	Przypnij na górze
 	Unpin from Top	Odepnij z góry
+
+# Font Settings v2: preview sample, geometry labels and accessibility tooltips.
+	Font Settings	Ustawienia czcionki
+	Style name	Nazwa stylu
+	No folder	Bez folderu
+	+ New folder...	+ Nowy folder...
+	Folder name	Nazwa folderu
+	New folder name	Nazwa nowego folderu
+	Typography and Font	Typografia i czcionka
+	Favorite font	Ulubiona czcionka
+	PostScript	PostScript
+	Formatting	Formatowanie
+	Faux bold	Sztuczne pogrubienie
+	Faux italic	Sztuczna kursywa
+	Align Left	Do lewej
+	Align Center	Do środka
+	Align Right	Do prawej
+	Typography Size (Line Spacing Sync)	Rozmiary typografii (synchronizacja interlinii)
+	System type	System
+	Use standard font metrics and the baseline	System metryczny: standardowe metryki czcionki i linia bazowa
+	Use visual kerning and bubble centering	System optyczny: wizualny kerning i centrowanie dymków
+	Size (pt)	Rozmiar (pt)
+	Leading is linked to size	Interlinia jest powiązana z rozmiarem
+	Leading is not linked to size	Interlinia nie jest powiązana z rozmiarem
+	H-Scale (%)	Skala pozioma (%)
+	Text Outline	Obrys tekstu
+	Thickness (px)	Grubość (px)
+	Preview sample	Podgląd
+	Preview text	Tekst podglądu
+	Edit preview text	Edytuj tekst podglądu
+	Leave empty for the automatic sample	Pozostaw puste, aby użyć automatycznej próbki
+	Preview unavailable	Podgląd niedostępny
+	Duplicate this style	Duplikuj ten styl
+	Delete this style	Usuń ten styl

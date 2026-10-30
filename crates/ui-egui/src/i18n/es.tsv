@@ -4819,3 +4819,37 @@ navigator	Zoom	Zoom
 	Remove what is selected with Nano Banana ({key})	Eliminar lo seleccionado con Nano Banana ({key})
 	Pin to Top	Fijar arriba
 	Unpin from Top	Dejar de fijar arriba
+
+# Font Settings v2: preview sample, geometry labels and accessibility tooltips.
+	Font Settings	Ajustes de fuente
+	Style name	Nombre del estilo
+	No folder	Sin carpeta
+	+ New folder...	+ Nueva carpeta...
+	Folder name	Nombre de la carpeta
+	New folder name	Nombre de la nueva carpeta
+	Typography and Font	Tipografía y fuente
+	Favorite font	Fuente favorita
+	PostScript	PostScript
+	Formatting	Formato
+	Faux bold	Negrita falsa
+	Faux italic	Cursiva falsa
+	Align Left	Izquierda
+	Align Center	Centro
+	Align Right	Derecha
+	Typography Size (Line Spacing Sync)	Tamaños de tipografía (sincronía de interlínea)
+	System type	Sistema
+	Use standard font metrics and the baseline	Sistema métrico: métricas estándar de fuente y línea base
+	Use visual kerning and bubble centering	Sistema óptico: interletrado visual y centrado de bocadillos
+	Size (pt)	Tamaño (pt)
+	Leading is linked to size	La interlínea está vinculada al tamaño
+	Leading is not linked to size	La interlínea no está vinculada al tamaño
+	H-Scale (%)	Escala H (%)
+	Text Outline	Contorno del texto
+	Thickness (px)	Grosor (px)
+	Preview sample	Vista previa
+	Preview text	Texto de vista previa
+	Edit preview text	Editar texto de vista previa
+	Leave empty for the automatic sample	Déjalo vacío para la muestra automática
+	Preview unavailable	Vista previa no disponible
+	Duplicate this style	Duplicar este estilo
+	Delete this style	Eliminar este estilo

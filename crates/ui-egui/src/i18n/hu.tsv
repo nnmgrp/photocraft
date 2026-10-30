@@ -4726,3 +4726,37 @@ cameraRaw	Yellow	Sárga
 	Remove what is selected with Nano Banana ({key})	A kijelölés eltávolítása a Nano Bananával ({key})
 	Pin to Top	Rögzítés felül
 	Unpin from Top	Rögzítés feloldása
+
+# Font Settings v2: preview sample, geometry labels and accessibility tooltips.
+	Font Settings	Betűtípus-beállítások
+	Style name	Stílus neve
+	No folder	Nincs mappa
+	+ New folder...	+ Új mappa...
+	Folder name	Mappa neve
+	New folder name	Új mappa neve
+	Typography and Font	Tipográfia és betűtípus
+	Favorite font	Kedvenc betűtípus
+	PostScript	PostScript
+	Formatting	Formázás
+	Faux bold	Álkövér
+	Faux italic	Áldőlt
+	Align Left	Balra
+	Align Center	Középre
+	Align Right	Jobbra
+	Typography Size (Line Spacing Sync)	Tipográfiai méretek (sortáv-szinkron)
+	System type	Rendszer
+	Use standard font metrics and the baseline	Metrikus rendszer: szabványos betűmetrikák és alapvonal
+	Use visual kerning and bubble centering	Optikai rendszer: vizuális kern és buborékközépre igazítás
+	Size (pt)	Méret (pt)
+	Leading is linked to size	A sortáv a mérethez van kötve
+	Leading is not linked to size	A sortáv nincs a mérethez kötve
+	H-Scale (%)	Vízszintes méretarány (%)
+	Text Outline	Szövegkörvonal
+	Thickness (px)	Vastagság (px)
+	Preview sample	Előnézet
+	Preview text	Előnézet szövege
+	Edit preview text	Előnézet szövegének szerkesztése
+	Leave empty for the automatic sample	Hagyja üresen az automatikus mintához
+	Preview unavailable	Az előnézet nem érhető el
+	Duplicate this style	Stílus kettőzése
+	Delete this style	Stílus törlése

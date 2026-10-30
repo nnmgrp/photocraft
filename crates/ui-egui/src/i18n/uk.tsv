@@ -4525,3 +4525,37 @@ curves	Smooth	Згладити
 	Remove what is selected with Nano Banana ({key})	Видалити виділене за допомогою Nano Banana ({key})
 	Pin to Top	Закріпити вгорі
 	Unpin from Top	Відкріпити згори
+
+# Font Settings v2: preview sample, geometry labels and accessibility tooltips.
+	Font Settings	Налаштування шрифту
+	Style name	Назва стилю
+	No folder	Без папки
+	+ New folder...	+ Нова папка...
+	Folder name	Назва папки
+	New folder name	Назва нової папки
+	Typography and Font	Гарнітура й накреслення
+	Favorite font	Улюблений шрифт
+	PostScript	PostScript
+	Formatting	Оформлення
+	Faux bold	Псевдожирний
+	Faux italic	Псевдокурсив
+	Align Left	Ліворуч
+	Align Center	По центру
+	Align Right	Праворуч
+	Typography Size (Line Spacing Sync)	Розміри типографіки (синхронізація інтерліньяжу)
+	System type	Система
+	Use standard font metrics and the baseline	Метрична система: стандартні метрики шрифту та базова лінія
+	Use visual kerning and bubble centering	Оптична система: візуальний кернінг і центрування баблів
+	Size (pt)	Кегль (pt)
+	Leading is linked to size	Інтерліньяж пов'язаний з кеглем
+	Leading is not linked to size	Інтерліньяж не пов'язаний з кеглем
+	H-Scale (%)	Горизонтальний масштаб (%)
+	Text Outline	Обведення тексту
+	Thickness (px)	Товщина (px)
+	Preview sample	Попередній перегляд
+	Preview text	Текст попереднього перегляду
+	Edit preview text	Редагувати текст попереднього перегляду
+	Leave empty for the automatic sample	Залиште порожнім для автоматичного зразка
+	Preview unavailable	Попередній перегляд недоступний
+	Duplicate this style	Дублювати цей стиль
+	Delete this style	Видалити цей стиль

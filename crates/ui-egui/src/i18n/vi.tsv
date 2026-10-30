@@ -4309,3 +4309,40 @@ curves	Smooth	Làm mượt
 	Remove what is selected with Nano Banana ({key})	Xóa vùng chọn bằng Nano Banana ({key})
 	Pin to Top	Ghim lên đầu
 	Unpin from Top	Bỏ ghim khỏi đầu
+
+# Font Settings v2: preview sample, geometry labels and accessibility tooltips.
+	Font Settings	Cài đặt phông chữ
+	Style name	Tên kiểu
+	No folder	Không có thư mục
+	+ New folder...	+ Thư mục mới...
+	Folder name	Tên thư mục
+	New folder name	Tên thư mục mới
+	Typography and Font	Kiểu chữ và Phông chữ
+	Favorite font	Phông chữ yêu thích
+	PostScript	PostScript
+	Formatting	Định dạng
+	Faux bold	Đậm giả
+	Faux italic	Nghiêng giả
+	Superscript	Chỉ số trên
+	Subscript	Chỉ số dưới
+	Hanging Punctuation	Dấu câu treo
+	Align Left	Căn trái
+	Align Center	Căn giữa
+	Align Right	Căn phải
+	Typography Size (Line Spacing Sync)	Kích thước kiểu chữ (đồng bộ giãn dòng)
+	System type	Hệ thống
+	Use standard font metrics and the baseline	Hệ mét: số đo phông chữ tiêu chuẩn và đường cơ sở
+	Use visual kerning and bubble centering	Hệ quang học: kerning trực quan và căn giữa bong bóng
+	Size (pt)	Cỡ (pt)
+	Leading is linked to size	Giãn dòng được liên kết với cỡ chữ
+	Leading is not linked to size	Giãn dòng không liên kết với cỡ chữ
+	H-Scale (%)	Tỷ lệ ngang (%)
+	Text Outline	Viền chữ
+	Thickness (px)	Độ dày (px)
+	Preview sample	Xem trước
+	Preview text	Văn bản xem trước
+	Edit preview text	Sửa văn bản xem trước
+	Leave empty for the automatic sample	Để trống để dùng mẫu tự động
+	Preview unavailable	Không thể xem trước
+	Duplicate this style	Nhân bản kiểu này
+	Delete this style	Xóa kiểu này

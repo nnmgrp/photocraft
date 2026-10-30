@@ -1589,14 +1589,19 @@ impl PhotocraftApp {
         let active_doc_idx = self.session.active_index();
         let total_docs = self.session.documents().len();
         let ctx = ui.ctx().clone();
+        // A foreground save blocks the app; showing no quick-save button anywhere also removes
+        // the way to start a second save.
+        let save_in_progress = jobs_ui::foreground_save(self).is_some();
 
         let mut items = Vec::with_capacity(total_docs);
         for idx in 0..total_docs {
-            let (title, path, is_dirty, dimensions, doc_id, doc_rev) = {
+            let (title, path, is_dirty, dimensions, doc_id, doc_rev, can_quick_save) = {
                 let doc_state = match self.session.documents().get(idx) {
                     Some(s) => s,
                     None => continue,
                 };
+                let can_quick_save = !save_in_progress
+                    && pages_panel::can_quick_save_page(&doc_state.doc, doc_state.path.as_deref(), doc_state.is_dirty());
                 (
                     doc_state.doc.name.clone(),
                     doc_state.path.as_deref().map(std::path::PathBuf::from),
@@ -1604,6 +1609,7 @@ impl PhotocraftApp {
                     Some((doc_state.doc.size.width, doc_state.doc.size.height)),
                     doc_state.doc.id,
                     doc_state.revision,
+                    can_quick_save,
                 )
             };
 
@@ -1642,6 +1648,7 @@ impl PhotocraftApp {
             let is_active = Some(idx) == active_doc_idx;
             let mut info = pages_panel::PageItemInfo::new(idx, title, path, is_active);
             info.is_dirty = is_dirty;
+            info.can_quick_save = can_quick_save;
             info.dimensions = dimensions;
             info.thumbnail_texture = thumbnail_texture;
 
@@ -1666,36 +1673,112 @@ impl PhotocraftApp {
         self.pages.render_embedded(ui, &view_info)
     }
 
+    /// Активировать страницу так же, как клик по её карточке: выбрать документ и, если включена
+    /// автопривязка TypeR, перевести панель на страницу этого документа.
+    fn activate_page(&mut self, idx: usize) -> bool {
+        if !self.session.set_active(idx) {
+            return false;
+        }
+        if self.pages.auto_sync_typer {
+            if let Some(doc_state) = self.session.documents().get(idx) {
+                let path = doc_state.path.as_deref().map(std::path::PathBuf::from);
+                let title = &doc_state.doc.name;
+                let target_page = path
+                    .as_deref()
+                    .and_then(|p| p.file_name())
+                    .and_then(|n| n.to_str())
+                    .and_then(pages_panel::parse_page_number_from_name)
+                    .or_else(|| pages_panel::parse_page_number_from_name(title))
+                    .unwrap_or(idx.saturating_add(1));
+
+                if self.typesetter.state.current_page != target_page {
+                    self.typesetter.state.current_page = target_page;
+                    if let Some(pos) = self.typesetter.state.lines.iter().position(|l| l.page == target_page) {
+                        self.typesetter.state.current_line_idx = pos;
+                    }
+                }
+            }
+        }
+        true
+    }
+
     /// Обработка пользовательских действий в панели страниц (выбор, закрытие, сортировка, открытие главы).
     pub(crate) fn handle_pages_action(&mut self, ctx: &egui::Context, action: pages_panel::PagesPanelAction) {
         match action {
             pages_panel::PagesPanelAction::SelectPage(idx) => {
-                if self.session.active_index() != Some(idx) {
-                    self.session.set_active(idx);
-                }
-                if self.pages.auto_sync_typer {
-                    if let Some(doc_state) = self.session.documents().get(idx) {
-                        let path = doc_state.path.as_deref().map(std::path::PathBuf::from);
-                        let title = &doc_state.doc.name;
-                        let target_page = path
-                            .as_deref()
-                            .and_then(|p| p.file_name())
-                            .and_then(|n| n.to_str())
-                            .and_then(pages_panel::parse_page_number_from_name)
-                            .or_else(|| pages_panel::parse_page_number_from_name(title))
-                            .unwrap_or(idx.saturating_add(1));
-
-                        if self.typesetter.state.current_page != target_page {
-                            self.typesetter.state.current_page = target_page;
-                            if let Some(pos) = self.typesetter.state.lines.iter().position(|l| l.page == target_page) {
-                                self.typesetter.state.current_line_idx = pos;
-                            }
-                        }
-                    }
-                }
+                self.activate_page(idx);
             }
             pages_panel::PagesPanelAction::ClosePage(idx) => {
                 let _ = crate::menus::invoke(self, ctx, "file.close", serde_json::json!({"document": idx}));
+            }
+            pages_panel::PagesPanelAction::SavePage(idx) => {
+                if jobs_ui::foreground_save(self).is_some() {
+                    notices::post(self, "Сохранение уже выполняется", Vec::new(), false, None);
+                    return;
+                }
+                let Some(doc_state) = self.session.documents().get(idx) else {
+                    notices::post(
+                        self,
+                        "Не удалось сохранить страницу",
+                        vec![format!("Страница больше не существует (индекс {idx}).")],
+                        true,
+                        None,
+                    );
+                    return;
+                };
+                if !pages_panel::can_quick_save_page(&doc_state.doc, doc_state.path.as_deref(), doc_state.is_dirty()) {
+                    notices::post(
+                        self,
+                        "Не удалось сохранить страницу",
+                        vec!["Эту страницу нельзя сохранить на месте. Используйте „Сохранить как“.".to_string()],
+                        true,
+                        None,
+                    );
+                    return;
+                }
+                if !self.activate_page(idx) {
+                    notices::post(
+                        self,
+                        "Не удалось сохранить страницу",
+                        vec![format!("Страница больше не существует (индекс {idx}).")],
+                        true,
+                        None,
+                    );
+                    return;
+                }
+                if self.session.active_index() != Some(idx) {
+                    notices::post(
+                        self,
+                        "Не удалось сохранить страницу",
+                        vec![format!("Не удалось активировать страницу (индекс {idx}).")],
+                        true,
+                        None,
+                    );
+                    return;
+                }
+                let Some(doc_state) = self.session.documents().get(idx) else {
+                    notices::post(
+                        self,
+                        "Не удалось сохранить страницу",
+                        vec![format!("Страница больше не существует (индекс {idx}).")],
+                        true,
+                        None,
+                    );
+                    return;
+                };
+                if !pages_panel::can_quick_save_page(&doc_state.doc, doc_state.path.as_deref(), doc_state.is_dirty()) {
+                    notices::post(
+                        self,
+                        "Не удалось сохранить страницу",
+                        vec!["Эту страницу нельзя сохранить на месте. Используйте „Сохранить как“.".to_string()],
+                        true,
+                        None,
+                    );
+                    return;
+                }
+                if let Err(error) = crate::menus::invoke(self, ctx, "file.save", serde_json::json!({})) {
+                    notices::post(self, "Не удалось сохранить страницу", vec![error], true, None);
+                }
             }
             pages_panel::PagesPanelAction::OpenChapterFolder => {
                 if let Some(folder) = rfd::FileDialog::new().pick_folder() {

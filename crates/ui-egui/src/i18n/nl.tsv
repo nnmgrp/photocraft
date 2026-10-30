@@ -4570,3 +4570,37 @@ curves	Smooth	Vloeiend maken
 	Remove what is selected with Nano Banana ({key})	Selectie verwijderen met Nano Banana ({key})
 	Pin to Top	Bovenaan vastzetten
 	Unpin from Top	Losmaken van bovenaan
+
+# Font Settings v2: preview sample, geometry labels and accessibility tooltips.
+	Font Settings	Lettertype-instellingen
+	Style name	Stijlnaam
+	No folder	Geen map
+	+ New folder...	+ Nieuwe map...
+	Folder name	Mapnaam
+	New folder name	Naam nieuwe map
+	Typography and Font	Typografie en lettertype
+	Favorite font	Favoriet lettertype
+	PostScript	PostScript
+	Formatting	Opmaak
+	Faux bold	Valse vet
+	Faux italic	Valse cursief
+	Align Left	Links uitlijnen
+	Align Center	Centreren
+	Align Right	Rechts uitlijnen
+	Typography Size (Line Spacing Sync)	Typografieformaten (regelafstand synchroniseren)
+	System type	Systeem
+	Use standard font metrics and the baseline	Metrisch systeem: standaard lettertypemetingen en basislijn
+	Use visual kerning and bubble centering	Optisch systeem: visuele kerning en balloncentrering
+	Size (pt)	Grootte (pt)
+	Leading is linked to size	Regelafstand is gekoppeld aan grootte
+	Leading is not linked to size	Regelafstand is niet gekoppeld aan grootte
+	H-Scale (%)	H-schaal (%)
+	Text Outline	Tekstomtrek
+	Thickness (px)	Dikte (px)
+	Preview sample	Voorbeeld
+	Preview text	Voorbeeldtekst
+	Edit preview text	Voorbeeldtekst bewerken
+	Leave empty for the automatic sample	Leeg laten voor het automatische voorbeeld
+	Preview unavailable	Voorbeeld niet beschikbaar
+	Duplicate this style	Deze stijl dupliceren
+	Delete this style	Deze stijl verwijderen

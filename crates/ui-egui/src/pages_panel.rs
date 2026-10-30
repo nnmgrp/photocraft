@@ -46,6 +46,8 @@ pub struct PageItemInfo {
     pub is_active: bool,
     /// Флаг наличия несохраненных изменений в документе.
     pub is_dirty: bool,
+    /// Быстрое сохранение допустимо для изменённого документа в его текущий файл.
+    pub can_quick_save: bool,
     /// Общее количество текстовых реплик (баблов) в `TypeR` для этой страницы.
     pub total_lines: usize,
     /// Количество уже сверстанных (вставленных на холст) реплик.
@@ -75,6 +77,7 @@ impl PageItemInfo {
             detected_page,
             is_active,
             is_dirty: false,
+            can_quick_save: false,
             total_lines: 0,
             applied_lines: 0,
             thumbnail_texture: None,
@@ -99,6 +102,13 @@ impl PageItemInfo {
     }
 }
 
+pub(crate) fn can_quick_save_page(doc: &photocraft_doc::Document, path: Option<&str>, is_dirty: bool) -> bool {
+    is_dirty
+        && path.is_some_and(|path| {
+            photocraft_engine::file_cmds::saves_in_place(path) && photocraft_engine::file_cmds::holds_at(doc, path)
+        })
+}
+
 /// Срез данных о документах сессии, передаваемый в `PagesPanelState::render_embedded` на каждом кадре.
 #[derive(Debug, Clone, Default)]
 pub struct PagesViewInfo {
@@ -119,6 +129,8 @@ pub enum PagesPanelAction {
     SelectPage(usize),
     /// Закрыть указанный документ (передается `doc_index`).
     ClosePage(usize),
+    /// Быстро сохранить страницу в её существующий файл на диске без диалогов.
+    SavePage(usize),
     /// Открыть системный диалог выбора папки с главой манги.
     OpenChapterFolder,
     /// Открыть системный диалог добавления отдельных файлов страниц.
@@ -883,6 +895,16 @@ impl PagesPanelState {
                     action = Some(PagesPanelAction::ClosePage(item.doc_index));
                 }
 
+                if item.can_quick_save {
+                    if ui
+                        .small_button("💾")
+                        .on_hover_text("Сохранить страницу в её файл")
+                        .clicked()
+                    {
+                        action = Some(PagesPanelAction::SavePage(item.doc_index));
+                    }
+                }
+
                 if item.doc_index + 1 < total_session_docs
                     && ui
                         .small_button("↓")
@@ -1075,6 +1097,16 @@ impl PagesPanelState {
                     .clicked()
                 {
                     action = Some(PagesPanelAction::ClosePage(item.doc_index));
+                }
+
+                if item.can_quick_save {
+                    if ui
+                        .small_button("💾")
+                        .on_hover_text("Сохранить страницу в её файл")
+                        .clicked()
+                    {
+                        action = Some(PagesPanelAction::SavePage(item.doc_index));
+                    }
                 }
             });
         });
@@ -1455,6 +1487,14 @@ impl PagesPanelState {
 
         ui.separator();
 
+        if item.can_quick_save {
+            if ui.button("💾 Сохранить страницу").clicked()
+            {
+                action = Some(PagesPanelAction::SavePage(item.doc_index));
+                ui.close();
+            }
+        }
+
         if ui
             .button(
                 RichText::new("✖ Закрыть страницу").color(Color32::from_rgb(240, 90, 90)),
@@ -1725,5 +1765,227 @@ mod tests {
             1,
             "the document must stay open until the unsaved-changes prompt is answered"
         );
+    }
+
+    #[test]
+    fn quick_save_eligibility_matches_document_and_format() {
+        use crate::{PhotocraftApp, Services};
+        use photocraft_engine::Session;
+        use serde_json::json;
+
+        let mut app = PhotocraftApp::new(Session::new(), Services::default());
+        app.run("file.new", json!({"width": 10, "height": 10, "name": "page01.psd"})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+
+        let doc = &app.session.active().unwrap().doc;
+        assert!(can_quick_save_page(doc, Some("chapter/page01.psd"), true));
+        assert!(can_quick_save_page(doc, Some("chapter/page01.psb"), true));
+        assert!(can_quick_save_page(doc, Some("chapter/page01.pcraft"), true));
+        assert!(can_quick_save_page(doc, Some("chapter/page01.ora"), true));
+        assert!(can_quick_save_page(doc, Some("chapter/PAGE01.PSD"), true));
+        assert!(can_quick_save_page(doc, Some("chapter/PAGE01.PsB"), true));
+        assert!(can_quick_save_page(doc, Some("chapter/PAGE01.ORA"), true));
+        assert!(!can_quick_save_page(doc, Some("chapter/page01"), true), "a path without an extension cannot save in place");
+        assert!(!can_quick_save_page(doc, None, true));
+        assert!(!can_quick_save_page(doc, Some("chapter/page01.psd"), false));
+        for path in [
+            "chapter/page01.png",
+            "chapter/page01.jpg",
+            "chapter/page01.jpeg",
+            "chapter/page01.webp",
+            "chapter/page01.tga",
+        ] {
+            assert!(!can_quick_save_page(doc, Some(path), true), "{path} must require Save As");
+        }
+
+        app.run("layer.newAdjustmentLayer.levels", json!({})).unwrap();
+        let doc = &app.session.active().unwrap().doc;
+        assert!(!can_quick_save_page(doc, Some("chapter/page01.ora"), true), "ORA cannot preserve adjustment layers");
+        assert!(can_quick_save_page(doc, Some("chapter/page01.psd"), true));
+    }
+
+    #[test]
+    fn save_page_activates_and_saves_target_document() {
+        use crate::{PhotocraftApp, Services};
+        use photocraft_engine::Session;
+        use serde_json::json;
+
+        let mut app = PhotocraftApp::new(
+            Session::new(),
+            Services {
+                export: Some(Box::new(|_, _, _| Ok((Vec::new(), Vec::new())))),
+                write: Some(Box::new(|_, _| Ok(()))),
+                ..Default::default()
+            },
+        );
+        app.run("file.new", json!({"width": 10, "height": 10, "name": "page01.psd"})).unwrap();
+        app.session.active_mut().unwrap().path = Some("F:/quick-save-test.psd".into());
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.run("file.new", json!({"width": 10, "height": 10, "name": "page02.psd"})).unwrap();
+        assert_eq!(app.session.active_index(), Some(1));
+
+        app.handle_pages_action(&egui::Context::default(), PagesPanelAction::SavePage(0));
+
+        assert_eq!(app.session.active_index(), Some(0));
+        assert!(!app.session.active().unwrap().is_dirty(), "the target document should be saved");
+        assert!(app.ui.notices.is_empty(), "a successful save should not report an error");
+    }
+
+    #[test]
+    fn save_page_reports_invalid_target_and_save_errors() {
+        use crate::{PhotocraftApp, Services};
+        use photocraft_engine::Session;
+        use serde_json::json;
+
+        let mut app = PhotocraftApp::new(Session::new(), Services::default());
+        app.run("file.new", json!({"width": 10, "height": 10, "name": "page01.psd"})).unwrap();
+        app.session.active_mut().unwrap().path = Some("F:/quick-save-test.psd".into());
+        app.run("layer.new.layer", json!({})).unwrap();
+
+        let ctx = egui::Context::default();
+        app.handle_pages_action(&ctx, PagesPanelAction::SavePage(usize::MAX));
+        assert!(app.ui.notices.last().is_some_and(|notice| notice.error));
+        assert!(app.session.active().unwrap().is_dirty());
+
+        app.services.export = Some(Box::new(|_, _, _| Err("synthetic export failure".into())));
+        app.handle_pages_action(&ctx, PagesPanelAction::SavePage(0));
+        let notice = app.ui.notices.last().expect("save failure should be reported");
+        assert!(notice.error);
+        assert!(notice.lines.iter().any(|line| line == "synthetic export failure"));
+        assert!(app.session.active().unwrap().is_dirty());
+    }
+
+    #[test]
+    fn save_page_refuses_stale_ineligible_target() {
+        use crate::{PhotocraftApp, Services};
+        use photocraft_engine::Session;
+        use serde_json::json;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let exports = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&exports);
+        let mut app = PhotocraftApp::new(
+            Session::new(),
+            Services {
+                export: Some(Box::new(move |_, _, _| {
+                    counter.fetch_add(1, Ordering::Relaxed);
+                    Ok((Vec::new(), Vec::new()))
+                })),
+                write: Some(Box::new(|_, _| Ok(()))),
+                ..Default::default()
+            },
+        );
+        app.run("file.new", json!({"width": 10, "height": 10, "name": "page01.psd"})).unwrap();
+        app.session.active_mut().unwrap().path = Some("F:/quick-save-test.psd".into());
+        app.run("layer.new.layer", json!({})).unwrap();
+        assert!(app.session.active().unwrap().is_dirty());
+
+        // The card was built when the PSD could save in place; by the time the click arrives the
+        // path is flat. The button must report the stale state instead of falling through to
+        // Save As (which would call the exporter).
+        app.session.active_mut().unwrap().path = Some("F:/quick-save-test.png".into());
+        app.handle_pages_action(&egui::Context::default(), PagesPanelAction::SavePage(0));
+
+        assert_eq!(exports.load(Ordering::Relaxed), 0, "the quick-save button must never open Save As");
+        assert!(app.session.active().unwrap().is_dirty(), "the document must stay dirty");
+        let notice = app.ui.notices.last().expect("the stale target must be reported");
+        assert!(notice.error);
+        assert!(notice.lines.iter().any(|line| line.contains("нельзя сохранить на месте")), "{notice:?}");
+    }
+
+    #[test]
+    fn save_page_activation_syncs_typer_page() {
+        use crate::{PhotocraftApp, Services};
+        use photocraft_engine::Session;
+        use serde_json::json;
+
+        let mut app = PhotocraftApp::new(
+            Session::new(),
+            Services {
+                export: Some(Box::new(|_, _, _| Ok((Vec::new(), Vec::new())))),
+                write: Some(Box::new(|_, _| Ok(()))),
+                ..Default::default()
+            },
+        );
+        app.pages.auto_sync_typer = true;
+        app.run("file.new", json!({"width": 10, "height": 10, "name": "page_007.psd"})).unwrap();
+        app.session.active_mut().unwrap().path = Some("F:/chapter/page_007.psd".into());
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.run("file.new", json!({"width": 10, "height": 10, "name": "page_012.psd"})).unwrap();
+        app.session.active_mut().unwrap().path = Some("F:/chapter/page_012.psd".into());
+        assert_eq!(app.session.active_index(), Some(1));
+
+        app.handle_pages_action(&egui::Context::default(), PagesPanelAction::SavePage(0));
+
+        assert_eq!(app.session.active_index(), Some(0));
+        assert_eq!(app.typesetter.state.current_page, 7, "quick save must use the card-click TypeR sync");
+    }
+
+    #[test]
+    fn save_page_skips_when_foreground_save_runs() {
+        use crate::{PhotocraftApp, Services};
+        use photocraft_engine::Session;
+        use photocraft_engine::jobs::Started;
+        use serde_json::json;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let exports = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&exports);
+        let mut app = PhotocraftApp::new(
+            Session::new(),
+            Services {
+                export: Some(Box::new(move |_, _, _| {
+                    counter.fetch_add(1, Ordering::Relaxed);
+                    Ok((Vec::new(), Vec::new()))
+                })),
+                write: Some(Box::new(|_, _| Ok(()))),
+                ..Default::default()
+            },
+        );
+        app.run("file.new", json!({"width": 10, "height": 10, "name": "page01.psd"})).unwrap();
+        app.session.active_mut().unwrap().path = Some("F:/quick-save-test.psd".into());
+        app.run("layer.new.layer", json!({})).unwrap();
+        let doc = app.session.active().unwrap().doc.id;
+
+        let started = app
+            .session
+            .start_job(
+                "test.foreground-save",
+                json!({}),
+                "test save",
+                false,
+                |ctx| {
+                    while !ctx.cancelled() {
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                    }
+                    Ok(())
+                },
+                |_, _| Ok(json!({})),
+            )
+            .expect("the fake save job starts");
+        let Started::Job(job) = started else { panic!("the fake save must run as a job") };
+        app.jobs.saves.push(crate::jobs_ui::SaveJob {
+            job,
+            doc,
+            revision: 0,
+            path: "F:/quick-save-test.psd".into(),
+            copy: false,
+            automation: false,
+            state: Arc::new(crate::jobs_ui::SaveState::default()),
+            ended: false,
+            foreground: true,
+        });
+
+        app.handle_pages_action(&egui::Context::default(), PagesPanelAction::SavePage(0));
+
+        assert_eq!(exports.load(Ordering::Relaxed), 0, "a second save must not start while the foreground one runs");
+        assert!(app.session.active().unwrap().is_dirty());
+        let notice = app.ui.notices.last().expect("the running save should be reported");
+        assert!(!notice.error, "a save already in progress is not an error: {notice:?}");
+
+        app.session.cancel_job(job);
+        let _ = app.session.poll_jobs();
     }
 }

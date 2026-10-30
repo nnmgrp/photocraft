@@ -4749,3 +4749,37 @@ layerLabel	No Color	Sem cor
 	Remove what is selected with Nano Banana ({key})	Remover a seleção com o Nano Banana ({key})
 	Pin to Top	Fixar no topo
 	Unpin from Top	Desafixar do topo
+
+# Font Settings v2: preview sample, geometry labels and accessibility tooltips.
+	Font Settings	Configurações de fonte
+	Style name	Nome do estilo
+	No folder	Sem pasta
+	+ New folder...	+ Nova pasta...
+	Folder name	Nome da pasta
+	New folder name	Nome da nova pasta
+	Typography and Font	Tipografia e fonte
+	Favorite font	Fonte favorita
+	PostScript	PostScript
+	Formatting	Formatação
+	Faux bold	Negrito falso
+	Faux italic	Itálico falso
+	Align Left	Esquerda
+	Align Center	Centro
+	Align Right	Direita
+	Typography Size (Line Spacing Sync)	Tamanhos de tipografia (sincronização de entrelinha)
+	System type	Sistema
+	Use standard font metrics and the baseline	Sistema métrico: métricas padrão da fonte e linha de base
+	Use visual kerning and bubble centering	Sistema óptico: kerning visual e centralização de balões
+	Size (pt)	Tamanho (pt)
+	Leading is linked to size	A entrelinha está vinculada ao tamanho
+	Leading is not linked to size	A entrelinha não está vinculada ao tamanho
+	H-Scale (%)	Escala H (%)
+	Text Outline	Contorno do texto
+	Thickness (px)	Espessura (px)
+	Preview sample	Pré-visualização
+	Preview text	Texto da pré-visualização
+	Edit preview text	Editar texto da pré-visualização
+	Leave empty for the automatic sample	Deixe vazio para a amostra automática
+	Preview unavailable	Pré-visualização indisponível
+	Duplicate this style	Duplicar este estilo
+	Delete this style	Excluir este estilo

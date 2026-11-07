@@ -1062,6 +1062,7 @@ fn build() -> Vec<CommandSpec> {
         }),
         cmd!("layer.flattenImage", "Flatten Image", ["Layer"], None, "{}", has_doc, |s, _| {
             s.edit("Flatten Image", |doc, active| {
+                crate::screentone_cmds::ensure_doc_screentones_baked(doc);
                 let fmt = doc.pixel_format();
                 let mut bg = Layer::raster("Background", fmt);
                 bg.locks.transparency = true;
@@ -1541,6 +1542,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::transform_cmds::specs());
     v.extend(crate::float_cmds::specs());
     v.extend(crate::vector_cmds::specs());
+    v.extend(crate::balloon_cmds::specs());
     v.extend(crate::path_edit_cmds::specs());
     v.extend(crate::smartselect_cmds::specs());
     v.extend(crate::cutout_cmds::specs());

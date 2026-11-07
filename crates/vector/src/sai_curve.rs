@@ -696,21 +696,18 @@ fn clean_polygon(poly: &[P]) -> Vec<P> {
         if !pt.0.is_finite() || !pt.1.is_finite() {
             continue;
         }
-        if let Some(&last) = out.last() {
-            if dist(last, pt) < 1e-4 {
-                continue;
-            }
+        if let Some(&last) = out.last()
+            && dist(last, pt) < 1e-4
+        {
+            continue;
         }
         out.push(pt);
     }
-    if out.len() > 2 {
-        if let Some(&first) = out.first() {
-            if let Some(&last) = out.last() {
-                if dist(first, last) < 1e-4 {
-                    out.pop();
-                }
-            }
-        }
+    if out.len() > 2
+        && let (Some(&first), Some(&last)) = (out.first(), out.last())
+        && dist(first, last) < 1e-4
+    {
+        out.pop();
     }
     out
 }

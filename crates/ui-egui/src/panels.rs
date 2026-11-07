@@ -40,7 +40,7 @@ const TOOL_SECTIONS: &[&[&[Tool]]] = &[
         &[Tool::Pen, Tool::FreeformPen, Tool::CurvaturePen, Tool::AddAnchorPoint, Tool::DeleteAnchorPoint, Tool::ConvertPoint],
         &[Tool::Type, Tool::VerticalType, Tool::VerticalTypeMask, Tool::HorizontalTypeMask],
         &[Tool::PathSelection, Tool::DirectSelection],
-        &[Tool::Rectangle, Tool::EllipseShape, Tool::Triangle, Tool::Polygon, Tool::Line, Tool::CustomShape],
+        &[Tool::Rectangle, Tool::EllipseShape, Tool::Triangle, Tool::Polygon, Tool::Line, Tool::CustomShape, Tool::Balloon],
     ],
     &[&[Tool::Hand, Tool::RotateView], &[Tool::Zoom]],
 ];
@@ -2048,47 +2048,33 @@ pub fn left_dock(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if !app.ui.panels.left_dock {
         return;
     }
-    let typesetter_in_tree = app
-        .ui
-        .docking_left
-        .as_ref()
-        .is_some_and(|l| l.root.is_some() && l.contains(&"typesetter".to_string()));
+    let typesetter_in_tree = app.ui.docking_left.as_ref().is_some_and(|l| l.root.is_some() && l.contains(&"typesetter".to_string()));
     let typesetter_here = app.ui.panels.typesetter
         && app.typesetter.is_open
         && app.typesetter.dock_mode == crate::typesetter_ui::TypesetterDockMode::DockLeft
         && !typesetter_in_tree;
-    let has_layout_panels = app
-        .ui
-        .docking_left
-        .as_ref()
-        .is_some_and(|l| l.root.is_some());
+    let has_layout_panels = app.ui.docking_left.as_ref().is_some_and(|l| l.root.is_some());
     if !typesetter_here && !has_layout_panels {
         return;
     }
     let t = Tokens::get(ui.ctx());
     let default_w = if t.pro { 280.0 } else { 300.0 };
-    egui::Panel::left("shared-left-dock")
-        .default_size(default_w)
-        .size_range(200.0..=650.0)
-        .resizable(true)
-        .frame(egui::Frame::NONE.fill(t.card))
-        .show(ui, |ui| {
+    egui::Panel::left("shared-left-dock").default_size(default_w).size_range(200.0..=650.0).resizable(true).frame(egui::Frame::NONE.fill(t.card)).show(
+        ui,
+        |ui| {
             if let Some(layout) = app.ui.docking_left.clone()
                 && layout.root.is_some()
             {
-                crate::panel_docking::show_side_dock(
-                    app,
-                    ui,
-                    &layout,
-                    crate::panel_docking::DockSide::Left,
-                );
+                crate::panel_docking::show_side_dock(app, ui, &layout, crate::panel_docking::DockSide::Left);
             }
             if typesetter_here {
                 if let Some(action) = app.typesetter.render_embedded(ui) {
                     app.handle_typesetter_action(action);
                 }
+                app.refresh_typesetter_contour();
             }
-        });
+        },
+    );
 }
 
 pub fn right_dock(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
@@ -2160,46 +2146,32 @@ pub fn bottom_dock(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if !app.ui.panels.bottom_dock {
         return;
     }
-    let typesetter_in_tree = app
-        .ui
-        .docking_bottom
-        .as_ref()
-        .is_some_and(|l| l.root.is_some() && l.contains(&"typesetter".to_string()));
+    let typesetter_in_tree = app.ui.docking_bottom.as_ref().is_some_and(|l| l.root.is_some() && l.contains(&"typesetter".to_string()));
     let typesetter_here = app.ui.panels.typesetter
         && app.typesetter.is_open
         && app.typesetter.dock_mode == crate::typesetter_ui::TypesetterDockMode::DockBottom
         && !typesetter_in_tree;
-    let has_layout_panels = app
-        .ui
-        .docking_bottom
-        .as_ref()
-        .is_some_and(|l| l.root.is_some());
+    let has_layout_panels = app.ui.docking_bottom.as_ref().is_some_and(|l| l.root.is_some());
     if !typesetter_here && !has_layout_panels {
         return;
     }
     let t = Tokens::get(ui.ctx());
-    egui::Panel::bottom("shared-bottom-dock")
-        .default_size(240.0)
-        .size_range(140.0..=480.0)
-        .resizable(true)
-        .frame(egui::Frame::NONE.fill(t.card))
-        .show(ui, |ui| {
+    egui::Panel::bottom("shared-bottom-dock").default_size(240.0).size_range(140.0..=480.0).resizable(true).frame(egui::Frame::NONE.fill(t.card)).show(
+        ui,
+        |ui| {
             if let Some(layout) = app.ui.docking_bottom.clone()
                 && layout.root.is_some()
             {
-                crate::panel_docking::show_side_dock(
-                    app,
-                    ui,
-                    &layout,
-                    crate::panel_docking::DockSide::Bottom,
-                );
+                crate::panel_docking::show_side_dock(app, ui, &layout, crate::panel_docking::DockSide::Bottom);
             }
             if typesetter_here {
                 if let Some(action) = app.typesetter.render_embedded(ui) {
                     app.handle_typesetter_action(action);
                 }
+                app.refresh_typesetter_contour();
             }
-        });
+        },
+    );
 }
 
 pub(crate) const DOCK_MIN_WIDTH: f32 = 250.0;
@@ -5500,14 +5472,7 @@ fn effect_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, l: &Layer, depth: usi
             if resp.clicked() && ui.input(|inp| inp.modifiers.alt) {
                 let anchor = crate::fx_scrub::compute_hud_anchor(ui.ctx(), rect, 190.0);
                 ui.ctx().data_mut(|d| {
-                    d.insert_temp(
-                        crate::fx_scrub::hud_state_id(),
-                        crate::fx_scrub::FxHudState {
-                            layer_id: l.id,
-                            effect_idx: i - 1,
-                            anchor_pos: anchor,
-                        },
-                    );
+                    d.insert_temp(crate::fx_scrub::hud_state_id(), crate::fx_scrub::FxHudState { layer_id: l.id, effect_idx: i - 1, anchor_pos: anchor });
                 });
             }
         } else if i == 0 && resp.drag_started() {
@@ -5558,13 +5523,7 @@ fn effect_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, l: &Layer, depth: usi
             let val_str = param.format(val);
             let val_font = egui::FontId::proportional(10.5);
             let val_color = if resp.hovered() { t.text_dim } else { t.text_faint.gamma_multiply(0.7) };
-            ui.painter().text(
-                pos2(right - 2.0, rect.center().y),
-                egui::Align2::RIGHT_CENTER,
-                val_str,
-                val_font,
-                val_color,
-            );
+            ui.painter().text(pos2(right - 2.0, rect.center().y), egui::Align2::RIGHT_CENTER, val_str, val_font, val_color);
         }
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, name.clone()));
         if resp.double_clicked() {
@@ -5577,14 +5536,7 @@ fn effect_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, l: &Layer, depth: usi
                 if ui.button(tl!("Quick Adjust HUD…")).clicked() {
                     let anchor = crate::fx_scrub::compute_hud_anchor(ui.ctx(), rect, 190.0);
                     ui.ctx().data_mut(|d| {
-                        d.insert_temp(
-                            crate::fx_scrub::hud_state_id(),
-                            crate::fx_scrub::FxHudState {
-                                layer_id: l.id,
-                                effect_idx: i - 1,
-                                anchor_pos: anchor,
-                            },
-                        );
+                        d.insert_temp(crate::fx_scrub::hud_state_id(), crate::fx_scrub::FxHudState { layer_id: l.id, effect_idx: i - 1, anchor_pos: anchor });
                     });
                     ui.close();
                 }
@@ -6299,9 +6251,9 @@ mod history_transform_tests {
         let mut h = Harness::builder().with_size(vec2(300.0, 400.0)).build_ui_state(|ui, app: &mut PhotocraftApp| history(app, ui), app);
         h.run_steps(2);
         // The column cells are the only 24 pt squares, one per state, top to bottom.
-        let mut cells: Vec<Rect> = h
-            .ctx
-            .viewport(|v| v.prev_pass.widgets.layers().flat_map(|(_, w)| w.iter()).filter(|w| w.rect.size() == vec2(24.0, HISTORY_ROW_H)).map(|w| w.rect).collect());
+        let mut cells: Vec<Rect> = h.ctx.viewport(|v| {
+            v.prev_pass.widgets.layers().flat_map(|(_, w)| w.iter()).filter(|w| w.rect.size() == vec2(24.0, HISTORY_ROW_H)).map(|w| w.rect).collect()
+        });
         cells.sort_by(|a, b| a.center().y.total_cmp(&b.center().y));
         cells.dedup();
         assert_eq!(cells.len(), 3, "Open, Fill, Fill: {cells:?}");

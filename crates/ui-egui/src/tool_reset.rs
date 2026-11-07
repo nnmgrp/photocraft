@@ -189,7 +189,9 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         Tool::Brush => reset!(brush_clear),
         Tool::Pencil => reset!(pencil_auto_erase, pencil_clear),
         Tool::Eraser => reset!(eraser_mode),
-        Tool::Remove => reset!(remove_lama, remove_diffusion, remove_nano, remove_generative, remove_model, remove_nano_mark, remove_area, remove_creative, remove_quality),
+        Tool::Remove => {
+            reset!(remove_lama, remove_diffusion, remove_nano, remove_generative, remove_model, remove_nano_mark, remove_area, remove_creative, remove_quality)
+        }
         Tool::BackgroundEraser => reset!(bg_sampling, bg_limits, bg_tolerance, bg_protect_fg),
         Tool::ColorReplacement => reset!(cr_mode, cr_sampling, cr_limits, cr_tolerance, cr_anti_alias),
         Tool::MagicEraser => reset!(tolerance, anti_alias, contiguous, magic_eraser_opacity),
@@ -216,6 +218,9 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         Tool::FreeformPen => reset!(vector_mode, curve_fit),
         Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Line | Tool::CustomShape => {
             reset!(vector_mode, shape_fill, stroke_width, shape_stroke, corner_radius, polygon_sides, line_weight)
+        }
+        Tool::Balloon => {
+            reset!(balloon_mode, balloon_preset, balloon_mouth, balloon_bumps, balloon_amplitude, balloon_jitter, balloon_spikes, balloon_length, balloon_smooth, balloon_inward, balloon_seed)
         }
         Tool::ColorSampler
         | Tool::Ruler

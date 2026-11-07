@@ -118,7 +118,7 @@ pub fn char_width_factor(c: char) -> f32 {
         c if ('А'..='Я').contains(&c) || c == 'Ё' => 0.65,
         c if ('а'..='я').contains(&c) || c == 'ё' => 0.52,
         c if c.is_ascii_digit() => 0.55,
-        c if c >= '\u{3000}' && c <= '\u{9FFF}' => 1.0, // CJK
+        c if ('\u{3000}'..='\u{9FFF}').contains(&c) => 1.0, // CJK
         _ => 0.50,
     }
 }
@@ -327,10 +327,10 @@ pub fn knuth_plass_bubble_wrap_ext(
         let end = window[1];
         lines.push(tokens[start..end].join(" "));
     }
-    if let Some(&last_start) = best_break_indices.last() {
-        if last_start < tokens.len() {
-            lines.push(tokens[last_start..].join(" "));
-        }
+    if let Some(&last_start) = best_break_indices.last()
+        && last_start < tokens.len()
+    {
+        lines.push(tokens[last_start..].join(" "));
     }
 
     lines.join("\n")

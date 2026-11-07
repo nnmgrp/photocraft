@@ -844,10 +844,10 @@ pub fn detect_page_header(line: &str) -> Option<usize> {
     for prefix in prefixes {
         if let Some(rest) = lower.strip_prefix(prefix) {
             let digits: String = rest.trim().chars().take_while(|c| c.is_ascii_digit()).collect();
-            if let Ok(num) = digits.parse::<usize>() {
-                if num > 0 {
-                    return Some(num);
-                }
+            if let Ok(num) = digits.parse::<usize>()
+                && num > 0
+            {
+                return Some(num);
             }
         }
     }
@@ -858,18 +858,18 @@ pub fn detect_page_header(line: &str) -> Option<usize> {
 pub fn clean_script_line_with_options(line: &str, options: &TypesetterOptions) -> String {
     let mut s = line.trim();
 
-    if options.strip_dash_prefix {
-        if let Some(stripped) = s.strip_prefix("- ").or_else(|| s.strip_prefix("— ")) {
-            s = stripped.trim();
-        }
+    if options.strip_dash_prefix
+        && let Some(stripped) = s.strip_prefix("- ").or_else(|| s.strip_prefix("— "))
+    {
+        s = stripped.trim();
     }
 
-    if options.strip_character_names {
-        if let Some((_, text)) = s.split_once(':') {
-            let trimmed = text.trim();
-            if !trimmed.is_empty() {
-                s = trimmed;
-            }
+    if options.strip_character_names
+        && let Some((_, text)) = s.split_once(':')
+    {
+        let trimmed = text.trim();
+        if !trimmed.is_empty() {
+            s = trimmed;
         }
     }
 

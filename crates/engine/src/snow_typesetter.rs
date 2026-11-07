@@ -1,3 +1,5 @@
+use photocraft_doc::{Document, Rect};
+use photocraft_raster::Surface;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -169,6 +171,27 @@ impl Default for TypesetterOptions {
     }
 }
 
+/// How a contour proposal arranges the dialogue.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContourWrapKind {
+    /// The line breaks written by the author.
+    Original,
+    /// A layout fitted to the sampled bubble contour.
+    ContourFit,
+    /// A rectangular wrap inside the bubble.
+    BubbleWrap,
+    /// Rows distributed over roughly equal optical lengths.
+    Balanced,
+}
+
+/// One line-breaking proposal for the active dialogue line.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ContourVariant {
+    pub kind: ContourWrapKind,
+    pub text: String,
+    pub lines: usize,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TypesetterState {
     pub lines: Vec<ScriptLine>,
@@ -236,11 +259,7 @@ pub fn parse_color_value(val: &serde_json::Value) -> Option<[u8; 4]> {
                     if let Some(n) = v.as_u64() {
                         n.min(255) as u8
                     } else if let Some(f) = v.as_f64() {
-                        if f <= 1.0 && f > 0.0 {
-                            (f * 255.0).round().clamp(0.0, 255.0) as u8
-                        } else {
-                            f.round().clamp(0.0, 255.0) as u8
-                        }
+                        if f <= 1.0 && f > 0.0 { (f * 255.0).round().clamp(0.0, 255.0) as u8 } else { f.round().clamp(0.0, 255.0) as u8 }
                     } else {
                         0
                     }
@@ -253,11 +272,7 @@ pub fn parse_color_value(val: &serde_json::Value) -> Option<[u8; 4]> {
                     if let Some(n) = a.as_u64() {
                         n.min(255) as u8
                     } else if let Some(f) = a.as_f64() {
-                        if f <= 1.0 {
-                            (f * 255.0).round().clamp(0.0, 255.0) as u8
-                        } else {
-                            f.round().clamp(0.0, 255.0) as u8
-                        }
+                        if f <= 1.0 { (f * 255.0).round().clamp(0.0, 255.0) as u8 } else { f.round().clamp(0.0, 255.0) as u8 }
                     } else {
                         255
                     }
@@ -278,11 +293,7 @@ pub fn parse_color_value(val: &serde_json::Value) -> Option<[u8; 4]> {
                 } else {
                     g.round().clamp(0.0, 255.0) as u8
                 };
-                let a = if let Some(op) = map.get("opacity").and_then(|v| v.as_f64()) {
-                    ((op / 100.0) * 255.0).round().clamp(0.0, 255.0) as u8
-                } else {
-                    255
-                };
+                let a = if let Some(op) = map.get("opacity").and_then(|v| v.as_f64()) { ((op / 100.0) * 255.0).round().clamp(0.0, 255.0) as u8 } else { 255 };
                 return Some([v, v, v, a]);
             }
 
@@ -293,11 +304,7 @@ pub fn parse_color_value(val: &serde_json::Value) -> Option<[u8; 4]> {
                 if let Some(n) = v.as_u64() {
                     n.min(255) as u8
                 } else if let Some(f) = v.as_f64() {
-                    if f <= 1.0 && f > 0.0 {
-                        (f * 255.0).round().clamp(0.0, 255.0) as u8
-                    } else {
-                        f.round().clamp(0.0, 255.0) as u8
-                    }
+                    if f <= 1.0 && f > 0.0 { (f * 255.0).round().clamp(0.0, 255.0) as u8 } else { f.round().clamp(0.0, 255.0) as u8 }
                 } else {
                     0
                 }
@@ -332,17 +339,13 @@ pub fn parse_color_value(val: &serde_json::Value) -> Option<[u8; 4]> {
 impl TypesetterState {
     /// Импортирует стили из JSON-строки (полная поддержка структуры TypeR / Photoshop CEP).
     pub fn import_styles_json(&mut self, json_str: &str) -> Result<usize, String> {
-        let val: serde_json::Value = serde_json::from_str(json_str)
-            .map_err(|e| format!("Ошибка парсинга JSON: {}", e))?;
+        let val: serde_json::Value = serde_json::from_str(json_str).map_err(|e| format!("Ошибка парсинга JSON: {}", e))?;
 
         // 1. Построение словаря папок: id -> название папки
         let mut folders_map = std::collections::HashMap::new();
         if let Some(folders) = val.get("folders").and_then(|f| f.as_array()) {
             for f in folders {
-                if let (Some(id), Some(name)) = (
-                    f.get("id").and_then(|v| v.as_str()),
-                    f.get("name").and_then(|v| v.as_str()),
-                ) {
+                if let (Some(id), Some(name)) = (f.get("id").and_then(|v| v.as_str()), f.get("name").and_then(|v| v.as_str())) {
                     folders_map.insert(id.to_string(), name.to_string());
                 }
             }
@@ -359,20 +362,12 @@ impl TypesetterState {
 
         let mut count = 0;
         for item in items {
-            let raw_name = item.get("name")
-                .or_else(|| item.get("title"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("Новый стиль");
+            let raw_name = item.get("name").or_else(|| item.get("title")).and_then(|v| v.as_str()).unwrap_or("Новый стиль");
 
             let folder_id = item.get("folder").and_then(|v| v.as_str());
             let folder_name = folder_id.and_then(|id| folders_map.get(id)).cloned();
             let name = raw_name.to_string();
-            let preview_text = item
-                .get("preview_text")
-                .or_else(|| item.get("previewText"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
+            let preview_text = item.get("preview_text").or_else(|| item.get("previewText")).and_then(|v| v.as_str()).unwrap_or("").to_string();
 
             // Разрешение вложенного пути TypeR: textProps -> layerText -> textStyleRange[0] -> textStyle
             let text_style = item.pointer("/textProps/layerText/textStyleRange/0/textStyle");
@@ -385,27 +380,14 @@ impl TypesetterState {
                 .unwrap_or("Kurai Voice 2")
                 .to_string();
 
-            let font_postscript = text_style
-                .and_then(|ts| ts.get("fontPostScriptName"))
-                .and_then(|v| v.as_str())
-                .unwrap_or(&font_family)
-                .to_string();
+            let font_postscript = text_style.and_then(|ts| ts.get("fontPostScriptName")).and_then(|v| v.as_str()).unwrap_or(&font_family).to_string();
 
-            let font_style = text_style
-                .and_then(|ts| ts.get("fontStyleName"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("Regular")
-                .to_string();
+            let font_style = text_style.and_then(|ts| ts.get("fontStyleName")).and_then(|v| v.as_str()).unwrap_or("Regular").to_string();
 
-            let font_size = text_style
-                .and_then(|ts| ts.get("size"))
-                .or_else(|| item.get("size"))
-                .and_then(|v| v.as_f64())
-                .unwrap_or(24.0) as f32;
+            let font_size = text_style.and_then(|ts| ts.get("size")).or_else(|| item.get("size")).and_then(|v| v.as_f64()).unwrap_or(24.0) as f32;
 
-            let auto_leading_pct = item.pointer("/textProps/layerText/paragraphStyleRange/0/paragraphStyle/autoLeadingPercentage")
-                .and_then(|v| v.as_f64())
-                .unwrap_or(1.2) as f32;
+            let auto_leading_pct =
+                item.pointer("/textProps/layerText/paragraphStyleRange/0/paragraphStyle/autoLeadingPercentage").and_then(|v| v.as_f64()).unwrap_or(1.2) as f32;
 
             let leading = text_style
                 .and_then(|ts| ts.get("leading"))
@@ -414,26 +396,13 @@ impl TypesetterState {
                 .map(|v| v as f32)
                 .unwrap_or_else(|| (font_size * auto_leading_pct).round());
 
-            let tracking = text_style
-                .and_then(|ts| ts.get("tracking"))
-                .or_else(|| item.get("tracking"))
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0) as i32;
+            let tracking = text_style.and_then(|ts| ts.get("tracking")).or_else(|| item.get("tracking")).and_then(|v| v.as_i64()).unwrap_or(0) as i32;
 
-            let horizontal_scale = text_style
-                .and_then(|ts| ts.get("horizontalScale"))
-                .and_then(|v| v.as_f64())
-                .unwrap_or(100.0) as f32;
+            let horizontal_scale = text_style.and_then(|ts| ts.get("horizontalScale")).and_then(|v| v.as_f64()).unwrap_or(100.0) as f32;
 
-            let synthetic_bold = text_style
-                .and_then(|ts| ts.get("syntheticBold"))
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
+            let synthetic_bold = text_style.and_then(|ts| ts.get("syntheticBold")).and_then(|v| v.as_bool()).unwrap_or(false);
 
-            let synthetic_italic = text_style
-                .and_then(|ts| ts.get("syntheticItalic"))
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
+            let synthetic_italic = text_style.and_then(|ts| ts.get("syntheticItalic")).and_then(|v| v.as_bool()).unwrap_or(false);
 
             let is_bold_style = font_style.to_lowercase().contains("bold");
             let is_italic_style = font_style.to_lowercase().contains("italic") || font_style.to_lowercase().contains("oblique");
@@ -441,26 +410,14 @@ impl TypesetterState {
             let bold = synthetic_bold || is_bold_style;
             let italic = synthetic_italic || is_italic_style;
 
-            let caps_value = text_style
-                .and_then(|ts| ts.get("fontCaps"))
-                .and_then(|v| v.as_str())
-                .or_else(|| item.get("caps").and_then(|v| v.as_str()));
+            let caps_value = text_style.and_then(|ts| ts.get("fontCaps")).and_then(|v| v.as_str()).or_else(|| item.get("caps").and_then(|v| v.as_str()));
             let all_caps = matches!(caps_value, Some("allCaps" | "all"));
             let small_caps = matches!(caps_value, Some("smallCaps" | "small"))
-                || item
-                    .get("smallCaps")
-                    .or_else(|| item.get("small_caps"))
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
+                || item.get("smallCaps").or_else(|| item.get("small_caps")).and_then(|v| v.as_bool()).unwrap_or(false);
 
-            let baseline = text_style
-                .and_then(|ts| ts.get("baseline"))
-                .and_then(|v| v.as_str())
-                .or_else(|| item.get("baseline").and_then(|v| v.as_str()));
-            let superscript = matches!(baseline, Some("superscript"))
-                || item.get("superscript").and_then(|v| v.as_bool()).unwrap_or(false);
-            let subscript = matches!(baseline, Some("subscript"))
-                || item.get("subscript").and_then(|v| v.as_bool()).unwrap_or(false);
+            let baseline = text_style.and_then(|ts| ts.get("baseline")).and_then(|v| v.as_str()).or_else(|| item.get("baseline").and_then(|v| v.as_str()));
+            let superscript = matches!(baseline, Some("superscript")) || item.get("superscript").and_then(|v| v.as_bool()).unwrap_or(false);
+            let subscript = matches!(baseline, Some("subscript")) || item.get("subscript").and_then(|v| v.as_bool()).unwrap_or(false);
 
             let underline = text_style
                 .and_then(|ts| ts.get("underline"))
@@ -477,19 +434,11 @@ impl TypesetterState {
                 let enabled = stroke_obj.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
                 let size = stroke_obj.get("size").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
                 let width = if enabled { size } else { 0.0 };
-                let color = if let Some(c) = stroke_obj.get("color") {
-                    parse_color_value(c).unwrap_or([255, 255, 255, 255])
-                } else {
-                    [255, 255, 255, 255]
-                };
+                let color = if let Some(c) = stroke_obj.get("color") { parse_color_value(c).unwrap_or([255, 255, 255, 255]) } else { [255, 255, 255, 255] };
                 (width, color)
             } else if let Some(stroke_val) = item.get("stroke_width").or_else(|| item.get("stroke")) {
                 let width = stroke_val.as_f64().unwrap_or(0.0) as f32;
-                let color = if let Some(c) = item.get("strokeColor") {
-                    parse_color_value(c).unwrap_or([255, 255, 255, 255])
-                } else {
-                    [255, 255, 255, 255]
-                };
+                let color = if let Some(c) = item.get("strokeColor") { parse_color_value(c).unwrap_or([255, 255, 255, 255]) } else { [255, 255, 255, 255] };
                 (width, color)
             } else {
                 (0.0, [255, 255, 255, 255])
@@ -511,11 +460,13 @@ impl TypesetterState {
                 parse_color_value(c)
             } else {
                 None
-            }.unwrap_or([0, 0, 0, 255]);
+            }
+            .unwrap_or([0, 0, 0, 255]);
 
             let measurement_system = if let Some(kern) = text_style.and_then(|ts| ts.get("autoKern")).and_then(|v| v.as_str()) {
                 MeasurementSystem::from_str_loose(kern)
-            } else if let Some(ms) = item.get("measurementSystem")
+            } else if let Some(ms) = item
+                .get("measurementSystem")
                 .or_else(|| item.get("measurement_system"))
                 .or_else(|| text_style.and_then(|ts| ts.get("measurementSystem")))
                 .and_then(|v| v.as_str())
@@ -527,7 +478,8 @@ impl TypesetterState {
                 MeasurementSystem::Optical
             };
 
-            let para_style = item.get("textProps")
+            let para_style = item
+                .get("textProps")
                 .and_then(|tp| tp.get("layerText"))
                 .and_then(|lt| lt.get("paragraphStyleRange"))
                 .and_then(|psr| psr.as_array())
@@ -699,8 +651,7 @@ impl TypesetterState {
             "styles": styles_arr
         });
 
-        serde_json::to_string_pretty(&out)
-            .map_err(|e| format!("Ошибка сериализации в JSON: {}", e))
+        serde_json::to_string_pretty(&out).map_err(|e| format!("Ошибка сериализации в JSON: {}", e))
     }
 
     /// Очищает и загружает сырой текст скрипта манги в очередь реплик с автоопределением страниц.
@@ -721,12 +672,7 @@ impl TypesetterState {
 
             let cleaned = clean_script_line_with_options(trimmed, &self.options);
             if !cleaned.is_empty() {
-                self.lines.push(ScriptLine {
-                    raw: trimmed.to_string(),
-                    text: cleaned,
-                    is_applied: false,
-                    page,
-                });
+                self.lines.push(ScriptLine { raw: trimmed.to_string(), text: cleaned, is_applied: false, page });
             }
         }
 
@@ -739,20 +685,12 @@ impl TypesetterState {
         let mut p: Vec<usize> = self.lines.iter().map(|l| l.page).collect();
         p.sort_unstable();
         p.dedup();
-        if p.is_empty() {
-            vec![1]
-        } else {
-            p
-        }
+        if p.is_empty() { vec![1] } else { p }
     }
 
     /// Возвращает реплики для указанной страницы вместе с их индексами в общем списке.
     pub fn lines_for_page(&self, page: usize) -> Vec<(usize, &ScriptLine)> {
-        self.lines
-            .iter()
-            .enumerate()
-            .filter(|(_, line)| line.page == page)
-            .collect()
+        self.lines.iter().enumerate().filter(|(_, line)| line.page == page).collect()
     }
 
     pub fn active_line(&self) -> Option<&ScriptLine> {
@@ -820,11 +758,7 @@ impl TypesetterState {
 
     /// Возвращает список уникальных названий папок стилей.
     pub fn folders(&self) -> Vec<String> {
-        let mut list: Vec<String> = self
-            .presets
-            .iter()
-            .filter_map(|p| p.folder.clone())
-            .collect();
+        let mut list: Vec<String> = self.presets.iter().filter_map(|p| p.folder.clone()).collect();
         list.sort();
         list.dedup();
         list
@@ -832,12 +766,7 @@ impl TypesetterState {
 
     /// Дублирует всю папку со всеми стилями (особенность TypeR: Duplicate Style Folders).
     pub fn duplicate_folder(&mut self, folder: &str, new_folder_name: &str) -> usize {
-        let to_duplicate: Vec<TextStylePreset> = self
-            .presets
-            .iter()
-            .filter(|p| p.folder.as_deref() == Some(folder))
-            .cloned()
-            .collect();
+        let to_duplicate: Vec<TextStylePreset> = self.presets.iter().filter(|p| p.folder.as_deref() == Some(folder)).cloned().collect();
 
         let count = to_duplicate.len();
         for mut style in to_duplicate {
@@ -871,6 +800,37 @@ impl TypesetterState {
             self.selected_preset_idx = self.presets.len() - 1;
         }
         true
+    }
+
+    /// Ограничивает область вокруг якоря баббла, чтобы композит не строился на весь холст.
+    const BUBBLE_SEARCH_RADIUS: i32 = 300;
+
+    /// Ищет границы реплики-баббла вокруг точки `anchor` (документные пиксели).
+    ///
+    /// Из светлого пикселя рядом с якорем выпускаются четыре луча; каждый останавливается
+    /// на первом контурном пикселе с яркостью ниже порога. Композитится только окрестность
+    /// якоря, поэтому вызов пригоден для пересчёта по событию, а не каждый кадр.
+    pub fn detect_speech_bubble_bounds(&self, doc: &Document, anchor: (f32, f32)) -> Option<Rect> {
+        if !anchor.0.is_finite() || !anchor.1.is_finite() {
+            return None;
+        }
+        let canvas = doc.bounds();
+        if canvas.is_empty() {
+            return None;
+        }
+        let max_x = canvas.x1.saturating_sub(1);
+        let max_y = canvas.y1.saturating_sub(1);
+        let anchor_x = (anchor.0.round() as i32).clamp(canvas.x0, max_x);
+        let anchor_y = (anchor.1.round() as i32).clamp(canvas.y0, max_y);
+        let radius = Self::BUBBLE_SEARCH_RADIUS;
+        let region =
+            Rect::new(anchor_x.saturating_sub(radius), anchor_y.saturating_sub(radius), anchor_x.saturating_add(radius), anchor_y.saturating_add(radius))
+                .intersect(&canvas);
+        if region.is_empty() {
+            return None;
+        }
+        let surface = photocraft_compose::composite_to_surface(doc, region, photocraft_color::PixelFormat::RGBA32F, None);
+        detect_speech_bubble_bounds_in_surface(&surface, anchor_x, anchor_y, radius)
     }
 }
 
@@ -926,28 +886,141 @@ pub use crate::snow_knuth_plass::char_width_factor;
 /// Рассчитывает автоматический перенос слов (word wrap) для вставки текста в выделенный баббл/форму.
 /// Использует типографическую привязку союзов/предлогов («висячка») и солвер Кнута—Пласса
 /// для балансировки строк по форме овального или ромбовидного манга-баблона.
-pub fn wrap_text_to_bubble(
-    text: &str,
-    bubble_width: f32,
-    font_size_pt: f32,
-    dpi: f32,
-    horizontal_scale_pct: f32,
-) -> String {
-    crate::snow_knuth_plass::knuth_plass_bubble_wrap_ext(
-        text,
-        bubble_width,
-        bubble_width * 1.2,
-        font_size_pt,
-        dpi,
-        horizontal_scale_pct,
-        true,
-    )
+pub fn wrap_text_to_bubble(text: &str, bubble_width: f32, font_size_pt: f32, dpi: f32, horizontal_scale_pct: f32) -> String {
+    crate::snow_knuth_plass::knuth_plass_bubble_wrap_ext(text, bubble_width, bubble_width * 1.2, font_size_pt, dpi, horizontal_scale_pct, true)
 }
 
 /// Вычисляет геометрический центр ограничивающего прямоугольника [min_x, min_y, max_x, max_y] баббла.
 pub fn calculate_bubble_center(bounds: [f32; 4]) -> [f32; 2] {
     let [min_x, min_y, max_x, max_y] = bounds;
     [min_x + (max_x - min_x) * 0.5, min_y + (max_y - min_y) * 0.5]
+}
+
+/// Яркость, ниже которой пиксель считается контуром баббла.
+pub const BUBBLE_OUTLINE_LUMA: f32 = 0.45;
+
+/// Яркость, выше которой пиксель может быть внутренностью баббла.
+pub const BUBBLE_FILL_LUMA: f32 = 0.50;
+
+fn surface_luma(surface: &Surface, x: i32, y: i32) -> f32 {
+    let pixel = surface.pixel(x, y);
+    match pixel.as_slice() {
+        [r, g, b, ..] => 0.299 * r + 0.587 * g + 0.114 * b,
+        [value, ..] => *value,
+        [] => 0.0,
+    }
+}
+
+/// Трассирует границы баббла на готовой поверхности.
+///
+/// `anchor_*` задаёт точку внутри баббла (обычно центр реплики), `max_radius` ограничивает
+/// длину каждого луча. Возвращает прямоугольник в координатах поверхности, если хотя бы по
+/// одной оси обе границы найдены и размеры похожи на реплику.
+pub fn detect_speech_bubble_bounds_in_surface(surface: &Surface, anchor_x: i32, anchor_y: i32, max_radius: i32) -> Option<Rect> {
+    let bounds = surface.content_bounds();
+    if !bounds.contains(anchor_x, anchor_y) {
+        return None;
+    }
+
+    // Внутри баббла ищем светлый пиксель: якорь может попасть на букву или блик.
+    let mut seed = None;
+    'seed: for radius in [0, 4, 8, 12, 16, 20] {
+        for dy in [-radius, 0, radius] {
+            for dx in [-radius, 0, radius] {
+                let (sx, sy) = (anchor_x.saturating_add(dx), anchor_y.saturating_add(dy));
+                if bounds.contains(sx, sy) && surface_luma(surface, sx, sy) >= BUBBLE_FILL_LUMA {
+                    seed = Some((sx, sy));
+                    break 'seed;
+                }
+            }
+        }
+    }
+    let (seed_x, seed_y) = seed?;
+
+    let max_radius = max_radius.clamp(20, 300);
+    let step_toward = |dx: i32, dy: i32| -> Option<i32> {
+        let mut step = 1;
+        while step <= max_radius {
+            let x = seed_x.saturating_add(dx.saturating_mul(step));
+            let y = seed_y.saturating_add(dy.saturating_mul(step));
+            if !bounds.contains(x, y) {
+                return None;
+            }
+            if surface_luma(surface, x, y) < BUBBLE_OUTLINE_LUMA {
+                return Some(step - 1);
+            }
+            step += 1;
+        }
+        None
+    };
+
+    let left = step_toward(-1, 0);
+    let right = step_toward(1, 0);
+    let top = step_toward(0, -1);
+    let bottom = step_toward(0, 1);
+    // Баббл должен быть замкнут хотя бы по одной оси, иначе луч ушёл в открытое поле.
+    if (left.is_none() && right.is_none()) || (top.is_none() && bottom.is_none()) {
+        return None;
+    }
+
+    let min_x = seed_x.saturating_sub(left.unwrap_or(0));
+    let max_x = seed_x.saturating_add(right.unwrap_or(0));
+    let min_y = seed_y.saturating_sub(top.unwrap_or(0));
+    let max_y = seed_y.saturating_add(bottom.unwrap_or(0));
+    let width = max_x.saturating_sub(min_x).saturating_add(1);
+    let height = max_y.saturating_sub(min_y).saturating_add(1);
+    if width >= 20 && height >= 20 && width <= 500 && height <= 600 {
+        Some(Rect::new(min_x, min_y, max_x.saturating_add(1), max_y.saturating_add(1)))
+    } else {
+        None
+    }
+}
+
+/// Строит варианты контурной разбивки для меню.
+///
+/// Первым всегда идёт авторский текст с сохранёнными переносами. Затем генератор силуэта
+/// предлагает разные количества строк; одинаковые разбивки отбрасываются. `bubble` задаёт
+/// границы реплики (выделение или найденный баббл), `dpi` переводит кегль в пиксели.
+pub fn contour_variants(text: &str, preset: &TextStylePreset, bubble: Option<Rect>, dpi: f32, limit: usize) -> Vec<ContourVariant> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() || trimmed.len() > 16_384 {
+        return Vec::new();
+    }
+    let limit = limit.clamp(1, 24);
+    let clean_text = trimmed.split_whitespace().collect::<Vec<_>>().join(" ");
+    let bound_clean = crate::snow_knuth_plass::bind_orphan_prepositions(&clean_text);
+    let original = if trimmed.contains('\n') {
+        trimmed.lines().map(str::trim).filter(|line| !line.is_empty()).map(crate::snow_knuth_plass::bind_orphan_prepositions).collect::<Vec<_>>().join("\n")
+    } else {
+        bound_clean.clone()
+    };
+
+    let mut variants = Vec::new();
+    push_contour_variant(&mut variants, ContourWrapKind::Original, original, limit);
+
+    let (bubble_w, bubble_h) = bubble.map_or((None, None), |rect| (Some(rect.width() as f32), Some(rect.height() as f32)));
+    let generated = crate::snow_knuth_plass::generate_contour_variants(
+        &bound_clean,
+        bubble_w,
+        bubble_h,
+        preset.font_size,
+        dpi,
+        limit.saturating_sub(variants.len()).max(1),
+    );
+    for (idx, proposal) in generated.into_iter().enumerate() {
+        let kind = if idx == 0 { ContourWrapKind::BubbleWrap } else { ContourWrapKind::Balanced };
+        push_contour_variant(&mut variants, kind, proposal, limit);
+    }
+    variants
+}
+
+fn push_contour_variant(variants: &mut Vec<ContourVariant>, kind: ContourWrapKind, text: String, limit: usize) {
+    let text = text.trim();
+    if text.is_empty() || variants.len() >= limit || variants.iter().any(|variant| variant.text == text) {
+        return;
+    }
+    let lines = text.lines().filter(|line| !line.trim().is_empty()).count().max(1);
+    variants.push(ContourVariant { kind, text: text.to_string(), lines });
 }
 
 #[cfg(test)]
@@ -1012,11 +1085,7 @@ mod tests {
 
     #[test]
     fn test_line_spacing_sync() {
-        let mut preset = TextStylePreset {
-            font_size: 20.0,
-            leading: 24.0,
-            ..TextStylePreset::default()
-        };
+        let mut preset = TextStylePreset { font_size: 20.0, leading: 24.0, ..TextStylePreset::default() };
         preset.sync_leading_with_size(30.0);
         assert_eq!(preset.font_size, 30.0);
         assert_eq!(preset.leading, 36.0); // 24 * (30/20) = 36
@@ -1041,10 +1110,7 @@ mod tests {
         assert!(json.contains("folders"));
         assert!(json.contains("styles"));
 
-        let mut new_state = TypesetterState {
-            presets: Vec::new(),
-            ..TypesetterState::default()
-        };
+        let mut new_state = TypesetterState { presets: Vec::new(), ..TypesetterState::default() };
         let imported = new_state.import_styles_json(&json).unwrap();
         assert_eq!(imported, state.presets.len());
         for i in 0..state.presets.len() {
@@ -1055,10 +1121,7 @@ mod tests {
 
     #[test]
     fn test_export_import_keeps_alignment_antialias_and_hanging_punctuation() {
-        let mut state = TypesetterState {
-            presets: Vec::new(),
-            ..TypesetterState::default()
-        };
+        let mut state = TypesetterState { presets: Vec::new(), ..TypesetterState::default() };
         state.presets.push(TextStylePreset {
             name: "Left aligned".into(),
             align: "left".into(),
@@ -1074,17 +1137,11 @@ mod tests {
 
         let exported = state.export_styles_json(None).unwrap();
         let value: serde_json::Value = serde_json::from_str(&exported).unwrap();
-        assert_eq!(
-            value["styles"][0]["textProps"]["layerText"]["paragraphStyleRange"][0]["paragraphStyle"]["alignment"],
-            "left"
-        );
+        assert_eq!(value["styles"][0]["textProps"]["layerText"]["paragraphStyleRange"][0]["paragraphStyle"]["alignment"], "left");
         assert_eq!(value["styles"][0]["antiAlias"], "sharp");
         assert_eq!(value["styles"][0]["hangingPunctuation"], false);
 
-        let mut imported = TypesetterState {
-            presets: Vec::new(),
-            ..TypesetterState::default()
-        };
+        let mut imported = TypesetterState { presets: Vec::new(), ..TypesetterState::default() };
         assert_eq!(imported.import_styles_json(&exported).unwrap(), 1);
         let preset = &imported.presets[0];
         assert_eq!(preset.align, "left");
@@ -1192,10 +1249,7 @@ mod tests {
             ]
         }"#;
 
-        let mut state = TypesetterState {
-            presets: Vec::new(),
-            ..TypesetterState::default()
-        };
+        let mut state = TypesetterState { presets: Vec::new(), ..TypesetterState::default() };
         let count = state.import_styles_json(json_data).unwrap();
         assert_eq!(count, 3);
 
@@ -1226,10 +1280,7 @@ mod tests {
     #[test]
     fn test_import_real_file_if_present() {
         if let Ok(content) = std::fs::read_to_string(r"d:\Work\umamusume\TypeR_Export.json") {
-            let mut state = TypesetterState {
-                presets: Vec::new(),
-                ..TypesetterState::default()
-            };
+            let mut state = TypesetterState { presets: Vec::new(), ..TypesetterState::default() };
             let count = state.import_styles_json(&content).unwrap();
             assert!(count > 0);
             for p in &state.presets {
@@ -1300,10 +1351,7 @@ mod tests {
             ]
         }"##;
 
-        let mut state = TypesetterState {
-            presets: Vec::new(),
-            ..TypesetterState::default()
-        };
+        let mut state = TypesetterState { presets: Vec::new(), ..TypesetterState::default() };
         let count = state.import_styles_json(json_data).unwrap();
         assert_eq!(count, 3);
 
@@ -1327,10 +1375,7 @@ mod tests {
 
         // Roundtrip export
         let exported = state.export_styles_json(None).unwrap();
-        let mut reimported = TypesetterState {
-            presets: Vec::new(),
-            ..TypesetterState::default()
-        };
+        let mut reimported = TypesetterState { presets: Vec::new(), ..TypesetterState::default() };
         reimported.import_styles_json(&exported).unwrap();
         assert_eq!(reimported.presets.len(), 3);
         assert_eq!(reimported.presets[0].text_color, state.presets[0].text_color);
@@ -1343,11 +1388,7 @@ mod tests {
 
     #[test]
     fn preview_text_round_trips_in_preset_json_and_defaults_for_old_files() {
-        let preset = TextStylePreset {
-            name: "Custom".into(),
-            preview_text: "Свой образец".into(),
-            ..TextStylePreset::default()
-        };
+        let preset = TextStylePreset { name: "Custom".into(), preview_text: "Свой образец".into(), ..TextStylePreset::default() };
         let json = serde_json::to_string(&preset).unwrap();
         assert!(json.contains("\"preview_text\""), "the field is serialized: {json}");
         let parsed: TextStylePreset = serde_json::from_str(&json).unwrap();
@@ -1364,40 +1405,25 @@ mod tests {
     #[test]
     fn preview_text_survives_typer_export_import() {
         let mut state = TypesetterState::default();
-        state.presets = vec![TextStylePreset {
-            name: "TypeR Custom".into(),
-            preview_text: "Экспортный образец".into(),
-            ..TextStylePreset::default()
-        }];
+        state.presets =
+            vec![TextStylePreset { name: "TypeR Custom".into(), preview_text: "Экспортный образец".into(), ..TextStylePreset::default() }];
         let exported = state.export_styles_json(None).unwrap();
         let value: serde_json::Value = serde_json::from_str(&exported).unwrap();
         assert_eq!(value["styles"][0]["preview_text"], "Экспортный образец");
-        assert!(
-            value["styles"][0].get("previewText").is_none(),
-            "export writes only the documented snake_case field"
-        );
+        assert!(value["styles"][0].get("previewText").is_none(), "export writes only the documented snake_case field");
 
-        let mut reimported = TypesetterState {
-            presets: Vec::new(),
-            ..TypesetterState::default()
-        };
+        let mut reimported = TypesetterState { presets: Vec::new(), ..TypesetterState::default() };
         reimported.import_styles_json(&exported).unwrap();
         assert_eq!(reimported.presets[0].preview_text, "Экспортный образец");
 
         // The camelCase alias is accepted for styles exported by other tools.
         let alias = r#"{"styles":[{"name":"Alias","previewText":"Alias sample"}]}"#;
-        let mut aliased = TypesetterState {
-            presets: Vec::new(),
-            ..TypesetterState::default()
-        };
+        let mut aliased = TypesetterState { presets: Vec::new(), ..TypesetterState::default() };
         aliased.import_styles_json(alias).unwrap();
         assert_eq!(aliased.presets[0].preview_text, "Alias sample");
 
         let missing = r#"{"styles":[{"name":"Missing"}]}"#;
-        let mut plain = TypesetterState {
-            presets: Vec::new(),
-            ..TypesetterState::default()
-        };
+        let mut plain = TypesetterState { presets: Vec::new(), ..TypesetterState::default() };
         plain.import_styles_json(missing).unwrap();
         assert_eq!(plain.presets[0].preview_text, "", "missing preview_text means the automatic sample");
     }
@@ -1419,5 +1445,63 @@ mod tests {
         let words_orig: Vec<&str> = long_text.split_whitespace().collect();
         let words_wrapped: Vec<&str> = wrapped.split_whitespace().collect();
         assert_eq!(words_orig, words_wrapped);
+    }
+
+    #[test]
+    fn test_speech_bubble_bounds_trace_a_light_bubble() {
+        let mut surface = Surface::new(photocraft_color::PixelFormat::RGBA32F);
+        surface.fill_rect(Rect::new(0, 0, 220, 220), &[0.0, 0.0, 0.0, 1.0]);
+        surface.fill_rect(Rect::new(50, 40, 170, 180), &[1.0, 1.0, 1.0, 1.0]);
+
+        let bounds = detect_speech_bubble_bounds_in_surface(&surface, 110, 110, 200).expect("the light bubble is closed on both axes");
+        assert_eq!(bounds, Rect::new(50, 40, 170, 180));
+
+        let dark = {
+            let mut s = Surface::new(photocraft_color::PixelFormat::RGBA32F);
+            s.fill_rect(Rect::new(0, 0, 64, 64), &[0.0, 0.0, 0.0, 1.0]);
+            s
+        };
+        assert_eq!(detect_speech_bubble_bounds_in_surface(&dark, 32, 32, 64), None, "no light seed means no bubble");
+    }
+
+    #[test]
+    fn test_speech_bubble_bounds_composites_a_document() {
+        let size = photocraft_doc::Size::new(240, 240);
+        let mut doc = Document::with_background(
+            "Bubble",
+            size,
+            photocraft_doc::ColorMode::Rgb,
+            photocraft_doc::SampleType::U8,
+            photocraft_doc::Color::rgb(0.0, 0.0, 0.0),
+        );
+        let mut bubble = photocraft_doc::Layer::raster("Bubble fill", doc.pixel_format());
+        if let Some(surface) = bubble.surface_mut() {
+            let white = photocraft_raster::from_rgba(&surface.format(), [1.0, 1.0, 1.0, 1.0]);
+            surface.fill_rect(Rect::new(50, 40, 170, 180), &white);
+        }
+        doc.layers.push(bubble);
+
+        let state = TypesetterState::default();
+        let bounds = state.detect_speech_bubble_bounds(&doc, (110.0, 110.0)).expect("the drawn bubble is detected");
+        assert_eq!(bounds, Rect::new(50, 40, 170, 180));
+        assert_eq!(state.detect_speech_bubble_bounds(&doc, (f32::NAN, 10.0)), None, "non-finite anchors are rejected");
+    }
+
+    #[test]
+    fn test_contour_variants_keep_words_and_vary_height() {
+        let text = "Это длинная реплика персонажа которая должна красиво переноситься внутри баббла";
+        let preset = TextStylePreset { font_size: 12.0, ..TextStylePreset::default() };
+        let variants = contour_variants(text, &preset, Some(Rect::new(0, 0, 260, 200)), 72.0, 8);
+
+        assert!(!variants.is_empty());
+        assert_eq!(variants[0].kind, ContourWrapKind::Original);
+        assert!(variants.len() <= 8);
+        let words_original: Vec<&str> = text.split_whitespace().collect();
+        for variant in &variants {
+            assert_eq!(variant.text.split_whitespace().collect::<Vec<_>>(), words_original, "a layout never drops or reorders words");
+            assert_eq!(variant.lines, variant.text.lines().count().max(1));
+        }
+        let line_counts: std::collections::BTreeSet<usize> = variants.iter().map(|variant| variant.lines).collect();
+        assert!(line_counts.len() >= 2, "the menu offers visibly different heights: {line_counts:?}");
     }
 }

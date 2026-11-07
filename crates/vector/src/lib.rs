@@ -25,6 +25,7 @@ pub mod feather;
 pub mod flatten;
 pub mod map;
 pub mod raster;
+pub mod sai_curve;
 pub mod shapes;
 pub mod stroke;
 pub mod trace;

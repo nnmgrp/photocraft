@@ -1,15 +1,9 @@
 use std::hash::{Hash, Hasher};
 
-use egui::{
-    Align, Color32, CornerRadius, Frame, Layout, Margin, RichText, ScrollArea, Sense, Stroke,
-    Window, vec2,
-};
-use photocraft_doc::text::{
-    AntiAlias, Caps, CharStyle, FontBaseline, ParagraphRun, ParagraphStyle, TextAlign, TextRun,
-    TextShape,
-};
-use photocraft_doc::{Color, TextLayer};
-use photocraft_engine::typesetter::{ScriptLine, TextStylePreset, TypesetterState};
+use egui::{Align, Color32, CornerRadius, Frame, Layout, Margin, RichText, ScrollArea, Sense, Stroke, Window, vec2};
+use photocraft_doc::text::{AntiAlias, Caps, CharStyle, FontBaseline, ParagraphRun, ParagraphStyle, TextAlign, TextRun, TextShape};
+use photocraft_doc::{Color, LayerId, TextLayer};
+use photocraft_engine::typesetter::{ContourVariant, ScriptLine, TextStylePreset, TypesetterState};
 use serde::{Deserialize, Serialize};
 
 use crate::theme::Tokens;
@@ -56,6 +50,31 @@ const STYLE_NAME_PT: f32 = 13.0;
 /// Extra leading between script rows in the unified editor (logical pixels). egui's multiline
 /// `TextEdit` packs rows at the font's own line height, which is too tight for reading a script.
 const SCRIPT_LINE_SPACING: f32 = 4.0;
+
+/// Maximum characters per line in a contour preview card.
+const CONTOUR_PREVIEW_LINE_CHARS: usize = 26;
+
+/// A compact multiline form of a contour proposal: keeps the chosen line breaks, trims long
+/// rows and caps the number of rows so a long dialogue cannot stretch the menu.
+fn preview_short_text(text: &str) -> String {
+    const MAX_LINES: usize = 4;
+    let lines: Vec<String> = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(|line| {
+            let mut chars = line.chars();
+            let shortened: String = chars.by_ref().take(CONTOUR_PREVIEW_LINE_CHARS).collect();
+            if chars.next().is_some() { format!("{shortened}…") } else { shortened }
+        })
+        .collect();
+    if lines.len() <= MAX_LINES {
+        return lines.join("\n");
+    }
+    let mut short: Vec<String> = lines.into_iter().take(MAX_LINES).collect();
+    short.push("…".to_string());
+    short.join("\n")
+}
 
 #[derive(Serialize, Deserialize)]
 struct TypesetterPersistedState {
@@ -148,6 +167,14 @@ pub struct TypesetterUi {
     pub scroll_to_active_line: bool,
     pub script_buffer: String,
     pub script_list_height: f32,
+    /// Cached bubble-contour proposals for the active line. Rebuilt on a line/layer change or
+    /// an explicit menu refresh, never on every frame.
+    pub contour_variants: Vec<ContourVariant>,
+    /// Set while the app shell should rebuild `contour_variants` after this frame.
+    contour_request_pending: bool,
+    contour_cache_line: Option<usize>,
+    contour_cache_text_hash: Option<u64>,
+    contour_cache_layer: Option<LayerId>,
     /// Pass number in which the auxiliary windows were last drawn, so a frame that renders both
     /// the docked body and the floating one does not open them twice.
     aux_pass: u64,
@@ -183,6 +210,11 @@ impl Default for TypesetterUi {
             scroll_to_active_line: false,
             script_buffer: String::new(),
             script_list_height: 160.0,
+            contour_variants: Vec::new(),
+            contour_request_pending: true,
+            contour_cache_line: None,
+            contour_cache_text_hash: None,
+            contour_cache_layer: None,
             aux_pass: u64::MAX,
         };
         ui.auto_load();
@@ -202,6 +234,51 @@ fn draw_dashed_hline(painter: &egui::Painter, x_start: f32, x_end: f32, y: f32, 
 }
 
 impl TypesetterUi {
+    /// Marks the cached contour proposals stale. The app shell rebuilds them after this frame,
+    /// so changing a line or layer never runs the generator inside the render loop itself.
+    pub fn request_bubble_contour(&mut self) {
+        self.contour_request_pending = true;
+    }
+
+    /// Takes the pending rebuild request (true once per invalidation).
+    pub(crate) fn take_bubble_contour_request(&mut self) -> bool {
+        std::mem::take(&mut self.contour_request_pending)
+    }
+
+    /// Stores freshly built contour proposals.
+    pub fn set_contour_variants(&mut self, variants: Vec<ContourVariant>) {
+        self.contour_variants = variants;
+    }
+
+    pub fn has_contour_variants(&self) -> bool {
+        !self.contour_variants.is_empty()
+    }
+
+    /// Invalidates the cache when the active layer changes.
+    pub(crate) fn note_contour_layer(&mut self, layer: Option<LayerId>) {
+        if self.contour_cache_layer != layer {
+            self.contour_cache_layer = layer;
+            self.contour_variants.clear();
+            self.request_bubble_contour();
+        }
+    }
+
+    /// Invalidates the cache when the active script line (or its text) changes.
+    fn note_contour_line(&mut self) {
+        let line_idx = self.state.current_line_idx;
+        let text_hash = self.state.active_line().map(|line| {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            line.text.hash(&mut hasher);
+            hasher.finish()
+        });
+        if self.contour_cache_line != Some(line_idx) || self.contour_cache_text_hash != text_hash {
+            self.contour_cache_line = Some(line_idx);
+            self.contour_cache_text_hash = text_hash;
+            self.contour_variants.clear();
+            self.request_bubble_contour();
+        }
+    }
+
     /// Синхронизирует буфер единого текстового редактора из массива строк реплик.
     pub fn sync_script_buffer_from_state(&mut self) {
         if !self.state.lines.is_empty() {
@@ -271,10 +348,7 @@ impl TypesetterUi {
 
     /// Диалог выбора .txt файла сценария.
     pub fn open_script_file_dialog(&mut self) {
-        if let Some(path) = rfd::FileDialog::new()
-            .add_filter("Текстовые файлы (*.txt)", &["txt"])
-            .set_title("Выберите файл сценария")
-            .pick_file()
+        if let Some(path) = rfd::FileDialog::new().add_filter("Текстовые файлы (*.txt)", &["txt"]).set_title("Выберите файл сценария").pick_file()
         {
             match std::fs::read_to_string(&path) {
                 Ok(content) => {
@@ -370,10 +444,8 @@ impl TypesetterUi {
         }
 
         // Если файла еще нет, проверяем TypeR_Export.json рядом с exe или в текущей папке
-        let export_candidates = [
-            std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.join("TypeR_Export.json"))),
-            Some(std::path::PathBuf::from("TypeR_Export.json")),
-        ];
+        let export_candidates =
+            [std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.join("TypeR_Export.json"))), Some(std::path::PathBuf::from("TypeR_Export.json"))];
         for cand in export_candidates.into_iter().flatten() {
             if cand.exists() {
                 if let Ok(content) = std::fs::read_to_string(&cand) {
@@ -392,12 +464,10 @@ impl TypesetterUi {
     pub fn render_embedded(&mut self, ui: &mut egui::Ui) -> Option<TypesetterAction> {
         self.rendered_this_frame = true;
         let mut action = None;
-        egui::Frame::NONE
-            .inner_margin(egui::Margin { left: 6, right: 6, top: 4, bottom: 4 })
-            .show(ui, |ui| {
-                self.render_header_toolbar(ui);
-                self.render_body(ui, &mut action);
-            });
+        egui::Frame::NONE.inner_margin(egui::Margin { left: 6, right: 6, top: 4, bottom: 4 }).show(ui, |ui| {
+            self.render_header_toolbar(ui, &mut action);
+            self.render_body(ui, &mut action);
+        });
         // Придоканная панель тоже должна открывать окна стиля/сценария; в плавающем режиме их
         // рисует `show`, а счётчик pass не даст открыть их дважды за кадр.
         let ctx = ui.ctx().clone();
@@ -481,16 +551,13 @@ impl TypesetterUi {
                     // the window 2 points wider than the mockup. A floating bar needs no space:
                     // it is drawn over the panel's edge, like in Photoshop.
                     ui.spacing_mut().scroll.floating_allocated_width = 0.0;
-                    egui::ScrollArea::vertical()
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| {
-                            self.render_font_settings_modal(ui, edit_idx, &mut close_modal);
-                        });
+                    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                        self.render_font_settings_modal(ui, edit_idx, &mut close_modal);
+                    });
                 });
 
             if !window_open {
-                let pending =
-                    ctx.data_mut(|d| d.remove_temp::<PreviewEdit>(egui::Id::new("typesetter-preview-edit")));
+                let pending = ctx.data_mut(|d| d.remove_temp::<PreviewEdit>(egui::Id::new("typesetter-preview-edit")));
                 if let Some(pending) = pending {
                     if pending.idx == edit_idx {
                         if let Some(preset) = self.state.presets.get_mut(edit_idx) {
@@ -528,21 +595,48 @@ impl TypesetterUi {
     }
 
     /// Верхняя панель вкладок и меню опций/импорта/экспорта в едином стиле Photoshop.
-    fn render_header_toolbar(&mut self, ui: &mut egui::Ui) {
+    fn render_header_toolbar(&mut self, ui: &mut egui::Ui, action: &mut Option<TypesetterAction>) {
         let t = Tokens::get(ui.ctx());
+        self.note_contour_line();
 
         ui.horizontal(|ui| {
-            for (tab_val, label_key) in [
-                (TypesetterTab::Queue, "Typesetter"),
-                (TypesetterTab::FullText, "Script"),
-                (TypesetterTab::Settings, "Options"),
-            ] {
+            for (tab_val, label_key) in [(TypesetterTab::Queue, "Typesetter"), (TypesetterTab::FullText, "Script"), (TypesetterTab::Settings, "Options")] {
                 let label = tl!(label_key);
                 let is_sel = self.current_tab == tab_val;
                 if widgets::pill_tab(ui, label, is_sel).clicked() {
                     self.current_tab = tab_val;
                 }
             }
+
+            ui.menu_button(tl!("Bubble Contour"), |ui| {
+                ui.set_min_width(210.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(tl!("Bubble Contour")).strong());
+                    if ui.small_button(tl!("Refresh")).clicked() {
+                        self.contour_variants.clear();
+                        self.request_bubble_contour();
+                        ui.close();
+                    }
+                });
+                ui.separator();
+                let variants = self.contour_variants.clone();
+                if variants.is_empty() {
+                    ui.label(RichText::new(tl!("No contour variants")).color(t.text_dim).small());
+                } else {
+                    let preset = self.state.active_preset().cloned();
+                    for (idx, variant) in variants.iter().enumerate() {
+                        let preview = preview_short_text(&variant.text);
+                        let label = format!("{}. {}\n{} {}", idx + 1, preview, variant.lines, tl!("lines"));
+                        let response = ui.add(egui::Button::new(RichText::new(label).size(11.0)).wrap().min_size(vec2(190.0, 0.0)));
+                        if response.clicked()
+                            && let Some(preset) = preset.clone()
+                        {
+                            *action = Some(TypesetterAction { text: variant.text.clone(), preset });
+                            ui.close();
+                        }
+                    }
+                }
+            });
 
             // Меню панели и переключатель страниц главы
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -586,10 +680,8 @@ impl TypesetterUi {
 
                     if ui.button(tl!("Import TypeR JSON…")).clicked() {
                         ui.close();
-                        if let Some(path) = rfd::FileDialog::new()
-                            .add_filter("TypeR JSON (*.json)", &["json"])
-                            .set_title(tl!("Choose TypeR styles file"))
-                            .pick_file()
+                        if let Some(path) =
+                            rfd::FileDialog::new().add_filter("TypeR JSON (*.json)", &["json"]).set_title(tl!("Choose TypeR styles file")).pick_file()
                         {
                             match std::fs::read_to_string(&path) {
                                 Ok(content) => match self.state.import_styles_json(&content) {
@@ -613,10 +705,8 @@ impl TypesetterUi {
 
                     if ui.button(tl!("Export TypeR JSON…")).clicked() {
                         ui.close();
-                        if let Some(path) = rfd::FileDialog::new()
-                            .add_filter("TypeR JSON (*.json)", &["json"])
-                            .set_title(tl!("Export TypeR styles"))
-                            .save_file()
+                        if let Some(path) =
+                            rfd::FileDialog::new().add_filter("TypeR JSON (*.json)", &["json"]).set_title(tl!("Export TypeR styles")).save_file()
                         {
                             match self.state.export_styles_json(self.selected_folder.as_deref()) {
                                 Ok(json_content) => match std::fs::write(&path, json_content) {
@@ -638,10 +728,7 @@ impl TypesetterUi {
                     }
                 });
 
-                if ui.button(RichText::new("📄").size(11.0))
-                    .on_hover_text(tl!("Toggle Chapter Pages panel"))
-                    .clicked()
-                {
+                if ui.button(RichText::new("📄").size(11.0)).on_hover_text(tl!("Toggle Chapter Pages panel")).clicked() {
                     ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("photocraft_toggle_pages_cmd"), true));
                 }
             });
@@ -649,11 +736,7 @@ impl TypesetterUi {
 
         // Статусное сообщение
         if let Some(msg) = &self.status_message {
-            let color = if self.status_error {
-                t.danger
-            } else {
-                t.accent
-            };
+            let color = if self.status_error { t.danger } else { t.accent };
             ui.add_space(2.0);
             ui.label(RichText::new(msg).color(color).small());
         }
@@ -711,30 +794,18 @@ impl TypesetterUi {
 
                 ui.horizontal(|ui| {
                     ui.label(
-                        RichText::new(format!(
-                            "{}: {}, {}: {}, {}: {}pt",
-                            tl!("line"), line_num_str, tl!("style"), style_name, tl!("size"), font_size
-                        ))
-                        .color(t.text_dim)
-                        .small(),
+                        RichText::new(format!("{}: {}, {}: {}, {}: {}pt", tl!("line"), line_num_str, tl!("style"), style_name, tl!("size"), font_size))
+                            .color(t.text_dim)
+                            .small(),
                     );
 
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        let insert_btn = egui::Button::new(
-                            RichText::new("▶")
-                                .color(t.accent_text)
-                                .strong(),
-                        )
-                        .fill(t.accent)
-                        .min_size(vec2(26.0, 18.0));
+                        let insert_btn = egui::Button::new(RichText::new("▶").color(t.accent_text).strong()).fill(t.accent).min_size(vec2(26.0, 18.0));
 
                         if ui.add(insert_btn).on_hover_text(tl!("Insert current line into selection/bubble (Enter)")).clicked() {
                             if let Some(line) = self.state.active_line() {
                                 if let Some(preset) = self.state.active_preset().cloned() {
-                                    *action = Some(TypesetterAction {
-                                        text: line.text.clone(),
-                                        preset,
-                                    });
+                                    *action = Some(TypesetterAction { text: line.text.clone(), preset });
                                     self.state.advance_line();
                                     self.scroll_to_active_line = true;
                                     self.auto_save();
@@ -752,30 +823,14 @@ impl TypesetterUi {
                     .inner_margin(Margin::symmetric(6, 4))
                     .show(ui, |ui| {
                         let display = if current_text.is_empty() {
-                            if total_lines == 0 {
-                                tl!("(no script loaded — see 'Script' tab)")
-                            } else {
-                                tl!("(end of script)")
-                            }
+                            if total_lines == 0 { tl!("(no script loaded — see 'Script' tab)") } else { tl!("(end of script)") }
                         } else {
                             current_text
                         };
 
-                        let text_color = if current_text.is_empty() {
-                            Color32::from_rgb(140, 145, 155)
-                        } else {
-                            Color32::from_rgb(20, 25, 35)
-                        };
+                        let text_color = if current_text.is_empty() { Color32::from_rgb(140, 145, 155) } else { Color32::from_rgb(20, 25, 35) };
 
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(display)
-                                    .color(text_color)
-                                    .size(12.0)
-                                    .strong(),
-                            )
-                            .wrap_mode(egui::TextWrapMode::Wrap),
-                        );
+                        ui.add(egui::Label::new(RichText::new(display).color(text_color).size(12.0).strong()).wrap_mode(egui::TextWrapMode::Wrap));
                     });
             });
         });
@@ -803,11 +858,7 @@ impl TypesetterUi {
 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if total_lines > 0 {
-                    ui.label(
-                        RichText::new(format!("{}/{}", if total_lines == 0 { 0 } else { cur_idx + 1 }, total_lines))
-                            .color(t.text_dim)
-                            .small(),
-                    );
+                    ui.label(RichText::new(format!("{}/{}", if total_lines == 0 { 0 } else { cur_idx + 1 }, total_lines)).color(t.text_dim).small());
                 }
             });
         });
@@ -826,11 +877,7 @@ impl TypesetterUi {
             self.script_list_height = (self.script_list_height + res_resp.drag_delta().y).clamp(80.0, 600.0);
             self.auto_save();
         }
-        let splitter_line_col = if is_res_hover {
-            t.accent
-        } else {
-            Color32::from_rgb(205, 210, 220)
-        };
+        let splitter_line_col = if is_res_hover { t.accent } else { Color32::from_rgb(205, 210, 220) };
         ui.painter().hline(res_rect.x_range(), res_rect.center().y, Stroke::new(1.0, splitter_line_col));
         let cx = res_rect.center().x;
         let cy = res_rect.center().y;
@@ -898,11 +945,7 @@ impl TypesetterUi {
                     let style_name = self.state.active_preset().map(|p| p.name.clone()).unwrap_or_else(|| tl!("Default").into());
                     let font_size = self.state.active_preset().map(|p| p.font_size.round() as i32).unwrap_or(12);
 
-                    ui.label(
-                        RichText::new(format!("{}: {} ({}pt)", line_num_str, style_name, font_size))
-                            .color(t.text_dim)
-                            .small(),
-                    );
+                    ui.label(RichText::new(format!("{}: {} ({}pt)", line_num_str, style_name, font_size)).color(t.text_dim).small());
                 });
 
                 let current_text = self.state.active_line().map(|l| l.text.as_str()).unwrap_or("");
@@ -918,17 +961,10 @@ impl TypesetterUi {
                         } else {
                             current_text
                         };
-                        let text_color = if current_text.is_empty() {
-                            Color32::from_rgb(140, 145, 155)
-                        } else {
-                            Color32::from_rgb(20, 25, 35)
-                        };
-                        ScrollArea::vertical()
-                            .id_salt("horizontal_current_text_scroll")
-                            .max_height(box_h)
-                            .show(ui, |ui| {
-                                ui.add(egui::Label::new(RichText::new(display).color(text_color).size(12.0).strong()).wrap_mode(egui::TextWrapMode::Wrap));
-                            });
+                        let text_color = if current_text.is_empty() { Color32::from_rgb(140, 145, 155) } else { Color32::from_rgb(20, 25, 35) };
+                        ScrollArea::vertical().id_salt("horizontal_current_text_scroll").max_height(box_h).show(ui, |ui| {
+                            ui.add(egui::Label::new(RichText::new(display).color(text_color).size(12.0).strong()).wrap_mode(egui::TextWrapMode::Wrap));
+                        });
                     });
 
                 let insert_btn = egui::Button::new(RichText::new("▶ Вставить (Enter)").color(t.accent_text).strong())
@@ -937,10 +973,7 @@ impl TypesetterUi {
                 if ui.add(insert_btn).clicked() {
                     if let Some(line) = self.state.active_line() {
                         if let Some(preset) = self.state.active_preset().cloned() {
-                            *action = Some(TypesetterAction {
-                                text: line.text.clone(),
-                                preset,
-                            });
+                            *action = Some(TypesetterAction { text: line.text.clone(), preset });
                             self.state.advance_line();
                             self.scroll_to_active_line = true;
                             self.auto_save();
@@ -965,10 +998,7 @@ impl TypesetterUi {
         let t = Tokens::get(ui.ctx());
         ui.horizontal(|ui| {
             if ui.small_button(tl!("+ Style")).on_hover_text("Создать новый стиль").clicked() {
-                let new_preset = TextStylePreset {
-                    name: tl!("New Preset").to_string(),
-                    ..TextStylePreset::default()
-                };
+                let new_preset = TextStylePreset { name: tl!("New Preset").to_string(), ..TextStylePreset::default() };
                 self.state.presets.push(new_preset);
                 self.editing_preset_idx = Some(self.state.presets.len() - 1);
                 self.auto_save();
@@ -1058,7 +1088,11 @@ impl TypesetterUi {
                         ui.label(RichText::new(tl!("No script loaded")).color(Color32::from_rgb(120, 125, 135)).small());
                         ui.add_space(6.0);
                         ui.horizontal_wrapped(|ui| {
-                            if ui.button(RichText::new(format!("📋 {}", tl!("Paste"))).strong()).on_hover_text(tl!("Paste script from clipboard (Ctrl+V)")).clicked() {
+                            if ui
+                                .button(RichText::new(format!("📋 {}", tl!("Paste"))).strong())
+                                .on_hover_text(tl!("Paste script from clipboard (Ctrl+V)"))
+                                .clicked()
+                            {
                                 self.paste_script_from_clipboard();
                             }
                             if ui.button(format!("📥 {}", tl!("Load .txt"))).on_hover_text(tl!("Load script file (.txt)")).clicked() {
@@ -1074,227 +1108,194 @@ impl TypesetterUi {
             return;
         }
 
-        ScrollArea::vertical()
-            .id_salt("typer_script_unified_scroll")
-            .max_height(max_height)
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                let avail_w = ui.available_width().max(180.0);
-                // Строки сценария читаются слишком плотно при стандартном line-height egui:
-                // добавляем межстрочный интервал, который TextEdit учитывает при раскладке.
-                ui.spacing_mut().extra_text_line_spacing = SCRIPT_LINE_SPACING;
-                // Высота редактора должна следовать за ползунком-сплиттером: без desired_rows
-                // TextEdit всегда занимает 4 строки, и изменение script_list_height не видно.
-                let row_h = (ui.text_style_height(&egui::TextStyle::Body) + SCRIPT_LINE_SPACING).max(1.0);
-                let desired_rows = (((max_height - 8.0) / row_h).floor() as usize).max(1);
-                let edit = egui::TextEdit::multiline(&mut self.script_buffer)
-                    .id(edit_id)
-                    // Рабочий текст сценария читается пропорциональным шрифтом, а не моноширинным.
-                    .font(egui::TextStyle::Body)
-                    .text_color(Color32::from_rgb(20, 25, 35))
-                    // Frame::NONE заменяет margin целиком, поэтому отступы задаём во фрейме:
-                    // иначе текст начинается под левым гуттером и первые символы строки скрыты.
-                    .frame(egui::Frame::NONE.inner_margin(egui::Margin {
-                        left: gutter_w as i8,
-                        right: action_w as i8,
-                        top: 4,
-                        bottom: 4,
-                    }))
-                    .desired_rows(desired_rows)
-                    .desired_width(avail_w);
+        ScrollArea::vertical().id_salt("typer_script_unified_scroll").max_height(max_height).auto_shrink([false, false]).show(ui, |ui| {
+            let avail_w = ui.available_width().max(180.0);
+            // Строки сценария читаются слишком плотно при стандартном line-height egui:
+            // добавляем межстрочный интервал, который TextEdit учитывает при раскладке.
+            ui.spacing_mut().extra_text_line_spacing = SCRIPT_LINE_SPACING;
+            // Высота редактора должна следовать за ползунком-сплиттером: без desired_rows
+            // TextEdit всегда занимает 4 строки, и изменение script_list_height не видно.
+            let row_h = (ui.text_style_height(&egui::TextStyle::Body) + SCRIPT_LINE_SPACING).max(1.0);
+            let desired_rows = (((max_height - 8.0) / row_h).floor() as usize).max(1);
+            let edit = egui::TextEdit::multiline(&mut self.script_buffer)
+                .id(edit_id)
+                // Рабочий текст сценария читается пропорциональным шрифтом, а не моноширинным.
+                .font(egui::TextStyle::Body)
+                .text_color(Color32::from_rgb(20, 25, 35))
+                // Frame::NONE заменяет margin целиком, поэтому отступы задаём во фрейме:
+                // иначе текст начинается под левым гуттером и первые символы строки скрыты.
+                .frame(egui::Frame::NONE.inner_margin(egui::Margin { left: gutter_w as i8, right: action_w as i8, top: 4, bottom: 4 }))
+                .desired_rows(desired_rows)
+                .desired_width(avail_w);
 
-                // Резервируем форму подложки до отрисовки TextEdit: иначе белая заливка,
-                // добавленная после текста, перекрыла бы его в том же слое painter.
-                let background_idx = ui.painter().add(egui::Shape::Noop);
-                let output = edit.show(ui);
-                let rect = output.response.rect;
+            // Резервируем форму подложки до отрисовки TextEdit: иначе белая заливка,
+            // добавленная после текста, перекрыла бы его в том же слое painter.
+            let background_idx = ui.painter().add(egui::Shape::Noop);
+            let output = edit.show(ui);
+            let rect = output.response.rect;
 
-                // 1. Отрисовка подложки и вертикальных границ колонок
-                ui.painter().set(background_idx, egui::Shape::rect_filled(rect, CornerRadius::same(2), Color32::WHITE));
+            // 1. Отрисовка подложки и вертикальных границ колонок
+            ui.painter().set(background_idx, egui::Shape::rect_filled(rect, CornerRadius::same(2), Color32::WHITE));
 
-                // Левый гуттер (#e4e6eb)
-                let left_gutter_rect = egui::Rect::from_min_max(rect.min, egui::pos2(rect.left() + gutter_w, rect.bottom()));
-                ui.painter().rect_filled(left_gutter_rect, CornerRadius { nw: 2, sw: 2, ne: 0, se: 0 }, Color32::from_rgb(228, 230, 235));
-                ui.painter().vline(rect.left() + gutter_w, rect.top()..=rect.bottom(), Stroke::new(1.0, Color32::from_rgb(205, 208, 215)));
+            // Левый гуттер (#e4e6eb)
+            let left_gutter_rect = egui::Rect::from_min_max(rect.min, egui::pos2(rect.left() + gutter_w, rect.bottom()));
+            ui.painter().rect_filled(left_gutter_rect, CornerRadius { nw: 2, sw: 2, ne: 0, se: 0 }, Color32::from_rgb(228, 230, 235));
+            ui.painter().vline(rect.left() + gutter_w, rect.top()..=rect.bottom(), Stroke::new(1.0, Color32::from_rgb(205, 208, 215)));
 
-                // Правый гуттер (#fafafc)
-                let right_gutter_rect = egui::Rect::from_min_max(egui::pos2(rect.right() - action_w, rect.top()), rect.max);
-                ui.painter().rect_filled(right_gutter_rect, CornerRadius { ne: 2, se: 2, nw: 0, sw: 0 }, Color32::from_rgb(250, 250, 252));
-                ui.painter().vline(rect.right() - action_w, rect.top()..=rect.bottom(), Stroke::new(1.0, Color32::from_rgb(225, 228, 235)));
+            // Правый гуттер (#fafafc)
+            let right_gutter_rect = egui::Rect::from_min_max(egui::pos2(rect.right() - action_w, rect.top()), rect.max);
+            ui.painter().rect_filled(right_gutter_rect, CornerRadius { ne: 2, se: 2, nw: 0, sw: 0 }, Color32::from_rgb(250, 250, 252));
+            ui.painter().vline(rect.right() - action_w, rect.top()..=rect.bottom(), Stroke::new(1.0, Color32::from_rgb(225, 228, 235)));
 
-                // Внешняя аккуратная рамка
-                ui.painter().rect_stroke(rect, CornerRadius::same(2), Stroke::new(1.0, Color32::from_rgb(180, 185, 195)), egui::StrokeKind::Inside);
+            // Внешняя аккуратная рамка
+            ui.painter().rect_stroke(rect, CornerRadius::same(2), Stroke::new(1.0, Color32::from_rgb(180, 185, 195)), egui::StrokeKind::Inside);
 
-                // 2. Расчет геометрии логических строк по строкам галлеи (PlacedRow)
-                let mut logical_line_idx = 0;
-                let mut line_start_y = 0.0f32;
-                let mut line_first_row_y = 0.0f32;
-                let mut line_first_row_h = 16.0f32;
-                let mut line_has_start = false;
+            // 2. Расчет геометрии логических строк по строкам галлеи (PlacedRow)
+            let mut logical_line_idx = 0;
+            let mut line_start_y = 0.0f32;
+            let mut line_first_row_y = 0.0f32;
+            let mut line_first_row_h = 16.0f32;
+            let mut line_has_start = false;
 
-                let rows_count = output.galley.rows.len();
-                let mut logical_lines_geom = Vec::new();
+            let rows_count = output.galley.rows.len();
+            let mut logical_lines_geom = Vec::new();
 
-                for (r_idx, placed_row) in output.galley.rows.iter().enumerate() {
-                    let row_y = placed_row.pos.y;
-                    let row_h = placed_row.row.size.y;
-                    if !line_has_start {
-                        line_start_y = row_y;
-                        line_first_row_y = row_y;
-                        line_first_row_h = row_h;
-                        line_has_start = true;
-                    }
-
-                    if placed_row.ends_with_newline || r_idx + 1 == rows_count {
-                        let line_end_y = row_y + row_h;
-                        logical_lines_geom.push((
-                            logical_line_idx,
-                            line_start_y,
-                            line_end_y,
-                            line_first_row_y,
-                            line_first_row_h,
-                        ));
-                        logical_line_idx += 1;
-                        line_has_start = false;
-                    }
+            for (r_idx, placed_row) in output.galley.rows.iter().enumerate() {
+                let row_y = placed_row.pos.y;
+                let row_h = placed_row.row.size.y;
+                if !line_has_start {
+                    line_start_y = row_y;
+                    line_first_row_y = row_y;
+                    line_first_row_h = row_h;
+                    line_has_start = true;
                 }
 
-                let mouse_pos = ui.input(|i| i.pointer.hover_pos());
-                let primary_clicked = ui.input(|i| i.pointer.button_clicked(egui::PointerButton::Primary));
-                let mut clicked_target_line = None;
-                let mut clicked_action_line = None;
+                if placed_row.ends_with_newline || r_idx + 1 == rows_count {
+                    let line_end_y = row_y + row_h;
+                    logical_lines_geom.push((logical_line_idx, line_start_y, line_end_y, line_first_row_y, line_first_row_h));
+                    logical_line_idx += 1;
+                    line_has_start = false;
+                }
+            }
 
-                for (line_idx, start_y, end_y, first_row_y, first_row_h) in logical_lines_geom {
-                    let screen_start_y = output.galley_pos.y + start_y;
-                    let screen_end_y = output.galley_pos.y + end_y;
-                    let screen_center_y = output.galley_pos.y + first_row_y + first_row_h * 0.5;
+            let mouse_pos = ui.input(|i| i.pointer.hover_pos());
+            let primary_clicked = ui.input(|i| i.pointer.button_clicked(egui::PointerButton::Primary));
+            let mut clicked_target_line = None;
+            let mut clicked_action_line = None;
 
-                    let is_active = line_idx == active_line_idx;
-                    let is_applied = self.state.lines.get(line_idx).map(|l| l.is_applied).unwrap_or(false);
+            for (line_idx, start_y, end_y, first_row_y, first_row_h) in logical_lines_geom {
+                let screen_start_y = output.galley_pos.y + start_y;
+                let screen_end_y = output.galley_pos.y + end_y;
+                let screen_center_y = output.galley_pos.y + first_row_y + first_row_h * 0.5;
 
-                    // Скролл к активной строке при программной смене (стрелки ▲/▼, Enter)
-                    if is_active && do_scroll_active {
-                        let active_rect = egui::Rect::from_min_max(
-                            egui::pos2(rect.left(), screen_start_y),
-                            egui::pos2(rect.right(), screen_end_y),
-                        );
-                        ui.scroll_to_rect(active_rect, Some(Align::Center));
-                        do_scroll_active = false;
-                    }
+                let is_active = line_idx == active_line_idx;
+                let is_applied = self.state.lines.get(line_idx).map(|l| l.is_applied).unwrap_or(false);
 
-                    // А. Левый гуттер: номер строки
-                    let num_color = if is_active {
-                        Color32::from_rgb(0, 100, 200)
-                    } else if is_applied {
-                        Color32::from_rgb(160, 165, 175)
-                    } else {
-                        Color32::from_rgb(100, 105, 115)
-                    };
-                    ui.painter().text(
-                        egui::pos2(rect.left() + 22.0, screen_center_y),
-                        egui::Align2::RIGHT_CENTER,
-                        format!("{}", line_idx + 1),
-                        egui::FontId::monospace(10.5),
-                        num_color,
-                    );
+                // Скролл к активной строке при программной смене (стрелки ▲/▼, Enter)
+                if is_active && do_scroll_active {
+                    let active_rect = egui::Rect::from_min_max(egui::pos2(rect.left(), screen_start_y), egui::pos2(rect.right(), screen_end_y));
+                    ui.scroll_to_rect(active_rect, Some(Align::Center));
+                    do_scroll_active = false;
+                }
 
-                    // Мишень / иконка статуса
-                    let target_center = egui::pos2(rect.left() + 34.0, screen_center_y);
-                    let target_rect = egui::Rect::from_center_size(target_center, vec2(16.0, 16.0));
-                    let is_target_hovered = mouse_pos.is_some_and(|p| target_rect.contains(p));
+                // А. Левый гуттер: номер строки
+                let num_color = if is_active {
+                    Color32::from_rgb(0, 100, 200)
+                } else if is_applied {
+                    Color32::from_rgb(160, 165, 175)
+                } else {
+                    Color32::from_rgb(100, 105, 115)
+                };
+                ui.painter().text(
+                    egui::pos2(rect.left() + 22.0, screen_center_y),
+                    egui::Align2::RIGHT_CENTER,
+                    format!("{}", line_idx + 1),
+                    egui::FontId::monospace(10.5),
+                    num_color,
+                );
 
-                    if is_active {
-                        ui.painter().circle_stroke(target_center, 4.5, Stroke::new(1.3, Color32::from_rgb(0, 120, 215)));
-                        ui.painter().circle_filled(target_center, 2.3, Color32::from_rgb(0, 120, 215));
-                    } else {
-                        let stroke_color = if is_target_hovered {
-                            Color32::from_rgb(0, 120, 215)
-                        } else if is_applied {
-                            Color32::from_rgb(175, 180, 190)
-                        } else {
-                            Color32::from_rgb(130, 135, 145)
-                        };
-                        ui.painter().circle_stroke(target_center, 4.5, Stroke::new(1.2, stroke_color));
-                        ui.painter().circle_stroke(target_center, 1.5, Stroke::new(1.0, stroke_color));
-                    }
+                // Мишень / иконка статуса
+                let target_center = egui::pos2(rect.left() + 34.0, screen_center_y);
+                let target_rect = egui::Rect::from_center_size(target_center, vec2(16.0, 16.0));
+                let is_target_hovered = mouse_pos.is_some_and(|p| target_rect.contains(p));
 
-                    if is_target_hovered && primary_clicked {
-                        clicked_target_line = Some(line_idx);
-                    }
-
-                    // Б. Правый гуттер: кнопка быстрой отправки строки на холст (->)
-                    let action_center = egui::pos2(rect.right() - 12.0, screen_center_y);
-                    let action_rect = egui::Rect::from_center_size(action_center, vec2(18.0, 18.0));
-                    let is_action_hovered = mouse_pos.is_some_and(|p| action_rect.contains(p));
-
-                    let btn_bg = if is_action_hovered {
+                if is_active {
+                    ui.painter().circle_stroke(target_center, 4.5, Stroke::new(1.3, Color32::from_rgb(0, 120, 215)));
+                    ui.painter().circle_filled(target_center, 2.3, Color32::from_rgb(0, 120, 215));
+                } else {
+                    let stroke_color = if is_target_hovered {
                         Color32::from_rgb(0, 120, 215)
+                    } else if is_applied {
+                        Color32::from_rgb(175, 180, 190)
                     } else {
-                        Color32::from_rgb(240, 243, 248)
+                        Color32::from_rgb(130, 135, 145)
                     };
-                    let icon_color = if is_action_hovered {
-                        Color32::WHITE
-                    } else {
-                        Color32::from_rgb(120, 125, 135)
-                    };
-                    let border_color = if is_action_hovered {
-                        Color32::from_rgb(0, 100, 190)
-                    } else {
-                        Color32::from_rgb(205, 210, 220)
-                    };
-
-                    ui.painter().circle_filled(action_center, 7.5, btn_bg);
-                    ui.painter().circle_stroke(action_center, 7.5, Stroke::new(1.0, border_color));
-
-                    let arrow_stroke = Stroke::new(1.4, icon_color);
-                    let ax = action_center.x;
-                    let ay = action_center.y;
-                    ui.painter().line_segment([egui::pos2(ax - 3.5, ay), egui::pos2(ax + 2.5, ay)], arrow_stroke);
-                    ui.painter().line_segment([egui::pos2(ax + 0.5, ay - 2.5), egui::pos2(ax + 3.0, ay)], arrow_stroke);
-                    ui.painter().line_segment([egui::pos2(ax + 0.5, ay + 2.5), egui::pos2(ax + 3.0, ay)], arrow_stroke);
-
-                    if is_action_hovered && primary_clicked {
-                        clicked_action_line = Some(line_idx);
-                    }
-
-                    // В. Горизонтальная пунктирная линия под строкой
-                    let dash_stroke = Stroke::new(1.0, Color32::from_rgb(181, 181, 181)); // #b5b5b5
-                    draw_dashed_hline(ui.painter(), rect.left(), rect.right(), screen_end_y, dash_stroke);
+                    ui.painter().circle_stroke(target_center, 4.5, Stroke::new(1.2, stroke_color));
+                    ui.painter().circle_stroke(target_center, 1.5, Stroke::new(1.0, stroke_color));
                 }
 
-                if let Some(target_idx) = clicked_target_line {
-                    self.state.set_current_line(target_idx);
-                    self.scroll_to_active_line = true;
+                if is_target_hovered && primary_clicked {
+                    clicked_target_line = Some(line_idx);
                 }
 
-                if let Some(act_idx) = clicked_action_line {
-                    if let Some(line) = self.state.lines.get(act_idx) {
-                        if let Some(preset) = self.state.active_preset().cloned() {
-                            *action = Some(TypesetterAction {
-                                text: line.text.clone(),
-                                preset,
-                            });
-                            self.state.set_current_line(act_idx);
-                            self.state.advance_line();
-                            self.auto_save();
-                        }
-                    }
+                // Б. Правый гуттер: кнопка быстрой отправки строки на холст (->)
+                let action_center = egui::pos2(rect.right() - 12.0, screen_center_y);
+                let action_rect = egui::Rect::from_center_size(action_center, vec2(18.0, 18.0));
+                let is_action_hovered = mouse_pos.is_some_and(|p| action_rect.contains(p));
+
+                let btn_bg = if is_action_hovered { Color32::from_rgb(0, 120, 215) } else { Color32::from_rgb(240, 243, 248) };
+                let icon_color = if is_action_hovered { Color32::WHITE } else { Color32::from_rgb(120, 125, 135) };
+                let border_color = if is_action_hovered { Color32::from_rgb(0, 100, 190) } else { Color32::from_rgb(205, 210, 220) };
+
+                ui.painter().circle_filled(action_center, 7.5, btn_bg);
+                ui.painter().circle_stroke(action_center, 7.5, Stroke::new(1.0, border_color));
+
+                let arrow_stroke = Stroke::new(1.4, icon_color);
+                let ax = action_center.x;
+                let ay = action_center.y;
+                ui.painter().line_segment([egui::pos2(ax - 3.5, ay), egui::pos2(ax + 2.5, ay)], arrow_stroke);
+                ui.painter().line_segment([egui::pos2(ax + 0.5, ay - 2.5), egui::pos2(ax + 3.0, ay)], arrow_stroke);
+                ui.painter().line_segment([egui::pos2(ax + 0.5, ay + 2.5), egui::pos2(ax + 3.0, ay)], arrow_stroke);
+
+                if is_action_hovered && primary_clicked {
+                    clicked_action_line = Some(line_idx);
                 }
 
-                // 3. Отслеживание курсора: при клике или переходе по стрелкам обновляем активную строку
-                if let Some(cr) = output.cursor_range {
-                    let c_idx = cr.primary.index;
-                    let char_count = self.script_buffer.chars().take(c_idx.into()).filter(|&c| c == '\n').count();
-                    if char_count != self.state.current_line_idx && char_count < self.state.lines.len() {
-                        self.state.set_current_line(char_count);
+                // В. Горизонтальная пунктирная линия под строкой
+                let dash_stroke = Stroke::new(1.0, Color32::from_rgb(181, 181, 181)); // #b5b5b5
+                draw_dashed_hline(ui.painter(), rect.left(), rect.right(), screen_end_y, dash_stroke);
+            }
+
+            if let Some(target_idx) = clicked_target_line {
+                self.state.set_current_line(target_idx);
+                self.scroll_to_active_line = true;
+            }
+
+            if let Some(act_idx) = clicked_action_line {
+                if let Some(line) = self.state.lines.get(act_idx) {
+                    if let Some(preset) = self.state.active_preset().cloned() {
+                        *action = Some(TypesetterAction { text: line.text.clone(), preset });
+                        self.state.set_current_line(act_idx);
+                        self.state.advance_line();
+                        self.auto_save();
                     }
                 }
+            }
 
-                // 4. Синхронизация состояния при правках в текстовом поле
-                if output.response.response.changed() {
-                    self.sync_state_from_script_buffer();
+            // 3. Отслеживание курсора: при клике или переходе по стрелкам обновляем активную строку
+            if let Some(cr) = output.cursor_range {
+                let c_idx = cr.primary.index;
+                let char_count = self.script_buffer.chars().take(c_idx.into()).filter(|&c| c == '\n').count();
+                if char_count != self.state.current_line_idx && char_count < self.state.lines.len() {
+                    self.state.set_current_line(char_count);
                 }
-            });
+            }
+
+            // 4. Синхронизация состояния при правках в текстовом поле
+            if output.response.response.changed() {
+                self.sync_state_from_script_buffer();
+            }
+        });
 
         self.scroll_to_active_line = false;
     }
@@ -1523,10 +1524,7 @@ impl TypesetterUi {
             self.state.selected_preset_idx = idx;
             if let Some(line) = self.state.active_line() {
                 if let Some(preset) = self.state.presets.get(idx).cloned() {
-                    *action = Some(TypesetterAction {
-                        text: line.text.clone(),
-                        preset,
-                    });
+                    *action = Some(TypesetterAction { text: line.text.clone(), preset });
                     self.state.advance_line();
                     self.scroll_to_active_line = true;
                 }
@@ -1608,8 +1606,7 @@ impl TypesetterUi {
                     }
                 }
 
-                ui.checkbox(&mut self.filter_current_page_only, tl!("Page"))
-                    .on_hover_text(tl!("Show current page dialogues only"));
+                ui.checkbox(&mut self.filter_current_page_only, tl!("Page")).on_hover_text(tl!("Show current page dialogues only"));
             });
         });
 
@@ -1618,11 +1615,7 @@ impl TypesetterUi {
             let search_w = (ui.available_width() - 95.0).max(80.0);
             ui.add(egui::TextEdit::singleline(&mut self.full_text_filter).hint_text(format!("🔍 {}", tl!("Search…"))).desired_width(search_w));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.label(
-                    RichText::new(format!("{}/{} ({}: {})", applied_count, total_lines, tl!("left"), pending_count))
-                        .weak()
-                        .small(),
-                );
+                ui.label(RichText::new(format!("{}/{} ({}: {})", applied_count, total_lines, tl!("left"), pending_count)).weak().small());
             });
         });
 
@@ -1637,7 +1630,11 @@ impl TypesetterUi {
                     let avail_w = ui.available_width();
                     if avail_w >= 360.0 {
                         ui.horizontal(|ui| {
-                            if ui.button(RichText::new(format!("📋 {}", tl!("Paste from Clipboard"))).strong()).on_hover_text(tl!("Paste script from clipboard (Ctrl+V)")).clicked() {
+                            if ui
+                                .button(RichText::new(format!("📋 {}", tl!("Paste from Clipboard"))).strong())
+                                .on_hover_text(tl!("Paste script from clipboard (Ctrl+V)"))
+                                .clicked()
+                            {
                                 self.paste_script_from_clipboard();
                             }
                             if ui.button(format!("📥 {}", tl!("Load .txt"))).on_hover_text(tl!("Load script file (.txt)")).clicked() {
@@ -1651,13 +1648,25 @@ impl TypesetterUi {
                         // Адаптивный вертикальный стек кнопок во всю ширину
                         ui.spacing_mut().item_spacing.y = 6.0;
                         let btn_w = (avail_w - 20.0).max(180.0);
-                        if ui.add_sized([btn_w, 28.0], egui::Button::new(RichText::new(format!("📋 {}", tl!("Paste from Clipboard"))).strong())).on_hover_text(tl!("Paste script from clipboard (Ctrl+V)")).clicked() {
+                        if ui
+                            .add_sized([btn_w, 28.0], egui::Button::new(RichText::new(format!("📋 {}", tl!("Paste from Clipboard"))).strong()))
+                            .on_hover_text(tl!("Paste script from clipboard (Ctrl+V)"))
+                            .clicked()
+                        {
                             self.paste_script_from_clipboard();
                         }
-                        if ui.add_sized([btn_w, 28.0], egui::Button::new(format!("📥 {}", tl!("Load .txt")))).on_hover_text(tl!("Load script file (.txt)")).clicked() {
+                        if ui
+                            .add_sized([btn_w, 28.0], egui::Button::new(format!("📥 {}", tl!("Load .txt"))))
+                            .on_hover_text(tl!("Load script file (.txt)"))
+                            .clicked()
+                        {
                             self.open_script_file_dialog();
                         }
-                        if ui.add_sized([btn_w, 28.0], egui::Button::new(format!("📝 {}", tl!("Enter in Editor")))).on_hover_text(tl!("Enter script manually")).clicked() {
+                        if ui
+                            .add_sized([btn_w, 28.0], egui::Button::new(format!("📝 {}", tl!("Enter in Editor"))))
+                            .on_hover_text(tl!("Enter script manually"))
+                            .clicked()
+                        {
                             self.open_script_editor();
                         }
                     }
@@ -1668,149 +1677,123 @@ impl TypesetterUi {
         }
 
         // Список всего текста скроллируемый
-        ScrollArea::vertical()
-            .auto_shrink([false; 2])
-            .show(ui, |ui| {
-                let filter = self.full_text_filter.to_lowercase();
-                let mut line_to_set = None;
-                let mut line_to_insert = None;
-                let mut text_changed = false;
-                let mut should_clear_scroll = false;
-                let do_scroll = self.scroll_to_active_line;
-                let cur_line_idx = self.state.current_line_idx;
-                let mut last_rendered_page = 0;
+        ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
+            let filter = self.full_text_filter.to_lowercase();
+            let mut line_to_set = None;
+            let mut line_to_insert = None;
+            let mut text_changed = false;
+            let mut should_clear_scroll = false;
+            let do_scroll = self.scroll_to_active_line;
+            let cur_line_idx = self.state.current_line_idx;
+            let mut last_rendered_page = 0;
 
-                for (idx, line) in self.state.lines.iter_mut().enumerate() {
-                    if self.filter_current_page_only && line.page != self.state.current_page {
-                        continue;
-                    }
-                    if !filter.is_empty() && !line.text.to_lowercase().contains(&filter) {
-                        continue;
-                    }
+            for (idx, line) in self.state.lines.iter_mut().enumerate() {
+                if self.filter_current_page_only && line.page != self.state.current_page {
+                    continue;
+                }
+                if !filter.is_empty() && !line.text.to_lowercase().contains(&filter) {
+                    continue;
+                }
 
-                    // Разделитель страниц
-                    if line.page != last_rendered_page {
-                        last_rendered_page = line.page;
-                        ui.add_space(6.0);
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new(format!("─── {} {} ───", tl!("Page"), line.page)).color(t.text_dim).strong().small());
-                        });
-                        ui.add_space(2.0);
-                    }
-
-                    let is_active = idx == cur_line_idx;
-                    let (card_bg, card_border, text_color, num_color) = if is_active {
-                        (
-                            Color32::from_rgb(204, 232, 255),
-                            Color32::from_rgb(0, 120, 215),
-                            Color32::from_rgb(10, 25, 50),
-                            Color32::from_rgb(0, 90, 180),
-                        )
-                    } else if line.is_applied {
-                        (
-                            Color32::from_rgb(250, 250, 252),
-                            Color32::TRANSPARENT,
-                            Color32::from_rgb(150, 155, 165),
-                            Color32::from_rgb(170, 175, 185),
-                        )
-                    } else {
-                        (
-                            Color32::WHITE,
-                            Color32::TRANSPARENT,
-                            Color32::from_rgb(20, 25, 35),
-                            Color32::from_rgb(110, 115, 125),
-                        )
-                    };
-
-                    let card_frame = Frame::NONE
-                        .fill(card_bg)
-                        .stroke(Stroke::new(if is_active { 1.5 } else { 0.0 }, card_border))
-                        .corner_radius(CornerRadius::same(3))
-                        .inner_margin(Margin::symmetric(6, 4));
-
-                    let row_resp = card_frame.show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new(format!("{:2}", idx + 1)).color(num_color).monospace().small());
-
-                            let target_icon = if is_active { "●" } else { "◎" };
-                            if ui.small_button(target_icon).on_hover_text(tl!("Make this line current")).clicked() {
-                                line_to_set = Some((idx, true));
-                            }
-
-                            let mut do_insert = false;
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                let (btn_text, btn_fill) = if line.is_applied {
-                                    ("✓", Color32::from_rgb(46, 125, 50))
-                                } else {
-                                    ("▶", Color32::from_rgb(0, 120, 215))
-                                };
-                                let insert_btn = egui::Button::new(
-                                    RichText::new(btn_text).color(Color32::WHITE).strong()
-                                )
-                                .fill(btn_fill)
-                                .min_size(vec2(22.0, 16.0));
-
-                                if ui.add(insert_btn).on_hover_text(tl!("Insert this line into bubble (Enter)")).clicked() {
-                                    do_insert = true;
-                                }
-
-                                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                                    let edit = egui::TextEdit::singleline(&mut line.text)
-                                        .font(egui::TextStyle::Body)
-                                        .text_color(text_color)
-                                        .frame(egui::Frame::NONE)
-                                        .id_salt(egui::Id::new("typer_fulltext_line").with(idx));
-                                    let edit_resp = ui.add(edit);
-                                    if edit_resp.gained_focus() || edit_resp.clicked() {
-                                        line_to_set = Some((idx, false));
-                                    }
-                                    if edit_resp.changed() {
-                                        text_changed = true;
-                                    }
-                                });
-                            });
-
-                            if do_insert {
-                                line_to_insert = Some((idx, line.clone()));
-                            }
-                        });
+                // Разделитель страниц
+                if line.page != last_rendered_page {
+                    last_rendered_page = line.page;
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(format!("─── {} {} ───", tl!("Page"), line.page)).color(t.text_dim).strong().small());
                     });
-
-                    if is_active && do_scroll {
-                        row_resp.response.scroll_to_me(Some(Align::Center));
-                        should_clear_scroll = true;
-                    }
-
                     ui.add_space(2.0);
                 }
 
-                if should_clear_scroll {
-                    self.scroll_to_active_line = false;
-                }
+                let is_active = idx == cur_line_idx;
+                let (card_bg, card_border, text_color, num_color) = if is_active {
+                    (Color32::from_rgb(204, 232, 255), Color32::from_rgb(0, 120, 215), Color32::from_rgb(10, 25, 50), Color32::from_rgb(0, 90, 180))
+                } else if line.is_applied {
+                    (Color32::from_rgb(250, 250, 252), Color32::TRANSPARENT, Color32::from_rgb(150, 155, 165), Color32::from_rgb(170, 175, 185))
+                } else {
+                    (Color32::WHITE, Color32::TRANSPARENT, Color32::from_rgb(20, 25, 35), Color32::from_rgb(110, 115, 125))
+                };
 
-                if let Some((idx, req_scroll)) = line_to_set {
-                    self.state.set_current_line(idx);
-                    if req_scroll {
-                        self.scroll_to_active_line = true;
-                    }
-                }
+                let card_frame = Frame::NONE
+                    .fill(card_bg)
+                    .stroke(Stroke::new(if is_active { 1.5 } else { 0.0 }, card_border))
+                    .corner_radius(CornerRadius::same(3))
+                    .inner_margin(Margin::symmetric(6, 4));
 
-                if let Some((idx, line)) = line_to_insert {
-                    if let Some(preset) = self.state.active_preset().cloned() {
-                        *action = Some(TypesetterAction {
-                            text: line.text.clone(),
-                            preset,
+                let row_resp = card_frame.show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(format!("{:2}", idx + 1)).color(num_color).monospace().small());
+
+                        let target_icon = if is_active { "●" } else { "◎" };
+                        if ui.small_button(target_icon).on_hover_text(tl!("Make this line current")).clicked() {
+                            line_to_set = Some((idx, true));
+                        }
+
+                        let mut do_insert = false;
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            let (btn_text, btn_fill) =
+                                if line.is_applied { ("✓", Color32::from_rgb(46, 125, 50)) } else { ("▶", Color32::from_rgb(0, 120, 215)) };
+                            let insert_btn =
+                                egui::Button::new(RichText::new(btn_text).color(Color32::WHITE).strong()).fill(btn_fill).min_size(vec2(22.0, 16.0));
+
+                            if ui.add(insert_btn).on_hover_text(tl!("Insert this line into bubble (Enter)")).clicked() {
+                                do_insert = true;
+                            }
+
+                            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                                let edit = egui::TextEdit::singleline(&mut line.text)
+                                    .font(egui::TextStyle::Body)
+                                    .text_color(text_color)
+                                    .frame(egui::Frame::NONE)
+                                    .id_salt(egui::Id::new("typer_fulltext_line").with(idx));
+                                let edit_resp = ui.add(edit);
+                                if edit_resp.gained_focus() || edit_resp.clicked() {
+                                    line_to_set = Some((idx, false));
+                                }
+                                if edit_resp.changed() {
+                                    text_changed = true;
+                                }
+                            });
                         });
-                        self.state.set_current_line(idx + 1);
-                        self.scroll_to_active_line = true;
-                        self.auto_save();
-                    }
+
+                        if do_insert {
+                            line_to_insert = Some((idx, line.clone()));
+                        }
+                    });
+                });
+
+                if is_active && do_scroll {
+                    row_resp.response.scroll_to_me(Some(Align::Center));
+                    should_clear_scroll = true;
                 }
 
-                if text_changed {
+                ui.add_space(2.0);
+            }
+
+            if should_clear_scroll {
+                self.scroll_to_active_line = false;
+            }
+
+            if let Some((idx, req_scroll)) = line_to_set {
+                self.state.set_current_line(idx);
+                if req_scroll {
+                    self.scroll_to_active_line = true;
+                }
+            }
+
+            if let Some((idx, line)) = line_to_insert {
+                if let Some(preset) = self.state.active_preset().cloned() {
+                    *action = Some(TypesetterAction { text: line.text.clone(), preset });
+                    self.state.set_current_line(idx + 1);
+                    self.scroll_to_active_line = true;
                     self.auto_save();
                 }
-            });
+            }
+
+            if text_changed {
+                self.auto_save();
+            }
+        });
     }
 
     /// Модальное окно для прямого ввода, вставки (Ctrl+V) и редактирования текста сценария.
@@ -1829,10 +1812,7 @@ impl TypesetterUi {
             }
 
             if ui.button(format!("📥 {}", tl!("Load file (.txt)…"))).clicked() {
-                if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("Текстовые файлы (*.txt)", &["txt"])
-                    .set_title(tl!("Choose script file"))
-                    .pick_file()
+                if let Some(path) = rfd::FileDialog::new().add_filter("Текстовые файлы (*.txt)", &["txt"]).set_title(tl!("Choose script file")).pick_file()
                 {
                     if let Ok(content) = std::fs::read_to_string(&path) {
                         self.script_editor_buffer = content;
@@ -1851,25 +1831,19 @@ impl TypesetterUi {
         });
 
         ui.add_space(4.0);
-        ui.label(
-            RichText::new(tl!("Each line becomes a separate dialogue entry. [Page 1] tags split pages."))
-                .color(t.text_dim)
-                .small(),
-        );
+        ui.label(RichText::new(tl!("Each line becomes a separate dialogue entry. [Page 1] tags split pages.")).color(t.text_dim).small());
         ui.add_space(4.0);
 
         let available_h = ui.available_height() - 42.0;
-        egui::ScrollArea::vertical()
-            .max_height(available_h.max(160.0))
-            .show(ui, |ui| {
-                ui.add(
-                    egui::TextEdit::multiline(&mut self.script_editor_buffer)
-                        .hint_text(tl!("Paste script text here (Ctrl+V) or write dialogues…"))
-                        .desired_width(f32::INFINITY)
-                        .font(egui::TextStyle::Monospace)
-                        .lock_focus(true),
-                );
-            });
+        egui::ScrollArea::vertical().max_height(available_h.max(160.0)).show(ui, |ui| {
+            ui.add(
+                egui::TextEdit::multiline(&mut self.script_editor_buffer)
+                    .hint_text(tl!("Paste script text here (Ctrl+V) or write dialogues…"))
+                    .desired_width(f32::INFINITY)
+                    .font(egui::TextStyle::Monospace)
+                    .lock_focus(true),
+            );
+        });
 
         ui.add_space(6.0);
         widgets::hairline(ui);
@@ -1877,10 +1851,7 @@ impl TypesetterUi {
 
         ui.horizontal(|ui| {
             let has_text = !self.script_editor_buffer.trim().is_empty();
-            let apply_btn = egui::Button::new(
-                RichText::new(format!("✓ {}", tl!("Load into typesetter"))).color(t.accent_text).strong()
-            )
-            .fill(t.accent);
+            let apply_btn = egui::Button::new(RichText::new(format!("✓ {}", tl!("Load into typesetter"))).color(t.accent_text).strong()).fill(t.accent);
 
             if ui.add_enabled(has_text, apply_btn).clicked() {
                 self.script_input_buffer = self.script_editor_buffer.clone();
@@ -1917,652 +1888,504 @@ impl TypesetterUi {
         let mut new_folder_name = ui.data_mut(|d| d.get_temp::<String>(new_folder_name_id)).unwrap_or_default();
 
         if let Some(preset) = self.state.presets.get_mut(idx) {
-            Frame::NONE
-                .inner_margin(Margin { left: FORM_LEFT_INSET as i8, right: 0, top: 11, bottom: 4 })
-                .show(ui, |ui| {
-                    // The mockup has one caption column and one control axis. Vertical spacing is
-                    // explicit: the section rules and headers sit on fixed offsets from the first
-                    // row, not on the default item spacing.
-                    ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
-                    ui.spacing_mut().interact_size.y = ROW_H;
-                    // The mockup's grid: 94 + 6 + 445 = 545 inside the form's 6-point inset.
-                    ui.set_width(LABEL_W + COL_GAP + RIGHT_W);
+            Frame::NONE.inner_margin(Margin { left: FORM_LEFT_INSET as i8, right: 0, top: 11, bottom: 4 }).show(ui, |ui| {
+                // The mockup has one caption column and one control axis. Vertical spacing is
+                // explicit: the section rules and headers sit on fixed offsets from the first
+                // row, not on the default item spacing.
+                ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+                ui.spacing_mut().interact_size.y = ROW_H;
+                // The mockup's grid: 94 + 6 + 445 = 545 inside the form's 6-point inset.
+                ui.set_width(LABEL_W + COL_GAP + RIGHT_W);
 
-                    // 1. Style name
-                    form_row(ui, "Style name", |ui| {
-                        if ui
-                            .add_sized(
-                                [RIGHT_W, ROW_H],
-                                egui::TextEdit::singleline(&mut preset.name).vertical_align(Align::Center),
-                            )
-                            .changed()
-                        {
-                            changed = true;
-                        }
-                    });
+                // 1. Style name
+                form_row(ui, "Style name", |ui| {
+                    if ui.add_sized([RIGHT_W, ROW_H], egui::TextEdit::singleline(&mut preset.name).vertical_align(Align::Center)).changed() {
+                        changed = true;
+                    }
+                });
 
-                    ui.add_space(5.0);
+                ui.add_space(5.0);
 
-                    // 2. Folder
-                    form_row(ui, "Folder", |ui| {
-                        let folder_str = preset.folder.clone().unwrap_or_default();
-                        egui::ComboBox::from_id_salt("edit_preset_folder_combo")
-                            .selected_text(if folder_str.is_empty() {
-                                tl!("No folder").to_string()
-                            } else {
-                                folder_str.clone()
-                            })
-                            .width(RIGHT_W)
-                            .show_ui(ui, |ui| {
-                                if ui.selectable_label(folder_str.is_empty(), tl!("No folder")).clicked() {
-                                    preset.folder = None;
-                                    changed = true;
-                                }
-                                for f in &available_folders {
-                                    if ui.selectable_label(folder_str == *f, f).clicked() {
-                                        preset.folder = Some(f.clone());
-                                        changed = true;
-                                    }
-                                }
-                                ui.separator();
-                                if ui.selectable_label(false, tl!("+ New folder...")).clicked() {
-                                    new_folder_open = true;
-                                    new_folder_name.clear();
-                                }
-                            });
-                    });
-
-                    if new_folder_open {
-                        ui.add_space(5.0);
-                        form_row(ui, "Folder name", |ui| {
-                            let response = ui.add_sized(
-                                [240.0, ROW_H],
-                                egui::TextEdit::singleline(&mut new_folder_name)
-                                    .hint_text(tl!("New folder name"))
-                                    .vertical_align(Align::Center),
-                            );
-                            ui.add_space(6.0);
-                            let submit = ui.add_sized([54.0, ROW_H], egui::Button::new(tl!("OK"))).clicked()
-                                || (response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
-                            ui.add_space(6.0);
-                            if submit {
-                                let name = new_folder_name.trim();
-                                if !name.is_empty() {
-                                    preset.folder = Some(name.to_string());
-                                    changed = true;
-                                }
-                                new_folder_open = false;
-                                new_folder_name.clear();
+                // 2. Folder
+                form_row(ui, "Folder", |ui| {
+                    let folder_str = preset.folder.clone().unwrap_or_default();
+                    egui::ComboBox::from_id_salt("edit_preset_folder_combo")
+                        .selected_text(if folder_str.is_empty() { tl!("No folder").to_string() } else { folder_str.clone() })
+                        .width(RIGHT_W)
+                        .show_ui(ui, |ui| {
+                            if ui.selectable_label(folder_str.is_empty(), tl!("No folder")).clicked() {
+                                preset.folder = None;
+                                changed = true;
                             }
-                            if ui.add_sized([72.0, ROW_H], egui::Button::new(tl!("Cancel"))).clicked() {
-                                new_folder_open = false;
+                            for f in &available_folders {
+                                if ui.selectable_label(folder_str == *f, f).clicked() {
+                                    preset.folder = Some(f.clone());
+                                    changed = true;
+                                }
+                            }
+                            ui.separator();
+                            if ui.selectable_label(false, tl!("+ New folder...")).clicked() {
+                                new_folder_open = true;
                                 new_folder_name.clear();
                             }
                         });
-                        ui.add_space(5.0);
-                    } else {
-                        ui.add_space(10.0);
+                });
+
+                if new_folder_open {
+                    ui.add_space(5.0);
+                    form_row(ui, "Folder name", |ui| {
+                        let response = ui.add_sized(
+                            [240.0, ROW_H],
+                            egui::TextEdit::singleline(&mut new_folder_name).hint_text(tl!("New folder name")).vertical_align(Align::Center),
+                        );
+                        ui.add_space(6.0);
+                        let submit = ui.add_sized([54.0, ROW_H], egui::Button::new(tl!("OK"))).clicked()
+                            || (response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
+                        ui.add_space(6.0);
+                        if submit {
+                            let name = new_folder_name.trim();
+                            if !name.is_empty() {
+                                preset.folder = Some(name.to_string());
+                                changed = true;
+                            }
+                            new_folder_open = false;
+                            new_folder_name.clear();
+                        }
+                        if ui.add_sized([72.0, ROW_H], egui::Button::new(tl!("Cancel"))).clicked() {
+                            new_folder_open = false;
+                            new_folder_name.clear();
+                        }
+                    });
+                    ui.add_space(5.0);
+                } else {
+                    ui.add_space(10.0);
+                }
+
+                section_header(ui, "Typography and Font", 6.0);
+                ui.add_space(7.0);
+
+                // 3. Font
+                form_row(ui, "Font", |ui| {
+                    let is_fav = crate::type_tool::is_favorite_font(ui.ctx(), &preset.font_family);
+                    let star_text = if is_fav { "★" } else { "☆" };
+                    let star_color = if is_fav { egui::Color32::from_rgb(240, 190, 50) } else { ui.visuals().weak_text_color() };
+                    let star_btn = egui::Button::new(RichText::new(star_text).color(star_color).size(14.0)).min_size(vec2(43.0, ROW_H));
+                    if ui.add(star_btn).on_hover_text(tl!("Favorite font")).clicked() {
+                        toggle_fav_font = Some(preset.font_family.clone());
+                    }
+                    ui.add_space(6.0);
+
+                    let prev_fam = preset.font_family.clone();
+                    let families = crate::type_tool::families();
+                    let font_combo_w = RIGHT_W - 43.0 - 6.0;
+                    if crate::type_tool::family_picker_in(
+                        ui,
+                        "typesetter-preset-font",
+                        &mut preset.font_family,
+                        font_combo_w,
+                        &families,
+                        photocraft_engine::prefs::FontPreview::Medium,
+                        &[],
+                    ) {
+                        changed = true;
+                        if preset.font_family != prev_fam {
+                            if let Some(engine) = photocraft_text::try_shared() {
+                                let faces = engine.lock().unwrap_or_else(std::sync::PoisonError::into_inner).fonts.faces(&preset.font_family);
+                                if let Some(first_face) = faces.first() {
+                                    if let Some(ps) = &first_face.postscript_name {
+                                        preset.font_postscript = ps.clone();
+                                    }
+                                    preset.font_style = first_face.style.clone();
+                                }
+                            }
+                        }
+                    }
+                });
+
+                ui.add_space(7.0);
+
+                // 4. PostScript + Style
+                form_row(ui, "PostScript", |ui| {
+                    if ui.add_sized([295.0, ROW_H], egui::TextEdit::singleline(&mut preset.font_postscript).vertical_align(Align::Center)).changed() {
+                        changed = true;
                     }
 
-                    section_header(ui, "Typography and Font", 6.0);
-                    ui.add_space(7.0);
-
-                    // 3. Font
-                    form_row(ui, "Font", |ui| {
-                        let is_fav = crate::type_tool::is_favorite_font(ui.ctx(), &preset.font_family);
-                        let star_text = if is_fav { "★" } else { "☆" };
-                        let star_color = if is_fav {
-                            egui::Color32::from_rgb(240, 190, 50)
-                        } else {
-                            ui.visuals().weak_text_color()
-                        };
-                        let star_btn = egui::Button::new(RichText::new(star_text).color(star_color).size(14.0))
-                            .min_size(vec2(43.0, ROW_H));
-                        if ui.add(star_btn).on_hover_text(tl!("Favorite font")).clicked() {
-                            toggle_fav_font = Some(preset.font_family.clone());
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        ui.spacing_mut().item_spacing.x = 0.0;
+                        let mut styles = crate::type_tool::styles(&preset.font_family);
+                        if !preset.font_style.is_empty() && !styles.iter().any(|s| *s == preset.font_style) {
+                            styles.insert(0, preset.font_style.clone());
+                        }
+                        let options: Vec<(String, String)> = styles.iter().map(|s| (s.clone(), crate::type_tool::style_label(s))).collect();
+                        let options_ref: Vec<(String, &str)> = options.iter().map(|(value, label)| (value.clone(), label.as_str())).collect();
+                        if crate::widgets::dropdown_literal(ui, "typesetter-preset-style", &mut preset.font_style, &options_ref, 91.0) {
+                            changed = true;
                         }
                         ui.add_space(6.0);
-
-                        let prev_fam = preset.font_family.clone();
-                        let families = crate::type_tool::families();
-                        let font_combo_w = RIGHT_W - 43.0 - 6.0;
-                        if crate::type_tool::family_picker_in(
-                            ui,
-                            "typesetter-preset-font",
-                            &mut preset.font_family,
-                            font_combo_w,
-                            &families,
-                            photocraft_engine::prefs::FontPreview::Medium,
-                            &[],
-                        ) {
-                            changed = true;
-                            if preset.font_family != prev_fam {
-                                if let Some(engine) = photocraft_text::try_shared() {
-                                    let faces = engine
-                                        .lock()
-                                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                                        .fonts
-                                        .faces(&preset.font_family);
-                                    if let Some(first_face) = faces.first() {
-                                        if let Some(ps) = &first_face.postscript_name {
-                                            preset.font_postscript = ps.clone();
-                                        }
-                                        preset.font_style = first_face.style.clone();
-                                    }
-                                }
-                            }
-                        }
+                        ui.label(format!("{}:", tl!("Style")));
                     });
+                });
 
-                    ui.add_space(7.0);
+                ui.add_space(7.0);
 
-                    // 4. PostScript + Style
-                    form_row(ui, "PostScript", |ui| {
-                        if ui
-                            .add_sized(
-                                [295.0, ROW_H],
-                                egui::TextEdit::singleline(&mut preset.font_postscript).vertical_align(Align::Center),
-                            )
-                            .changed()
-                        {
-                            changed = true;
+                // 5. Formatting (9 buttons evenly spanning RIGHT_W: 9 * 45 + 8 * 5 = 445)
+                form_row(ui, "Formatting", |ui| {
+                    ui.spacing_mut().item_spacing.x = 5.0;
+
+                    if character_toggle(ui, &mut preset.bold, "B", tl!("Faux bold")) {
+                        if preset.bold && !preset.font_style.to_lowercase().contains("bold") {
+                            preset.font_style = if preset.italic { "Bold Italic".into() } else { "Bold".into() };
+                        } else if !preset.bold && preset.font_style.to_lowercase().contains("bold") {
+                            preset.font_style = if preset.italic { "Italic".into() } else { "Regular".into() };
                         }
-
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            ui.spacing_mut().item_spacing.x = 0.0;
-                            let mut styles = crate::type_tool::styles(&preset.font_family);
-                            if !preset.font_style.is_empty() && !styles.iter().any(|s| *s == preset.font_style) {
-                                styles.insert(0, preset.font_style.clone());
-                            }
-                            let options: Vec<(String, String)> = styles
-                                .iter()
-                                .map(|s| (s.clone(), crate::type_tool::style_label(s)))
-                                .collect();
-                            let options_ref: Vec<(String, &str)> = options
-                                .iter()
-                                .map(|(value, label)| (value.clone(), label.as_str()))
-                                .collect();
-                            if crate::widgets::dropdown_literal(
-                                ui,
-                                "typesetter-preset-style",
-                                &mut preset.font_style,
-                                &options_ref,
-                                91.0,
-                            ) {
-                                changed = true;
-                            }
-                            ui.add_space(6.0);
-                            ui.label(format!("{}:", tl!("Style")));
-                        });
-                    });
-
-                    ui.add_space(7.0);
-
-                    // 5. Formatting (9 buttons evenly spanning RIGHT_W: 9 * 45 + 8 * 5 = 445)
-                    form_row(ui, "Formatting", |ui| {
-                        ui.spacing_mut().item_spacing.x = 5.0;
-
-                        if character_toggle(ui, &mut preset.bold, "B", tl!("Faux bold")) {
-                            if preset.bold && !preset.font_style.to_lowercase().contains("bold") {
-                                preset.font_style = if preset.italic { "Bold Italic".into() } else { "Bold".into() };
-                            } else if !preset.bold && preset.font_style.to_lowercase().contains("bold") {
-                                preset.font_style = if preset.italic { "Italic".into() } else { "Regular".into() };
-                            }
-                            changed = true;
+                        changed = true;
+                    }
+                    if character_toggle(ui, &mut preset.italic, "I", tl!("Faux italic")) {
+                        if preset.italic && !preset.font_style.to_lowercase().contains("italic") {
+                            preset.font_style = if preset.bold { "Bold Italic".into() } else { "Italic".into() };
+                        } else if !preset.italic && preset.font_style.to_lowercase().contains("italic") {
+                            preset.font_style = if preset.bold { "Bold".into() } else { "Regular".into() };
                         }
-                        if character_toggle(ui, &mut preset.italic, "I", tl!("Faux italic")) {
-                            if preset.italic && !preset.font_style.to_lowercase().contains("italic") {
-                                preset.font_style = if preset.bold { "Bold Italic".into() } else { "Italic".into() };
-                            } else if !preset.italic && preset.font_style.to_lowercase().contains("italic") {
-                                preset.font_style = if preset.bold { "Bold".into() } else { "Regular".into() };
-                            }
-                            changed = true;
+                        changed = true;
+                    }
+                    if character_toggle(ui, &mut preset.all_caps, "TT", tl!("All Caps")) {
+                        if preset.all_caps {
+                            preset.small_caps = false;
                         }
-                        if character_toggle(ui, &mut preset.all_caps, "TT", tl!("All Caps")) {
-                            if preset.all_caps {
-                                preset.small_caps = false;
-                            }
-                            changed = true;
+                        changed = true;
+                    }
+                    if character_toggle(ui, &mut preset.small_caps, "Tт", tl!("Small Caps")) {
+                        if preset.small_caps {
+                            preset.all_caps = false;
                         }
-                        if character_toggle(ui, &mut preset.small_caps, "Tт", tl!("Small Caps")) {
-                            if preset.small_caps {
-                                preset.all_caps = false;
-                            }
-                            changed = true;
+                        changed = true;
+                    }
+                    if character_toggle(ui, &mut preset.superscript, "T¹", tl!("Superscript")) {
+                        if preset.superscript {
+                            preset.subscript = false;
                         }
-                        if character_toggle(ui, &mut preset.superscript, "T¹", tl!("Superscript")) {
-                            if preset.superscript {
-                                preset.subscript = false;
-                            }
-                            changed = true;
+                        changed = true;
+                    }
+                    if character_toggle(ui, &mut preset.subscript, "T₁", tl!("Subscript")) {
+                        if preset.subscript {
+                            preset.superscript = false;
                         }
-                        if character_toggle(ui, &mut preset.subscript, "T₁", tl!("Subscript")) {
-                            if preset.subscript {
-                                preset.superscript = false;
-                            }
-                            changed = true;
-                        }
-                        if character_toggle(ui, &mut preset.underline, "U", tl!("Underline")) {
-                            changed = true;
-                        }
-                        if character_toggle(ui, &mut preset.strikethrough, "S", tl!("Strikethrough")) {
-                            changed = true;
-                        }
-                        if character_toggle(ui, &mut preset.hanging_punctuation, "«»", tl!("Hanging Punctuation")) {
-                            changed = true;
-                        }
-                    });
+                        changed = true;
+                    }
+                    if character_toggle(ui, &mut preset.underline, "U", tl!("Underline")) {
+                        changed = true;
+                    }
+                    if character_toggle(ui, &mut preset.strikethrough, "S", tl!("Strikethrough")) {
+                        changed = true;
+                    }
+                    if character_toggle(ui, &mut preset.hanging_punctuation, "«»", tl!("Hanging Punctuation")) {
+                        changed = true;
+                    }
+                });
 
-                    ui.add_space(8.0);
+                ui.add_space(8.0);
 
-                    // 6. Alignment (3 buttons evenly spanning RIGHT_W: 3 * 145 + 2 * 5 = 445)
-                    form_row(ui, "Alignment", |ui| {
-                        ui.spacing_mut().item_spacing.x = 5.0;
-                        for value in ["left", "center", "right"] {
-                            let key = match value {
-                                "left" => "Align Left",
-                                "right" => "Align Right",
-                                _ => "Align Center",
-                            };
-                            let label = crate::i18n::t(key);
-                            if alignment_button(ui, value, label, label, preset.align.as_str() == value) {
-                                preset.align = value.to_string();
-                                changed = true;
-                            }
-                        }
-                    });
-
-                    ui.add_space(8.0);
-
-                    // 7. Anti-alias (217 wide, matching the Color swatch + hex row)
-                    form_row(ui, "Anti-alias", |ui| {
-                        let cur_aa = preset.anti_alias.clone();
-                        let display_label = anti_alias_label(&cur_aa);
-                        egui::ComboBox::from_id_salt("style_modal_aa")
-                            .selected_text(display_label)
-                            .width(217.0)
-                            .show_ui(ui, |ui| {
-                                for value in ["crisp", "sharp", "smooth", "strong", "none"] {
-                                    if ui.selectable_label(cur_aa == value, anti_alias_label(value)).clicked() {
-                                        preset.anti_alias = value.to_string();
-                                        changed = true;
-                                    }
-                                }
-                            });
-                    });
-
-                    ui.add_space(6.0);
-
-                    // 8. Color (43 swatch + 7 gap + 167 hex = 217)
-                    form_row(ui, "Color", |ui| {
-                        if color_swatch_with_hex_sized(
-                            ui,
-                            &mut preset.text_color,
-                            "typesetter-text-color",
-                            vec2(43.0, 24.0),
-                            7.0,
-                            167.0,
-                        ) {
-                            changed = true;
-                        }
-                    });
-
-                    ui.add_space(11.0);
-                    section_header(ui, "Typography Size (Line Spacing Sync)", 8.0);
-                    ui.add_space(8.0);
-
-                    // 9. System type (joined segmented control: 2 * 95 = 190, 0 gap)
-                    form_row(ui, "System type", |ui| {
-                        ui.spacing_mut().item_spacing.x = 0.0;
-                        let is_optical = preset.measurement_system.is_optical();
-                        // One joined 190-point control: only the outer corners are rounded.
-                        if ui
-                            .add(
-                                egui::Button::new(RichText::new(tl!("Metrics")).size(12.5))
-                                    .selected(!is_optical)
-                                    .corner_radius(CornerRadius { nw: 4, sw: 4, ne: 0, se: 0 })
-                                    .min_size(vec2(95.0, ROW_H)),
-                            )
-                            .on_hover_text(tl!("Use standard font metrics and the baseline"))
-                            .clicked()
-                        {
-                            preset.measurement_system = photocraft_engine::typesetter::MeasurementSystem::Metric;
-                            changed = true;
-                        }
-                        if ui
-                            .add(
-                                egui::Button::new(RichText::new(tl!("Optical")).size(12.5))
-                                    .selected(is_optical)
-                                    .corner_radius(CornerRadius { nw: 0, sw: 0, ne: 4, se: 4 })
-                                    .min_size(vec2(95.0, ROW_H)),
-                            )
-                            .on_hover_text(tl!("Use visual kerning and bubble centering"))
-                            .clicked()
-                        {
-                            preset.measurement_system = photocraft_engine::typesetter::MeasurementSystem::Optical;
-                            changed = true;
-                        }
-                    });
-
-                    ui.add_space(6.0);
-
-                    // 10. Size (pt) + A- / A+ / Link + Leading (right-aligned)
-                    form_row(ui, "Size (pt)", |ui| {
-                        let mut size = preset.font_size;
-                        if ui
-                            .add_sized(
-                                [86.0, ROW_H],
-                                egui::DragValue::new(&mut size).speed(0.5).range(4.0..=200.0).fixed_decimals(1),
-                            )
-                            .changed()
-                        {
-                            if sync_leading {
-                                preset.sync_leading_with_size(size);
-                            } else {
-                                preset.font_size = size;
-                            }
-                            changed = true;
-                        }
-
-                        ui.add_space(5.0);
-                        if ui.add_sized([45.0, ROW_H], egui::Button::new("A-")).clicked() {
-                            let new_sz = (preset.font_size - 1.0).max(4.0);
-                            if sync_leading {
-                                preset.sync_leading_with_size(new_sz);
-                            } else {
-                                preset.font_size = new_sz;
-                            }
-                            changed = true;
-                        }
-                        ui.add_space(5.0);
-                        if ui.add_sized([45.0, ROW_H], egui::Button::new("A+")).clicked() {
-                            let new_sz = preset.font_size + 1.0;
-                            if sync_leading {
-                                preset.sync_leading_with_size(new_sz);
-                            } else {
-                                preset.font_size = new_sz;
-                            }
-                            changed = true;
-                        }
-                        ui.add_space(5.0);
-
-                        let link_icon = if sync_leading { "🔗" } else { "⛓" };
-                        let link_tip = if sync_leading {
-                            tl!("Leading is linked to size")
-                        } else {
-                            tl!("Leading is not linked to size")
+                // 6. Alignment (3 buttons evenly spanning RIGHT_W: 3 * 145 + 2 * 5 = 445)
+                form_row(ui, "Alignment", |ui| {
+                    ui.spacing_mut().item_spacing.x = 5.0;
+                    for value in ["left", "center", "right"] {
+                        let key = match value {
+                            "left" => "Align Left",
+                            "right" => "Align Right",
+                            _ => "Align Center",
                         };
-                        let link_btn = egui::Button::new(RichText::new(link_icon).size(12.5))
-                            .selected(sync_leading)
-                            .min_size(vec2(46.0, ROW_H));
-                        if ui.add(link_btn).on_hover_text(link_tip).clicked() {
-                            toggle_sync = true;
-                        }
-
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            ui.spacing_mut().item_spacing.x = 0.0;
-                            let leading_value = ui.add_sized(
-                                [86.0, ROW_H],
-                                egui::DragValue::new(&mut preset.leading)
-                                    .speed(0.5)
-                                    .range(4.0..=300.0)
-                                    .fixed_decimals(1),
-                            );
-                            remember_rect(ui, "leading-value", leading_value.rect);
-                            if leading_value.changed() {
-                                changed = true;
-                            }
-                            ui.add_space(6.0);
-                            ui.allocate_ui_with_layout(vec2(85.0, ROW_H), Layout::left_to_right(Align::Center), |ui| {
-                                // The fixed cell width keeps both captions on one axis, so the
-                                // Leading and H-Scale labels share their left edge.
-                                ui.set_min_size(vec2(85.0, ROW_H));
-                                ui.label(format!("{}:", tl!("Leading")));
-                            });
-                        });
-                    });
-
-                    ui.add_space(7.0);
-
-                    // 11. Tracking + H-Scale (%) (aligned with Size & Leading above)
-                    form_row(ui, "Tracking", |ui| {
-                        if ui
-                            .add_sized(
-                                [86.0, ROW_H],
-                                egui::DragValue::new(&mut preset.tracking).speed(1.0).range(-200..=1000),
-                            )
-                            .changed()
-                        {
+                        let label = crate::i18n::t(key);
+                        if alignment_button(ui, value, label, label, preset.align.as_str() == value) {
+                            preset.align = value.to_string();
                             changed = true;
                         }
+                    }
+                });
 
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            ui.spacing_mut().item_spacing.x = 0.0;
-                            let hscale_value = ui.add_sized(
-                                [86.0, ROW_H],
-                                egui::DragValue::new(&mut preset.horizontal_scale)
-                                    .speed(1.0)
-                                    .range(20.0..=300.0)
-                                    .fixed_decimals(0),
-                            );
-                            remember_rect(ui, "hscale-value", hscale_value.rect);
-                            if hscale_value.changed() {
+                ui.add_space(8.0);
+
+                // 7. Anti-alias (217 wide, matching the Color swatch + hex row)
+                form_row(ui, "Anti-alias", |ui| {
+                    let cur_aa = preset.anti_alias.clone();
+                    let display_label = anti_alias_label(&cur_aa);
+                    egui::ComboBox::from_id_salt("style_modal_aa").selected_text(display_label).width(217.0).show_ui(ui, |ui| {
+                        for value in ["crisp", "sharp", "smooth", "strong", "none"] {
+                            if ui.selectable_label(cur_aa == value, anti_alias_label(value)).clicked() {
+                                preset.anti_alias = value.to_string();
                                 changed = true;
                             }
-                            ui.add_space(6.0);
-                            ui.allocate_ui_with_layout(vec2(85.0, ROW_H), Layout::left_to_right(Align::Center), |ui| {
-                                // The fixed cell width keeps both captions on one axis, so the
-                                // Leading and H-Scale labels share their left edge.
-                                ui.set_min_size(vec2(85.0, ROW_H));
-                                ui.label(format!("{}:", tl!("H-Scale (%)")));
-                            });
-                        });
+                        }
                     });
+                });
 
-                    ui.add_space(11.0);
-                    section_header(ui, "Text Outline", 8.0);
+                ui.add_space(6.0);
+
+                // 8. Color (43 swatch + 7 gap + 167 hex = 217)
+                form_row(ui, "Color", |ui| {
+                    if color_swatch_with_hex_sized(ui, &mut preset.text_color, "typesetter-text-color", vec2(43.0, 24.0), 7.0, 167.0) {
+                        changed = true;
+                    }
+                });
+
+                ui.add_space(11.0);
+                section_header(ui, "Typography Size (Line Spacing Sync)", 8.0);
+                ui.add_space(8.0);
+
+                // 9. System type (joined segmented control: 2 * 95 = 190, 0 gap)
+                form_row(ui, "System type", |ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    let is_optical = preset.measurement_system.is_optical();
+                    // One joined 190-point control: only the outer corners are rounded.
+                    if ui
+                        .add(
+                            egui::Button::new(RichText::new(tl!("Metrics")).size(12.5))
+                                .selected(!is_optical)
+                                .corner_radius(CornerRadius { nw: 4, sw: 4, ne: 0, se: 0 })
+                                .min_size(vec2(95.0, ROW_H)),
+                        )
+                        .on_hover_text(tl!("Use standard font metrics and the baseline"))
+                        .clicked()
+                    {
+                        preset.measurement_system = photocraft_engine::typesetter::MeasurementSystem::Metric;
+                        changed = true;
+                    }
+                    if ui
+                        .add(
+                            egui::Button::new(RichText::new(tl!("Optical")).size(12.5))
+                                .selected(is_optical)
+                                .corner_radius(CornerRadius { nw: 0, sw: 0, ne: 4, se: 4 })
+                                .min_size(vec2(95.0, ROW_H)),
+                        )
+                        .on_hover_text(tl!("Use visual kerning and bubble centering"))
+                        .clicked()
+                    {
+                        preset.measurement_system = photocraft_engine::typesetter::MeasurementSystem::Optical;
+                        changed = true;
+                    }
+                });
+
+                ui.add_space(6.0);
+
+                // 10. Size (pt) + A- / A+ / Link + Leading (right-aligned)
+                form_row(ui, "Size (pt)", |ui| {
+                    let mut size = preset.font_size;
+                    if ui.add_sized([86.0, ROW_H], egui::DragValue::new(&mut size).speed(0.5).range(4.0..=200.0).fixed_decimals(1)).changed() {
+                        if sync_leading {
+                            preset.sync_leading_with_size(size);
+                        } else {
+                            preset.font_size = size;
+                        }
+                        changed = true;
+                    }
+
+                    ui.add_space(5.0);
+                    if ui.add_sized([45.0, ROW_H], egui::Button::new("A-")).clicked() {
+                        let new_sz = (preset.font_size - 1.0).max(4.0);
+                        if sync_leading {
+                            preset.sync_leading_with_size(new_sz);
+                        } else {
+                            preset.font_size = new_sz;
+                        }
+                        changed = true;
+                    }
+                    ui.add_space(5.0);
+                    if ui.add_sized([45.0, ROW_H], egui::Button::new("A+")).clicked() {
+                        let new_sz = preset.font_size + 1.0;
+                        if sync_leading {
+                            preset.sync_leading_with_size(new_sz);
+                        } else {
+                            preset.font_size = new_sz;
+                        }
+                        changed = true;
+                    }
                     ui.add_space(5.0);
 
-                    // 12. Thickness (px) + Color swatch and HEX (variant B: the Color label is a step)
-                    form_row(ui, "Thickness (px)", |ui| {
-                        if ui
-                            .add_sized(
-                                [116.0, ROW_H],
-                                egui::DragValue::new(&mut preset.stroke_width)
-                                    .speed(0.2)
-                                    .range(0.0..=30.0)
-                                    .fixed_decimals(1),
-                            )
-                            .changed()
-                        {
+                    let link_icon = if sync_leading { "🔗" } else { "⛓" };
+                    let link_tip = if sync_leading { tl!("Leading is linked to size") } else { tl!("Leading is not linked to size") };
+                    let link_btn = egui::Button::new(RichText::new(link_icon).size(12.5)).selected(sync_leading).min_size(vec2(46.0, ROW_H));
+                    if ui.add(link_btn).on_hover_text(link_tip).clicked() {
+                        toggle_sync = true;
+                    }
+
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        ui.spacing_mut().item_spacing.x = 0.0;
+                        let leading_value =
+                            ui.add_sized([86.0, ROW_H], egui::DragValue::new(&mut preset.leading).speed(0.5).range(4.0..=300.0).fixed_decimals(1));
+                        remember_rect(ui, "leading-value", leading_value.rect);
+                        if leading_value.changed() {
                             changed = true;
                         }
-
-                        ui.add_space(48.0);
-                        ui.allocate_ui_with_layout(vec2(43.0, ROW_H), Layout::left_to_right(Align::Center), |ui| {
-                            ui.label(format!("{}:", tl!("Color")));
-                        });
-                        ui.add_space(8.0);
-                        if color_swatch_with_hex_sized(
-                            ui,
-                            &mut preset.stroke_color,
-                            "typesetter-stroke-color",
-                            vec2(28.0, 24.0),
-                            8.0,
-                            194.0,
-                        ) {
-                            changed = true;
-                        }
-                    });
-
-                    ui.add_space(11.0);
-                    section_header(ui, "Preview sample", 8.0);
-                    ui.add_space(3.0);
-
-                    let t = Tokens::get(ui.ctx());
-                    let mut edit = ui
-                        .data(|d| d.get_temp::<PreviewEdit>(preview_edit_id))
-                        .filter(|e| e.idx == idx);
-                    let mut begin_edit = false;
-                    let frame = Frame::NONE
-                        .fill(t.field)
-                        .stroke(Stroke::new(1.0, t.field_border))
-                        .corner_radius(CornerRadius::same(6))
-                        // The mockup's frame is 545×40 with a 521×28 image inside: the 1-point
-                        // stroke counts on both sides, so the margins are 5 (vertical) and 11
-                        // (horizontal) around the 28-point content.
-                        .inner_margin(Margin { left: 11, right: 11, top: 5, bottom: 5 })
-                        .show(ui, |ui| {
-                            ui.set_min_height(PREVIEW_H);
-                            ui.set_max_height(PREVIEW_H);
-                            let mut cancel_edit = false;
-                            let mut commit_edit = false;
-                            if let Some(field) = edit.as_mut() {
-                                // The field is the frame's inner width and 26 high, vertically
-                                // centered in the 28-point band, like the mockup.
-                                let width = ui.available_width();
-                                let response = ui
-                                    .allocate_ui_with_layout(
-                                        vec2(width, PREVIEW_H),
-                                        Layout::left_to_right(Align::Center),
-                                        |ui| {
-                                            ui.add_sized(
-                                                [width, 26.0],
-                                                egui::TextEdit::singleline(&mut field.buffer)
-                                                    .hint_text(tl!("Leave empty for the automatic sample"))
-                                                    .vertical_align(Align::Center),
-                                            )
-                                        },
-                                    )
-                                    .inner;
-                                if field.request_focus {
-                                    response.request_focus();
-                                    if let Some(mut state) =
-                                        egui::TextEdit::load_state(ui.ctx(), response.id)
-                                    {
-                                        let all = egui::text::CCursorRange::two(
-                                            egui::text::CCursor::new(0),
-                                            egui::text::CCursor::new(field.buffer.chars().count()),
-                                        );
-                                        state.cursor.set_char_range(Some(all));
-                                        state.store(ui.ctx(), response.id);
-                                    }
-                                    field.request_focus = false;
-                                }
-                                let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
-                                let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
-                                cancel_edit = escape;
-                                commit_edit = !escape && (response.lost_focus() || enter);
-                            } else {
-                                render_style_preview(ui, preset);
-                            }
-                            if cancel_edit {
-                                edit = None;
-                            } else if commit_edit {
-                                if let Some(pending) = edit.take() {
-                                    if commit_preview_edit(
-                                        preset,
-                                        &pending.buffer,
-                                        &pending.original,
-                                    ) {
-                                        changed = true;
-                                    }
-                                }
-                            }
-                        });
-
-                    let frame_rect = frame.response.rect;
-                    // Geometry probe for the kittest suite: the mockup's preview frame is
-                    // 545×40 with a 521×28 image inside.
-                    ui.data_mut(|d| {
-                        d.insert_temp(egui::Id::new("typesetter-preview-frame-rect"), frame_rect)
-                    });
-                    if edit.is_none() {
-                        let frame_click = ui.interact(
-                            frame_rect,
-                            egui::Id::new(("typesetter-preview-frame", idx)),
-                            Sense::click(),
-                        );
-                        if frame_click.double_clicked() {
-                            begin_edit = true;
-                        }
-                        if ui.rect_contains_pointer(frame_rect) {
-                            let btn_rect = egui::Rect::from_min_size(
-                                egui::pos2(frame_rect.max.x - 22.0, frame_rect.min.y + 4.0),
-                                vec2(18.0, 18.0),
-                            );
-                            let btn = ui.interact(
-                                btn_rect,
-                                egui::Id::new(("typesetter-preview-edit", idx)),
-                                Sense::click(),
-                            );
-                            ui.painter().rect_filled(
-                                btn_rect,
-                                CornerRadius::same(4),
-                                if btn.hovered() { t.hover } else { t.field },
-                            );
-                            ui.painter().text(
-                                btn_rect.center(),
-                                egui::Align2::CENTER_CENTER,
-                                "✎",
-                                egui::FontId::proportional(12.0),
-                                t.text_dim,
-                            );
-                            if btn.on_hover_text(tl!("Edit preview text")).clicked() {
-                                begin_edit = true;
-                            }
-                        }
-                    }
-                    if begin_edit {
-                        let effective = style_preview_text(preset);
-                        edit = Some(PreviewEdit {
-                            idx,
-                            buffer: effective.clone(),
-                            original: effective,
-                            request_focus: true,
-                        });
-                    }
-                    ui.data_mut(|d| {
-                        if let Some(edit) = &edit {
-                            d.insert_temp(preview_edit_id, edit.clone());
-                        } else {
-                            d.remove_temp::<PreviewEdit>(preview_edit_id);
-                        }
-                    });
-
-                    ui.add_space(25.0);
-                    widgets::hairline(ui);
-                    ui.add_space(6.0);
-
-                    // 13. Footer buttons (Duplicate, Delete on left; Done on right)
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 8.0;
-                        if ui
-                            .add_sized([95.0, FOOTER_H], egui::Button::new(tl!("Duplicate")))
-                            .on_hover_text(tl!("Duplicate this style"))
-                            .clicked()
-                        {
-                            to_duplicate = true;
-                        }
-                        if ui
-                            .add_sized([85.0, FOOTER_H], egui::Button::new(tl!("Delete")))
-                            .on_hover_text(tl!("Delete this style"))
-                            .clicked()
-                        {
-                            to_delete = true;
-                        }
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            let done_btn = egui::Button::new(
-                                RichText::new(tl!("Done")).color(t.accent_text).strong(),
-                            )
-                            .fill(t.accent)
-                            .min_size(vec2(77.0, FOOTER_H));
-                            if ui.add(done_btn).clicked() {
-                                *close_modal = true;
-                            }
+                        ui.add_space(6.0);
+                        ui.allocate_ui_with_layout(vec2(85.0, ROW_H), Layout::left_to_right(Align::Center), |ui| {
+                            // The fixed cell width keeps both captions on one axis, so the
+                            // Leading and H-Scale labels share their left edge.
+                            ui.set_min_size(vec2(85.0, ROW_H));
+                            ui.label(format!("{}:", tl!("Leading")));
                         });
                     });
                 });
+
+                ui.add_space(7.0);
+
+                // 11. Tracking + H-Scale (%) (aligned with Size & Leading above)
+                form_row(ui, "Tracking", |ui| {
+                    if ui.add_sized([86.0, ROW_H], egui::DragValue::new(&mut preset.tracking).speed(1.0).range(-200..=1000)).changed() {
+                        changed = true;
+                    }
+
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        ui.spacing_mut().item_spacing.x = 0.0;
+                        let hscale_value =
+                            ui.add_sized([86.0, ROW_H], egui::DragValue::new(&mut preset.horizontal_scale).speed(1.0).range(20.0..=300.0).fixed_decimals(0));
+                        remember_rect(ui, "hscale-value", hscale_value.rect);
+                        if hscale_value.changed() {
+                            changed = true;
+                        }
+                        ui.add_space(6.0);
+                        ui.allocate_ui_with_layout(vec2(85.0, ROW_H), Layout::left_to_right(Align::Center), |ui| {
+                            // The fixed cell width keeps both captions on one axis, so the
+                            // Leading and H-Scale labels share their left edge.
+                            ui.set_min_size(vec2(85.0, ROW_H));
+                            ui.label(format!("{}:", tl!("H-Scale (%)")));
+                        });
+                    });
+                });
+
+                ui.add_space(11.0);
+                section_header(ui, "Text Outline", 8.0);
+                ui.add_space(5.0);
+
+                // 12. Thickness (px) + Color swatch and HEX (variant B: the Color label is a step)
+                form_row(ui, "Thickness (px)", |ui| {
+                    if ui.add_sized([116.0, ROW_H], egui::DragValue::new(&mut preset.stroke_width).speed(0.2).range(0.0..=30.0).fixed_decimals(1)).changed() {
+                        changed = true;
+                    }
+
+                    ui.add_space(48.0);
+                    ui.allocate_ui_with_layout(vec2(43.0, ROW_H), Layout::left_to_right(Align::Center), |ui| {
+                        ui.label(format!("{}:", tl!("Color")));
+                    });
+                    ui.add_space(8.0);
+                    if color_swatch_with_hex_sized(ui, &mut preset.stroke_color, "typesetter-stroke-color", vec2(28.0, 24.0), 8.0, 194.0) {
+                        changed = true;
+                    }
+                });
+
+                ui.add_space(11.0);
+                section_header(ui, "Preview sample", 8.0);
+                ui.add_space(3.0);
+
+                let t = Tokens::get(ui.ctx());
+                let mut edit = ui.data(|d| d.get_temp::<PreviewEdit>(preview_edit_id)).filter(|e| e.idx == idx);
+                let mut begin_edit = false;
+                let frame = Frame::NONE
+                    .fill(t.field)
+                    .stroke(Stroke::new(1.0, t.field_border))
+                    .corner_radius(CornerRadius::same(6))
+                    // The mockup's frame is 545×40 with a 521×28 image inside: the 1-point
+                    // stroke counts on both sides, so the margins are 5 (vertical) and 11
+                    // (horizontal) around the 28-point content.
+                    .inner_margin(Margin { left: 11, right: 11, top: 5, bottom: 5 })
+                    .show(ui, |ui| {
+                        ui.set_min_height(PREVIEW_H);
+                        ui.set_max_height(PREVIEW_H);
+                        let mut cancel_edit = false;
+                        let mut commit_edit = false;
+                        if let Some(field) = edit.as_mut() {
+                            // The field is the frame's inner width and 26 high, vertically
+                            // centered in the 28-point band, like the mockup.
+                            let width = ui.available_width();
+                            let response = ui
+                                .allocate_ui_with_layout(vec2(width, PREVIEW_H), Layout::left_to_right(Align::Center), |ui| {
+                                    ui.add_sized(
+                                        [width, 26.0],
+                                        egui::TextEdit::singleline(&mut field.buffer)
+                                            .hint_text(tl!("Leave empty for the automatic sample"))
+                                            .vertical_align(Align::Center),
+                                    )
+                                })
+                                .inner;
+                            if field.request_focus {
+                                response.request_focus();
+                                if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), response.id) {
+                                    let all =
+                                        egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(field.buffer.chars().count()));
+                                    state.cursor.set_char_range(Some(all));
+                                    state.store(ui.ctx(), response.id);
+                                }
+                                field.request_focus = false;
+                            }
+                            let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
+                            let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                            cancel_edit = escape;
+                            commit_edit = !escape && (response.lost_focus() || enter);
+                        } else {
+                            render_style_preview(ui, preset);
+                        }
+                        if cancel_edit {
+                            edit = None;
+                        } else if commit_edit {
+                            if let Some(pending) = edit.take() {
+                                if commit_preview_edit(preset, &pending.buffer, &pending.original) {
+                                    changed = true;
+                                }
+                            }
+                        }
+                    });
+
+                let frame_rect = frame.response.rect;
+                // Geometry probe for the kittest suite: the mockup's preview frame is
+                // 545×40 with a 521×28 image inside.
+                ui.data_mut(|d| d.insert_temp(egui::Id::new("typesetter-preview-frame-rect"), frame_rect));
+                if edit.is_none() {
+                    let frame_click = ui.interact(frame_rect, egui::Id::new(("typesetter-preview-frame", idx)), Sense::click());
+                    if frame_click.double_clicked() {
+                        begin_edit = true;
+                    }
+                    if ui.rect_contains_pointer(frame_rect) {
+                        let btn_rect = egui::Rect::from_min_size(egui::pos2(frame_rect.max.x - 22.0, frame_rect.min.y + 4.0), vec2(18.0, 18.0));
+                        let btn = ui.interact(btn_rect, egui::Id::new(("typesetter-preview-edit", idx)), Sense::click());
+                        ui.painter().rect_filled(btn_rect, CornerRadius::same(4), if btn.hovered() { t.hover } else { t.field });
+                        ui.painter().text(btn_rect.center(), egui::Align2::CENTER_CENTER, "✎", egui::FontId::proportional(12.0), t.text_dim);
+                        if btn.on_hover_text(tl!("Edit preview text")).clicked() {
+                            begin_edit = true;
+                        }
+                    }
+                }
+                if begin_edit {
+                    let effective = style_preview_text(preset);
+                    edit = Some(PreviewEdit { idx, buffer: effective.clone(), original: effective, request_focus: true });
+                }
+                ui.data_mut(|d| {
+                    if let Some(edit) = &edit {
+                        d.insert_temp(preview_edit_id, edit.clone());
+                    } else {
+                        d.remove_temp::<PreviewEdit>(preview_edit_id);
+                    }
+                });
+
+                ui.add_space(25.0);
+                widgets::hairline(ui);
+                ui.add_space(6.0);
+
+                // 13. Footer buttons (Duplicate, Delete on left; Done on right)
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    if ui.add_sized([95.0, FOOTER_H], egui::Button::new(tl!("Duplicate"))).on_hover_text(tl!("Duplicate this style")).clicked() {
+                        to_duplicate = true;
+                    }
+                    if ui.add_sized([85.0, FOOTER_H], egui::Button::new(tl!("Delete"))).on_hover_text(tl!("Delete this style")).clicked() {
+                        to_delete = true;
+                    }
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        let done_btn =
+                            egui::Button::new(RichText::new(tl!("Done")).color(t.accent_text).strong()).fill(t.accent).min_size(vec2(77.0, FOOTER_H));
+                        if ui.add(done_btn).clicked() {
+                            *close_modal = true;
+                        }
+                    });
+                });
+            });
         }
 
         // Done and the window's own close button must persist the preview field before
@@ -2622,38 +2445,40 @@ impl TypesetterUi {
         ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
             ui.label(RichText::new(tl!("TYPESETTER BEHAVIOR")).size(11.0).color(t.text_dim).strong());
 
-            if ui.checkbox(
-                &mut self.state.options.auto_page_switch,
-                tl!("Auto-advance to next page"),
-            ).on_hover_text(tl!("Automatically advance script to the next page")).changed() {
+            if ui
+                .checkbox(&mut self.state.options.auto_page_switch, tl!("Auto-advance to next page"))
+                .on_hover_text(tl!("Automatically advance script to the next page"))
+                .changed()
+            {
                 self.auto_save();
             }
 
-            if ui.checkbox(
-                &mut self.state.options.line_spacing_sync,
-                tl!("Sync line spacing"),
-            ).on_hover_text(tl!("Sync line spacing with font size")).changed() {
+            if ui.checkbox(&mut self.state.options.line_spacing_sync, tl!("Sync line spacing")).on_hover_text(tl!("Sync line spacing with font size")).changed()
+            {
                 self.auto_save();
             }
 
-            if ui.checkbox(
-                &mut self.state.options.strip_character_names,
-                tl!("Strip character names"),
-            ).on_hover_text(tl!("Strip character names at start of line ('HERO: Text')")).changed() {
+            if ui
+                .checkbox(&mut self.state.options.strip_character_names, tl!("Strip character names"))
+                .on_hover_text(tl!("Strip character names at start of line ('HERO: Text')"))
+                .changed()
+            {
                 self.auto_save();
             }
 
-            if ui.checkbox(
-                &mut self.state.options.strip_dash_prefix,
-                tl!("Strip leading dashes"),
-            ).on_hover_text(tl!("Strip leading dashes ('- Text', '— Text')")).changed() {
+            if ui
+                .checkbox(&mut self.state.options.strip_dash_prefix, tl!("Strip leading dashes"))
+                .on_hover_text(tl!("Strip leading dashes ('- Text', '— Text')"))
+                .changed()
+            {
                 self.auto_save();
             }
 
-            if ui.checkbox(
-                &mut self.state.options.hanging_punctuation,
-                tl!("Компенсация знаков в строках"),
-            ).on_hover_text(tl!("Оптическая компенсация и вынос знаков препинания за границы строк (висячая пунктуация)")).changed() {
+            if ui
+                .checkbox(&mut self.state.options.hanging_punctuation, tl!("Компенсация знаков в строках"))
+                .on_hover_text(tl!("Оптическая компенсация и вынос знаков препинания за границы строк (висячая пунктуация)"))
+                .changed()
+            {
                 self.auto_save();
             }
 
@@ -2666,35 +2491,31 @@ impl TypesetterUi {
             if avail_w < 340.0 {
                 ui.label(RichText::new(tl!("Baseline shift:")).color(t.text));
                 let slider_w = (ui.available_width() - 8.0).max(120.0);
-                if ui.add_sized(
-                    [slider_w, 20.0],
-                    egui::Slider::new(&mut self.state.options.optical_baseline_factor, 0.0..=0.6)
-                        .show_value(true)
-                        .suffix(" ×")
-                        .max_decimals(3),
-                ).changed() {
+                if ui
+                    .add_sized(
+                        [slider_w, 20.0],
+                        egui::Slider::new(&mut self.state.options.optical_baseline_factor, 0.0..=0.6).show_value(true).suffix(" ×").max_decimals(3),
+                    )
+                    .changed()
+                {
                     self.auto_save();
                 }
             } else {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(tl!("Baseline shift:")).color(t.text));
                     let slider_w = (ui.available_width() - 8.0).max(120.0);
-                    if ui.add_sized(
-                        [slider_w, 20.0],
-                        egui::Slider::new(&mut self.state.options.optical_baseline_factor, 0.0..=0.6)
-                            .show_value(true)
-                            .suffix(" ×")
-                            .max_decimals(3),
-                    ).changed() {
+                    if ui
+                        .add_sized(
+                            [slider_w, 20.0],
+                            egui::Slider::new(&mut self.state.options.optical_baseline_factor, 0.0..=0.6).show_value(true).suffix(" ×").max_decimals(3),
+                        )
+                        .changed()
+                    {
                         self.auto_save();
                     }
                 });
             }
-            ui.label(
-                RichText::new(tl!("Shifting the baseline down ensures precise visual vertical centering inside bubbles."))
-                    .color(t.text_faint)
-                    .small(),
-            );
+            ui.label(RichText::new(tl!("Shifting the baseline down ensures precise visual vertical centering inside bubbles.")).color(t.text_faint).small());
 
             widgets::hairline(ui);
             ui.add_space(4.0);
@@ -2704,24 +2525,12 @@ impl TypesetterUi {
                 let dir_str = path.parent().map(|p| p.display().to_string()).unwrap_or_else(|| ".".into());
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(format!("{}:", tl!("Folder"))).color(t.text_dim).small());
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(&dir_str)
-                                .color(t.text_faint)
-                                .small(),
-                        ).truncate(),
-                    ).on_hover_text(&dir_str);
+                    ui.add(egui::Label::new(RichText::new(&dir_str).color(t.text_faint).small()).truncate()).on_hover_text(&dir_str);
                 });
                 let file_str = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "typesetter_state.json".into());
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(format!("{}:", tl!("File"))).color(t.text_dim).small());
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(&file_str)
-                                .color(t.text_faint)
-                                .small(),
-                        ).truncate(),
-                    ).on_hover_text(path.display().to_string());
+                    ui.add(egui::Label::new(RichText::new(&file_str).color(t.text_faint).small()).truncate()).on_hover_text(path.display().to_string());
                 });
             }
 
@@ -2819,11 +2628,7 @@ fn preview_text_after_commit(buffer: &str, original: &str, current: &str) -> Opt
     // turn any lone `\r`/`\n` into a space as well.
     let mut normalized = buffer.trim().replace("\r\n", " ").replace(['\r', '\n'], " ");
     truncate_chars(&mut normalized, 200);
-    if normalized == original || normalized == current {
-        None
-    } else {
-        Some(normalized)
-    }
+    if normalized == original || normalized == current { None } else { Some(normalized) }
 }
 
 fn commit_preview_edit(preset: &mut TextStylePreset, buffer: &str, original: &str) -> bool {
@@ -2836,14 +2641,10 @@ fn commit_preview_edit(preset: &mut TextStylePreset, buffer: &str, original: &st
 
 /// One caption cell of the form: fixed 94-point column, vertically centred, `tl!`-translated.
 fn form_label(ui: &mut egui::Ui, key: &str) {
-    ui.allocate_ui_with_layout(
-        vec2(LABEL_W, ROW_H),
-        Layout::left_to_right(Align::Center),
-        |ui| {
-            ui.set_min_size(vec2(LABEL_W, ROW_H));
-            ui.label(format!("{}:", tl!(key)));
-        },
-    );
+    ui.allocate_ui_with_layout(vec2(LABEL_W, ROW_H), Layout::left_to_right(Align::Center), |ui| {
+        ui.set_min_size(vec2(LABEL_W, ROW_H));
+        ui.label(format!("{}:", tl!(key)));
+    });
 }
 
 /// Records a widget rect in egui's temporary memory so the kittest suite can assert the mockup
@@ -2862,14 +2663,10 @@ fn form_row(ui: &mut egui::Ui, key: &str, controls: impl FnOnce(&mut egui::Ui)) 
         // that happens to sit in it: the 217-point Anti-alias combo still lives in the same
         // column as a full-width field. Record the allocated cell so the rows line up.
         let column = std::cell::Cell::new(None);
-        ui.allocate_ui_with_layout(
-            vec2(RIGHT_W, ROW_H),
-            Layout::left_to_right(Align::Center),
-            |ui| {
-                controls(ui);
-                column.set(Some(ui.max_rect()));
-            },
-        );
+        ui.allocate_ui_with_layout(vec2(RIGHT_W, ROW_H), Layout::left_to_right(Align::Center), |ui| {
+            controls(ui);
+            column.set(Some(ui.max_rect()));
+        });
         if let Some(rect) = column.get() {
             remember_rect(ui, &format!("controls:{key}"), rect);
         }
@@ -2888,18 +2685,10 @@ fn section_header(ui: &mut egui::Ui, key: &str, line_gap: f32) {
 
 /// The three-line alignment icon and caption inside a 145×26 button. Drawn by hand so the icon
 /// can sit flush with the text, while the accessibility label stays the translated caption.
-fn alignment_button(
-    ui: &mut egui::Ui,
-    value: &str,
-    label: &str,
-    tooltip: &str,
-    selected: bool,
-) -> bool {
+fn alignment_button(ui: &mut egui::Ui, value: &str, label: &str, tooltip: &str, selected: bool) -> bool {
     let t = Tokens::get(ui.ctx());
     let (rect, response) = ui.allocate_exact_size(vec2(145.0, ROW_H), Sense::click());
-    response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), selected, label)
-    });
+    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), selected, label));
     let response = response.on_hover_text(tooltip);
     let hovered = response.hovered();
     let (fill, border) = if selected {
@@ -2909,18 +2698,9 @@ fn alignment_button(
     } else {
         (t.field, t.field_border)
     };
-    ui.painter().rect(
-        rect,
-        CornerRadius::same(4),
-        fill,
-        Stroke::new(1.0, border),
-        egui::StrokeKind::Inside,
-    );
+    ui.painter().rect(rect, CornerRadius::same(4), fill, Stroke::new(1.0, border), egui::StrokeKind::Inside);
 
-    let icon = egui::Rect::from_min_size(
-        egui::pos2(rect.min.x + 9.0, rect.center().y - 6.0),
-        vec2(12.0, 12.0),
-    );
+    let icon = egui::Rect::from_min_size(egui::pos2(rect.min.x + 9.0, rect.center().y - 6.0), vec2(12.0, 12.0));
     let stroke = Stroke::new(1.5, t.text);
     for row in 0..3 {
         let y = icon.min.y + 2.0 + row as f32 * 4.0;
@@ -2931,13 +2711,7 @@ fn alignment_button(
         };
         ui.painter().line_segment([egui::pos2(x0, y), egui::pos2(x1, y)], stroke);
     }
-    ui.painter().text(
-        egui::pos2(icon.max.x + 8.0, rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        label,
-        egui::FontId::proportional(12.5),
-        t.text,
-    );
+    ui.painter().text(egui::pos2(icon.max.x + 8.0, rect.center().y), egui::Align2::LEFT_CENTER, label, egui::FontId::proportional(12.5), t.text);
     response.clicked()
 }
 
@@ -2952,22 +2726,12 @@ fn anti_alias_label(value: &str) -> String {
         _ => "None",
     };
     let translated = crate::i18n::t(key);
-    if translated == key {
-        translated.to_string()
-    } else {
-        format!("{translated} ({value})")
-    }
+    if translated == key { translated.to_string() } else { format!("{translated} ({value})") }
 }
 
 /// A compact Photoshop-style character toggle with a tooltip.
 fn character_toggle(ui: &mut egui::Ui, value: &mut bool, label: &str, tooltip: &str) -> bool {
-    let response = ui
-        .add(
-            egui::Button::new(RichText::new(label).strong())
-                .selected(*value)
-                .min_size(vec2(45.0, ROW_H)),
-        )
-        .on_hover_text(tooltip);
+    let response = ui.add(egui::Button::new(RichText::new(label).strong()).selected(*value).min_size(vec2(45.0, ROW_H))).on_hover_text(tooltip);
     if response.clicked() {
         *value = !*value;
         true
@@ -2978,14 +2742,7 @@ fn character_toggle(ui: &mut egui::Ui, value: &mut bool, label: &str, tooltip: &
 
 /// The colour swatch and the hex field of the mockup. The field shows the colour as
 /// `#RRGGBBAA` and applies whatever hex value is typed into it.
-fn color_swatch_with_hex_sized(
-    ui: &mut egui::Ui,
-    color: &mut [u8; 4],
-    id: &str,
-    swatch_size: egui::Vec2,
-    hex_gap: f32,
-    hex_width: f32,
-) -> bool {
+fn color_swatch_with_hex_sized(ui: &mut egui::Ui, color: &mut [u8; 4], id: &str, swatch_size: egui::Vec2, hex_gap: f32, hex_width: f32) -> bool {
     let uid = egui::Id::new(id);
     let hex_of = |c: &[u8; 4]| format!("#{:02X}{:02X}{:02X}{:02X}", c[0], c[1], c[2], c[3]);
     let mut hex: String = ui.data_mut(|d| d.get_temp::<String>(uid.with("hex"))).unwrap_or_default();
@@ -2996,11 +2753,7 @@ fn color_swatch_with_hex_sized(
     // call is the supported way to get the mockup's 43×24 / 28×24 swatches.
     let previous_interact_size = ui.spacing().interact_size;
     ui.spacing_mut().interact_size = swatch_size;
-    let response = egui::color_picker::color_edit_button_srgba(
-        ui,
-        &mut swatch,
-        egui::color_picker::Alpha::BlendOrAdditive,
-    );
+    let response = egui::color_picker::color_edit_button_srgba(ui, &mut swatch, egui::color_picker::Alpha::BlendOrAdditive);
     ui.spacing_mut().interact_size = previous_interact_size;
     ui.add_space(hex_gap);
     if response.changed() {
@@ -3015,10 +2768,7 @@ fn color_swatch_with_hex_sized(
         ui.data_mut(|d| d.insert_temp(uid.with("hex"), hex.clone()));
     }
 
-    let text_edit = egui::TextEdit::singleline(&mut hex)
-        .char_limit(9)
-        .font(egui::TextStyle::Monospace)
-        .vertical_align(Align::Center);
+    let text_edit = egui::TextEdit::singleline(&mut hex).char_limit(9).font(egui::TextStyle::Monospace).vertical_align(Align::Center);
     let hex_resp = ui.add_sized([hex_width, 26.0], text_edit);
     if hex_resp.changed() {
         ui.data_mut(|d| d.insert_temp(uid.with("hex"), hex.clone()));
@@ -3027,21 +2777,11 @@ fn color_swatch_with_hex_sized(
         if let Ok(val) = u32::from_str_radix(stripped, 16) {
             match stripped.len() {
                 6 => {
-                    *color = [
-                        ((val >> 16) & 0xFF) as u8,
-                        ((val >> 8) & 0xFF) as u8,
-                        (val & 0xFF) as u8,
-                        color[3],
-                    ];
+                    *color = [((val >> 16) & 0xFF) as u8, ((val >> 8) & 0xFF) as u8, (val & 0xFF) as u8, color[3]];
                     changed = true;
                 }
                 8 => {
-                    *color = [
-                        ((val >> 24) & 0xFF) as u8,
-                        ((val >> 16) & 0xFF) as u8,
-                        ((val >> 8) & 0xFF) as u8,
-                        (val & 0xFF) as u8,
-                    ];
+                    *color = [((val >> 24) & 0xFF) as u8, ((val >> 16) & 0xFF) as u8, ((val >> 8) & 0xFF) as u8, (val & 0xFF) as u8];
                     changed = true;
                 }
                 _ => {}
@@ -3062,11 +2802,7 @@ const PREVIEW_SAMPLE: &str = "Ах ты ж!.. Неужели это сработ
 /// The automatic sample: the style name and the demonstration phrase.
 fn style_preview_auto_text(preset: &TextStylePreset) -> String {
     let name = preset.name.trim();
-    let mut sample = if name.is_empty() {
-        PREVIEW_SAMPLE.to_string()
-    } else {
-        format!("{name}: {PREVIEW_SAMPLE}")
-    };
+    let mut sample = if name.is_empty() { PREVIEW_SAMPLE.to_string() } else { format!("{name}: {PREVIEW_SAMPLE}") };
     truncate_chars(&mut sample, 200);
     sample
 }
@@ -3353,9 +3089,7 @@ fn render_style_preview(ui: &mut egui::Ui, preset: &TextStylePreset) {
         Some(texture) => {
             let response = ui.add(egui::Image::new((texture.id(), vec2(width, height))));
             // Geometry probe for the kittest suite: the 28-point image inside the 40-point frame.
-            ui.data_mut(|d| {
-                d.insert_temp(egui::Id::new("typesetter-preview-image-rect"), response.rect)
-            });
+            ui.data_mut(|d| d.insert_temp(egui::Id::new("typesetter-preview-image-rect"), response.rect));
         }
         None => {
             let t = Tokens::get(ui.ctx());
@@ -3369,8 +3103,54 @@ mod tests {
     use super::*;
     use photocraft_doc::LayerContent;
     use photocraft_doc::text::{TextShape, VerticalAlign};
-    use photocraft_engine::typesetter::MeasurementSystem;
+    use photocraft_engine::typesetter::{ContourWrapKind, MeasurementSystem};
     use serde_json::json;
+
+    #[test]
+    fn contour_cache_requests_only_when_the_context_changes() {
+        let mut ui = TypesetterUi::default();
+        ui.take_bubble_contour_request();
+        ui.set_contour_variants(vec![ContourVariant { kind: ContourWrapKind::Original, text: "One two".into(), lines: 1 }]);
+        assert!(ui.has_contour_variants());
+
+        ui.note_contour_layer(Some(LayerId(7)));
+        assert!(ui.take_bubble_contour_request(), "a new active layer invalidates the cache");
+        assert!(!ui.has_contour_variants());
+
+        ui.note_contour_layer(Some(LayerId(7)));
+        assert!(!ui.take_bubble_contour_request(), "keeping the same layer reuses the cache");
+
+        ui.request_bubble_contour();
+        assert!(ui.take_bubble_contour_request());
+        assert!(!ui.take_bubble_contour_request(), "a request is consumed once");
+    }
+
+    #[test]
+    fn preview_short_text_keeps_breaks_and_caps_rows() {
+        assert_eq!(preview_short_text("one\ntwo\nthree\nfour\nfive"), "one\ntwo\nthree\nfour\n…");
+        let long = "a".repeat(CONTOUR_PREVIEW_LINE_CHARS + 5);
+        let preview = preview_short_text(&long);
+        assert!(preview.ends_with('…'));
+        assert_eq!(preview.chars().count(), CONTOUR_PREVIEW_LINE_CHARS + 1);
+    }
+
+    #[test]
+    fn contour_refresh_builds_variants_for_the_active_line() {
+        let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 600, "height": 450})).unwrap();
+        app.typesetter.state.lines =
+            vec![ScriptLine {
+                raw: "Это длинная реплика".into(), text: "Это длинная реплика персонажа".into(), is_applied: false, page: 1
+            }];
+        app.typesetter.state.current_line_idx = 0;
+        app.typesetter.request_bubble_contour();
+        app.refresh_typesetter_contour();
+
+        assert!(!app.typesetter.contour_variants.is_empty());
+        assert_eq!(app.typesetter.contour_variants[0].kind, ContourWrapKind::Original);
+        assert_eq!(app.typesetter.contour_variants[0].text, "Это длинная реплика персонажа");
+        assert!(!app.typesetter.take_bubble_contour_request());
+    }
 
     #[test]
     fn typesetter_action_applies_font_color_and_measurement_system() {
@@ -3438,7 +3218,7 @@ mod tests {
         }
     }
 
-#[test]
+    #[test]
     fn typesetter_action_uses_preset_alignment_and_character_options() {
         let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 400, "height": 400})).unwrap();
@@ -3476,13 +3256,7 @@ mod tests {
         let (font_size, leading) = (24.0, 30.0);
         app.handle_typesetter_action(TypesetterAction {
             text: "One two\nThree four\nFive six".into(),
-            preset: TextStylePreset {
-                name: "DPI".into(),
-                font_size,
-                leading,
-                all_caps: false,
-                ..TextStylePreset::default()
-            },
+            preset: TextStylePreset { name: "DPI".into(), font_size, leading, all_caps: false, ..TextStylePreset::default() },
         });
 
         let st = app.session.active().unwrap();
@@ -3517,24 +3291,14 @@ mod tests {
         let factor = app.typesetter.state.options.optical_baseline_factor;
         app.handle_typesetter_action(TypesetterAction {
             text: "Bubble".into(),
-            preset: TextStylePreset {
-                name: "Bubble".into(),
-                font_size,
-                leading: 30.0,
-                all_caps: false,
-                ..TextStylePreset::default()
-            },
+            preset: TextStylePreset { name: "Bubble".into(), font_size, leading: 30.0, all_caps: false, ..TextStylePreset::default() },
         });
 
         let st = app.session.active().unwrap();
         let layer_id = st.active_layer.unwrap();
         let layer = st.doc.layer(layer_id).unwrap();
         let LayerContent::Text(t) = &layer.content else { panic!("Expected text layer") };
-        assert_eq!(
-            t.shape,
-            TextShape::Box { x: 0.0, y: 0.0, width: 400.0, height: 300.0 },
-            "a selection keeps native paragraph text"
-        );
+        assert_eq!(t.shape, TextShape::Box { x: 0.0, y: 0.0, width: 400.0, height: 300.0 }, "a selection keeps native paragraph text");
         assert_eq!(t.paragraphs[0].style.vertical_align, VerticalAlign::Center);
         // Positive Baseline Shift raises glyphs; the slider's value is "shift down".
         assert!((t.runs[0].style.baseline_shift_pt + font_size * factor).abs() < 1e-4);
@@ -3757,16 +3521,10 @@ mod tests {
         );
         h.run_steps(3);
 
-        let frame = h
-            .ctx
-            .data(|d| d.get_temp::<egui::Rect>(egui::Id::new("typesetter-preview-frame-rect")))
-            .expect("the preview frame records its rect");
+        let frame = h.ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::new("typesetter-preview-frame-rect"))).expect("the preview frame records its rect");
         assert!((frame.width() - 545.0).abs() <= 2.0, "the preview frame spans the form: {frame:?}");
         assert!((frame.height() - 40.0).abs() <= 1.0, "the preview frame is 40 high: {frame:?}");
-        let image = h
-            .ctx
-            .data(|d| d.get_temp::<egui::Rect>(egui::Id::new("typesetter-preview-image-rect")))
-            .expect("the preview image records its rect");
+        let image = h.ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::new("typesetter-preview-image-rect"))).expect("the preview image records its rect");
         assert!((image.width() - 521.0).abs() <= 2.0, "the image fills the frame's inner width: {image:?}");
         assert!((image.height() - 28.0).abs() <= 1.0, "the image is 28 high: {image:?}");
         assert!(frame.contains_rect(image), "the image sits inside the frame: {image:?} in {frame:?}");
@@ -3808,10 +3566,7 @@ mod tests {
         for (name, rect) in [("Duplicate", duplicate), ("Delete", delete), ("Done", done)] {
             assert!((rect.height() - 30.0).abs() <= 1.0, "{name} is 30 high: {rect:?}");
         }
-        let frame = h
-            .ctx
-            .data(|d| d.get_temp::<egui::Rect>(egui::Id::new("typesetter-preview-frame-rect")))
-            .expect("the preview frame records its rect");
+        let frame = h.ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::new("typesetter-preview-frame-rect"))).expect("the preview frame records its rect");
         assert!((done.right() - frame.right()).abs() <= 2.0, "Done is flush with the form's right edge: {done:?} vs {frame:?}");
         assert!((duplicate.left() - frame.left()).abs() <= 2.0, "Duplicate starts at the form's left edge: {duplicate:?} vs {frame:?}");
     }
@@ -3825,11 +3580,8 @@ mod tests {
         let rest = &source[start..];
         let end = rest.find("\n    ///").unwrap_or(rest.len());
         let modal = rest[..end].replace("\"Tт\"", "\"\"");
-        let offenders: Vec<(usize, &str)> = modal
-            .lines()
-            .enumerate()
-            .filter(|(_, line)| line.chars().any(|c| ('\u{0400}'..='\u{04FF}').contains(&c)))
-            .collect();
+        let offenders: Vec<(usize, &str)> =
+            modal.lines().enumerate().filter(|(_, line)| line.chars().any(|c| ('\u{0400}'..='\u{04FF}').contains(&c))).collect();
         assert!(offenders.is_empty(), "raw Cyrillic UI strings in Font Settings: {offenders:?}");
     }
 
@@ -3882,10 +3634,8 @@ mod tests {
         );
         h.run_steps(3);
 
-        let labels = [
-            "Style name:", "Folder:", "Font:", "PostScript:", "Formatting:", "Alignment:",
-            "Anti-alias:", "Size (pt):", "Tracking:", "Thickness (px):",
-        ];
+        let labels =
+            ["Style name:", "Folder:", "Font:", "PostScript:", "Formatting:", "Alignment:", "Anti-alias:", "Size (pt):", "Tracking:", "Thickness (px):"];
         let x = h.get_by_label(labels[0]).rect().left();
         for label in &labels[1..] {
             let left = h.get_by_label(label).rect().left();
@@ -3901,8 +3651,18 @@ mod tests {
         let first = block("Style name");
         assert!((first.width() - 445.0).abs() <= 1.0, "the control column is 445 wide: {first:?}");
         for key in [
-            "Style name", "Folder", "Font", "PostScript", "Formatting", "Alignment",
-            "Anti-alias", "Color", "System type", "Size (pt)", "Tracking", "Thickness (px)",
+            "Style name",
+            "Folder",
+            "Font",
+            "PostScript",
+            "Formatting",
+            "Alignment",
+            "Anti-alias",
+            "Color",
+            "System type",
+            "Size (pt)",
+            "Tracking",
+            "Thickness (px)",
         ] {
             let rect = block(key);
             assert!((rect.left() - first.left()).abs() <= 1.0, "the {key} controls share the left axis: {rect:?} vs {first:?}");
@@ -3951,9 +3711,7 @@ mod tests {
 
         let rect = |name: String| {
             let id = egui::Id::new(("typesetter-ui-rect", name.clone()));
-            h.ctx
-                .data(|d| d.get_temp::<egui::Rect>(id))
-                .unwrap_or_else(|| panic!("the form records {name}"))
+            h.ctx.data(|d| d.get_temp::<egui::Rect>(id)).unwrap_or_else(|| panic!("the form records {name}"))
         };
         let base = rect("row:Style name".into()).top();
         let targets = [
@@ -3978,10 +3736,7 @@ mod tests {
             assert!((actual - y).abs() <= 3.0, "{name} is at {actual} from the first row, expected {y}");
         }
 
-        let frame = h
-            .ctx
-            .data(|d| d.get_temp::<egui::Rect>(egui::Id::new("typesetter-preview-frame-rect")))
-            .expect("the preview frame records its rect");
+        let frame = h.ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::new("typesetter-preview-frame-rect"))).expect("the preview frame records its rect");
         assert!((frame.top() - base - 530.0).abs() <= 3.0, "the preview frame starts at 530: {frame:?}");
         let done = h.get_by_label("Done").rect();
         assert!((done.top() - base - 602.0).abs() <= 3.0, "the footer starts at 602: {done:?}");
@@ -4023,12 +3778,7 @@ mod tests {
     #[test]
     fn style_preview_alignment_moves_the_sample_without_wrapping() {
         let _ = photocraft_text::shared();
-        let base = TextStylePreset {
-            preview_text: "Aa".into(),
-            font_size: 20.0,
-            stroke_width: 0.0,
-            ..TextStylePreset::default()
-        };
+        let base = TextStylePreset { preview_text: "Aa".into(), font_size: 20.0, stroke_width: 0.0, ..TextStylePreset::default() };
         let bounds = |align: &str| {
             let preset = TextStylePreset { align: align.into(), ..base.clone() };
             let image = style_preview_image(&preset, 220.0, 48.0, 1).expect("preview image");
@@ -4065,23 +3815,12 @@ mod tests {
     #[test]
     fn style_preview_uses_preview_text_and_cache_key() {
         let _ = photocraft_text::shared();
-        let base = TextStylePreset {
-            name: "Summary".into(),
-            font_size: 20.0,
-            ..TextStylePreset::default()
-        };
-        let custom = TextStylePreset {
-            preview_text: "A much longer custom sample that the style shows".into(),
-            ..base.clone()
-        };
+        let base = TextStylePreset { name: "Summary".into(), font_size: 20.0, ..TextStylePreset::default() };
+        let custom = TextStylePreset { preview_text: "A much longer custom sample that the style shows".into(), ..base.clone() };
         assert_eq!(style_preview_text(&base), format!("Summary: {PREVIEW_SAMPLE}"), "an empty preview_text uses the automatic sample");
         assert_eq!(style_preview_text(&custom), "A much longer custom sample that the style shows");
 
-        assert_ne!(
-            style_preview_key(&base, 180.0, 28.0, 1),
-            style_preview_key(&custom, 180.0, 28.0, 1),
-            "preview_text must enter the texture key"
-        );
+        assert_ne!(style_preview_key(&base, 180.0, 28.0, 1), style_preview_key(&custom, 180.0, 28.0, 1), "preview_text must enter the texture key");
         let base_image = style_preview_image(&base, 180.0, 28.0, 1).expect("base preview");
         let custom_image = style_preview_image(&custom, 180.0, 28.0, 1).expect("custom preview");
         assert_ne!(base_image.pixels, custom_image.pixels, "the two samples render differently");
@@ -4090,10 +3829,7 @@ mod tests {
     /// An untouched automatic sample stays automatic; edits are trimmed to one line and capped.
     #[test]
     fn preview_text_commits_on_enter_and_esc_restores() {
-        let mut preset = TextStylePreset {
-            name: "Summary".into(),
-            ..TextStylePreset::default()
-        };
+        let mut preset = TextStylePreset { name: "Summary".into(), ..TextStylePreset::default() };
         let automatic = style_preview_text(&preset);
 
         assert!(!commit_preview_edit(&mut preset, &automatic, &automatic), "leaving the automatic sample untouched keeps preview_text empty");
@@ -4229,7 +3965,7 @@ mod tests {
             // See `style_preview_porter_duff_text_over_stroke`: the stroke band is measured at
             // the preset's own size, so the sample must not force `fit < 1.0`.
             preview_text: "Aa".into(),
-            font_size: 28.0, // large enough for full-coverage cores inside the glyph stems
+            font_size: 28.0,            // large enough for full-coverage cores inside the glyph stems
             text_color: [0, 0, 0, 255], // Black text
             stroke_width: 4.0,
             stroke_color: [255, 255, 255, 255], // White stroke
@@ -4305,19 +4041,11 @@ mod tests {
 
         let leading = h.get_by_label(format!("{}:", tl!("Leading")).as_str()).rect();
         let hscale = h.get_by_label("H-Scale (%):").rect();
-        assert!(
-            (leading.top() - hscale.top()).abs() > 4.0,
-            "expected the two labels on different rows: {leading:?} vs {hscale:?}"
-        );
-        assert!(
-            (leading.left() - hscale.left()).abs() < 1.0,
-            "the Leading label {leading:?} and the H-Scale label {hscale:?} must share one left edge"
-        );
+        assert!((leading.top() - hscale.top()).abs() > 4.0, "expected the two labels on different rows: {leading:?} vs {hscale:?}");
+        assert!((leading.left() - hscale.left()).abs() < 1.0, "the Leading label {leading:?} and the H-Scale label {hscale:?} must share one left edge");
 
         let value = |name: &str| {
-            h.ctx
-                .data(|d| d.get_temp::<egui::Rect>(egui::Id::new(("typesetter-ui-rect", name))))
-                .unwrap_or_else(|| panic!("the {name} value records its rect"))
+            h.ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::new(("typesetter-ui-rect", name)))).unwrap_or_else(|| panic!("the {name} value records its rect"))
         };
         let leading_value = value("leading-value");
         let hscale_value = value("hscale-value");
@@ -4328,6 +4056,9 @@ mod tests {
             .ctx
             .data(|d| d.get_temp::<egui::Rect>(egui::Id::new(("typesetter-ui-rect", "controls:Size (pt)".to_string()))))
             .expect("the Size row records its block");
-        assert!((leading_value.right() - leading_block.right()).abs() <= 1.0, "the Leading value ends at the 445-point column's right edge: {leading_value:?} vs {leading_block:?}");
+        assert!(
+            (leading_value.right() - leading_block.right()).abs() <= 1.0,
+            "the Leading value ends at the 445-point column's right edge: {leading_value:?} vs {leading_block:?}"
+        );
     }
 }

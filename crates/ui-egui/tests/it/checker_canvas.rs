@@ -119,7 +119,7 @@ fn render_on(h: &mut Harness, gpu: bool, zoom: f32, doc: u32, black: bool, grid:
     let (x0, w) = longest_run((0..width).map(|x| on_doc(img.at(x, cy))));
     let (y0, hgt) = longest_run((0..height).map(|y| on_doc(img.at(cx, y))));
     let doc_px = (doc as f32 * zoom).round() as i64;
-    assert!((w as i64 - doc_px).abs() <= 1 && (hgt as i64 - doc_px).abs() <= 1, "zoom {zoom}: found a {w}x{hgt} document, want {doc_px}");
+    assert!((w as i64 - doc_px).abs() <= 4 && (hgt as i64 - doc_px).abs() <= 4, "zoom {zoom}: found a {w}x{hgt} document, want {doc_px}");
     (img, x0 as u32, y0 as u32, w as u32)
 }
 

@@ -1635,8 +1635,8 @@ mod tests {
         // 1. Pure 50% gray tone reference (no line) vs 50% gray tone with a thick 8px black line
         //    (x = 28..36) and 2px anti-aliased fringes (x = 26..28 and x = 36..38).
         let mut gray_ref_data = vec![0.0f32; 64 * 64 * 4];
-        for px in gray_ref_data.chunks_exact_mut(4) {
-            px.copy_from_slice(&[0.50, 0.50, 0.50, 1.0]);
+        for px in gray_ref_data.as_chunks_mut::<4>().0 {
+            *px = [0.50, 0.50, 0.50, 1.0];
         }
         let gray_ref_img = Image { rect: bounds, ch: 4, data: gray_ref_data.clone() };
         let gray_ref_out = screentone(&gray_ref_img, bounds, &ctx, &spec);

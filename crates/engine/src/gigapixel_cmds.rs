@@ -121,6 +121,10 @@ pub fn installed() -> Option<Installed> {
 fn enabled(s: &Session) -> std::result::Result<(), String> {
     let st = s.active().ok_or("no document open")?;
     check_document(&st.doc).map_err(|e| e.to_string())?;
+    #[cfg(test)]
+    if FAKE_CLI.with(|f| f.borrow().is_some()) {
+        return Ok(());
+    }
     if installed().is_none() {
         return Err("Topaz Gigapixel AI is not installed (or set PHOTOCRAFT_GIGAPIXEL to its executable)".into());
     }

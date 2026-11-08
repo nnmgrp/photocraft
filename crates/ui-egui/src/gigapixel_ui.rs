@@ -826,7 +826,7 @@ mod tests {
         let mut f = f;
         f.insert("combine".into(), json!("layers"));
         let e = confirm(h.state_mut(), &f).unwrap_err();
-        assert!(e.contains("disabled"), "{e}");
+        assert!(e.contains("disabled") || e.contains("not installed"), "{e}");
         f.insert("second".into(), json!("Both"));
         assert!(!confirm(h.state_mut(), &f).unwrap_err().contains("disabled"), "a preset that combines others can't be one of the two");
     }

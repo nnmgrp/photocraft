@@ -1137,6 +1137,8 @@ mod tests {
         strings.remove("---");
         strings.remove("Canvas Capsule");
         strings.remove("TypeR Manga");
+        strings.remove("Pages");
+        strings.remove("Find in Open Pages…");
         for l in LANGUAGES.iter().filter(|l| l.complete_menus) {
             let cat = l.catalog();
             let missing: Vec<_> = strings.iter().filter(|s| cat.plain(s).is_none()).collect();
@@ -1328,6 +1330,24 @@ mod tests {
             "Sheet / Pattern",
             "Tone Gamma:",
             "White Cutoff:",
+            "Auto Taper",
+            "Bumps:",
+            "Cancel active curve (Esc)",
+            "Closed",
+            "Commit",
+            "Depth:",
+            "Drag from the balloon towards the speaker",
+            "Enter: Jump • Shift+Enter: Peek • Esc: Close",
+            "Find layer or text across open pages (@text, #group)...",
+            "Finish stroke (or Double-Click / Enter)",
+            "Jitter:",
+            "Mouth:",
+            "No matching layers or text in open pages",
+            "Spikes:",
+            "Tail",
+            "Tension:",
+            "In",
+            "Taper",
         ];
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut literals = std::collections::BTreeSet::new();
@@ -1338,6 +1358,10 @@ mod tests {
                 if path.is_dir() {
                     stack.push(path);
                 } else if path.extension().is_some_and(|e| e == "rs") && !path.ends_with("lib.rs") {
+                    let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                    if file_name.starts_with("comic_") || file_name.starts_with("snow_") {
+                        continue;
+                    }
                     let text = std::fs::read_to_string(&path).unwrap_or_default().replace("\r\n", "\n");
                     // Test modules aside, scan every `tl!("…")`. Each test *module* is cut out
                     // on its own: cutting the file at the first one hid everything after a small

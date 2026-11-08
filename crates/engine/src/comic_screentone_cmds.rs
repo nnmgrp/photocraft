@@ -1411,7 +1411,7 @@ mod tests {
         let surf = layer.surface().expect("raster surface");
         assert!(surf.tile_count() > 0, "Rasterized layer must have baked tiles, not an empty surface");
         let px = read_layer(&s, id);
-        assert!(px.chunks_exact(4).any(|p| p[3] > 0.0), "Rasterized screentone must contain ink pixels");
+        assert!(px.as_chunks::<4>().0.iter().any(|p| p[3] > 0.0), "Rasterized screentone must contain ink pixels");
     }
 
     #[test]
@@ -1437,7 +1437,7 @@ mod tests {
         // The active layer should contain the merged screentone pixels!
         let active_id = s.active().unwrap().active_layer.unwrap().0;
         let px = read_layer(&s, active_id);
-        assert!(px.chunks_exact(4).any(|p| p[3] > 0.0), "Merged down screentone must contribute ink to lower layer");
+        assert!(px.as_chunks::<4>().0.iter().any(|p| p[3] > 0.0), "Merged down screentone must contribute ink to lower layer");
     }
 
     #[test]
@@ -1460,6 +1460,6 @@ mod tests {
 
         let active_id = s.active().unwrap().active_layer.unwrap().0;
         let px = read_layer(&s, active_id);
-        assert!(px.chunks_exact(4).any(|p| p[0] < 0.95 || p[1] < 0.95 || p[2] < 0.95), "Flattened image must contain screentone dots");
+        assert!(px.as_chunks::<4>().0.iter().any(|p| p[0] < 0.95 || p[1] < 0.95 || p[2] < 0.95), "Flattened image must contain screentone dots");
     }
 }

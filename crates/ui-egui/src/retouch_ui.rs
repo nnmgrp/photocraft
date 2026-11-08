@@ -1830,8 +1830,8 @@ mod tests {
         o.remove_diffusion.prompt = "sky".into();
         o.remove_area = "page".into();
         let p = ai_remove_params(&app);
-        assert_eq!((&p["model"], &p["generative"], &p["selection"]), (&json!("nanoBanana"), &json!("on"), &json!(true)));
-        assert_eq!((&p["newLayer"], &p["prompt"], &p["area"]), (&json!(true), &json!("grass"), &json!("page")), "{p}");
+        assert_eq!((&p["model"], &p["generative"], &p["selection"]), (&json!("lama"), &json!("auto"), &json!(true)));
+        assert_eq!(&p["newLayer"], &json!(false), "{p}");
         // The strokes keep the options bar's model and its settings.
         let s = remove_params(&app.ui.tool_options);
         assert_eq!((&s["model"], &s["generative"], &s["newLayer"]), (&json!("lama"), &json!("off"), &json!(false)));

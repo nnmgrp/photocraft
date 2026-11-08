@@ -3300,8 +3300,8 @@ mod tests {
                 }
                 let Some(obj) = v.get(sec).and_then(Value::as_object) else { continue };
                 for k in obj.keys() {
-                    if sec == "interface" && k == "favoriteThemes" {
-                        continue; // Rendered as star controls beside the theme choices.
+                    if (sec == "interface" && k == "favoriteThemes") || (sec == "export" && k == "lastExportDir") {
+                        continue; // favoriteThemes: star controls; lastExportDir: internal remembered folder path.
                     }
                     let mut labels = vec![humanize(k)];
                     labels.extend(prefs::choices(&format!("{sec}.{k}")).into_iter().flatten().map(|c| choice_label(c)));

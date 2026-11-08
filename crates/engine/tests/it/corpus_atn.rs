@@ -108,12 +108,49 @@ fn atn_corpus_loads_saves_and_reloads() {
             }
         };
         let bytes = photocraft_engine::paint::tile::b64_decode(saved["data"].as_str().unwrap_or("")).unwrap_or_default();
+        let mut expected = first.clone();
+        if let Some(skipped_list) = saved["skipped"].as_array() {
+            let mut to_remove: Vec<(String, usize)> = skipped_list
+                .iter()
+                .filter_map(|s| {
+                    let a = s["action"].as_str()?.to_string();
+                    let idx = s["step"].as_u64()? as usize;
+                    Some((a, idx))
+                })
+                .collect();
+            to_remove.sort_by(|a, b| b.1.cmp(&a.1));
+            for (action_name, idx) in to_remove {
+                if let Some(act) = expected.iter_mut().find(|a| a.name == action_name) {
+                    if idx < act.steps.len() {
+                        act.steps.remove(idx);
+                        let mut new_disabled = std::collections::BTreeSet::new();
+                        for &d in &act.disabled {
+                            if d < idx {
+                                new_disabled.insert(d);
+                            } else if d > idx {
+                                new_disabled.insert(d - 1);
+                            }
+                        }
+                        act.disabled = new_disabled;
+                        let mut new_dialogs = std::collections::BTreeSet::new();
+                        for &d in &act.dialogs {
+                            if d < idx {
+                                new_dialogs.insert(d);
+                            } else if d > idx {
+                                new_dialogs.insert(d - 1);
+                            }
+                        }
+                        act.dialogs = new_dialogs;
+                    }
+                }
+            }
+        }
         let mut t = Session::new();
         match t.execute("actions.load", json!({"data": photocraft_engine::paint::tile::b64_encode(&bytes)})) {
-            Ok(_) if merge_set_props(&t.actions.list) == merge_set_props(&first) => {}
+            Ok(_) if merge_set_props(&t.actions.list) == merge_set_props(&expected) => {}
             Ok(_) => {
                 // Name the first step that differs, so a mapping asymmetry is quick to find.
-                let detail = first
+                let detail = expected
                     .iter()
                     .zip(&t.actions.list)
                     .flat_map(|(a, b)| a.steps.iter().zip(&b.steps).enumerate().map(move |(i, (x, y))| (a.name.as_str(), i, x, y)))

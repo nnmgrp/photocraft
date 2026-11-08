@@ -3812,8 +3812,7 @@ mod tests {
 
     #[test]
     fn style_preview_fits_a_long_sample_on_one_line() {
-        let mut preset = TextStylePreset::default();
-        preset.name = "Long style ".repeat(20);
+        let preset = TextStylePreset { name: "Long style ".repeat(20), ..Default::default() };
         let engine = photocraft_text::shared();
 
         let layer = style_preview_layer(&preset, 1);
@@ -4132,8 +4131,7 @@ mod tests {
 
     #[test]
     fn test_split_and_merge_current_line() {
-        let mut typer = TypesetterUi::default();
-        typer.script_buffer = "Привет мир!\nКак дела?".into();
+        let mut typer = TypesetterUi { script_buffer: "Привет мир!\nКак дела?".into(), ..Default::default() };
         typer.sync_state_from_script_buffer();
         assert_eq!(typer.state.lines.len(), 2);
         typer.state.current_line_idx = 0;

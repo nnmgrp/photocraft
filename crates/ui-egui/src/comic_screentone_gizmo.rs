@@ -621,8 +621,7 @@ mod tests {
     /// Drives a full press-move-release at document coordinates through the canvas's own
     /// event pipeline.
     fn drag(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2], shift: bool) {
-        let mut mods = egui::Modifiers::default();
-        mods.shift = shift;
+        let mods = egui::Modifiers { shift, ..Default::default() };
         crate::canvas::tool_event(app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, mods);
         crate::canvas::tool_event(app, ToolEvent::Move { x: to[0], y: to[1], pressure: 1.0 }, mods);
         crate::canvas::tool_event(app, ToolEvent::Up { x: to[0], y: to[1] }, mods);

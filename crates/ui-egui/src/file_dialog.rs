@@ -169,10 +169,8 @@ impl PhotocraftApp {
             FileDialogAnswer::SaveTo(path) => {
                 let path = saved_path(app, &path, suggested_ext.as_deref());
                 // The web answers a download name, which has no folder to remember.
-                if let Some(dir) = Path::new(&path).parent().filter(|p| !p.as_os_str().is_empty()) {
-                    if let Some(doc) = doc {
-                        app.save_dirs.insert(doc, dir.to_path_buf());
-                    }
+                if let (Some(dir), Some(doc)) = (Path::new(&path).parent().filter(|p| !p.as_os_str().is_empty()), doc) {
+                    app.save_dirs.insert(doc, dir.to_path_buf());
                 }
                 then(app, path)
             }

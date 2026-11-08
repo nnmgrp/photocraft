@@ -72,9 +72,12 @@ impl FireflyContextBar {
 
         let bar_pos = egui::pos2(screen_rect.center().x - 280.0, screen_rect.max.y - 115.0);
 
-        let (is_running, progress, status) = {
-            let st = self.state.lock().unwrap();
-            (st.is_running, st.progress, st.status.clone())
+        let (is_running, progress, status) = match self.state.lock() {
+            Ok(st) => (st.is_running, st.progress, st.status.clone()),
+            Err(poisoned) => {
+                let st = poisoned.into_inner();
+                (st.is_running, st.progress, st.status.clone())
+            }
         };
 
         egui::Window::new("##svetlyachok_bar")
@@ -137,8 +140,7 @@ impl FireflyContextBar {
         let state_clone = self.state.clone();
         let ctx_clone = ctx.clone();
 
-        {
-            let mut st = state_clone.lock().unwrap();
+        if let Ok(mut st) = state_clone.lock() {
             st.is_running = true;
             st.progress = 0.05;
             st.status = "Запуск модуля...".to_string();

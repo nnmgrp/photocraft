@@ -114,6 +114,7 @@ mod filter_preview_worker;
 pub mod flick_pan;
 pub mod snow_fx_scrub;
 pub use snow_fx_scrub as fx_scrub;
+pub mod comic_pages_panel;
 mod font_preview;
 pub mod frame_tool;
 pub mod gallery_ui;
@@ -176,8 +177,8 @@ mod opacity_keys;
 pub mod open_prompt;
 pub mod outline;
 mod page_keys;
-pub mod comic_pages_panel;
 pub use comic_pages_panel as pages_panel;
+pub mod comic_screentone_gizmo;
 pub mod paint_mouse;
 pub mod palette;
 mod panel_docking;
@@ -208,7 +209,6 @@ pub mod rotate_view;
 pub mod rulers;
 pub mod screen_picker;
 pub mod screen_sample;
-pub mod comic_screentone_gizmo;
 pub use comic_screentone_gizmo as screentone_gizmo;
 pub mod comic_screentone_panel;
 pub use comic_screentone_panel as screentone_panel;
@@ -1600,20 +1600,20 @@ impl PhotocraftApp {
         let res = self.run("type.create", type_params);
 
         if let Ok(v) = res {
-            if let Some(layer_id) = v.get("layer").and_then(serde_json::Value::as_u64) {
-                if action.preset.stroke_width > 0.0 {
-                    let hex_color = format!("#{:02x}{:02x}{:02x}", action.preset.stroke_color[0], action.preset.stroke_color[1], action.preset.stroke_color[2]);
-                    let _ = self.run(
-                        "layer.layerStyle.stroke",
-                        serde_json::json!({
-                            "layer": layer_id,
-                            "size": action.preset.stroke_width,
-                            "position": "outside",
-                            "color": hex_color,
-                            "opacity": (action.preset.stroke_color[3] as f32 / 2.55).round() as u32
-                        }),
-                    );
-                }
+            if let Some(layer_id) = v.get("layer").and_then(serde_json::Value::as_u64)
+                && action.preset.stroke_width > 0.0
+            {
+                let hex_color = format!("#{:02x}{:02x}{:02x}", action.preset.stroke_color[0], action.preset.stroke_color[1], action.preset.stroke_color[2]);
+                let _ = self.run(
+                    "layer.layerStyle.stroke",
+                    serde_json::json!({
+                        "layer": layer_id,
+                        "size": action.preset.stroke_width,
+                        "position": "outside",
+                        "color": hex_color,
+                        "opacity": (action.preset.stroke_color[3] as f32 / 2.55).round() as u32
+                    }),
+                );
             }
             // Снимаем активное выделение (Deselect / Ctrl+D), чтобы сразу можно было выделить следующий баббл
             let _ = self.run("select.deselect", serde_json::json!({}));
@@ -1687,7 +1687,7 @@ impl PhotocraftApp {
         }
 
         let chapter_folder_name = self.ui.chapter_folder_name.clone();
-        let is_left_dock_split = self.ui.docking_left.as_ref().map_or(false, |l| l.root.as_ref().map_or(false, |r| panel_docking::count_dock_panes(r) > 1));
+        let is_left_dock_split = self.ui.docking_left.as_ref().is_some_and(|l| l.root.as_ref().is_some_and(|r| panel_docking::count_dock_panes(r) > 1));
         let view_info = pages_panel::PagesViewInfo { items, active_doc_index: active_doc_idx, chapter_folder_name, is_left_dock_split };
 
         self.pages.render_embedded(ui, &view_info)
@@ -1699,23 +1699,23 @@ impl PhotocraftApp {
         if !self.session.set_active(idx) {
             return false;
         }
-        if self.pages.auto_sync_typer {
-            if let Some(doc_state) = self.session.documents().get(idx) {
-                let path = doc_state.path.as_deref().map(std::path::PathBuf::from);
-                let title = &doc_state.doc.name;
-                let target_page = path
-                    .as_deref()
-                    .and_then(|p| p.file_name())
-                    .and_then(|n| n.to_str())
-                    .and_then(pages_panel::parse_page_number_from_name)
-                    .or_else(|| pages_panel::parse_page_number_from_name(title))
-                    .unwrap_or(idx.saturating_add(1));
+        if self.pages.auto_sync_typer
+            && let Some(doc_state) = self.session.documents().get(idx)
+        {
+            let path = doc_state.path.as_deref().map(std::path::PathBuf::from);
+            let title = &doc_state.doc.name;
+            let target_page = path
+                .as_deref()
+                .and_then(|p| p.file_name())
+                .and_then(|n| n.to_str())
+                .and_then(pages_panel::parse_page_number_from_name)
+                .or_else(|| pages_panel::parse_page_number_from_name(title))
+                .unwrap_or(idx.saturating_add(1));
 
-                if self.typesetter.state.current_page != target_page {
-                    self.typesetter.state.current_page = target_page;
-                    if let Some(pos) = self.typesetter.state.lines.iter().position(|l| l.page == target_page) {
-                        self.typesetter.state.current_line_idx = pos;
-                    }
+            if self.typesetter.state.current_page != target_page {
+                self.typesetter.state.current_page = target_page;
+                if let Some(pos) = self.typesetter.state.lines.iter().position(|l| l.page == target_page) {
+                    self.typesetter.state.current_line_idx = pos;
                 }
             }
         }
@@ -1776,7 +1776,9 @@ impl PhotocraftApp {
                     notices::post(self, "Не удалось сохранить страницу", vec![error], true, None);
                 }
             }
-            pages_panel::PagesPanelAction::OpenChapterFolder => {
+            pages_panel::PagesPanelAction::OpenChapterFolder =>
+            {
+                #[cfg(not(target_arch = "wasm32"))]
                 if let Some(folder) = rfd::FileDialog::new().pick_folder() {
                     let folder_name = folder.file_name().and_then(|n| n.to_str()).unwrap_or("Chapter").to_string();
                     self.ui.chapter_folder_name = Some(folder_name);
@@ -1785,12 +1787,12 @@ impl PhotocraftApp {
                         let mut image_paths: Vec<std::path::PathBuf> = Vec::new();
                         for entry in entries.flatten() {
                             let p = entry.path();
-                            if p.is_file() {
-                                if let Some(ext) = p.extension().and_then(|e| e.to_str()) {
-                                    let ext_lower = ext.to_lowercase();
-                                    if matches!(ext_lower.as_str(), "png" | "jpg" | "jpeg" | "webp" | "psd" | "tif" | "tiff") {
-                                        image_paths.push(p);
-                                    }
+                            if p.is_file()
+                                && let Some(ext) = p.extension().and_then(|e| e.to_str())
+                            {
+                                let ext_lower = ext.to_lowercase();
+                                if matches!(ext_lower.as_str(), "png" | "jpg" | "jpeg" | "webp" | "psd" | "tif" | "tiff") {
+                                    image_paths.push(p);
                                 }
                             }
                         }
@@ -1803,6 +1805,7 @@ impl PhotocraftApp {
                 }
             }
             pages_panel::PagesPanelAction::AddPages => {
+                #[cfg(not(target_arch = "wasm32"))]
                 if let Some(files) = rfd::FileDialog::new().add_filter("Images", &["png", "jpg", "jpeg", "webp", "psd", "tif", "tiff"]).pick_files() {
                     let mut file_paths = files;
                     pages_panel::natural_sort_paths(&mut file_paths);
@@ -1842,10 +1845,10 @@ impl PhotocraftApp {
                     sorted_ids.sort_by(|a, b| pages_panel::natural_cmp_str(&a.1, &b.1));
 
                     for (target_idx, (id, _)) in sorted_ids.into_iter().enumerate() {
-                        if let Some(current_idx) = self.session.documents().iter().position(|d| d.doc.id == id) {
-                            if current_idx != target_idx {
-                                self.session.move_document(current_idx, target_idx);
-                            }
+                        if let Some(current_idx) = self.session.documents().iter().position(|d| d.doc.id == id)
+                            && current_idx != target_idx
+                        {
+                            self.session.move_document(current_idx, target_idx);
                         }
                     }
                 }
@@ -4777,12 +4780,12 @@ mod channel_tint_tests {
 }
 
 #[cfg(test)]
+mod balloon_tool_tests;
+#[cfg(test)]
 mod browse_field_tests;
 #[cfg(test)]
 mod options_hit_area_tests;
 #[cfg(test)]
 mod select_and_mask_button_tests;
-#[cfg(test)]
-mod balloon_tool_tests;
 #[cfg(test)]
 mod snow_paste_tests;

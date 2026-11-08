@@ -42,20 +42,12 @@ pub struct SaiPoint {
 impl SaiPoint {
     #[inline]
     pub fn new(p: P) -> Self {
-        Self {
-            p,
-            pressure: 1.0,
-            corner: false,
-        }
+        Self { p, pressure: 1.0, corner: false }
     }
 
     #[inline]
     pub fn with_pressure(p: P, pressure: f32, corner: bool) -> Self {
-        Self {
-            p,
-            pressure: pressure.clamp(0.0, 2.0),
-            corner,
-        }
+        Self { p, pressure: pressure.clamp(0.0, 2.0), corner }
     }
 }
 
@@ -88,26 +80,13 @@ pub struct LiveVectorStroke {
 
 impl LiveVectorStroke {
     pub fn new(nodes: Vec<SaiPoint>, base_width: f64, tapered: bool) -> Self {
-        Self {
-            nodes,
-            base_width: base_width.clamp(0.1, 100_000.0),
-            min_ratio: 0.05,
-            tapered,
-            closed: false,
-            tension: SAI_DEFAULT_TENSION,
-        }
+        Self { nodes, base_width: base_width.clamp(0.1, 100_000.0), min_ratio: 0.05, tapered, closed: false, tension: SAI_DEFAULT_TENSION }
     }
 
     /// Rebuilds the vector `Path` from the current live parameters.
     pub fn rebuild_path(&self) -> Path {
         if self.tapered {
-            tapered_curve_path(
-                &self.nodes,
-                self.base_width,
-                self.min_ratio,
-                self.closed,
-                self.tension,
-            )
+            tapered_curve_path(&self.nodes, self.base_width, self.min_ratio, self.closed, self.tension)
         } else {
             sai_stroke_with_tension(&self.nodes, self.closed, self.tension)
         }
@@ -175,11 +154,7 @@ fn dist(a: P, b: P) -> f64 {
 #[inline]
 fn norm(a: P) -> P {
     let l = len(a);
-    if l <= 1e-9 || !l.is_finite() {
-        (0.0, 0.0)
-    } else {
-        (a.0 / l, a.1 / l)
-    }
+    if l <= 1e-9 || !l.is_finite() { (0.0, 0.0) } else { (a.0 / l, a.1 / l) }
 }
 
 #[inline]
@@ -228,11 +203,7 @@ pub fn width_at(base_width: f64, min_ratio: f64, pressure: f32) -> f64 {
     let base = base_width.abs().max(0.05);
     let min_r = min_ratio.clamp(0.0, 1.0);
     let p = f64::from(pressure.clamp(0.0, 2.0));
-    let effective_ratio = if p <= 1.0 {
-        min_r + (1.0 - min_r) * p
-    } else {
-        p
-    };
+    let effective_ratio = if p <= 1.0 { min_r + (1.0 - min_r) * p } else { p };
     (base * effective_ratio).max(0.05)
 }
 
@@ -269,16 +240,8 @@ pub fn sai_knots(points: &[SaiPoint], closed: bool, tension: f64) -> Vec<Knot> {
             continue;
         }
 
-        let prev_idx = if i == 0 {
-            if closed { n - 1 } else { 0 }
-        } else {
-            i - 1
-        };
-        let next_idx = if i + 1 >= n {
-            if closed { 0 } else { n - 1 }
-        } else {
-            i + 1
-        };
+        let prev_idx = if i == 0 { if closed { n - 1 } else { 0 } } else { i - 1 };
+        let next_idx = if i + 1 >= n { if closed { 0 } else { n - 1 } } else { i + 1 };
 
         let prev = points[prev_idx].p;
         let next = points[next_idx].p;
@@ -286,25 +249,13 @@ pub fn sai_knots(points: &[SaiPoint], closed: bool, tension: f64) -> Vec<Knot> {
         let d_prev = dist(prev, anchor);
         let d_next = dist(anchor, next);
 
-        let dir_in = if d_prev > 1e-6 {
-            norm(sub(anchor, prev))
-        } else {
-            (0.0, 0.0)
-        };
-        let dir_out = if d_next > 1e-6 {
-            norm(sub(next, anchor))
-        } else {
-            (0.0, 0.0)
-        };
+        let dir_in = if d_prev > 1e-6 { norm(sub(anchor, prev)) } else { (0.0, 0.0) };
+        let dir_out = if d_next > 1e-6 { norm(sub(next, anchor)) } else { (0.0, 0.0) };
 
         // Centripetal bisector tangent direction: weight unit chord directions inversely by sqrt(chord)
         let w_in = if d_prev > 1e-6 { 1.0 / d_prev.sqrt() } else { 0.0 };
         let w_out = if d_next > 1e-6 { 1.0 / d_next.sqrt() } else { 0.0 };
-        let tangent_dir = if w_in + w_out > 1e-6 {
-            norm(add(mul(dir_in, w_in), mul(dir_out, w_out)))
-        } else {
-            (0.0, 0.0)
-        };
+        let tangent_dir = if w_in + w_out > 1e-6 { norm(add(mul(dir_in, w_in), mul(dir_out, w_out))) } else { (0.0, 0.0) };
 
         // SAI tight handle length: proportional to local segment length so short segments never loop
         let handle_factor = (tension / 3.0) * 1.15;
@@ -316,11 +267,7 @@ pub fn sai_knots(points: &[SaiPoint], closed: bool, tension: f64) -> Vec<Knot> {
 
         let in_ctrl = sub(anchor, mul(tangent_dir, in_len));
         let out_ctrl = add(anchor, mul(tangent_dir, out_len));
-        knots.push(Knot::smooth(
-            Point::new(anchor.0, anchor.1),
-            Point::new(in_ctrl.0, in_ctrl.1),
-            Point::new(out_ctrl.0, out_ctrl.1),
-        ));
+        knots.push(Knot::smooth(Point::new(anchor.0, anchor.1), Point::new(in_ctrl.0, in_ctrl.1), Point::new(out_ctrl.0, out_ctrl.1)));
     }
     knots
 }
@@ -333,12 +280,7 @@ pub fn sai_knots(points: &[SaiPoint], closed: bool, tension: f64) -> Vec<Knot> {
 ///
 /// Used in `egui` when the user holds `Ctrl` (or in `Edit` mode) to hover and `Ctrl + Click`
 /// on a curve segment to insert a new node without deforming the curve.
-pub fn closest_point_on_curve(
-    points: &[SaiPoint],
-    query_pos: P,
-    closed: bool,
-    tension: f64,
-) -> Option<CurveHitProjection> {
+pub fn closest_point_on_curve(points: &[SaiPoint], query_pos: P, closed: bool, tension: f64) -> Option<CurveHitProjection> {
     let n = points.len();
     if n < 2 {
         return None;
@@ -393,17 +335,10 @@ pub fn closest_point_on_curve(
         let final_t = (left_t + right_t) * 0.5;
         let projected_point = eval_cubic(p0, p1, p2, p3, final_t);
         let distance = dist(projected_point, query_pos);
-        let interpolated_pressure =
-            interpolate_pressure(points[seg].pressure, points[next_idx].pressure, final_t);
+        let interpolated_pressure = interpolate_pressure(points[seg].pressure, points[next_idx].pressure, final_t);
 
         if best.as_ref().is_none_or(|b| distance < b.distance) {
-            best = Some(CurveHitProjection {
-                segment_index: seg,
-                t: final_t,
-                projected_point,
-                interpolated_pressure,
-                distance,
-            });
+            best = Some(CurveHitProjection { segment_index: seg, t: final_t, projected_point, interpolated_pressure, distance });
         }
     }
 
@@ -412,13 +347,7 @@ pub fn closest_point_on_curve(
 
 /// Inserts a new `SaiPoint` onto the spline at `query_pos` if the cursor is within `max_dist_px`
 /// of any curve segment. Returns `Some(inserted_node_index)` on success.
-pub fn insert_node_on_curve(
-    points: &mut Vec<SaiPoint>,
-    query_pos: P,
-    closed: bool,
-    tension: f64,
-    max_dist_px: f64,
-) -> Option<usize> {
+pub fn insert_node_on_curve(points: &mut Vec<SaiPoint>, query_pos: P, closed: bool, tension: f64, max_dist_px: f64) -> Option<usize> {
     let hit = closest_point_on_curve(points, query_pos, closed, tension)?;
     if hit.distance > max_dist_px {
         return None;
@@ -445,11 +374,7 @@ pub fn sai_stroke_with_tension(points: &[SaiPoint], closed: bool, tension: f64) 
         return Path::default();
     }
     let knots = sai_knots(points, closed, tension);
-    Path::new(vec![Subpath {
-        closed,
-        knots,
-        op: PathOp::Combine,
-    }])
+    Path::new(vec![Subpath { closed, knots, op: PathOp::Combine }])
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -482,23 +407,12 @@ fn safe_cubic_tangent(p0: P, p1: P, p2: P, p3: P, t: f64) -> P {
         return n_deriv2;
     }
     let chord = norm(sub(p3, p0));
-    if chord != (0.0, 0.0) {
-        chord
-    } else {
-        (1.0, 0.0)
-    }
+    if chord != (0.0, 0.0) { chord } else { (1.0, 0.0) }
 }
 
 /// Samples the cubic Bézier spline into dense `CurveSample` points with interpolated pressure
 /// and unit normals.
-pub fn sample_sai_curve(
-    points: &[SaiPoint],
-    base_width: f64,
-    min_ratio: f64,
-    closed: bool,
-    tension: f64,
-    max_step_px: f64,
-) -> Vec<CurveSample> {
+pub fn sample_sai_curve(points: &[SaiPoint], base_width: f64, min_ratio: f64, closed: bool, tension: f64, max_step_px: f64) -> Vec<CurveSample> {
     let n = points.len();
     if n < 2 {
         return Vec::new();
@@ -522,11 +436,7 @@ pub fn sample_sai_curve(
         let arc_len = estimate_cubic_length(p0, p1, p2, p3);
         let subdivisions = if is_straight {
             let pressure_delta = (points[seg].pressure - points[next_idx].pressure).abs();
-            if pressure_delta > 0.01 {
-                ((arc_len / (step_px * 2.0)).ceil() as usize).clamp(4, 64)
-            } else {
-                1
-            }
+            if pressure_delta > 0.01 { ((arc_len / (step_px * 2.0)).ceil() as usize).clamp(4, 64) } else { 1 }
         } else {
             ((arc_len / step_px).ceil() as usize).clamp(8, 96)
         };
@@ -539,19 +449,9 @@ pub fn sample_sai_curve(
             let normal = left_normal(tangent);
             let pressure = interpolate_pressure(points[seg].pressure, points[next_idx].pressure, t);
             let half_width = width_at(base_width, min_ratio, pressure) * 0.5;
-            let is_corner = (s == 0 && points[seg].corner)
-                || (s == subdivisions && points[next_idx].corner);
+            let is_corner = (s == 0 && points[seg].corner) || (s == subdivisions && points[next_idx].corner);
 
-            samples.push(CurveSample {
-                p: pos,
-                tangent,
-                normal,
-                pressure,
-                half_width,
-                is_corner,
-                segment_index: seg,
-                t,
-            });
+            samples.push(CurveSample { p: pos, tangent, normal, pressure, half_width, is_corner, segment_index: seg, t });
         }
     }
 
@@ -570,11 +470,7 @@ fn miter_offset(n1: P, n2: P, half_width: f64, miter_limit: f64) -> Option<P> {
         return None;
     }
     let scale = 1.0 / cos_half;
-    if scale > miter_limit {
-        None
-    } else {
-        Some(mul(miter_dir, half_width * scale))
-    }
+    if scale > miter_limit { None } else { Some(mul(miter_dir, half_width * scale)) }
 }
 
 /// Builds a smooth, closed polygon outline representing a variable-width stroke through `points`.
@@ -582,14 +478,7 @@ pub fn tapered_outline(points: &[SaiPoint], base_width: f64, min_ratio: f64) -> 
     tapered_outline_ex(points, base_width, min_ratio, false, SAI_DEFAULT_TENSION, 1.5)
 }
 
-pub fn tapered_outline_ex(
-    points: &[SaiPoint],
-    base_width: f64,
-    min_ratio: f64,
-    closed: bool,
-    tension: f64,
-    max_step_px: f64,
-) -> Vec<P> {
+pub fn tapered_outline_ex(points: &[SaiPoint], base_width: f64, min_ratio: f64, closed: bool, tension: f64, max_step_px: f64) -> Vec<P> {
     let samples = sample_sai_curve(points, base_width, min_ratio, closed, tension, max_step_px);
     let m = samples.len();
     if m < 2 {
@@ -612,8 +501,7 @@ pub fn tapered_outline_ex(
             let inner_clamp = miter_offset(s_in.normal, s_out.normal, hw, 1.35);
 
             if turn >= 0.0 {
-                let inner_off = inner_clamp
-                    .unwrap_or_else(|| mul(norm(add(s_in.normal, s_out.normal)), hw));
+                let inner_off = inner_clamp.unwrap_or_else(|| mul(norm(add(s_in.normal, s_out.normal)), hw));
                 left.push(add(s_in.p, inner_off));
                 if let Some(m_vec) = miter {
                     right.push(sub(s_in.p, m_vec));
@@ -622,8 +510,7 @@ pub fn tapered_outline_ex(
                     right.push(sub(s_out.p, mul(s_out.normal, hw)));
                 }
             } else {
-                let inner_off = inner_clamp
-                    .unwrap_or_else(|| mul(norm(add(s_in.normal, s_out.normal)), hw));
+                let inner_off = inner_clamp.unwrap_or_else(|| mul(norm(add(s_in.normal, s_out.normal)), hw));
                 right.push(sub(s_in.p, inner_off));
                 if let Some(m_vec) = miter {
                     left.push(add(s_in.p, m_vec));
@@ -659,10 +546,7 @@ pub fn tapered_outline_ex(
         if cap_half > 0.15 {
             for step in 1..12 {
                 let angle = std::f64::consts::PI * (step as f64 / 12.0);
-                let offset = add(
-                    mul(cap_normal, cap_half * angle.cos()),
-                    mul(cap_dir, cap_half * angle.sin()),
-                );
+                let offset = add(mul(cap_normal, cap_half * angle.cos()), mul(cap_dir, cap_half * angle.sin()));
                 poly.push(add(last.p, offset));
             }
         }
@@ -678,10 +562,7 @@ pub fn tapered_outline_ex(
         if start_half > 0.15 {
             for step in 1..12 {
                 let angle = std::f64::consts::PI * (step as f64 / 12.0);
-                let offset = add(
-                    mul(start_normal, start_half * angle.cos()),
-                    mul(start_dir, start_half * angle.sin()),
-                );
+                let offset = add(mul(start_normal, start_half * angle.cos()), mul(start_dir, start_half * angle.sin()));
                 poly.push(add(first.p, offset));
             }
         }
@@ -713,19 +594,9 @@ fn clean_polygon(poly: &[P]) -> Vec<P> {
 }
 
 /// Builds a filled `Path` representing the variable-width PaintTool SAI curve.
-pub fn tapered_curve_path(
-    points: &[SaiPoint],
-    base_width: f64,
-    min_ratio: f64,
-    closed: bool,
-    tension: f64,
-) -> Path {
+pub fn tapered_curve_path(points: &[SaiPoint], base_width: f64, min_ratio: f64, closed: bool, tension: f64) -> Path {
     let outline = tapered_outline_ex(points, base_width, min_ratio, closed, tension, 1.5);
-    if outline.len() < 3 {
-        Path::default()
-    } else {
-        Path::new(vec![Subpath::polygon(&outline)])
-    }
+    if outline.len() < 3 { Path::default() } else { Path::new(vec![Subpath::polygon(&outline)]) }
 }
 
 /// Drop-in replacement for legacy `balloon::tapered_path`.
@@ -747,35 +618,19 @@ mod tests {
         ];
 
         let samples = sample_sai_curve(&points, 14.0, 0.05, false, SAI_DEFAULT_TENSION, 1.5);
-        assert!(
-            samples.len() > 80,
-            "Expected dense cubic Bézier subdivision (>80 samples), got {}",
-            samples.len()
-        );
+        assert!(samples.len() > 80, "Expected dense cubic Bézier subdivision (>80 samples), got {}", samples.len());
 
         let mid_knot_a = points[1].p;
         let mid_knot_b = points[2].p;
         let chord_mid_y = (mid_knot_a.1 + mid_knot_b.1) * 0.5;
-        let arch_samples: Vec<_> = samples
-            .iter()
-            .filter(|s| s.segment_index == 1 && (s.t - 0.5).abs() < 0.15)
-            .collect();
+        let arch_samples: Vec<_> = samples.iter().filter(|s| s.segment_index == 1 && (s.t - 0.5).abs() < 0.15).collect();
         assert!(!arch_samples.is_empty());
         for s in arch_samples {
-            assert!(
-                s.p.1 < chord_mid_y - 3.0,
-                "Sampled spline point {:?} must arch smoothly above straight chord y={}",
-                s.p,
-                chord_mid_y
-            );
+            assert!(s.p.1 < chord_mid_y - 3.0, "Sampled spline point {:?} must arch smoothly above straight chord y={}", s.p, chord_mid_y);
         }
 
         let outline = tapered_outline(&points, 14.0, 0.05);
-        assert!(
-            outline.len() > 160,
-            "Tapered polygon outline should be smoothly discretized, got {} vertices",
-            outline.len()
-        );
+        assert!(outline.len() > 160, "Tapered polygon outline should be smoothly discretized, got {} vertices", outline.len());
     }
 
     #[test]
@@ -787,14 +642,12 @@ mod tests {
         ];
 
         let query = (200.0, 145.0);
-        let hit = closest_point_on_curve(&points, query, false, SAI_DEFAULT_TENSION)
-            .expect("Should find closest projection on spline");
+        let hit = closest_point_on_curve(&points, query, false, SAI_DEFAULT_TENSION).expect("Should find closest projection on spline");
         assert_eq!(hit.segment_index, 0);
         assert!(hit.distance < 15.0);
         assert!(hit.interpolated_pressure > 0.25 && hit.interpolated_pressure < 0.95);
 
-        let inserted_idx = insert_node_on_curve(&mut points, query, false, SAI_DEFAULT_TENSION, 20.0)
-            .expect("Ctrl+Click within 20px should insert a new node");
+        let inserted_idx = insert_node_on_curve(&mut points, query, false, SAI_DEFAULT_TENSION, 20.0).expect("Ctrl+Click within 20px should insert a new node");
         assert_eq!(inserted_idx, 1);
         assert_eq!(points.len(), 4);
     }

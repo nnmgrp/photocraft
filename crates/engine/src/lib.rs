@@ -37,6 +37,7 @@ pub use snow_typesetter as typesetter;
 pub mod snow_hyphenation;
 pub mod snow_knuth_plass;
 pub use snow_knuth_plass as knuth_plass;
+pub mod comic_screentone_cmds;
 pub mod comps_cmds;
 pub mod contour_lib_cmds;
 mod crop_fill;
@@ -120,7 +121,6 @@ pub mod render_cmds;
 pub mod retouch_cmds;
 pub mod sample_cmds;
 pub mod sampler_cmds;
-pub mod comic_screentone_cmds;
 pub use comic_screentone_cmds as screentone_cmds;
 pub mod second_mask_cmds;
 

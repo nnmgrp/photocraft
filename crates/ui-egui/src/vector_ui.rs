@@ -13,9 +13,7 @@ use crate::PhotocraftApp;
 use crate::canvas::ViewXform;
 use crate::state::{Tool, ToolOptions};
 use crate::theme::Tokens;
-use photocraft_vector::sai_curve::{
-    insert_node_on_curve, tapered_outline, width_at, SaiPoint, SAI_DEFAULT_TENSION,
-};
+use photocraft_vector::sai_curve::{SAI_DEFAULT_TENSION, SaiPoint, insert_node_on_curve, tapered_outline, width_at};
 
 /// Sub-mode of `Tool::VectorCurve`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -89,37 +87,23 @@ pub const SEGMENT_INSERT_RADIUS_PX: f64 = 12.0;
 impl VectorCurveState {
     pub fn node_at(&self, pos: [f64; 2], hit_radius_doc: f64) -> Option<usize> {
         let r2 = hit_radius_doc * hit_radius_doc;
-        self.points
-            .iter()
-            .enumerate()
-            .rev()
-            .find_map(|(i, pt)| {
-                let dx = pt[0] - pos[0];
-                let dy = pt[1] - pos[1];
-                if dx * dx + dy * dy <= r2 {
-                    Some(i)
-                } else {
-                    None
-                }
-            })
+        self.points.iter().enumerate().rev().find_map(|(i, pt)| {
+            let dx = pt[0] - pos[0];
+            let dy = pt[1] - pos[1];
+            if dx * dx + dy * dy <= r2 { Some(i) } else { None }
+        })
     }
 
     pub fn try_insert_node_on_segment(&mut self, x: f64, y: f64, max_dist_doc: f64, closed: bool) -> Option<usize> {
-        let mut sai_pts: Vec<SaiPoint> = self
-            .points
-            .iter()
-            .map(|p| SaiPoint::with_pressure((p[0], p[1]), p[2] as f32, p[3] > 0.5))
-            .collect();
+        let mut sai_pts: Vec<SaiPoint> = self.points.iter().map(|p| SaiPoint::with_pressure((p[0], p[1]), p[2] as f32, p[3] > 0.5)).collect();
 
         let inserted_idx = insert_node_on_curve(&mut sai_pts, (x, y), closed, self.tension, max_dist_doc)?;
-        self.points = sai_pts
-            .into_iter()
-            .map(|pt| [pt.p.0, pt.p.1, f64::from(pt.pressure), if pt.corner { 1.0 } else { 0.0 }])
-            .collect();
+        self.points = sai_pts.into_iter().map(|pt| [pt.p.0, pt.p.1, f64::from(pt.pressure), if pt.corner { 1.0 } else { 0.0 }]).collect();
         self.selected_node = Some(inserted_idx);
         Some(inserted_idx)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn on_primary_down(
         &mut self,
         x: f64,
@@ -167,23 +151,21 @@ impl VectorCurveState {
             self.drag_initial_pressure = self.points[idx][2];
             self.drag_moved = false;
 
-            self.drag_kind = if self.mode == VectorCurveMode::Weight || alt_held {
-                Some(NodeDragKind::AdjustPressure)
-            } else {
-                Some(NodeDragKind::MovePosition)
-            };
+            self.drag_kind =
+                if self.mode == VectorCurveMode::Weight || alt_held { Some(NodeDragKind::AdjustPressure) } else { Some(NodeDragKind::MovePosition) };
             return false;
         }
 
-        if (ctrl_held || self.mode == VectorCurveMode::Edit) && self.points.len() >= 2 {
-            if let Some(inserted_idx) = self.try_insert_node_on_segment(x, y, seg_radius, closed) {
-                self.drag_node = Some(inserted_idx);
-                self.drag_origin = [x, y];
-                self.drag_initial_pressure = self.points[inserted_idx][2];
-                self.drag_moved = false;
-                self.drag_kind = Some(NodeDragKind::MovePosition);
-                return false;
-            }
+        if (ctrl_held || self.mode == VectorCurveMode::Edit)
+            && self.points.len() >= 2
+            && let Some(inserted_idx) = self.try_insert_node_on_segment(x, y, seg_radius, closed)
+        {
+            self.drag_node = Some(inserted_idx);
+            self.drag_origin = [x, y];
+            self.drag_initial_pressure = self.points[inserted_idx][2];
+            self.drag_moved = false;
+            self.drag_kind = Some(NodeDragKind::MovePosition);
+            return false;
         }
 
         if self.mode != VectorCurveMode::Draw {
@@ -242,12 +224,13 @@ impl VectorCurveState {
     }
 
     pub fn on_primary_up(&mut self, alt_held: bool) {
-        if let Some(idx) = self.drag_node.take() {
-            if alt_held && !self.drag_moved && self.mode != VectorCurveMode::Weight {
-                if let Some(node) = self.points.get_mut(idx) {
-                    node[3] = if node[3] > 0.5 { 0.0 } else { 1.0 };
-                }
-            }
+        if let Some(idx) = self.drag_node.take()
+            && alt_held
+            && !self.drag_moved
+            && self.mode != VectorCurveMode::Weight
+            && let Some(node) = self.points.get_mut(idx)
+        {
+            node[3] = if node[3] > 0.5 { 0.0 } else { 1.0 };
         }
         self.drag_kind = None;
         self.drag_moved = false;
@@ -257,28 +240,16 @@ impl VectorCurveState {
         if self.points.is_empty() {
             return false;
         }
-        let target = self
-            .selected_node
-            .unwrap_or_else(|| self.points.len().saturating_sub(1));
+        let target = self.selected_node.unwrap_or_else(|| self.points.len().saturating_sub(1));
         if target < self.points.len() {
             self.points.remove(target);
-            self.selected_node = if self.points.is_empty() {
-                None
-            } else {
-                Some(target.min(self.points.len() - 1))
-            };
+            self.selected_node = if self.points.is_empty() { None } else { Some(target.min(self.points.len() - 1)) };
             return true;
         }
         false
     }
 
-    pub fn to_command_params(
-        &self,
-        base_width: f64,
-        min_ratio: f64,
-        tapered: bool,
-        closed: bool,
-    ) -> std::result::Result<Value, String> {
+    pub fn to_command_params(&self, base_width: f64, min_ratio: f64, tapered: bool, closed: bool) -> std::result::Result<Value, String> {
         if self.points.len() < 2 {
             return Err("Vector Curve: at least two nodes are needed to commit a stroke".into());
         }
@@ -1718,16 +1689,8 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
 // ---------------------------------------------------------------------------------------------
 // Options bars
 
-pub fn vector_curve_down(
-    app: &mut PhotocraftApp,
-    x: f64,
-    y: f64,
-    ctrl: bool,
-    alt: bool,
-    shift: bool,
-    double_clicked: bool,
-    zoom: f64,
-) {
+#[allow(clippy::too_many_arguments)]
+pub fn vector_curve_down(app: &mut PhotocraftApp, x: f64, y: f64, ctrl: bool, alt: bool, shift: bool, double_clicked: bool, zoom: f64) {
     let closed = app.ui.tool_options.vector_curve_closed;
     let commit_now = {
         let vc = app.ui.vector_curve.get_or_insert_with(VectorCurveState::default);
@@ -1759,12 +1722,7 @@ pub fn vector_curve_commit(app: &mut PhotocraftApp) {
         return;
     }
     let o = &app.ui.tool_options;
-    match vc.to_command_params(
-        f64::from(o.vector_curve_width),
-        f64::from(o.vector_curve_min_ratio),
-        o.vector_curve_tapered,
-        o.vector_curve_closed,
-    ) {
+    match vc.to_command_params(f64::from(o.vector_curve_width), f64::from(o.vector_curve_min_ratio), o.vector_curve_tapered, o.vector_curve_closed) {
         Ok(params) => {
             if let Err(e) = app.run("shape.vectorCurve.create", params) {
                 app.ui.status = e;
@@ -1782,27 +1740,21 @@ pub fn vector_curve_commit(app: &mut PhotocraftApp) {
 
 pub fn draw_vector_curve_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) {
     let Some(vc) = app.ui.vector_curve.as_ref() else { return };
-    if vc.points.is_empty() { return; }
+    if vc.points.is_empty() {
+        return;
+    }
     let to_scr = |q: [f64; 2]| xf.to_screen(q[0] as f32, q[1] as f32);
     let accent = Tokens::get(painter.ctx()).accent;
     let o = &app.ui.tool_options;
 
     if vc.points.len() >= 2 {
-        let pts: Vec<SaiPoint> = vc
-            .points
-            .iter()
-            .map(|p| SaiPoint::with_pressure((p[0], p[1]), p[2] as f32, p[3] > 0.5))
-            .collect();
+        let pts: Vec<SaiPoint> = vc.points.iter().map(|p| SaiPoint::with_pressure((p[0], p[1]), p[2] as f32, p[3] > 0.5)).collect();
 
         if o.vector_curve_tapered {
             let outline = tapered_outline(&pts, f64::from(o.vector_curve_width), f64::from(o.vector_curve_min_ratio));
             if outline.len() >= 3 {
                 let scr_pts: Vec<Pos2> = outline.iter().map(|p| to_scr([p.0, p.1])).collect();
-                painter.add(egui::Shape::convex_polygon(
-                    scr_pts.clone(),
-                    accent.gamma_multiply(0.25),
-                    Stroke::new(1.0, accent),
-                ));
+                painter.add(egui::Shape::convex_polygon(scr_pts.clone(), accent.gamma_multiply(0.25), Stroke::new(1.0, accent)));
             }
         } else {
             let mut scr_pts = Vec::new();
@@ -1818,12 +1770,7 @@ pub fn draw_vector_curve_overlay(app: &PhotocraftApp, painter: &egui::Painter, x
         && let (Some(last), Some(h)) = (vc.points.last(), vc.hover_pos)
         && vc.drag_node.is_none()
     {
-        painter.add(egui::Shape::dashed_line(
-            &[to_scr([last[0], last[1]]), to_scr(h)],
-            Stroke::new(1.0, accent),
-            4.0,
-            3.0,
-        ));
+        painter.add(egui::Shape::dashed_line(&[to_scr([last[0], last[1]]), to_scr(h)], Stroke::new(1.0, accent), 4.0, 3.0));
     }
 
     for (i, pt) in vc.points.iter().enumerate() {
@@ -1842,12 +1789,7 @@ pub fn draw_vector_curve_overlay(app: &PhotocraftApp, painter: &egui::Painter, x
 
         if is_corner {
             let d = 4.5;
-            let diamond = vec![
-                pos2(c.x, c.y - d),
-                pos2(c.x + d, c.y),
-                pos2(c.x, c.y + d),
-                pos2(c.x - d, c.y),
-            ];
+            let diamond = vec![pos2(c.x, c.y - d), pos2(c.x + d, c.y), pos2(c.x, c.y + d), pos2(c.x - d, c.y)];
             let fill = if is_selected { accent } else { Color32::WHITE };
             painter.add(egui::Shape::convex_polygon(diamond, fill, Stroke::new(1.0, Color32::BLACK)));
         } else {
@@ -1862,7 +1804,9 @@ pub fn draw_vector_curve_overlay(app: &PhotocraftApp, painter: &egui::Painter, x
 
 /// Options bar for vector tools; false for other tools.
 pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bool {
-    if !(is_shape_tool(tool) || tool == Tool::Balloon || tool == Tool::VectorCurve
+    if !(is_shape_tool(tool)
+        || tool == Tool::Balloon
+        || tool == Tool::VectorCurve
         || matches!(
             tool,
             Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen | Tool::AddAnchorPoint | Tool::DeleteAnchorPoint | Tool::PathSelection | Tool::DirectSelection
@@ -2077,11 +2021,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         Tool::VectorCurve => {
             crate::widgets::vline(ui, 22.0);
             let cur_mode = app.ui.vector_curve.as_ref().map_or(VectorCurveMode::Draw, |vc| vc.mode);
-            for (mode, label) in [
-                (VectorCurveMode::Draw, "Draw"),
-                (VectorCurveMode::Weight, "Weight"),
-                (VectorCurveMode::Edit, "Edit"),
-            ] {
+            for (mode, label) in [(VectorCurveMode::Draw, "Draw"), (VectorCurveMode::Weight, "Weight"), (VectorCurveMode::Edit, "Edit")] {
                 if crate::widgets::pill_tab(ui, tl!(label), cur_mode == mode).clicked() {
                     let vc = app.ui.vector_curve.get_or_insert_with(VectorCurveState::default);
                     vc.mode = mode;

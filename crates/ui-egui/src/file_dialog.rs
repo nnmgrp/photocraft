@@ -176,7 +176,7 @@ impl PhotocraftApp {
                     }
                     let dir_str: String = dir.to_string_lossy().into();
                     app.session.edit_prefs(|p| p.export.last_export_dir = Some(dir_str));
-                    let prefs_json = serde_json::to_value(&app.session.prefs().clone()).unwrap_or_default();
+                    let prefs_json = serde_json::to_value(app.session.prefs().clone()).unwrap_or_default();
                     let _ = crate::prefs_ui::write_prefs(app, &prefs_json);
                 }
                 then(app, path)

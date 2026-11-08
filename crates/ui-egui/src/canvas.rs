@@ -4885,7 +4885,13 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                 }
                 // The pen tools: their own icon with its nib on the point, or the crosshair for
                 // precise Other Cursors (#4639).
-                Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen | Tool::AddAnchorPoint | Tool::DeleteAnchorPoint | Tool::ConvertPoint | Tool::VectorCurve => {
+                Tool::Pen
+                | Tool::FreeformPen
+                | Tool::CurvaturePen
+                | Tool::AddAnchorPoint
+                | Tool::DeleteAnchorPoint
+                | Tool::ConvertPoint
+                | Tool::VectorCurve => {
                     if precise_other_cursor(app) {
                         egui::CursorIcon::Crosshair
                     } else {

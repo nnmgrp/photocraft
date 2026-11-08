@@ -220,7 +220,19 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
             reset!(vector_mode, shape_fill, stroke_width, shape_stroke, corner_radius, polygon_sides, line_weight)
         }
         Tool::Balloon => {
-            reset!(balloon_mode, balloon_preset, balloon_mouth, balloon_bumps, balloon_amplitude, balloon_jitter, balloon_spikes, balloon_length, balloon_smooth, balloon_inward, balloon_seed)
+            reset!(
+                balloon_mode,
+                balloon_preset,
+                balloon_mouth,
+                balloon_bumps,
+                balloon_amplitude,
+                balloon_jitter,
+                balloon_spikes,
+                balloon_length,
+                balloon_smooth,
+                balloon_inward,
+                balloon_seed
+            )
         }
         Tool::VectorCurve => {
             reset!(vector_curve_width, vector_curve_tapered, vector_curve_closed, vector_curve_min_ratio, vector_curve_tension)

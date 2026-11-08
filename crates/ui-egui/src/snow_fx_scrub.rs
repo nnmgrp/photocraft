@@ -750,9 +750,10 @@ pub fn all_numeric_params(effect: &Effect) -> Vec<FxParamDesc> {
 }
 
 /// The state of the mouse scrubby slider gesture.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub enum ScrubGestureState {
     /// No gesture active.
+    #[default]
     Idle,
     /// Mouse pressed down, awaiting disambiguation threshold.
     Pending { layer_id: LayerId, effect_idx: usize, start_pos: Pos2, initial_val: f32, param_key: &'static str },
@@ -769,12 +770,6 @@ pub enum ScrubGestureState {
     },
     /// Disambiguated as vertical Drag-and-Drop layer transfer.
     DelegatedToDnD,
-}
-
-impl Default for ScrubGestureState {
-    fn default() -> Self {
-        Self::Idle
-    }
 }
 
 /// Key in egui Context temp storage for the active scrub gesture.
@@ -947,13 +942,11 @@ pub fn handle_effect_drag(
     }
 
     // 3. Initiate gesture on press
-    if resp.drag_started() || (resp.is_pointer_button_down_on() && matches!(state, ScrubGestureState::Idle)) {
-        if matches!(state, ScrubGestureState::Idle) {
-            let start_pos = ctx.input(|i| i.pointer.press_origin()).or(pointer_pos).unwrap_or_default();
-            let initial_val = all_effects.get(effect_idx).map_or(0.0, |fx| (param.getter)(fx));
-            state = ScrubGestureState::Pending { layer_id, effect_idx, start_pos, initial_val, param_key: param.key };
-            ctx.data_mut(|d| d.insert_temp(scrub_state_id(), state.clone()));
-        }
+    if (resp.is_pointer_button_down_on() || resp.drag_started()) && matches!(state, ScrubGestureState::Idle) {
+        let start_pos = ctx.input(|i| i.pointer.press_origin()).or(pointer_pos).unwrap_or_default();
+        let initial_val = all_effects.get(effect_idx).map_or(0.0, |fx| (param.getter)(fx));
+        state = ScrubGestureState::Pending { layer_id, effect_idx, start_pos, initial_val, param_key: param.key };
+        ctx.data_mut(|d| d.insert_temp(scrub_state_id(), state.clone()));
     }
 
     // 4. Update gesture state machine while pointer is held down
@@ -1148,12 +1141,12 @@ pub fn render_fx_hud(ctx: &egui::Context, doc: &photocraft_doc::Document, action
     });
 
     // Close HUD on outside click (if not currently scrubbing)
-    if !is_scrubbing && ctx.input(|i| i.pointer.primary_clicked()) {
-        if let Some(pos) = ctx.input(|i| i.pointer.interact_pos()) {
-            if !area_resp.response.rect.contains(pos) {
-                close_hud = true;
-            }
-        }
+    if !is_scrubbing
+        && ctx.input(|i| i.pointer.primary_clicked())
+        && let Some(pos) = ctx.input(|i| i.pointer.interact_pos())
+        && !area_resp.response.rect.contains(pos)
+    {
+        close_hud = true;
     }
 
     if close_hud && !is_scrubbing {

@@ -40,10 +40,7 @@ fn gray8_selection_changes_paste_fingerprint_and_limits_cleanup_sampling() {
     );
 
     assert_eq!(selection.content_bounds(), other_selection.content_bounds());
-    assert_ne!(
-        crate::snow_clean::selection_fingerprint(&selection),
-        crate::snow_clean::selection_fingerprint(&other_selection)
-    );
+    assert_ne!(crate::snow_clean::selection_fingerprint(&selection), crate::snow_clean::selection_fingerprint(&other_selection));
     assert_eq!(crate::snow_clean::mean_luminance(Some(&artwork), &selection), Some(255.0));
     assert_eq!(crate::snow_clean::clean_fill_color(Some(&artwork), &selection), [255, 255, 255]);
 }

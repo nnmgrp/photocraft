@@ -102,40 +102,38 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // If unpinned, dynamically follow context (selection bounds or text layer bounds)
     if !is_pinned {
         if has_selection {
-            if let Some(xf_val) = xf {
-                if let Some(bounds) = active.doc.selection.as_ref().map(|s| s.content_bounds()).filter(|b| !b.is_empty()) {
-                    let s_min = xf_val.to_screen(bounds.x0 as f32, bounds.y0 as f32);
-                    let s_max = xf_val.to_screen(bounds.x1 as f32, bounds.y1 as f32);
-                    let min_y = s_min.y.min(s_max.y);
-                    let max_y = s_min.y.max(s_max.y);
-                    let sel_center_x = (s_min.x + s_max.x) * 0.5;
-                    let mut target_y = max_y + 16.0;
-                    if target_y > canvas_rect.max.y - 60.0 {
-                        target_y = (min_y - 48.0).max(canvas_rect.min.y + 36.0);
-                    }
-                    base_pos = pos2(sel_center_x, target_y);
+            if let Some(xf_val) = xf
+                && let Some(bounds) = active.doc.selection.as_ref().map(|s| s.content_bounds()).filter(|b| !b.is_empty())
+            {
+                let s_min = xf_val.to_screen(bounds.x0 as f32, bounds.y0 as f32);
+                let s_max = xf_val.to_screen(bounds.x1 as f32, bounds.y1 as f32);
+                let min_y = s_min.y.min(s_max.y);
+                let max_y = s_min.y.max(s_max.y);
+                let sel_center_x = (s_min.x + s_max.x) * 0.5;
+                let mut target_y = max_y + 16.0;
+                if target_y > canvas_rect.max.y - 60.0 {
+                    target_y = (min_y - 48.0).max(canvas_rect.min.y + 36.0);
                 }
+                base_pos = pos2(sel_center_x, target_y);
             }
-        } else if show_type {
-            if let Some(xf_val) = xf {
-                let text_bounds = active.active_layer.and_then(|id| {
-                    active.doc.layer(id).and_then(|l| match &l.content {
-                        photocraft_doc::LayerContent::Text(t) => t.cache.as_ref().map(|c| c.content_bounds()),
-                        _ => None,
-                    })
-                });
-                if let Some(bounds) = text_bounds.filter(|b| !b.is_empty()) {
-                    let s_min = xf_val.to_screen(bounds.x0 as f32, bounds.y0 as f32);
-                    let s_max = xf_val.to_screen(bounds.x1 as f32, bounds.y1 as f32);
-                    let min_y = s_min.y.min(s_max.y);
-                    let max_y = s_min.y.max(s_max.y);
-                    let text_center_x = (s_min.x + s_max.x) * 0.5;
-                    let mut target_y = max_y + 16.0;
-                    if target_y > canvas_rect.max.y - 60.0 {
-                        target_y = (min_y - 48.0).max(canvas_rect.min.y + 36.0);
-                    }
-                    base_pos = pos2(text_center_x, target_y);
+        } else if show_type && let Some(xf_val) = xf {
+            let text_bounds = active.active_layer.and_then(|id| {
+                active.doc.layer(id).and_then(|l| match &l.content {
+                    photocraft_doc::LayerContent::Text(t) => t.cache.as_ref().map(|c| c.content_bounds()),
+                    _ => None,
+                })
+            });
+            if let Some(bounds) = text_bounds.filter(|b| !b.is_empty()) {
+                let s_min = xf_val.to_screen(bounds.x0 as f32, bounds.y0 as f32);
+                let s_max = xf_val.to_screen(bounds.x1 as f32, bounds.y1 as f32);
+                let min_y = s_min.y.min(s_max.y);
+                let max_y = s_min.y.max(s_max.y);
+                let text_center_x = (s_min.x + s_max.x) * 0.5;
+                let mut target_y = max_y + 16.0;
+                if target_y > canvas_rect.max.y - 60.0 {
+                    target_y = (min_y - 48.0).max(canvas_rect.min.y + 36.0);
                 }
+                base_pos = pos2(text_center_x, target_y);
             }
         }
     }

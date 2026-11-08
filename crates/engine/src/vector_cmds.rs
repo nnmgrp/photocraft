@@ -24,9 +24,9 @@ use photocraft_doc::{
 };
 use photocraft_geom::{Affine, Point, Rect};
 use photocraft_vector as vector;
-use std::sync::Arc;
-use vector::sai_curve::{LiveVectorStroke, SaiPoint, SAI_DEFAULT_TENSION};
 use serde_json::{Value, json};
+use std::sync::Arc;
+use vector::sai_curve::{LiveVectorStroke, SAI_DEFAULT_TENSION, SaiPoint};
 
 use crate::commands::{CommandSpec, blend_from_str};
 use crate::{EngineError, Result, Session};
@@ -729,10 +729,10 @@ pub const SAI_CURVE_BLOCK: [u8; 4] = *b"saiC";
 /// Retrieves `LiveVectorStroke` parametric data preserved on a layer's PSD blocks if present.
 pub fn get_live_vector_stroke(layer: &Layer) -> Option<LiveVectorStroke> {
     for (k, data) in &layer.psd_blocks {
-        if *k == SAI_CURVE_BLOCK {
-            if let Ok(stroke) = serde_json::from_slice::<LiveVectorStroke>(data) {
-                return Some(stroke);
-            }
+        if *k == SAI_CURVE_BLOCK
+            && let Ok(stroke) = serde_json::from_slice::<LiveVectorStroke>(data)
+        {
+            return Some(stroke);
         }
     }
     None
@@ -756,11 +756,7 @@ pub fn parse_sai_point(v: &Value) -> Option<SaiPoint> {
         let x = a.first().and_then(Value::as_f64)?;
         let y = a.get(1).and_then(Value::as_f64)?;
         let pressure = a.get(2).and_then(Value::as_f64).unwrap_or(1.0);
-        let corner = a
-            .get(3)
-            .and_then(Value::as_bool)
-            .or_else(|| a.get(2).and_then(Value::as_bool))
-            .unwrap_or(false);
+        let corner = a.get(3).and_then(Value::as_bool).or_else(|| a.get(2).and_then(Value::as_bool)).unwrap_or(false);
         (x, y, pressure, corner)
     } else {
         let x = v.get("x").and_then(Value::as_f64)?;
@@ -777,19 +773,13 @@ pub fn parse_sai_point(v: &Value) -> Option<SaiPoint> {
 
 /// Validates and parses an array of `SaiPoint` nodes from command JSON parameters.
 pub fn parse_sai_points(p: &Value, cmd: &str) -> std::result::Result<Vec<SaiPoint>, String> {
-    let raw = p
-        .get("points")
-        .and_then(Value::as_array)
-        .ok_or_else(|| format!("{cmd}: `points` must be an array"))?;
+    let raw = p.get("points").and_then(Value::as_array).ok_or_else(|| format!("{cmd}: `points` must be an array"))?;
     if !(2..=4096).contains(&raw.len()) {
         return Err(format!("{cmd}: `points` must contain 2..=4096 nodes"));
     }
     let mut points = Vec::with_capacity(raw.len());
     for item in raw {
-        points.push(
-            parse_sai_point(item)
-                .ok_or_else(|| format!("{cmd}: every point needs finite `x`, `y` and `pressure`"))?,
-        );
+        points.push(parse_sai_point(item).ok_or_else(|| format!("{cmd}: every point needs finite `x`, `y` and `pressure`"))?);
     }
     Ok(points)
 }
@@ -812,44 +802,21 @@ pub fn build_vector_curve_layer(p: &Value) -> std::result::Result<VectorCurveCom
         return Err(format!("{CMD}: `width` must be between 0.01 and 100000 px"));
     }
 
-    let min_ratio = p
-        .get("minRatio")
-        .and_then(Value::as_f64)
-        .unwrap_or(0.05)
-        .clamp(0.0, 1.0);
+    let min_ratio = p.get("minRatio").and_then(Value::as_f64).unwrap_or(0.05).clamp(0.0, 1.0);
     let tapered = p.get("tapered").and_then(Value::as_bool).unwrap_or(true);
     let closed = p.get("closed").and_then(Value::as_bool).unwrap_or(false);
-    let tension = p
-        .get("tension")
-        .and_then(Value::as_f64)
-        .unwrap_or(SAI_DEFAULT_TENSION)
-        .clamp(0.0, 1.0);
+    let tension = p.get("tension").and_then(Value::as_f64).unwrap_or(SAI_DEFAULT_TENSION).clamp(0.0, 1.0);
 
-    let live_stroke = LiveVectorStroke {
-        nodes: points,
-        base_width: width,
-        min_ratio,
-        tapered,
-        closed,
-        tension,
-    };
+    let live_stroke = LiveVectorStroke { nodes: points, base_width: width, min_ratio, tapered, closed, tension };
 
     let path = live_stroke.rebuild_path();
     if path.is_empty() {
         return Err(format!("{CMD}: the points produce no drawable path"));
     }
 
-    let name = p
-        .get("name")
-        .and_then(Value::as_str)
-        .unwrap_or("SAI Vector Curve")
-        .to_string();
+    let name = p.get("name").and_then(Value::as_str).unwrap_or("SAI Vector Curve").to_string();
 
-    Ok(VectorCurveCommandOutput {
-        name,
-        path,
-        live_stroke,
-    })
+    Ok(VectorCurveCommandOutput { name, path, live_stroke })
 }
 
 /// Command handler for `shape.vectorCurve.updateNode`:
@@ -862,20 +829,18 @@ pub fn update_vector_curve_node(
     new_pressure: Option<f32>,
     toggle_corner: bool,
 ) -> std::result::Result<Path, String> {
-    let node = live
-        .nodes
-        .get_mut(node_index)
-        .ok_or_else(|| format!("shape.vectorCurve.updateNode: node index {node_index} out of bounds"))?;
+    let node = live.nodes.get_mut(node_index).ok_or_else(|| format!("shape.vectorCurve.updateNode: node index {node_index} out of bounds"))?;
 
-    if let Some((x, y)) = new_pos {
-        if x.is_finite() && y.is_finite() {
-            node.p = (x, y);
-        }
+    if let Some((x, y)) = new_pos
+        && x.is_finite()
+        && y.is_finite()
+    {
+        node.p = (x, y);
     }
-    if let Some(pressure) = new_pressure {
-        if pressure.is_finite() {
-            node.pressure = pressure.clamp(0.0, 2.0);
-        }
+    if let Some(pressure) = new_pressure
+        && pressure.is_finite()
+    {
+        node.pressure = pressure.clamp(0.0, 2.0);
     }
     if toggle_corner {
         node.corner = !node.corner;
@@ -891,15 +856,8 @@ pub fn update_vector_curve_node(
 /// Command handler for `shape.vectorCurve.insertNode` (`Ctrl + Click` on a curve segment).
 /// Projects `(x, y)` onto the closest cubic Bézier segment of `live`, inserts a new `SaiPoint`
 /// with interpolated pressure `P(t)`, and rebuilds the `Path`.
-pub fn insert_vector_curve_node_at(
-    live: &mut LiveVectorStroke,
-    x: f64,
-    y: f64,
-    max_dist_px: f64,
-) -> std::result::Result<(usize, Path), String> {
-    let idx = live
-        .insert_node_at_pos((x, y), max_dist_px)
-        .ok_or_else(|| "shape.vectorCurve.insertNode: no curve segment within hit radius".to_string())?;
+pub fn insert_vector_curve_node_at(live: &mut LiveVectorStroke, x: f64, y: f64, max_dist_px: f64) -> std::result::Result<(usize, Path), String> {
+    let idx = live.insert_node_at_pos((x, y), max_dist_px).ok_or_else(|| "shape.vectorCurve.insertNode: no curve segment within hit radius".to_string())?;
     let path = live.rebuild_path();
     Ok((idx, path))
 }
@@ -944,11 +902,7 @@ fn vector_curve_create(s: &mut Session, p: &Value) -> Result<Value> {
         };
         (fill, None)
     } else {
-        let base = ShapeStroke {
-            width: output.live_stroke.base_width as f32,
-            paint: Fill::Solid(fgc),
-            ..Default::default()
-        };
+        let base = ShapeStroke { width: output.live_stroke.base_width as f32, paint: Fill::Solid(fgc), ..Default::default() };
         let stroke = match p.get("stroke") {
             Some(v) => parse_stroke(v, Some(base), fgc).map_err(|e| bad(CMD, e))?,
             None => Some(base),
@@ -958,13 +912,7 @@ fn vector_curve_create(s: &mut Session, p: &Value) -> Result<Value> {
     vector::flatten::validate_shape(&output.path, stroke.as_ref()).map_err(|e| bad(CMD, e))?;
 
     let name = output.name;
-    let mut sh = ShapeLayer {
-        path: output.path,
-        fill,
-        stroke,
-        live: None,
-        ..Default::default()
-    };
+    let mut sh = ShapeLayer { path: output.path, fill, stroke, live: None, ..Default::default() };
 
     let live_stroke_clone = output.live_stroke.clone();
     let id = s.edit("New Vector Curve", |doc, active| {

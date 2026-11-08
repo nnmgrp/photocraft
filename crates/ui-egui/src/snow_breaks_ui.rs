@@ -64,11 +64,7 @@ pub fn split_line(line: &str, char_index: usize, hyphenate: bool) -> (String, St
     let left: String = chars[..char_index].iter().collect();
     let right: String = chars[char_index..].iter().collect();
     let word_boundary = char_index > 0 && chars[char_index - 1].is_whitespace();
-    let left = if hyphenate && !word_boundary && !left.trim_end().ends_with('-') {
-        format!("{}-", left.trim_end())
-    } else {
-        left.trim_end().to_string()
-    };
+    let left = if hyphenate && !word_boundary && !left.trim_end().ends_with('-') { format!("{}-", left.trim_end()) } else { left.trim_end().to_string() };
     (left, right.trim_start().to_string())
 }
 
@@ -114,111 +110,93 @@ pub fn show(ui: &mut egui::Ui, line: &str, next: Option<&str>) -> Option<BreakAc
     let points = line_break_points(line);
     let joinable = line.trim_end().ends_with('-') && next.is_some();
     let mut action = None;
-    egui::Frame::NONE
-        .fill(style.ui_dark)
-        .stroke(Stroke::new(1.0, style.line))
-        .corner_radius(2.0)
-        .inner_margin(Margin::symmetric(6, 3))
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(format!("{}", points.len())).color(style.muted).size(10.5).strong());
-                ui.label(egui::RichText::new("переносов").color(style.muted).size(10.5));
-                if joinable {
-                    ui.label(egui::RichText::new("· клик по − склеит").color(style.warn).size(10.5));
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let mut hint = ui.ctx().data_mut(|d| d.get_temp::<bool>(egui::Id::new(HINT_OPEN)).unwrap_or(false));
-                    if ui
-                        .add(egui::Button::new(egui::RichText::new("?").size(10.5).color(if hint { Color32::WHITE } else { style.muted })).frame(false))
-                        .clicked()
-                    {
-                        hint = !hint;
-                        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(HINT_OPEN), hint));
-                    }
-                    if hint {
-                        ui.add(
-                            egui::Label::new(
-                                egui::RichText::new("клик — дефис · Alt+клик — без дефиса · тяните маркер — двигать")
-                                    .color(style.muted)
-                                    .size(10.0),
-                            ).truncate(),
-                        );
-                    }
-                });
-            });
-            let font = FontId::proportional(13.0);
-            let galley = ui.painter().layout_no_wrap(line.to_owned(), font, style.text);
-            let width = ui.available_width().max(0.0);
-            let height = galley.size().y.max(18.0) + 4.0;
-            let (rect, response) = ui.allocate_exact_size(vec2(width, height), Sense::click_and_drag());
-            let text_rect = Rect::from_min_size(rect.min + vec2(2.0, 2.0), galley.size());
-            let painter = ui.painter().with_clip_rect(rect);
-            painter.galley(text_rect.min, galley.clone(), style.text);
-            let x_of = |index: usize| galley.pos_from_cursor(egui::text::CCursor::new(index)).left() + text_rect.min.x;
-            let pointer = response.hover_pos();
-            let join_x = join_marker_x(rect);
-            let drag_key = ui.id().with((DRAG_ID, line));
-            let mut dragging: Option<usize> = ui.ctx().data(|d| d.get_temp(drag_key));
-            if dragging.is_some()
-                && !response.drag_stopped()
-                && !ui.input(|input| input.pointer.primary_down())
-            {
-                ui.ctx().data_mut(|d| d.remove_temp::<usize>(drag_key));
-                dragging = None;
-            }
-            if response.drag_started()
-                && let Some(pos) = pointer
-            {
-                let hit = points.iter().copied().find(|point| (x_of(*point) - pos.x).abs() <= MARKER_HIT_PX);
-                if let Some(point) = hit {
-                    ui.ctx().data_mut(|d| d.insert_temp(drag_key, point));
-                }
-            }
-            let active = dragging.or_else(|| {
-                pointer.and_then(|pos| points.iter().copied().find(|point| (x_of(*point) - pos.x).abs() <= MARKER_HIT_PX))
-            });
-            if response.hovered() || dragging.is_some() {
-                for &point in &points {
-                    let hot = Some(point) == active;
-                    let color = if hot { style.blue } else { style.muted };
-                    painter.circle_filled(pos2(x_of(point), text_rect.bottom() + 1.0), if hot { 2.6 } else { 2.0 }, color);
-                }
-            }
-            // Dragging a mark: the break follows the pointer to the nearest syllable.
-            let mut release_point = None;
-            if dragging.is_some() {
-                if let Some(pos) = pointer {
-                    let cursor = galley.cursor_from_pos(pos - text_rect.min).index;
-                    let cursor: usize = cursor.into();
-                    release_point = nearest_break(&points, cursor);
-                    if let Some(point) = release_point {
-                        let x = x_of(point);
-                        painter.line_segment([pos2(x, text_rect.top()), pos2(x, text_rect.bottom())], Stroke::new(1.5, style.blue));
-                    }
-                }
-                if response.drag_stopped() {
-                    ui.ctx().data_mut(|d| d.remove_temp::<usize>(drag_key));
-                    if pointer.is_some()
-                        && let Some(point) = release_point.or(dragging)
-                    {
-                        action = Some(BreakAction::Split { char_index: point, hyphenate: true });
-                    }
-                }
-            } else if response.clicked() {
-                let alt = ui.input(|i| i.modifiers.alt);
-                if joinable && pointer.is_some_and(|pos| (pos.x - join_x).abs() <= 6.0) {
-                    action = Some(BreakAction::Merge);
-                } else if let Some(point) = active {
-                    action = Some(BreakAction::Split { char_index: point, hyphenate: !alt });
-                }
-            }
+    egui::Frame::NONE.fill(style.ui_dark).stroke(Stroke::new(1.0, style.line)).corner_radius(2.0).inner_margin(Margin::symmetric(6, 3)).show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(format!("{}", points.len())).color(style.muted).size(10.5).strong());
+            ui.label(egui::RichText::new("переносов").color(style.muted).size(10.5));
             if joinable {
-                painter.line_segment(
-                    [pos2(join_x - 3.0, text_rect.center().y), pos2(join_x + 3.0, text_rect.center().y)],
-                    Stroke::new(1.5, style.warn),
-                );
+                ui.label(egui::RichText::new("· клик по − склеит").color(style.warn).size(10.5));
             }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let mut hint = ui.ctx().data_mut(|d| d.get_temp::<bool>(egui::Id::new(HINT_OPEN)).unwrap_or(false));
+                if ui.add(egui::Button::new(egui::RichText::new("?").size(10.5).color(if hint { Color32::WHITE } else { style.muted })).frame(false)).clicked()
+                {
+                    hint = !hint;
+                    ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(HINT_OPEN), hint));
+                }
+                if hint {
+                    ui.add(
+                        egui::Label::new(egui::RichText::new("клик — дефис · Alt+клик — без дефиса · тяните маркер — двигать").color(style.muted).size(10.0))
+                            .truncate(),
+                    );
+                }
+            });
         });
+        let font = FontId::proportional(13.0);
+        let galley = ui.painter().layout_no_wrap(line.to_owned(), font, style.text);
+        let width = ui.available_width().max(0.0);
+        let height = galley.size().y.max(18.0) + 4.0;
+        let (rect, response) = ui.allocate_exact_size(vec2(width, height), Sense::click_and_drag());
+        let text_rect = Rect::from_min_size(rect.min + vec2(2.0, 2.0), galley.size());
+        let painter = ui.painter().with_clip_rect(rect);
+        painter.galley(text_rect.min, galley.clone(), style.text);
+        let x_of = |index: usize| galley.pos_from_cursor(egui::text::CCursor::new(index)).left() + text_rect.min.x;
+        let pointer = response.hover_pos();
+        let join_x = join_marker_x(rect);
+        let drag_key = ui.id().with((DRAG_ID, line));
+        let mut dragging: Option<usize> = ui.ctx().data(|d| d.get_temp(drag_key));
+        if dragging.is_some() && !response.drag_stopped() && !ui.input(|input| input.pointer.primary_down()) {
+            ui.ctx().data_mut(|d| d.remove_temp::<usize>(drag_key));
+            dragging = None;
+        }
+        if response.drag_started()
+            && let Some(pos) = pointer
+        {
+            let hit = points.iter().copied().find(|point| (x_of(*point) - pos.x).abs() <= MARKER_HIT_PX);
+            if let Some(point) = hit {
+                ui.ctx().data_mut(|d| d.insert_temp(drag_key, point));
+            }
+        }
+        let active = dragging.or_else(|| pointer.and_then(|pos| points.iter().copied().find(|point| (x_of(*point) - pos.x).abs() <= MARKER_HIT_PX)));
+        if response.hovered() || dragging.is_some() {
+            for &point in &points {
+                let hot = Some(point) == active;
+                let color = if hot { style.blue } else { style.muted };
+                painter.circle_filled(pos2(x_of(point), text_rect.bottom() + 1.0), if hot { 2.6 } else { 2.0 }, color);
+            }
+        }
+        // Dragging a mark: the break follows the pointer to the nearest syllable.
+        let mut release_point = None;
+        if dragging.is_some() {
+            if let Some(pos) = pointer {
+                let cursor = galley.cursor_from_pos(pos - text_rect.min).index;
+                let cursor: usize = cursor.into();
+                release_point = nearest_break(&points, cursor);
+                if let Some(point) = release_point {
+                    let x = x_of(point);
+                    painter.line_segment([pos2(x, text_rect.top()), pos2(x, text_rect.bottom())], Stroke::new(1.5, style.blue));
+                }
+            }
+            if response.drag_stopped() {
+                ui.ctx().data_mut(|d| d.remove_temp::<usize>(drag_key));
+                if pointer.is_some()
+                    && let Some(point) = release_point.or(dragging)
+                {
+                    action = Some(BreakAction::Split { char_index: point, hyphenate: true });
+                }
+            }
+        } else if response.clicked() {
+            let alt = ui.input(|i| i.modifiers.alt);
+            if joinable && pointer.is_some_and(|pos| (pos.x - join_x).abs() <= 6.0) {
+                action = Some(BreakAction::Merge);
+            } else if let Some(point) = active {
+                action = Some(BreakAction::Split { char_index: point, hyphenate: !alt });
+            }
+        }
+        if joinable {
+            painter.line_segment([pos2(join_x - 3.0, text_rect.center().y), pos2(join_x + 3.0, text_rect.center().y)], Stroke::new(1.5, style.warn));
+        }
+    });
     action
 }
 

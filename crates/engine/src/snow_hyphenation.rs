@@ -67,7 +67,6 @@ fn is_apostrophe(c: char) -> bool {
     c == '\'' || c == '\u{2019}'
 }
 
-
 /// Lowercases the text and splits it into Latin words (apostrophes stay inside a word).
 fn latin_words(text: &str) -> Vec<String> {
     let lower = text.to_lowercase().replace('\u{2019}', "'");
@@ -158,8 +157,8 @@ fn is_russian_post_sign(c: char) -> bool {
 
 /// Consonant clusters that may open a Russian/Ukrainian syllable as a whole.
 const RU_ONSETS: [&str; 30] = [
-    "бл", "бр", "вл", "вр", "гл", "гн", "гр", "др", "зл", "зн", "кл", "кн", "кр", "мн", "пл", "пр", "ск", "сл", "см", "сн", "сп", "ст",
-    "св", "тв", "тр", "фл", "фр", "хл", "хр", "шк",
+    "бл", "бр", "вл", "вр", "гл", "гн", "гр", "др", "зл", "зн", "кл", "кн", "кр", "мн", "пл", "пр", "ск", "сл", "см", "сн", "сп", "ст", "св", "тв", "тр", "фл",
+    "фр", "хл", "хр", "шк",
 ];
 
 const RU_ONSETS_3: [&str; 6] = ["стр", "спр", "скр", "взр", "сбл", "здр"];
@@ -169,11 +168,7 @@ fn is_onset(cluster: &[char]) -> bool {
         return false;
     }
     let text: String = cluster.iter().map(|c| lower_char(*c)).collect();
-    if cluster.len() == 2 {
-        RU_ONSETS.contains(&text.as_str())
-    } else {
-        RU_ONSETS_3.contains(&text.as_str())
-    }
+    if cluster.len() == 2 { RU_ONSETS.contains(&text.as_str()) } else { RU_ONSETS_3.contains(&text.as_str()) }
 }
 
 /// Russian/Ukrainian syllabification: a single consonant between vowels opens the next syllable
@@ -213,8 +208,8 @@ fn syllabic_ru(body: &[char], lang: &str) -> Vec<usize> {
 
 /// French consonant clusters that legally open a syllable.
 const FRENCH_ONSETS: [&str; 26] = [
-    "bl", "br", "ch", "cl", "cr", "dr", "fl", "fr", "gl", "gn", "gr", "kl", "kr", "ph", "pl", "pr", "rh", "th", "tr", "vr", "chl", "chr",
-    "phl", "phr", "thr", "gn",
+    "bl", "br", "ch", "cl", "cr", "dr", "fl", "fr", "gl", "gn", "gr", "kl", "kr", "ph", "pl", "pr", "rh", "th", "tr", "vr", "chl", "chr", "phl", "phr", "thr",
+    "gn",
 ];
 
 const FRENCH_VOWELS: &str = "aeiouyàâäéèêëîïôöùûüœ";
@@ -225,9 +220,7 @@ fn is_french_vowel(c: char) -> bool {
 
 fn is_french_letter(c: char) -> bool {
     let lower = lower_char(c);
-    lower.is_ascii_alphabetic()
-        || FRENCH_VOWELS.contains(lower)
-        || matches!(lower, 'ç' | 'ñ')
+    lower.is_ascii_alphabetic() || FRENCH_VOWELS.contains(lower) || matches!(lower, 'ç' | 'ñ')
 }
 
 fn is_french_consonant(c: char) -> bool {
@@ -365,11 +358,8 @@ pub fn hyphen_break_points(word: &str, lang: &'static str) -> Vec<usize> {
         "fr" => syllabic_fr(&body),
         _ => generic_latin(&body, lang),
     };
-    let mut out: Vec<usize> = points
-        .into_iter()
-        .map(|index| index + lead)
-        .filter(|index| *index >= 2 && chars.len().saturating_sub(*index) >= 2 && *index < chars.len())
-        .collect();
+    let mut out: Vec<usize> =
+        points.into_iter().map(|index| index + lead).filter(|index| *index >= 2 && chars.len().saturating_sub(*index) >= 2 && *index < chars.len()).collect();
     out.sort_unstable();
     out.dedup();
     out
@@ -445,13 +435,7 @@ mod tests {
 
     #[test]
     fn russian_post_signs_stay_with_the_preceding_syllable() {
-        for (word, expected) in [
-            ("письмо", 4),
-            ("мальчик", 4),
-            ("подъезд", 4),
-            ("война", 3),
-            ("объявление", 3),
-        ] {
+        for (word, expected) in [("письмо", 4), ("мальчик", 4), ("подъезд", 4), ("война", 3), ("объявление", 3)] {
             let points = hyphen_break_points(word, "ru");
             assert!(points.contains(&expected), "{word}: {points:?}");
             let chars: Vec<char> = word.chars().collect();
@@ -464,10 +448,7 @@ mod tests {
         for word in ["зв'язок", "комп'ютер", "п'ятниця", "м'ясо"] {
             assert!(!hyphen_break_points(word, "uk").is_empty(), "{word}");
         }
-        assert!(
-            hyphen_break_points("сім'я", "uk").is_empty(),
-            "do not strand its one-letter final syllable"
-        );
+        assert!(hyphen_break_points("сім'я", "uk").is_empty(), "do not strand its one-letter final syllable");
     }
 
     #[test]

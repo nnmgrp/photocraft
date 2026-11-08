@@ -540,22 +540,21 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> bool {
     paint_edge_snap_preview(ui, &t, output.group_drag.is_some(), tools_w);
     if let Some(panel) = output.group_drag.as_ref()
         && let Some(pointer) = ui.ctx().pointer_interact_pos()
+        && detect_edge_zone(ui.ctx(), pointer, tools_w).is_none()
     {
-        if detect_edge_zone(ui.ctx(), pointer, tools_w).is_none() {
-            let members = group_members(&layout, panel);
-            let eligible: Vec<_> = targets.iter().filter(|target| !members.contains(&target.anchor)).cloned().collect();
-            if let Some(proposal) = craft_ui::docking::resolve_drop(panel, pointer, &eligible) {
-                ui.painter().rect_stroke(proposal.preview, 0.0, egui::Stroke::new(2.0, t.accent), egui::StrokeKind::Inside);
-            }
+        let members = group_members(&layout, panel);
+        let eligible: Vec<_> = targets.iter().filter(|target| !members.contains(&target.anchor)).cloned().collect();
+        if let Some(proposal) = craft_ui::docking::resolve_drop(panel, pointer, &eligible) {
+            ui.painter().rect_stroke(proposal.preview, 0.0, egui::Stroke::new(2.0, t.accent), egui::StrokeKind::Inside);
         }
     }
-    if let Some((panel, pointer)) = output.group_drop {
-        if !handle_dock_drop(app, ui.ctx(), panel.clone(), pointer, tools_w) {
-            let members = group_members(&layout, &panel);
-            let eligible: Vec<_> = targets.iter().filter(|target| !members.contains(&target.anchor)).cloned().collect();
-            if let Some(proposal) = craft_ui::docking::resolve_drop(&panel, pointer, &eligible) {
-                commands.push(("window.panel.group", json!({"panel":panel,"operation":"move","anchor":proposal.anchor,"placement":proposal.placement})));
-            }
+    if let Some((panel, pointer)) = output.group_drop
+        && !handle_dock_drop(app, ui.ctx(), panel.clone(), pointer, tools_w)
+    {
+        let members = group_members(&layout, &panel);
+        let eligible: Vec<_> = targets.iter().filter(|target| !members.contains(&target.anchor)).cloned().collect();
+        if let Some(proposal) = craft_ui::docking::resolve_drop(&panel, pointer, &eligible) {
+            commands.push(("window.panel.group", json!({"panel":panel,"operation":"move","anchor":proposal.anchor,"placement":proposal.placement})));
         }
     }
     for action in output.actions {
@@ -889,14 +888,14 @@ pub(crate) fn compact_floating_rect(panel: &str, rect: [f32; 4]) -> [f32; 4] {
     };
     let compact_w = if panel == "typesetter" || panel == "pages" {
         w.clamp(270.0, 520.0)
-    } else if w > 420.0 || w < 200.0 {
+    } else if !(200.0..=420.0).contains(&w) {
         300.0
     } else {
         w
     };
     let compact_h = if panel == "typesetter" || panel == "pages" {
-        if h > 540.0 || h < 200.0 { default_h } else { h.clamp(320.0, 540.0) }
-    } else if h > 520.0 || h < 140.0 {
+        if !(200.0..=540.0).contains(&h) { default_h } else { h.clamp(320.0, 540.0) }
+    } else if !(140.0..=520.0).contains(&h) {
         default_h
     } else {
         h.min(480.0)
@@ -998,7 +997,7 @@ fn allow_split_in_side_dock(layout: &craft_ui::docking::Layout<String>, panel: &
 }
 
 pub(crate) fn toggle_split_left_dock(app: &mut PhotocraftApp) {
-    let is_already_split = app.ui.docking_left.as_ref().map_or(false, |l| l.root.as_ref().map_or(false, |r| count_dock_panes(r) > 1));
+    let is_already_split = app.ui.docking_left.as_ref().is_some_and(|l| l.root.as_ref().is_some_and(|r| count_dock_panes(r) > 1));
 
     if is_already_split {
         remove_panel_from_all_docks(app, "pages");
@@ -1091,27 +1090,27 @@ pub(crate) fn show_side_dock(app: &mut PhotocraftApp, ui: &mut egui::Ui, layout:
 
     if let Some(panel) = output.group_drag.as_ref()
         && let Some(pointer) = ui.ctx().pointer_interact_pos()
+        && detect_edge_zone(ui.ctx(), pointer, tools_w).is_none()
     {
-        if detect_edge_zone(ui.ctx(), pointer, tools_w).is_none() {
-            let members = group_members(layout, panel);
-            let eligible: Vec<_> = targets.iter().filter(|target| !members.contains(&target.anchor)).cloned().collect();
-            if let Some(proposal) = craft_ui::docking::resolve_drop(panel, pointer, &eligible) {
-                let preview = match proposal.placement {
-                    Placement::Split(zone) if zone != Zone::Center && !allow_split_in_side_dock(layout, panel, side) => {
-                        eligible.iter().find(|t| t.anchor == proposal.anchor).map(|t| t.rect).unwrap_or(proposal.preview)
-                    }
-                    _ => proposal.preview,
-                };
-                ui.painter().rect_stroke(preview, 0.0, egui::Stroke::new(2.0, t.accent), egui::StrokeKind::Inside);
-            }
+        let members = group_members(layout, panel);
+        let eligible: Vec<_> = targets.iter().filter(|target| !members.contains(&target.anchor)).cloned().collect();
+        if let Some(proposal) = craft_ui::docking::resolve_drop(panel, pointer, &eligible) {
+            let preview = match proposal.placement {
+                Placement::Split(zone) if zone != Zone::Center && !allow_split_in_side_dock(layout, panel, side) => {
+                    eligible.iter().find(|t| t.anchor == proposal.anchor).map(|t| t.rect).unwrap_or(proposal.preview)
+                }
+                _ => proposal.preview,
+            };
+            ui.painter().rect_stroke(preview, 0.0, egui::Stroke::new(2.0, t.accent), egui::StrokeKind::Inside);
         }
     }
 
     for mut action in output.actions {
-        if let Action::Move { ref panel, ref mut placement, .. } = action {
-            if matches!(placement, Placement::Split(zone) if *zone != Zone::Center) && !allow_split_in_side_dock(layout, panel, side) {
-                *placement = Placement::Tab { before: None };
-            }
+        if let Action::Move { ref panel, ref mut placement, .. } = action
+            && matches!(placement, Placement::Split(zone) if *zone != Zone::Center)
+            && !allow_split_in_side_dock(layout, panel, side)
+        {
+            *placement = Placement::Tab { before: None };
         }
         match action {
             Action::Float { ref panel, rect } => {
@@ -1139,23 +1138,23 @@ pub(crate) fn show_side_dock(app: &mut PhotocraftApp, ui: &mut egui::Ui, layout:
         }
     }
 
-    if let Some((panel, pointer)) = output.group_drop {
-        if !handle_dock_drop(app, ui.ctx(), panel.clone(), pointer, tools_w) {
-            let members = group_members(layout, &panel);
-            let eligible: Vec<_> = targets.iter().filter(|target| !members.contains(&target.anchor)).cloned().collect();
-            if let Some(proposal) = craft_ui::docking::resolve_drop(&panel, pointer, &eligible) {
-                let placement = match proposal.placement {
-                    Placement::Split(zone) if zone != Zone::Center && !allow_split_in_side_dock(layout, &panel, side) => Placement::Tab { before: None },
-                    other => other,
-                };
-                let target_layout = match side {
-                    DockSide::Left => &mut app.ui.docking_left,
-                    DockSide::Bottom => &mut app.ui.docking_bottom,
-                    DockSide::Right => &mut app.ui.docking,
-                };
-                if let Some(l) = target_layout.as_mut() {
-                    let _ = l.apply(craft_ui::docking::Action::Move { panel, anchor: proposal.anchor, placement });
-                }
+    if let Some((panel, pointer)) = output.group_drop
+        && !handle_dock_drop(app, ui.ctx(), panel.clone(), pointer, tools_w)
+    {
+        let members = group_members(layout, &panel);
+        let eligible: Vec<_> = targets.iter().filter(|target| !members.contains(&target.anchor)).cloned().collect();
+        if let Some(proposal) = craft_ui::docking::resolve_drop(&panel, pointer, &eligible) {
+            let placement = match proposal.placement {
+                Placement::Split(zone) if zone != Zone::Center && !allow_split_in_side_dock(layout, &panel, side) => Placement::Tab { before: None },
+                other => other,
+            };
+            let target_layout = match side {
+                DockSide::Left => &mut app.ui.docking_left,
+                DockSide::Bottom => &mut app.ui.docking_bottom,
+                DockSide::Right => &mut app.ui.docking,
+            };
+            if let Some(l) = target_layout.as_mut() {
+                let _ = l.apply(craft_ui::docking::Action::Move { panel, anchor: proposal.anchor, placement });
             }
         }
     }

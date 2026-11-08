@@ -5180,7 +5180,6 @@ dependencies = [
  "epaint_default_fonts",
  "flate2",
  "log",
- "photocraft-ai",
  "photocraft-algo",
  "photocraft-cms",
  "photocraft-codecs",
@@ -5209,6 +5208,7 @@ dependencies = [
  "tempfile",
  "toml",
  "unicode-bidi",
+ "uuid",
  "winsafe",
  "xcap",
 ]

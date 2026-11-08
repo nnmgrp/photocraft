@@ -645,8 +645,8 @@ pub fn screentone(src: &Image, out: Rect, ctx: &Ctx, spec: &ScreentoneSpec) -> V
     let max_sp = spacing_x.max(spacing_y).clamp(1.0, 256.0);
     let reach = (max_sp * 1.5).ceil() as i32 + 16;
     let work_rect = if use_shading { out.inflate(reach).intersect(&src.rect) } else { Rect::new(0, 0, 0, 0) };
-    let ww = work_rect.width().max(0) as usize;
-    let wh = work_rect.height().max(0) as usize;
+    let ww = work_rect.width() as usize;
+    let wh = work_rect.height() as usize;
 
     let mut luma_grid = Vec::new();
     let mut line_edge_grid = Vec::new();

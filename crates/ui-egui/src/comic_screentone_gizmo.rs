@@ -409,13 +409,13 @@ pub(crate) fn refresh_preview(app: &mut PhotocraftApp, ctx: &egui::Context, xf: 
     // fresh creation) would render in the document's, so the preview prefers the layer's.
     let fmt = target.and_then(|id| st.doc.layer(id)).and_then(|l| l.surface()).map(|s| s.format()).unwrap_or_else(|| st.doc.pixel_format());
     let key = format!(
-        "{}|{}|{:?}|{}|{}|{}|{}|{}",
+        "{}|{}|{:?}|{:?}|{:?}|{:?}|{}|{}",
         st.doc.id.0,
         st.revision,
         target,
-        format!("{spec:?}"),
-        format!("{b:?}"),
-        format!("{region:?}"),
+        spec,
+        b,
+        region,
         app.session.active_index().map_or(u64::MAX, |i| i as u64),
         display_key,
     );

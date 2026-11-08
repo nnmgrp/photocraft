@@ -263,7 +263,7 @@ fn ai_remove_params(app: &PhotocraftApp) -> Value {
 /// options bar's button or Enter with the Remove tool and a selection. Nano Banana is online
 /// only: nothing on the web.
 pub fn remove_selection(app: &mut PhotocraftApp) -> bool {
-    if cfg!(target_arch = "wasm32") || !app.session.active().is_some_and(|st| st.doc.selection.is_some()) {
+    if cfg!(target_arch = "wasm32") || app.session.active().is_none_or(|st| st.doc.selection.is_none()) {
         return false;
     }
     let p = ai_remove_params(app);

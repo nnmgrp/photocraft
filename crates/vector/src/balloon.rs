@@ -46,7 +46,6 @@ fn mul(a: P, s: f64) -> P {
     (a.0 * s, a.1 * s)
 }
 
-
 fn cross(a: P, b: P) -> f64 {
     a.0 * b.1 - a.1 * b.0
 }
@@ -155,7 +154,6 @@ fn inside(p: P, poly: &[P]) -> bool {
     }
     inside
 }
-
 
 /// Proper interior crossing of two segments (endpoints and collinear overlaps are ignored; the
 /// union only needs to split where one boundary truly enters the other).
@@ -398,7 +396,6 @@ impl BalloonTail {
     }
 }
 
-
 /// Shape of one tail polygon: sampled quadratic sides bowed away from the tail's centroid.
 fn tail_contour(b0: P, b1: P, tip: P, bulge: f64) -> Vec<P> {
     let steps = 14usize;
@@ -503,10 +500,7 @@ fn tail_shapes(tail: &BalloonTail, mouth_inset: f64) -> Vec<Vec<P>> {
             let spread = dist(base[0], base[1]).max(1.0) * 0.3;
             let tip_a = add(tail.tip, mul(side, spread));
             let tip_b = sub(tail.tip, mul(side, spread));
-            vec![
-                tail_contour(base[0], lerp(base[0], base[1], 0.5), tip_a, tail.curve),
-                tail_contour(lerp(base[0], base[1], 0.5), base[1], tip_b, tail.curve),
-            ]
+            vec![tail_contour(base[0], lerp(base[0], base[1], 0.5), tip_a, tail.curve), tail_contour(lerp(base[0], base[1], 0.5), base[1], tip_b, tail.curve)]
         }
         _ => vec![tail_contour(base[0], base[1], tail.tip, tail.curve)],
     }
@@ -638,16 +632,8 @@ pub fn catmull_rom_knots(points: &[P], closed: bool, tension: f64) -> Vec<Knot> 
         return vec![Knot::corner(points[0].0, points[0].1)];
     }
     let tangent = |i: usize| -> P {
-        let prev = if i == 0 {
-            if closed { points[n - 1] } else { points[0] }
-        } else {
-            points[i - 1]
-        };
-        let next = if i + 1 >= n {
-            if closed { points[0] } else { points[n - 1] }
-        } else {
-            points[i + 1]
-        };
+        let prev = if i == 0 { if closed { points[n - 1] } else { points[0] } } else { points[i - 1] };
+        let next = if i + 1 >= n { if closed { points[0] } else { points[n - 1] } } else { points[i + 1] };
         mul(sub(next, prev), 0.5 * tension)
     };
     let mut knots = Vec::with_capacity(n);
@@ -760,13 +746,7 @@ pub fn sai_stroke(points: &[SaiPoint], closed: bool) -> Path {
     let knots = smooth
         .into_iter()
         .zip(points.iter())
-        .map(|(knot, point)| {
-            if point.corner {
-                Knot { anchor: knot.anchor, in_ctrl: knot.anchor, out_ctrl: knot.anchor, smooth: false }
-            } else {
-                knot
-            }
-        })
+        .map(|(knot, point)| if point.corner { Knot { anchor: knot.anchor, in_ctrl: knot.anchor, out_ctrl: knot.anchor, smooth: false } } else { knot })
         .collect();
     Path::new(vec![Subpath { closed, knots, op: PathOp::Combine }])
 }
@@ -801,11 +781,7 @@ pub fn tapered_outline(points: &[SaiPoint], base_width: f64, min_ratio: f64) -> 
     let mut left: Vec<P> = Vec::with_capacity(n);
     let mut right: Vec<P> = Vec::with_capacity(n);
     for i in 0..n {
-        let prev = if i == 0 {
-            pts[0]
-        } else {
-            pts[i - 1]
-        };
+        let prev = if i == 0 { pts[0] } else { pts[i - 1] };
         let next = if i + 1 >= n { pts[n - 1] } else { pts[i + 1] };
         let mut dir = norm(sub(next, prev));
         if dir == (0.0, 0.0) {
@@ -846,11 +822,7 @@ pub fn tapered_outline(points: &[SaiPoint], base_width: f64, min_ratio: f64) -> 
 /// A path for the tapered stroke (a filled outline, ready for a shape layer with no stroke).
 pub fn tapered_path(points: &[SaiPoint], base_width: f64, min_ratio: f64) -> Path {
     let outline = tapered_outline(points, base_width, min_ratio);
-    if outline.len() < 3 {
-        Path::default()
-    } else {
-        Path::new(vec![Subpath::polygon(&outline)])
-    }
+    if outline.len() < 3 { Path::default() } else { Path::new(vec![Subpath::polygon(&outline)]) }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -939,11 +911,7 @@ mod tests {
 
     #[test]
     fn sai_stroke_smooths_nodes_and_keeps_corners_sharp() {
-        let points = [
-            SaiPoint::new((0.0, 0.0)),
-            SaiPoint::new((50.0, 40.0)),
-            SaiPoint { p: (100.0, 0.0), pressure: 1.0, corner: true },
-        ];
+        let points = [SaiPoint::new((0.0, 0.0)), SaiPoint::new((50.0, 40.0)), SaiPoint { p: (100.0, 0.0), pressure: 1.0, corner: true }];
         let path = sai_stroke(&points, false);
         assert_eq!(path.subpaths.len(), 1);
         assert_eq!(path.subpaths[0].knots.len(), 3);

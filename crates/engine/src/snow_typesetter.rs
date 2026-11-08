@@ -2,17 +2,12 @@ use photocraft_doc::{Document, Rect};
 use photocraft_raster::Surface;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum MeasurementSystem {
     Metric,
+    #[default]
     Optical,
-}
-
-impl Default for MeasurementSystem {
-    fn default() -> Self {
-        Self::Optical
-    }
 }
 
 impl MeasurementSystem {
@@ -451,12 +446,11 @@ impl TypesetterState {
                 parse_color_value(c)
             } else if let Some(c) = text_style.and_then(|ts| ts.get("color")) {
                 let mut col = parse_color_value(c);
-                if let Some(ref mut col) = col {
-                    if let Some(op) = text_style.and_then(|ts| ts.get("opacity")).or_else(|| item.get("opacity")).and_then(|v| v.as_f64()) {
-                        if (0.0..=100.0).contains(&op) {
-                            col[3] = ((op / 100.0) * 255.0).round().clamp(0.0, 255.0) as u8;
-                        }
-                    }
+                if let Some(col) = &mut col
+                    && let Some(op) = text_style.and_then(|ts| ts.get("opacity")).or_else(|| item.get("opacity")).and_then(|v| v.as_f64())
+                    && (0.0..=100.0).contains(&op)
+                {
+                    col[3] = ((op / 100.0) * 255.0).round().clamp(0.0, 255.0) as u8;
                 }
                 col
             } else if let Some(c) = item.get("color") {
@@ -489,13 +483,11 @@ impl TypesetterState {
                 .and_then(|arr| arr.first())
                 .and_then(|ps| ps.get("paragraphStyle"));
 
-            let hanging_punctuation = if let Some(hr) = para_style.and_then(|ps| ps.get("hangingRoman")).and_then(|v| v.as_bool()) {
-                hr
-            } else if let Some(hp) = item.get("hangingPunctuation").or_else(|| item.get("hanging_punctuation")).and_then(|v| v.as_bool()) {
-                hp
-            } else {
-                true
-            };
+            let hanging_punctuation = para_style
+                .and_then(|ps| ps.get("hangingRoman"))
+                .and_then(|v| v.as_bool())
+                .or_else(|| item.get("hangingPunctuation").or_else(|| item.get("hanging_punctuation")).and_then(|v| v.as_bool()))
+                .unwrap_or(true);
 
             let align = para_style
                 .and_then(|ps| ps.get("alignment").or_else(|| ps.get("align")))
@@ -561,26 +553,26 @@ impl TypesetterState {
 
         let mut folder_id_counter = 1;
         for preset in &self.presets {
-            if let Some(folder) = &preset.folder {
-                if !folders_map.contains_key(folder) {
-                    let id = format!("folder_{}", folder_id_counter);
-                    folder_id_counter += 1;
-                    folders_map.insert(folder.clone(), id.clone());
-                    folders_arr.push(serde_json::json!({
-                        "id": id,
-                        "name": folder,
-                        "order": folders_arr.len()
-                    }));
-                }
+            if let Some(folder) = &preset.folder
+                && !folders_map.contains_key(folder)
+            {
+                let id = format!("folder_{}", folder_id_counter);
+                folder_id_counter += 1;
+                folders_map.insert(folder.clone(), id.clone());
+                folders_arr.push(serde_json::json!({
+                    "id": id,
+                    "name": folder,
+                    "order": folders_arr.len()
+                }));
             }
         }
 
         let mut styles_arr = Vec::new();
         for preset in &self.presets {
-            if let Some(target_f) = folder_filter {
-                if preset.folder.as_deref() != Some(target_f) {
-                    continue;
-                }
+            if let Some(target_f) = folder_filter
+                && preset.folder.as_deref() != Some(target_f)
+            {
+                continue;
             }
 
             let folder_id = preset.folder.as_ref().and_then(|f| folders_map.get(f));
@@ -707,10 +699,10 @@ impl TypesetterState {
         if self.current_line_idx + 1 < self.lines.len() {
             self.current_line_idx += 1;
             let next = self.lines.get(self.current_line_idx);
-            if self.options.auto_page_switch {
-                if let Some(nl) = next {
-                    self.current_page = nl.page;
-                }
+            if self.options.auto_page_switch
+                && let Some(nl) = next
+            {
+                self.current_page = nl.page;
             }
             next
         } else {
@@ -721,10 +713,10 @@ impl TypesetterState {
     pub fn prev_line(&mut self) {
         if self.current_line_idx > 0 {
             self.current_line_idx -= 1;
-            if self.options.auto_page_switch {
-                if let Some(line) = self.lines.get(self.current_line_idx) {
-                    self.current_page = line.page;
-                }
+            if self.options.auto_page_switch
+                && let Some(line) = self.lines.get(self.current_line_idx)
+            {
+                self.current_page = line.page;
             }
         }
     }
@@ -1407,9 +1399,12 @@ mod tests {
 
     #[test]
     fn preview_text_survives_typer_export_import() {
-        let mut state = TypesetterState::default();
-        state.presets =
-            vec![TextStylePreset { name: "TypeR Custom".into(), preview_text: "Экспортный образец".into(), ..TextStylePreset::default() }];
+        let state = TypesetterState {
+            presets: vec![TextStylePreset {
+                name: "TypeR Custom".into(), preview_text: "Экспортный образец".into(), ..TextStylePreset::default()
+            }],
+            ..Default::default()
+        };
         let exported = state.export_styles_json(None).unwrap();
         let value: serde_json::Value = serde_json::from_str(&exported).unwrap();
         assert_eq!(value["styles"][0]["preview_text"], "Экспортный образец");

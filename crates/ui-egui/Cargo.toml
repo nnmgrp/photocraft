@@ -1,4 +1,4 @@
-﻿[package]
+[package]
 name = "photocraft-ui-egui"
 version.workspace = true
 edition.workspace = true
@@ -8,7 +8,6 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-photocraft-ai = { path = "../photocraft-ai" }
 craft-print = { workspace = true }
 craft-ui = { workspace = true }
 photocraft-geom = { workspace = true }
@@ -44,12 +43,15 @@ base64 = "0.22"
 # Inflating the translation catalogs, stored deflated (build.rs); already linked through photocraft-io.
 flate2 = { workspace = true }
 rfd.workspace = true
-arboard = "3.6"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+uuid = { version = "1", features = ["js"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rayon = { workspace = true }
 # Safe native UI-language APIs (Windows/macOS); no subprocess or web dependency.
 sys-locale = "=0.3.2"
+arboard = "3.6"
 
 # Installed RAM for the GPU memory budget (`gpu_canvas::physical_memory`): the safe binding the
 # desktop app already uses, pinned to the same version.

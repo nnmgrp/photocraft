@@ -223,13 +223,13 @@ pub fn parse_page_number_from_name(filename: &str) -> Option<usize> {
 
     for (idx, ch) in lower.char_indices() {
         let is_digit = ch.is_ascii_digit();
-        if let Some(prev) = prev_is_digit {
-            if prev != is_digit {
-                if let Some(slice) = lower.get(start..idx) {
-                    tokens.push((prev, slice));
-                }
-                start = idx;
+        if let Some(prev) = prev_is_digit
+            && prev != is_digit
+        {
+            if let Some(slice) = lower.get(start..idx) {
+                tokens.push((prev, slice));
             }
+            start = idx;
         }
         prev_is_digit = Some(is_digit);
     }
@@ -246,17 +246,15 @@ pub fn parse_page_number_from_name(filename: &str) -> Option<usize> {
             continue;
         }
 
-        if i > 0 {
-            if let Some(&(_, prefix_raw)) = tokens.get(i.saturating_sub(1)) {
-                let prefix = prefix_raw.trim_matches(|c: char| !c.is_alphabetic());
-                let is_page_marker =
-                    matches!(prefix, "p" | "pg" | "page" | "pages" | "стр") || prefix.ends_with("_p") || prefix.ends_with("-p") || prefix.ends_with("page");
+        if i > 0
+            && let Some(&(_, prefix_raw)) = tokens.get(i.saturating_sub(1))
+        {
+            let prefix = prefix_raw.trim_matches(|c: char| !c.is_alphabetic());
+            let is_page_marker =
+                matches!(prefix, "p" | "pg" | "page" | "pages" | "стр") || prefix.ends_with("_p") || prefix.ends_with("-p") || prefix.ends_with("page");
 
-                if is_page_marker {
-                    if let Ok(page_num) = num_str.parse::<usize>() {
-                        return Some(page_num);
-                    }
-                }
+            if is_page_marker && let Ok(page_num) = num_str.parse::<usize>() {
+                return Some(page_num);
             }
         }
     }
@@ -283,10 +281,8 @@ pub fn parse_page_number_from_name(filename: &str) -> Option<usize> {
             false
         };
 
-        if !is_chapter_or_volume {
-            if let Ok(num) = num_str.parse::<usize>() {
-                candidate_numbers.push(num);
-            }
+        if !is_chapter_or_volume && let Ok(num) = num_str.parse::<usize>() {
+            candidate_numbers.push(num);
         }
     }
 
@@ -623,12 +619,11 @@ impl PagesPanelState {
             return true;
         }
 
-        if let Some(path) = &item.path {
-            if let Some(fname) = path.file_name().and_then(|n| n.to_str()) {
-                if fname.to_lowercase().contains(&query) {
-                    return true;
-                }
-            }
+        if let Some(path) = &item.path
+            && let Some(fname) = path.file_name().and_then(|n| n.to_str())
+            && fname.to_lowercase().contains(&query)
+        {
+            return true;
         }
 
         false
@@ -709,10 +704,8 @@ impl PagesPanelState {
                     action = Some(PagesPanelAction::ClosePage(item.doc_index));
                 }
 
-                if item.can_quick_save {
-                    if ui.small_button("💾").on_hover_text("Сохранить страницу в её файл").clicked() {
-                        action = Some(PagesPanelAction::SavePage(item.doc_index));
-                    }
+                if item.can_quick_save && ui.small_button("💾").on_hover_text("Сохранить страницу в её файл").clicked() {
+                    action = Some(PagesPanelAction::SavePage(item.doc_index));
                 }
 
                 if item.doc_index + 1 < total_session_docs && ui.small_button("↓").on_hover_text("Переместить страницу ниже").clicked()
@@ -842,10 +835,8 @@ impl PagesPanelState {
                     action = Some(PagesPanelAction::ClosePage(item.doc_index));
                 }
 
-                if item.can_quick_save {
-                    if ui.small_button("💾").on_hover_text("Сохранить страницу в её файл").clicked() {
-                        action = Some(PagesPanelAction::SavePage(item.doc_index));
-                    }
+                if item.can_quick_save && ui.small_button("💾").on_hover_text("Сохранить страницу в её файл").clicked() {
+                    action = Some(PagesPanelAction::SavePage(item.doc_index));
                 }
             });
         });
@@ -1043,24 +1034,23 @@ impl PagesPanelState {
             }
         }
 
-        if let Some(from_idx) = self.dragged_doc_index {
-            if from_idx != doc_index {
-                let pointer_pos = ui.input(|i| i.pointer.interact_pos());
-                if let Some(pos) = pointer_pos {
-                    if rect.contains(pos) {
-                        self.drop_target_doc_index = Some(doc_index);
+        if let Some(from_idx) = self.dragged_doc_index
+            && from_idx != doc_index
+        {
+            let pointer_pos = ui.input(|i| i.pointer.interact_pos());
+            if let Some(pos) = pointer_pos
+                && rect.contains(pos)
+            {
+                self.drop_target_doc_index = Some(doc_index);
 
-                        // Рисуем линию индикации места вставки
-                        let line_y = if from_idx < doc_index { rect.max.y } else { rect.min.y };
-                        ui.painter()
-                            .line_segment([Pos2::new(rect.min.x, line_y), Pos2::new(rect.max.x, line_y)], Stroke::new(2.5, Color32::from_rgb(63, 185, 80)));
+                // Рисуем линию индикации места вставки
+                let line_y = if from_idx < doc_index { rect.max.y } else { rect.min.y };
+                ui.painter().line_segment([Pos2::new(rect.min.x, line_y), Pos2::new(rect.max.x, line_y)], Stroke::new(2.5, Color32::from_rgb(63, 185, 80)));
 
-                        if ui.input(|i| i.pointer.any_released()) {
-                            self.dragged_doc_index = None;
-                            self.drop_target_doc_index = None;
-                            return Some(PagesPanelAction::ReorderPages { from_idx, to_idx: doc_index });
-                        }
-                    }
+                if ui.input(|i| i.pointer.any_released()) {
+                    self.dragged_doc_index = None;
+                    self.drop_target_doc_index = None;
+                    return Some(PagesPanelAction::ReorderPages { from_idx, to_idx: doc_index });
                 }
             }
         }
@@ -1107,11 +1097,9 @@ impl PagesPanelState {
 
         ui.separator();
 
-        if item.can_quick_save {
-            if ui.button("💾 Сохранить страницу").clicked() {
-                action = Some(PagesPanelAction::SavePage(item.doc_index));
-                ui.close();
-            }
+        if item.can_quick_save && ui.button("💾 Сохранить страницу").clicked() {
+            action = Some(PagesPanelAction::SavePage(item.doc_index));
+            ui.close();
         }
 
         if ui.button(RichText::new("✖ Закрыть страницу").color(Color32::from_rgb(240, 90, 90))).clicked() {

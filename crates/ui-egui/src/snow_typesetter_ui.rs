@@ -9,18 +9,13 @@ use serde::{Deserialize, Serialize};
 use crate::theme::Tokens;
 use crate::widgets;
 
-#[derive(PartialEq, Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(PartialEq, Clone, Copy, Debug, Serialize, Deserialize, Default)]
 pub enum TypesetterDockMode {
+    #[default]
     Floating,
     DockRight,
     DockLeft,
     DockBottom,
-}
-
-impl Default for TypesetterDockMode {
-    fn default() -> Self {
-        Self::Floating
-    }
 }
 
 #[derive(PartialEq, Clone, Copy, Debug, Serialize, Deserialize)]
@@ -96,12 +91,12 @@ pub fn typesetter_storage_path() -> Option<std::path::PathBuf> {
         return Some(std::path::PathBuf::from(dir).join("typesetter_state.json"));
     }
     // Portable mode: check next to executable or portable.txt
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(parent) = exe.parent() {
-            let local = parent.join("typesetter_state.json");
-            if local.exists() || parent.join("portable.txt").exists() {
-                return Some(local);
-            }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(parent) = exe.parent()
+    {
+        let local = parent.join("typesetter_state.json");
+        if local.exists() || parent.join("portable.txt").exists() {
+            return Some(local);
         }
     }
     let cwd_local = std::path::PathBuf::from("typesetter_state.json");
@@ -231,6 +226,16 @@ fn draw_dashed_hline(painter: &egui::Painter, x_start: f32, x_end: f32, y: f32, 
         painter.line_segment([egui::pos2(x, y), egui::pos2(x2, y)], stroke);
         x += dash_len + gap_len;
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn get_system_clipboard_text() -> Option<String> {
+    arboard::Clipboard::new().ok().and_then(|mut cb| cb.get_text().ok())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn get_system_clipboard_text() -> Option<String> {
+    None
 }
 
 impl TypesetterUi {
@@ -368,7 +373,7 @@ impl TypesetterUi {
 
     /// Вставить сценарий напрямую из буфера обмена.
     pub fn paste_script_from_clipboard(&mut self) {
-        let text_opt = arboard::Clipboard::new().ok().and_then(|mut cb| cb.get_text().ok());
+        let text_opt = get_system_clipboard_text();
         if let Some(text) = text_opt {
             let trimmed = text.trim();
             if !trimmed.is_empty() {
@@ -399,6 +404,7 @@ impl TypesetterUi {
 
     /// Диалог выбора .txt файла сценария.
     pub fn open_script_file_dialog(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
         if let Some(path) = rfd::FileDialog::new().add_filter("Текстовые файлы (*.txt)", &["txt"]).set_title("Выберите файл сценария").pick_file()
         {
             match std::fs::read_to_string(&path) {
@@ -451,45 +457,43 @@ impl TypesetterUi {
 
     /// Автоматическая загрузка сохраненных пресетов и состояния.
     pub fn auto_load(&mut self) {
-        if let Some(path) = typesetter_storage_path() {
-            if path.exists() {
-                if let Ok(content) = std::fs::read_to_string(&path) {
-                    if let Ok(data) = serde_json::from_str::<TypesetterPersistedState>(&content) {
-                        self.dock_mode = data.dock_mode;
-                        self.state = data.state;
-                        self.selected_folder = data.selected_folder;
-                        if !data.favorite_fonts.is_empty() {
-                            self.favorite_fonts = data.favorite_fonts;
-                        }
-                        self.custom_storage_dir = data.custom_storage_dir;
-                        self.is_open = data.is_open;
-                        self.script_list_height = data.script_list_height;
-                        self.sync_script_buffer_from_state();
-                    } else if let Ok(count) = self.state.import_styles_json(&content) {
-                        if count > 0 {
-                            return;
-                        }
-                    }
+        if let Some(path) = typesetter_storage_path()
+            && path.exists()
+            && let Ok(content) = std::fs::read_to_string(&path)
+        {
+            if let Ok(data) = serde_json::from_str::<TypesetterPersistedState>(&content) {
+                self.dock_mode = data.dock_mode;
+                self.state = data.state;
+                self.selected_folder = data.selected_folder;
+                if !data.favorite_fonts.is_empty() {
+                    self.favorite_fonts = data.favorite_fonts;
                 }
+                self.custom_storage_dir = data.custom_storage_dir;
+                self.is_open = data.is_open;
+                self.script_list_height = data.script_list_height;
+                self.sync_script_buffer_from_state();
+            } else if let Ok(count) = self.state.import_styles_json(&content)
+                && count > 0
+            {
+                return;
             }
         }
 
         if let Some(custom_dir) = &self.custom_storage_dir {
             let custom_path = custom_dir.join("typesetter_state.json");
-            if custom_path.exists() {
-                if let Ok(content) = std::fs::read_to_string(&custom_path) {
-                    if let Ok(data) = serde_json::from_str::<TypesetterPersistedState>(&content) {
-                        self.dock_mode = data.dock_mode;
-                        self.state = data.state;
-                        self.selected_folder = data.selected_folder;
-                        if !data.favorite_fonts.is_empty() {
-                            self.favorite_fonts = data.favorite_fonts;
-                        }
-                        self.is_open = data.is_open;
-                        if !self.state.presets.is_empty() {
-                            return;
-                        }
-                    }
+            if custom_path.exists()
+                && let Ok(content) = std::fs::read_to_string(&custom_path)
+                && let Ok(data) = serde_json::from_str::<TypesetterPersistedState>(&content)
+            {
+                self.dock_mode = data.dock_mode;
+                self.state = data.state;
+                self.selected_folder = data.selected_folder;
+                if !data.favorite_fonts.is_empty() {
+                    self.favorite_fonts = data.favorite_fonts;
+                }
+                self.is_open = data.is_open;
+                if !self.state.presets.is_empty() {
+                    return;
                 }
             }
         }
@@ -498,15 +502,13 @@ impl TypesetterUi {
         let export_candidates =
             [std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.join("TypeR_Export.json"))), Some(std::path::PathBuf::from("TypeR_Export.json"))];
         for cand in export_candidates.into_iter().flatten() {
-            if cand.exists() {
-                if let Ok(content) = std::fs::read_to_string(&cand) {
-                    if let Ok(count) = self.state.import_styles_json(&content) {
-                        if count > 0 {
-                            self.auto_save();
-                            break;
-                        }
-                    }
-                }
+            if cand.exists()
+                && let Ok(content) = std::fs::read_to_string(&cand)
+                && let Ok(count) = self.state.import_styles_json(&content)
+                && count > 0
+            {
+                self.auto_save();
+                break;
             }
         }
     }
@@ -609,12 +611,11 @@ impl TypesetterUi {
 
             if !window_open {
                 let pending = ctx.data_mut(|d| d.remove_temp::<PreviewEdit>(egui::Id::new("typesetter-preview-edit")));
-                if let Some(pending) = pending {
-                    if pending.idx == edit_idx {
-                        if let Some(preset) = self.state.presets.get_mut(edit_idx) {
-                            commit_preview_edit(preset, &pending.buffer, &pending.original);
-                        }
-                    }
+                if let Some(pending) = pending
+                    && pending.idx == edit_idx
+                    && let Some(preset) = self.state.presets.get_mut(edit_idx)
+                {
+                    commit_preview_edit(preset, &pending.buffer, &pending.original);
                 }
                 close_modal = true;
             }
@@ -717,13 +718,11 @@ impl TypesetterUi {
                         self.open_script_file_dialog();
                     }
 
-                    if !self.state.lines.is_empty() {
-                        if ui.button(tl!("Clear script")).clicked() {
-                            ui.close();
-                            self.state.lines.clear();
-                            self.state.current_line_idx = 0;
-                            self.auto_save();
-                        }
+                    if !self.state.lines.is_empty() && ui.button(tl!("Clear script")).clicked() {
+                        ui.close();
+                        self.state.lines.clear();
+                        self.state.current_line_idx = 0;
+                        self.auto_save();
                     }
 
                     ui.separator();
@@ -731,6 +730,7 @@ impl TypesetterUi {
 
                     if ui.button(tl!("Import TypeR JSON…")).clicked() {
                         ui.close();
+                        #[cfg(not(target_arch = "wasm32"))]
                         if let Some(path) =
                             rfd::FileDialog::new().add_filter("TypeR JSON (*.json)", &["json"]).set_title(tl!("Choose TypeR styles file")).pick_file()
                         {
@@ -756,6 +756,7 @@ impl TypesetterUi {
 
                     if ui.button(tl!("Export TypeR JSON…")).clicked() {
                         ui.close();
+                        #[cfg(not(target_arch = "wasm32"))]
                         if let Some(path) =
                             rfd::FileDialog::new().add_filter("TypeR JSON (*.json)", &["json"]).set_title(tl!("Export TypeR styles")).save_file()
                         {
@@ -853,15 +854,14 @@ impl TypesetterUi {
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         let insert_btn = egui::Button::new(RichText::new("▶").color(t.accent_text).strong()).fill(t.accent).min_size(vec2(26.0, 18.0));
 
-                        if ui.add(insert_btn).on_hover_text(tl!("Insert current line into selection/bubble (Enter)")).clicked() {
-                            if let Some(line) = self.state.active_line() {
-                                if let Some(preset) = self.state.active_preset().cloned() {
-                                    *action = Some(TypesetterAction { text: line.text.clone(), preset });
-                                    self.state.advance_line();
-                                    self.scroll_to_active_line = true;
-                                    self.auto_save();
-                                }
-                            }
+                        if ui.add(insert_btn).on_hover_text(tl!("Insert current line into selection/bubble (Enter)")).clicked()
+                            && let Some(line) = self.state.active_line()
+                            && let Some(preset) = self.state.active_preset().cloned()
+                        {
+                            *action = Some(TypesetterAction { text: line.text.clone(), preset });
+                            self.state.advance_line();
+                            self.scroll_to_active_line = true;
+                            self.auto_save();
                         }
                     });
                 });
@@ -1021,15 +1021,14 @@ impl TypesetterUi {
                 let insert_btn = egui::Button::new(RichText::new("▶ Вставить (Enter)").color(t.accent_text).strong())
                     .fill(t.accent)
                     .min_size(vec2(ui.available_width(), 24.0));
-                if ui.add(insert_btn).clicked() {
-                    if let Some(line) = self.state.active_line() {
-                        if let Some(preset) = self.state.active_preset().cloned() {
-                            *action = Some(TypesetterAction { text: line.text.clone(), preset });
-                            self.state.advance_line();
-                            self.scroll_to_active_line = true;
-                            self.auto_save();
-                        }
-                    }
+                if ui.add(insert_btn).clicked()
+                    && let Some(line) = self.state.active_line()
+                    && let Some(preset) = self.state.active_preset().cloned()
+                {
+                    *action = Some(TypesetterAction { text: line.text.clone(), preset });
+                    self.state.advance_line();
+                    self.scroll_to_active_line = true;
+                    self.auto_save();
                 }
             });
 
@@ -1339,15 +1338,14 @@ impl TypesetterUi {
                 self.scroll_to_active_line = true;
             }
 
-            if let Some(act_idx) = clicked_action_line {
-                if let Some(line) = self.state.lines.get(act_idx) {
-                    if let Some(preset) = self.state.active_preset().cloned() {
-                        *action = Some(TypesetterAction { text: line.text.clone(), preset });
-                        self.state.set_current_line(act_idx);
-                        self.state.advance_line();
-                        self.auto_save();
-                    }
-                }
+            if let Some(act_idx) = clicked_action_line
+                && let Some(line) = self.state.lines.get(act_idx)
+                && let Some(preset) = self.state.active_preset().cloned()
+            {
+                *action = Some(TypesetterAction { text: line.text.clone(), preset });
+                self.state.set_current_line(act_idx);
+                self.state.advance_line();
+                self.auto_save();
             }
 
             // 3. Отслеживание курсора: при клике или переходе по стрелкам обновляем активную строку
@@ -1578,24 +1576,24 @@ impl TypesetterUi {
             self.auto_save();
         }
 
-        if let Some(idx) = style_to_delete {
-            if idx < self.state.presets.len() {
-                self.state.presets.remove(idx);
-                if self.state.selected_preset_idx >= self.state.presets.len() {
-                    self.state.selected_preset_idx = self.state.presets.len().saturating_sub(1);
-                }
-                self.auto_save();
+        if let Some(idx) = style_to_delete
+            && idx < self.state.presets.len()
+        {
+            self.state.presets.remove(idx);
+            if self.state.selected_preset_idx >= self.state.presets.len() {
+                self.state.selected_preset_idx = self.state.presets.len().saturating_sub(1);
             }
+            self.auto_save();
         }
 
         if let Some(idx) = style_to_apply {
             self.state.selected_preset_idx = idx;
-            if let Some(line) = self.state.active_line() {
-                if let Some(preset) = self.state.presets.get(idx).cloned() {
-                    *action = Some(TypesetterAction { text: line.text.clone(), preset });
-                    self.state.advance_line();
-                    self.scroll_to_active_line = true;
-                }
+            if let Some(line) = self.state.active_line()
+                && let Some(preset) = self.state.presets.get(idx).cloned()
+            {
+                *action = Some(TypesetterAction { text: line.text.clone(), preset });
+                self.state.advance_line();
+                self.scroll_to_active_line = true;
             }
             self.auto_save();
         }
@@ -1644,22 +1642,20 @@ impl TypesetterUi {
 
         // Панель управления текстом
         ui.horizontal(|ui| {
-            if ui.small_button("◀").on_hover_text(tl!("Previous page")).clicked() {
-                if let Some(pos) = pages.iter().position(|&p| p == current_page) {
-                    if pos > 0 {
-                        self.state.current_page = pages[pos - 1];
-                    }
-                }
+            if ui.small_button("◀").on_hover_text(tl!("Previous page")).clicked()
+                && let Some(pos) = pages.iter().position(|&p| p == current_page)
+                && pos > 0
+            {
+                self.state.current_page = pages[pos - 1];
             }
 
             ui.label(RichText::new(format!("{} {}", tl!("Page"), current_page)).strong());
 
-            if ui.small_button("▶").on_hover_text(tl!("Next page")).clicked() {
-                if let Some(pos) = pages.iter().position(|&p| p == current_page) {
-                    if pos + 1 < pages.len() {
-                        self.state.current_page = pages[pos + 1];
-                    }
-                }
+            if ui.small_button("▶").on_hover_text(tl!("Next page")).clicked()
+                && let Some(pos) = pages.iter().position(|&p| p == current_page)
+                && pos + 1 < pages.len()
+            {
+                self.state.current_page = pages[pos + 1];
             }
 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -1668,10 +1664,10 @@ impl TypesetterUi {
                     self.show_full_text_window = !self.show_full_text_window;
                 }
 
-                if ui.small_button("🎯").on_hover_text(tl!("Go to current line/page")).clicked() {
-                    if let Some(cur) = self.state.lines.get(self.state.current_line_idx) {
-                        self.state.current_page = cur.page;
-                    }
+                if ui.small_button("🎯").on_hover_text(tl!("Go to current line/page")).clicked()
+                    && let Some(cur) = self.state.lines.get(self.state.current_line_idx)
+                {
+                    self.state.current_page = cur.page;
                 }
 
                 ui.checkbox(&mut self.filter_current_page_only, tl!("Page")).on_hover_text(tl!("Show current page dialogues only"));
@@ -1849,13 +1845,13 @@ impl TypesetterUi {
                 }
             }
 
-            if let Some((idx, line)) = line_to_insert {
-                if let Some(preset) = self.state.active_preset().cloned() {
-                    *action = Some(TypesetterAction { text: line.text.clone(), preset });
-                    self.state.set_current_line(idx + 1);
-                    self.scroll_to_active_line = true;
-                    self.auto_save();
-                }
+            if let Some((idx, line)) = line_to_insert
+                && let Some(preset) = self.state.active_preset().cloned()
+            {
+                *action = Some(TypesetterAction { text: line.text.clone(), preset });
+                self.state.set_current_line(idx + 1);
+                self.scroll_to_active_line = true;
+                self.auto_save();
             }
 
             if text_changed {
@@ -1869,22 +1865,19 @@ impl TypesetterUi {
         let t = Tokens::get(ui.ctx());
 
         ui.horizontal(|ui| {
-            if ui.button(format!("📋 {}", tl!("Paste from Clipboard (Ctrl+V)"))).on_hover_text(tl!("Paste copied text from clipboard")).clicked() {
-                if let Ok(mut cb) = arboard::Clipboard::new() {
-                    if let Ok(text) = cb.get_text() {
-                        if !text.trim().is_empty() {
-                            self.script_editor_buffer = text;
-                        }
-                    }
-                }
+            if ui.button(format!("📋 {}", tl!("Paste from Clipboard (Ctrl+V)"))).on_hover_text(tl!("Paste copied text from clipboard")).clicked()
+                && let Some(text) = get_system_clipboard_text()
+                && !text.trim().is_empty()
+            {
+                self.script_editor_buffer = text;
             }
 
             if ui.button(format!("📥 {}", tl!("Load file (.txt)…"))).clicked() {
+                #[cfg(not(target_arch = "wasm32"))]
                 if let Some(path) = rfd::FileDialog::new().add_filter("Текстовые файлы (*.txt)", &["txt"]).set_title(tl!("Choose script file")).pick_file()
+                    && let Ok(content) = std::fs::read_to_string(&path)
                 {
-                    if let Ok(content) = std::fs::read_to_string(&path) {
-                        self.script_editor_buffer = content;
-                    }
+                    self.script_editor_buffer = content;
                 }
             }
 
@@ -2056,15 +2049,15 @@ impl TypesetterUi {
                         &[],
                     ) {
                         changed = true;
-                        if preset.font_family != prev_fam {
-                            if let Some(engine) = photocraft_text::try_shared() {
-                                let faces = engine.lock().unwrap_or_else(std::sync::PoisonError::into_inner).fonts.faces(&preset.font_family);
-                                if let Some(first_face) = faces.first() {
-                                    if let Some(ps) = &first_face.postscript_name {
-                                        preset.font_postscript = ps.clone();
-                                    }
-                                    preset.font_style = first_face.style.clone();
+                        if preset.font_family != prev_fam
+                            && let Some(engine) = photocraft_text::try_shared()
+                        {
+                            let faces = engine.lock().unwrap_or_else(std::sync::PoisonError::into_inner).fonts.faces(&preset.font_family);
+                            if let Some(first_face) = faces.first() {
+                                if let Some(ps) = &first_face.postscript_name {
+                                    preset.font_postscript = ps.clone();
                                 }
+                                preset.font_style = first_face.style.clone();
                             }
                         }
                     }
@@ -2081,7 +2074,7 @@ impl TypesetterUi {
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         ui.spacing_mut().item_spacing.x = 0.0;
                         let mut styles = crate::type_tool::styles(&preset.font_family);
-                        if !preset.font_style.is_empty() && !styles.iter().any(|s| *s == preset.font_style) {
+                        if !preset.font_style.is_empty() && !styles.contains(&preset.font_style) {
                             styles.insert(0, preset.font_style.clone());
                         }
                         let options: Vec<(String, String)> = styles.iter().map(|s| (s.clone(), crate::type_tool::style_label(s))).collect();
@@ -2392,12 +2385,11 @@ impl TypesetterUi {
                         }
                         if cancel_edit {
                             edit = None;
-                        } else if commit_edit {
-                            if let Some(pending) = edit.take() {
-                                if commit_preview_edit(preset, &pending.buffer, &pending.original) {
-                                    changed = true;
-                                }
-                            }
+                        } else if commit_edit
+                            && let Some(pending) = edit.take()
+                            && commit_preview_edit(preset, &pending.buffer, &pending.original)
+                        {
+                            changed = true;
                         }
                     });
 
@@ -2460,14 +2452,12 @@ impl TypesetterUi {
         // closing, even when the click did not move focus out of it first.
         if *close_modal {
             let pending = ui.data_mut(|d| d.remove_temp::<PreviewEdit>(preview_edit_id));
-            if let Some(pending) = pending {
-                if pending.idx == idx {
-                    if let Some(preset) = self.state.presets.get_mut(idx) {
-                        if commit_preview_edit(preset, &pending.buffer, &pending.original) {
-                            changed = true;
-                        }
-                    }
-                }
+            if let Some(pending) = pending
+                && pending.idx == idx
+                && let Some(preset) = self.state.presets.get_mut(idx)
+                && commit_preview_edit(preset, &pending.buffer, &pending.original)
+            {
+                changed = true;
             }
         }
 
@@ -2612,33 +2602,35 @@ impl TypesetterUi {
 
             ui.horizontal_wrapped(|ui| {
                 if ui.button(tl!("Choose folder…")).on_hover_text(tl!("Choose a custom directory to store typesetter presets and state")).clicked() {
-                    let mut dlg = rfd::FileDialog::new().set_title(tl!("Choose presets folder"));
-                    if let Some(curr) = self.storage_path().and_then(|p| p.parent().map(|d| d.to_path_buf())) {
-                        dlg = dlg.set_directory(&curr);
-                    }
-                    if let Some(folder) = dlg.pick_folder() {
-                        self.custom_storage_dir = Some(folder.clone());
-                        self.auto_save();
-                        self.status_message = Some(format!("{}: {}", tl!("Storage folder set"), folder.display()));
-                        self.status_error = false;
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        let mut dlg = rfd::FileDialog::new().set_title(tl!("Choose presets folder"));
+                        if let Some(curr) = self.storage_path().and_then(|p| p.parent().map(|d| d.to_path_buf())) {
+                            dlg = dlg.set_directory(&curr);
+                        }
+                        if let Some(folder) = dlg.pick_folder() {
+                            self.custom_storage_dir = Some(folder.clone());
+                            self.auto_save();
+                            self.status_message = Some(format!("{}: {}", tl!("Storage folder set"), folder.display()));
+                            self.status_error = false;
+                        }
                     }
                 }
-                if ui.button(tl!("Open folder")).on_hover_text(tl!("Open presets folder in file manager")).clicked() {
-                    if let Some(path) = self.storage_path() {
-                        if let Some(dir) = path.parent() {
-                            #[cfg(windows)]
-                            {
-                                let _ = std::process::Command::new("explorer").arg(dir).spawn();
-                            }
-                            #[cfg(target_os = "macos")]
-                            {
-                                let _ = std::process::Command::new("open").arg(dir).spawn();
-                            }
-                            #[cfg(not(any(windows, target_os = "macos")))]
-                            {
-                                let _ = std::process::Command::new("xdg-open").arg(dir).spawn();
-                            }
-                        }
+                if ui.button(tl!("Open folder")).on_hover_text(tl!("Open presets folder in file manager")).clicked()
+                    && let Some(path) = self.storage_path()
+                    && let Some(dir) = path.parent()
+                {
+                    #[cfg(windows)]
+                    {
+                        let _ = std::process::Command::new("explorer").arg(dir).spawn();
+                    }
+                    #[cfg(target_os = "macos")]
+                    {
+                        let _ = std::process::Command::new("open").arg(dir).spawn();
+                    }
+                    #[cfg(not(any(windows, target_os = "macos")))]
+                    {
+                        let _ = std::process::Command::new("xdg-open").arg(dir).spawn();
                     }
                 }
                 if ui.button(tl!("Save now")).clicked() {
@@ -2651,13 +2643,13 @@ impl TypesetterUi {
                     self.status_message = Some(tl!("Presets loaded from file").into());
                     self.status_error = false;
                 }
-                if self.custom_storage_dir.is_some() {
-                    if ui.button(tl!("Reset folder")).on_hover_text(tl!("Reset presets storage to default AppData directory")).clicked() {
-                        self.custom_storage_dir = None;
-                        self.auto_save();
-                        self.status_message = Some(tl!("Storage folder reset to default").into());
-                        self.status_error = false;
-                    }
+                if self.custom_storage_dir.is_some()
+                    && ui.button(tl!("Reset folder")).on_hover_text(tl!("Reset presets storage to default AppData directory")).clicked()
+                {
+                    self.custom_storage_dir = None;
+                    self.auto_save();
+                    self.status_message = Some(tl!("Storage folder reset to default").into());
+                    self.status_error = false;
                 }
             });
         });
@@ -4172,10 +4164,7 @@ mod tests {
         app.run("select.rect", json!({"x": 50, "y": 50, "width": 100, "height": 100})).unwrap();
 
         app.typesetter.state.options.auto_clean = true;
-        app.handle_typesetter_action(TypesetterAction {
-            text: "Hello clean world".into(),
-            preset: TextStylePreset::default(),
-        });
+        app.handle_typesetter_action(TypesetterAction { text: "Hello clean world".into(), preset: TextStylePreset::default() });
 
         let st = app.session.active().unwrap();
         let clean_layer = st.doc.layers.iter().find(|l| l.name == crate::snow_clean::CLEAN_LAYER);

@@ -76,11 +76,7 @@ pub fn mean_luminance(layer: Option<&Surface>, selection: &Surface) -> Option<f3
             }
         }
     }
-    if count == 0 {
-        None
-    } else {
-        Some((sum / f64::from(count)) as f32)
-    }
+    if count == 0 { None } else { Some((sum / f64::from(count)) as f32) }
 }
 
 /// The clean fill colour for the selected balloon: white on bright art, black on dark art, white

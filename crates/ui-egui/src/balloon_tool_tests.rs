@@ -36,7 +36,7 @@ fn a_tail_drag_unions_the_tail_with_the_active_balloon() {
     app.ui.tool_options.balloon_mode = "tail".into();
     app.ui.tool_options.balloon_preset = "arc".into();
     crate::vector_ui::finish_balloon(&mut app, [200.0, 245.0], [210.0, 360.0]);
-    assert_eq!(app.ui.status_error, false, "status: {}", app.ui.status);
+    assert!(!app.ui.status_error, "status: {}", app.ui.status);
     assert_eq!(shape_subpaths(&app, id), before, "the tail joins the balloon contour");
     assert_eq!(app.session.active().unwrap().history.past_len(), history + 1, "one undoable step");
 }
@@ -48,13 +48,11 @@ fn cloud_and_spiky_drags_create_balloon_layers() {
         let layers = app.session.active().unwrap().doc.layers.len();
         app.ui.tool_options.balloon_mode = mode.into();
         crate::vector_ui::finish_balloon(&mut app, [40.0, 40.0], [300.0, 240.0]);
-        assert_eq!(app.ui.status_error, false, "{mode} status: {}", app.ui.status);
+        assert!(!app.ui.status_error, "{mode} status: {}", app.ui.status);
         let st = app.session.active().unwrap();
         assert_eq!(st.doc.layers.len(), layers + 1, "{mode} adds one shape layer");
         let id = active_layer_id(&app);
-        let LayerContent::Shape(sh) = &st.doc.layer(photocraft_doc::LayerId(id)).unwrap().content else {
-            panic!("{mode} did not create a shape layer")
-        };
+        let LayerContent::Shape(sh) = &st.doc.layer(photocraft_doc::LayerId(id)).unwrap().content else { panic!("{mode} did not create a shape layer") };
         assert!(sh.path.subpaths[0].knots.len() >= knot_floor, "{mode}: {} knots", sh.path.subpaths[0].knots.len());
     }
 }

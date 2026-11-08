@@ -2454,15 +2454,15 @@ pub(crate) fn capsule_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         ui.label(egui::RichText::new("T").strong().color(t.text));
 
         // Font family dropdown with dedicated capsule ID salt
-        if fonts_ready(ui, 120.0) {
-            if family_picker_in(ui, "capsule-type-font", &mut fam, 120.0, &families(), app.session.prefs().type_.font_preview, &app.ui.recent_fonts) {
-                app.note_recent_font(&fam);
-                app.ui.tool_options.type_font = fam.clone();
-                let st = styles(&fam);
-                style = if st.contains(&style) { style } else { st.first().cloned().unwrap_or_else(|| "Regular".into()) };
-                app.ui.tool_options.type_style = style.clone();
-                apply(app, ui.ctx(), json!({"font": fam}));
-            }
+        if fonts_ready(ui, 120.0)
+            && family_picker_in(ui, "capsule-type-font", &mut fam, 120.0, &families(), app.session.prefs().type_.font_preview, &app.ui.recent_fonts)
+        {
+            app.note_recent_font(&fam);
+            app.ui.tool_options.type_font = fam.clone();
+            let st = styles(&fam);
+            style = if st.contains(&style) { style } else { st.first().cloned().unwrap_or_else(|| "Regular".into()) };
+            app.ui.tool_options.type_style = style.clone();
+            apply(app, ui.ctx(), json!({"font": fam}));
         }
 
         // Font size field

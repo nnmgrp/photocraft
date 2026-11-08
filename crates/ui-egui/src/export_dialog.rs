@@ -1114,7 +1114,7 @@ pub fn quick_export_png(app: &mut PhotocraftApp) -> Result<Value, String> {
                 let dir_str = dir.to_string_lossy().to_string();
                 app.session.edit_prefs(|p| p.export.last_export_dir = Some(dir_str));
                 app.save_dirs.insert(doc, dir.to_path_buf());
-                let prefs_json = serde_json::to_value(&app.session.prefs().clone()).unwrap_or_default();
+                let prefs_json = serde_json::to_value(app.session.prefs().clone()).unwrap_or_default();
                 let _ = crate::prefs_ui::write_prefs(app, &prefs_json);
             }
             app.refocus(doc)?;

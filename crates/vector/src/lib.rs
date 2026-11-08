@@ -21,12 +21,12 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod balloon;
+pub mod comic_sai_curve;
 pub mod edit;
 pub mod feather;
 pub mod flatten;
 pub mod map;
 pub mod raster;
-pub mod comic_sai_curve;
 pub use comic_sai_curve as sai_curve;
 pub mod shapes;
 pub mod stroke;

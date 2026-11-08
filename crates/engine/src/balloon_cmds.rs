@@ -305,7 +305,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "shape.balloon.tail",
             "Add Balloon Tail",
             [],
-                            r##"{{"layer":id?,"preset":"wedge|arc|double|thought"="wedge","tip":[x,y] (required),"base":[[x,y],[x,y]]? or "from":[x,y] + "mouthWidth":px=18 (the drag points),"curve":0..1?,"bubbles":1..12=3,"bubbleRadius":px=6 (thought)}} -> shape.info. The tail and body are unioned into ONE contour: one fill, one stroke, no seam. {fill} stays as the layer's; the layer must be a shape layer."##,
+            r##"{{"layer":id?,"preset":"wedge|arc|double|thought"="wedge","tip":[x,y] (required),"base":[[x,y],[x,y]]? or "from":[x,y] + "mouthWidth":px=18 (the drag points),"curve":0..1?,"bubbles":1..12=3,"bubbleRadius":px=6 (thought)}} -> shape.info. The tail and body are unioned into ONE contour: one fill, one stroke, no seam. {fill} stays as the layer's; the layer must be a shape layer."##,
             has_shape,
             balloon_tail
         ),
@@ -313,7 +313,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "shape.balloon.create",
             "New Balloon",
             [],
-                            r##"{{"kind":"cloud|spiky"="cloud","rect":[x,y,w,h] (required),"bumps":3..64=9,"amplitude":0..1=0.18,"jitter":0..1=0.35,"spikes":3..128=12,"length":0..2=0.45,"inward":bool=false,"smooth":bool=false,"seed":int=1,{fill}=foreground,{stroke}=none,"name":str?}} -> shape.info. cloud = scalloped thought balloon; spiky = shout/flash balloon."##,
+            r##"{{"kind":"cloud|spiky"="cloud","rect":[x,y,w,h] (required),"bumps":3..64=9,"amplitude":0..1=0.18,"jitter":0..1=0.35,"spikes":3..128=12,"length":0..2=0.45,"inward":bool=false,"smooth":bool=false,"seed":int=1,{fill}=foreground,{stroke}=none,"name":str?}} -> shape.info. cloud = scalloped thought balloon; spiky = shout/flash balloon."##,
             has_doc,
             balloon_create
         ),
@@ -321,7 +321,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "shape.balloon.stroke",
             "New Vector Stroke",
             [],
-                            r##"{{"points":[{{"x":px,"y":px,"pressure":0..1=1,"corner":bool=false}} | [x,y,corner?]] (2..4096, click nodes smoothed with a Catmull-Rom spline),"width":px=6,"minRatio":0..1=0.05 (taper floor),"tapered":bool=true (filled outline, weight per node) | false (uniform stroke path),"name":str?}} -> shape.info"##,
+            r##"{{"points":[{{"x":px,"y":px,"pressure":0..1=1,"corner":bool=false}} | [x,y,corner?]] (2..4096, click nodes smoothed with a Catmull-Rom spline),"width":px=6,"minRatio":0..1=0.05 (taper floor),"tapered":bool=true (filled outline, weight per node) | false (uniform stroke path),"name":str?}} -> shape.info"##,
             has_doc,
             balloon_stroke
         ),
@@ -333,8 +333,15 @@ pub fn specs() -> Vec<CommandSpec> {
             params: r##"{} -> {presets:[{id,label,mouth}]}"##,
             enabled: |_: &Session| Ok(()),
             run: |_, _| {
-                let names = [(TailPreset::Wedge, "Wedge", "straight tapered wedge"), (TailPreset::Arc, "Arc", "bow-sided tail"), (TailPreset::Double, "Double", "two tails, one mouth"), (TailPreset::Thought, "Thought", "shrinking bubbles")];
-                Ok(json!({"presets": names.iter().map(|(p, label, about)| json!({"id": p.id(), "label": label, "mouth": p.mouth(), "about": about})).collect::<Vec<_>>()}))
+                let names = [
+                    (TailPreset::Wedge, "Wedge", "straight tapered wedge"),
+                    (TailPreset::Arc, "Arc", "bow-sided tail"),
+                    (TailPreset::Double, "Double", "two tails, one mouth"),
+                    (TailPreset::Thought, "Thought", "shrinking bubbles"),
+                ];
+                Ok(
+                    json!({"presets": names.iter().map(|(p, label, about)| json!({"id": p.id(), "label": label, "mouth": p.mouth(), "about": about})).collect::<Vec<_>>()}),
+                )
             },
             journal: false,
         },

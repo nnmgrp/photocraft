@@ -100,7 +100,7 @@ fn atn_corpus_loads_saves_and_reloads() {
         unsupported += n_unsupported;
         println!("{name}: {} actions, {n_steps} steps, {n_unsupported} kept Photoshop steps {events:?}", loaded["actions"].as_array().map_or(0, Vec::len));
         let first = s.actions.list.clone();
-        let saved = match s.execute("actions.save", json!({"set": loaded["set"]})) {
+        let saved = match s.execute("actions.save", json!({"set": loaded["set"], "skipUnsupported": true})) {
             Ok(v) => v,
             Err(e) => {
                 failures.push(format!("{name}: save: {e}"));

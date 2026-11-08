@@ -161,6 +161,7 @@ struct Cache {
     /// That outline's mask, once made.
     raster: Option<Raster>,
     texture: Option<TextureHandle>,
+    generation: u64,
 }
 
 /// A mask of the outline and the view mapping it was rasterized at.
@@ -241,6 +242,7 @@ pub fn draw(ctx: &egui::Context, painter: &egui::Painter, view: egui::Id, xf: &V
         None => {
             let rect = raster_rect(need, reach, side);
             let mask = rasterize(&map, segs, rect);
+            cache.generation = cache.generation.wrapping_add(1);
             cache.raster = Some(Raster { map, rect, mask, uploaded: false, phase: 0, fresh: Px::default(), seen: map.offset, moved: time });
             [0, 0]
         }
@@ -643,13 +645,12 @@ mod tests {
             let c = shared.lock().unwrap();
             c.raster.as_ref().map(|r| (r.rect, r.map))
         };
-        // Whether the mask was rasterized again since the last call (a new mask buffer: the old
-        // one is still alive when it is allocated, so the address differs).
-        let last = std::cell::Cell::new(std::ptr::null::<u8>());
+        // Whether the mask was rasterized again since the last call.
+        let last = std::cell::Cell::new(0u64);
         let remade = || {
             let shared = ctx.data_mut(|d| d.get_temp::<Shared>(cache_id(id))).unwrap();
-            let p = shared.lock().unwrap().raster.as_ref().map_or(std::ptr::null(), |r| r.mask.as_ptr());
-            p != last.replace(p)
+            let g = shared.lock().unwrap().generation;
+            g != last.replace(g)
         };
         uploads(&ctx); // egui's own (the font atlas)
         assert!(draw(&ctx, &painter, id, &v, &segs, 0.0));

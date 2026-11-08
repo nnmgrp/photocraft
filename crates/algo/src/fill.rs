@@ -93,7 +93,16 @@ pub struct FillOptions {
 
 impl Default for FillOptions {
     fn default() -> Self {
-        Self { tolerance: 10.0, contiguous: true, close_gap: 0.0, scale: 0.0, scaling: Scaling::Darkest, anti_alias: true, image_border: false, match_color: None }
+        Self {
+            tolerance: 10.0,
+            contiguous: true,
+            close_gap: 0.0,
+            scale: 0.0,
+            scaling: Scaling::Darkest,
+            anti_alias: true,
+            image_border: false,
+            match_color: None,
+        }
     }
 }
 
@@ -202,7 +211,6 @@ fn tuck(fill: &mut [bool], block: &[u8], w: usize, h: usize) {
     grow_to_darkest(fill, block, &free, w, h, TUCK);
 }
 
-
 /// Enclose and Fill / Paint Unfilled Area: fills every area of `target` pixels of `img` (as in
 /// [`click_region`]) that lies wholly inside `inside` (the lasso or the painted stroke, a mask
 /// over `area`). An area that reaches outside it is left as it is. `contiguous` is not used.
@@ -259,15 +267,24 @@ fn mark_box(m: &[bool], w: usize) -> Option<(usize, usize, usize, usize)> {
 /// [`enclosed_region`] over `img` (`w` × `h`, covering `area`), the canvas edge a line on the
 /// sides `border` says (left, top, right, bottom).
 #[allow(clippy::too_many_arguments)]
-fn enclosed_in(img: &[[u8; 4]], area: Rect, inside: &[bool], w: usize, h: usize, border: [bool; 4], target: Target, o: &FillOptions, block: Option<&[u8]>) -> Option<Region> {
+fn enclosed_in(
+    img: &[[u8; 4]],
+    area: Rect,
+    inside: &[bool],
+    w: usize,
+    h: usize,
+    border: [bool; 4],
+    target: Target,
+    o: &FillOptions,
+    block: Option<&[u8]>,
+) -> Option<Region> {
     let mut strength = match target {
         Target::Transparent => strengths(img, |p| difference(p, [0; 4])),
         Target::WhiteAndTransparent => strengths(img, darkness),
     };
     blocked_strength(&mut strength, block);
     let margin = margin(o.tolerance);
-    let free: Vec<bool> =
-        strength.iter().enumerate().map(|(i, s)| *s <= margin && block.is_none_or(|b| b.get(i).is_some_and(|a| *a < BLOCK_ALPHA))).collect();
+    let free: Vec<bool> = strength.iter().enumerate().map(|(i, s)| *s <= margin && block.is_none_or(|b| b.get(i).is_some_and(|a| *a < BLOCK_ALPHA))).collect();
     let gap = finite(o.close_gap, MAX_GAP);
     let labels = if gap < 1.0 { components(&free, w, h) } else { areas(&free, w, h, gap, border, None).0 };
     let count = labels.iter().copied().max().unwrap_or(0) as usize + 1;
@@ -709,7 +726,8 @@ fn grow_to_darkest(fill: &mut [bool], strength: &[u8], free: &[bool], w: usize, 
     // nothing (a whole page of them took seconds).
     let at_line = |i: usize| {
         let (x, y) = (i % w, i / w);
-        (y.saturating_sub(1)..(y + 2).min(h)).any(|ny| (x.saturating_sub(1)..(x + 2).min(w)).any(|nx| free.get(ny * w + nx) == Some(&false) && fill.get(ny * w + nx) == Some(&false)))
+        (y.saturating_sub(1)..(y + 2).min(h))
+            .any(|ny| (x.saturating_sub(1)..(x + 2).min(w)).any(|nx| free.get(ny * w + nx) == Some(&false) && fill.get(ny * w + nx) == Some(&false)))
     };
     for (i, f) in fill.iter().enumerate() {
         if *f && let Some(c) = cost.get_mut(i) {

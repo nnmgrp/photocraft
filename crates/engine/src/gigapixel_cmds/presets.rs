@@ -84,7 +84,9 @@ fn checked_settings(v: &Value, cmd: &str) -> Result<Value> {
         }
         let names: Vec<String> = names
             .iter()
-            .map(|n| n.as_str().map(str::trim).filter(|n| !n.is_empty()).map(str::to_string).ok_or_else(|| bad(cmd, "`presets` must be a list of preset names")))
+            .map(|n| {
+                n.as_str().map(str::trim).filter(|n| !n.is_empty()).map(str::to_string).ok_or_else(|| bad(cmd, "`presets` must be a list of preset names"))
+            })
             .collect::<Result<_>>()?;
         let combine = match Combine::parse(o.get("combine"), cmd)? {
             Combine::Chain => "chain",
@@ -190,7 +192,12 @@ fn save(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     let name = req_str(p, "name", DELETE_ID)?;
-    let index = s.presets.gigapixel_presets.iter().position(|pr| pr.name.eq_ignore_ascii_case(name.trim())).ok_or_else(|| bad(DELETE_ID, "No such Topaz Gigapixel preset"))?;
+    let index = s
+        .presets
+        .gigapixel_presets
+        .iter()
+        .position(|pr| pr.name.eq_ignore_ascii_case(name.trim()))
+        .ok_or_else(|| bad(DELETE_ID, "No such Topaz Gigapixel preset"))?;
     let removed = s.presets.gigapixel_presets.remove(index);
     s.presets_changed();
     Ok(json!({"deleted": removed.name}))

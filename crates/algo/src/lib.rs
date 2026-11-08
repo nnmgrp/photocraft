@@ -42,6 +42,7 @@ pub mod histogram;
 mod image;
 pub mod inpaint;
 pub mod lens;
+pub mod snow_inpaint;
 pub mod liquify;
 pub mod magnetic;
 pub mod matting;
@@ -68,7 +69,8 @@ pub mod render2;
 pub mod resample;
 pub mod retouch;
 pub mod scancrop;
-pub mod screentone;
+pub mod comic_screentone;
+pub use comic_screentone as screentone;
 pub mod seam;
 pub mod segment;
 pub mod selection;
@@ -558,7 +560,7 @@ pub enum FilterParams {
     FilterGallery {
         effects: Vec<GalleryEffect>,
     },
-    /// Manga & comic screentone generator (GenTonik engine).
+    /// Manga & comic screentone generator (Comic screentone engine).
     Screentone {
         spec: ScreentoneSpec,
     },

@@ -623,7 +623,9 @@ fn param_lines(params: &Value) -> Vec<String> {
                 (_, Some(d), _) => layer(d),
                 (_, _, Some(l)) => l.into_iter().map(layer).collect::<Vec<_>>().join(", "),
                 (Value::String(s), ..) => s.clone(),
-                (Value::Number(n), ..) => n.as_f64().filter(|f| f.fract() != 0.0).map_or_else(|| n.to_string(), |f| format!("{f:.2}").trim_end_matches('0').to_string()),
+                (Value::Number(n), ..) => {
+                    n.as_f64().filter(|f| f.fract() != 0.0).map_or_else(|| n.to_string(), |f| format!("{f:.2}").trim_end_matches('0').to_string())
+                }
                 (other, ..) => other.to_string(),
             };
             let value: String = if value.chars().count() > 60 { value.chars().take(59).chain(std::iter::once('…')).collect() } else { value };
@@ -1155,7 +1157,11 @@ pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         act = Some("playback");
     }
     let mut tools = app.session.actions.prefs.allow_tool_recording;
-    if ui.checkbox(&mut tools, tl!("Allow Tool Recording")).on_hover_text(tl!("Record brush and other painting strokes, and the brush settings they use")).clicked() {
+    if ui
+        .checkbox(&mut tools, tl!("Allow Tool Recording"))
+        .on_hover_text(tl!("Record brush and other painting strokes, and the brush settings they use"))
+        .clicked()
+    {
         act = Some("tools");
     }
     ui.separator();
@@ -1993,7 +1999,9 @@ pub(crate) mod tests {
 
     #[test]
     fn recorded_layers_read_as_names_or_the_current_layer() {
-        let lines = param_lines(&json!({"layer": {"name": "Ink", "occurrence": 1}, "target": {"current": true}, "layers": [{"name": "A"}, {"current": true}], "opacity": 0.5}));
+        let lines = param_lines(
+            &json!({"layer": {"name": "Ink", "occurrence": 1}, "target": {"current": true}, "layers": [{"name": "A"}, {"current": true}], "opacity": 0.5}),
+        );
         assert_eq!(lines, ["Layer: Ink (2)", "Layers: A, Current Layer", "Opacity: 0.5", "Target: Current Layer"]);
     }
 
@@ -2018,7 +2026,8 @@ pub(crate) mod tests {
             }
             h.run_steps(3);
         };
-        let dialog = |h: &egui_kittest::Harness<'_, PhotocraftApp>| h.state().ui.dialogs.iter().find(|d| owns_set_shortcut(&d.fields)).map(|d| (d.id, d.fields.clone()));
+        let dialog =
+            |h: &egui_kittest::Harness<'_, PhotocraftApp>| h.state().ui.dialogs.iter().find(|d| owns_set_shortcut(&d.fields)).map(|d| (d.id, d.fields.clone()));
         let id = open_set_shortcut(h.state_mut(), "New Layer");
         h.run_steps(2);
         // Alt+F4 belongs to the system.

@@ -74,7 +74,12 @@ fn a_result_goes_to_its_own_document() {
 fn command_line_arguments() {
     let (i, o) = (Path::new("C:/t/in.tif"), Path::new("C:/t/out"));
     let a = cli_args(&json!({"model": "hf", "scale": 2, "denoise": 30}), i, o).unwrap();
-    assert_eq!(a, ["-i", "C:/t/in.tif", "-o", "C:/t/out", "--cf", "-m", "hf", "--mv", "2", "--scale", "2", "--dn", "30", "-f", "tif", "--tc", "none", "--bd", "0"].map(String::from), "High Fidelity V2: a bare -m hf fails");
+    assert_eq!(
+        a,
+        ["-i", "C:/t/in.tif", "-o", "C:/t/out", "--cf", "-m", "hf", "--mv", "2", "--scale", "2", "--dn", "30", "-f", "tif", "--tc", "none", "--bd", "0"]
+            .map(String::from),
+        "High Fidelity V2: a bare -m hf fails"
+    );
     let a = cli_args(&json!({"model": "recovery", "modelVersion": 2, "scale": 2, "detail": 30, "faceRecovery": 80, "faceRecoveryVersion": 2}), i, o).unwrap();
     assert_eq!(a[5..15], ["-m", "recovery", "--mv", "2", "--scale", "2", "--dt", "30", "--fr", "80"].map(String::from));
     assert_eq!(a[15..17], ["--frv", "2"].map(String::from));
@@ -418,15 +423,27 @@ fn settings_are_read_from_gigapixels_description() {
             "Upscaled with Gigapixel v8.4.4. 828x1104 => 2484x3312 (3x) Model: RecoveryXL, denoise: 1, decompression: 0, sharpen: , sharpen: 0, sharpen: 3",
             json!({"model": "redefine", "scale": 3.0}),
         ),
-        ("Upscaled with Gigapixel v8.4.4. 96x64 => 240x160 (2.5x) @ -1 ppcm Model: CGI, denoise: 0.5, sharpen: 0.07", json!({"model": "art", "scale": 2.5, "denoise": 50.0, "sharpen": 7.0})),
+        (
+            "Upscaled with Gigapixel v8.4.4. 96x64 => 240x160 (2.5x) @ -1 ppcm Model: CGI, denoise: 0.5, sharpen: 0.07",
+            json!({"model": "art", "scale": 2.5, "denoise": 50.0, "sharpen": 7.0}),
+        ),
         // Past the tool's 16×: the width.
         ("Upscaled with Gigapixel v8.4.4. 100x50 => 2000x1000 (20x) Model: High Compression", json!({"model": "vc", "width": 2000.0})),
-        ("Upscaled with Gigapixel v8.4.4. 1075x532 => 12124x6000 (11.2782x) Model: Rescue, detail: 0.82", json!({"model": "recovery", "modelVersion": 1, "scale": 11.28, "detail": 82.0})),
+        (
+            "Upscaled with Gigapixel v8.4.4. 1075x532 => 12124x6000 (11.2782x) Model: Rescue, detail: 0.82",
+            json!({"model": "recovery", "modelVersion": 1, "scale": 11.28, "detail": 82.0}),
+        ),
     ];
     for (text, want) in cases {
         assert_eq!(settings_from_description(text), Some(want), "{text}");
     }
-    for bad in ["", "Upscaled with Gigapixel", "Upscaled with Gigapixel v8. Model: Something New", "Made with another app. Model: Standard V2", "Upscaled with Gigapixel v8.4.4. 0x0 => 5x5 Model: CGI"] {
+    for bad in [
+        "",
+        "Upscaled with Gigapixel",
+        "Upscaled with Gigapixel v8. Model: Something New",
+        "Made with another app. Model: Standard V2",
+        "Upscaled with Gigapixel v8.4.4. 0x0 => 5x5 Model: CGI",
+    ] {
         let r = settings_from_description(bad);
         assert!(r.is_none() || bad.contains("0x0"), "{bad}: {r:?}");
     }

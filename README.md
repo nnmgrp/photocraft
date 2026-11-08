@@ -50,7 +50,7 @@
 >
 > 📖 **Полное описание возможностей, архитектуры, авторов и статуса функций: [docs/community-fork.md](docs/community-fork.md)**.
 >
-> *(Примечание: встроенного проброса туннеля для нейросетей пока нет, а визуальные стили GenTonik и элементы интерфейса ещё могут быть скорректированы в будущих обновлениях).*
+> *(Примечание: встроенного проброса туннеля для нейросетей пока нет, а визуальные стили скринтонов и элементы интерфейса ещё могут быть скорректированы в будущих обновлениях).*
 
 This is a personal fork of [storytold/photocraft](https://github.com/storytold/photocraft), currently
 based on **PhotoCraft 0.14.0** (branch `photoshop-parity-0.14`). It adds features and fixes aimed at

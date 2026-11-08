@@ -4517,6 +4517,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                 Tool::MagneticLasso if response.double_clicked() || response.triple_clicked() => crate::magnetic_lasso_ui::close(app, mods.alt),
                 // The first click placed (or grabbed) the point; the second toggles it.
                 Tool::CurvaturePen if response.double_clicked() => crate::vector_ui::curvature_toggle(app, d[0], d[1]),
+                Tool::VectorCurve if response.double_clicked() => crate::vector_ui::vector_curve_commit(app),
                 // Double-clicking a guide opens Preferences › Guides, Grid & Slices, as in Photoshop.
                 Tool::Move if response.double_clicked() && crate::rulers::guide_at(app, d[0], d[1]).is_some() => {
                     if let Err(e) = crate::menus::invoke(app, &ctx, "edit.preferences.guidesGridAndSlices", json!({})) {
@@ -4884,7 +4885,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                 }
                 // The pen tools: their own icon with its nib on the point, or the crosshair for
                 // precise Other Cursors (#4639).
-                Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen | Tool::AddAnchorPoint | Tool::DeleteAnchorPoint | Tool::ConvertPoint => {
+                Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen | Tool::AddAnchorPoint | Tool::DeleteAnchorPoint | Tool::ConvertPoint | Tool::VectorCurve => {
                     if precise_other_cursor(app) {
                         egui::CursorIcon::Crosshair
                     } else {
@@ -6160,6 +6161,8 @@ fn tool_move(app: &mut PhotocraftApp, x: f64, y: f64, pressure: f32, mods: egui:
         crate::vector_ui::pen_move(app, x, y, mods.shift);
     } else if tool == Tool::CurvaturePen {
         crate::vector_ui::curvature_move(app, x, y);
+    } else if tool == Tool::VectorCurve {
+        crate::vector_ui::vector_curve_move(app, x, y);
     }
     let zoom = app.point_zoom();
     if let Some(d) = app.drag.as_mut().filter(|d| d.reposition) {
@@ -6503,6 +6506,10 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
                     crate::vector_ui::curvature_down(app, x, y);
                     return;
                 }
+                Tool::VectorCurve => {
+                    crate::vector_ui::vector_curve_down(app, x, y, mods.ctrl || mods.command, mods.alt, mods.shift, false, app.point_zoom() as f64);
+                    return;
+                }
                 Tool::CloneStamp | Tool::Healing if mods.alt => {
                     crate::retouch_ui::set_source(app, x, y);
                     return;
@@ -6615,6 +6622,8 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
                 crate::vector_ui::pen_up(app);
             } else if tool == Tool::CurvaturePen {
                 crate::vector_ui::curvature_up(app);
+            } else if tool == Tool::VectorCurve {
+                crate::vector_ui::vector_curve_up(app, mods.alt);
             }
             let zoom = app.point_zoom();
             let Some(mut d) = app.drag.take() else { return };

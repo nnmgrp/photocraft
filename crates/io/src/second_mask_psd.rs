@@ -173,9 +173,7 @@ fn decode_mask(r: &mut Reader, depth: Option<SampleType>) -> Option<LayerMask> {
         let values: Vec<f32> = match sample {
             SampleType::U8 => raw.iter().map(|b| f32::from(*b) / 255.0).collect(),
             SampleType::U16 => raw.as_chunks::<2>().0.iter().map(|b| f32::from(u16::from_be_bytes(*b)) / 65535.0).collect(),
-            SampleType::F32 => {
-                raw.as_chunks::<4>().0.iter().map(|b| f32::from_be_bytes(*b)).map(|v| if v.is_finite() { v } else { 0.0 }).collect()
-            }
+            SampleType::F32 => raw.as_chunks::<4>().0.iter().map(|b| f32::from_be_bytes(*b)).map(|v| if v.is_finite() { v } else { 0.0 }).collect(),
         };
         m.surface.write_region(Rect::new(x0, y0, x1, y1), &values);
         m.surface.prune();

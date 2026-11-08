@@ -1925,9 +1925,7 @@ mod tests {
     #[test]
     fn vertical_align_in_create_and_set_style() {
         let mut s = session();
-        let created = s
-            .execute("type.create", json!({"box": [10, 10, 120, 160], "text": "Hello\nWorld", "size": 12, "verticalAlign": "center"}))
-            .unwrap();
+        let created = s.execute("type.create", json!({"box": [10, 10, 120, 160], "text": "Hello\nWorld", "size": 12, "verticalAlign": "center"})).unwrap();
         let id = created["layer"].as_u64().unwrap();
         assert_eq!(created["verticalAlign"], "Center");
         assert_eq!(text_layer(&s, id).vertical_align(), VerticalAlign::Center);
@@ -1956,7 +1954,10 @@ mod tests {
         let steps = s.active().unwrap().history.entries().len();
         for bad_val in [json!("diagonal"), json!(123), json!(true), json!(null)] {
             assert!(matches!(s.execute("type.setStyle", json!({"layer": id, "verticalAlign": bad_val})), Err(EngineError::BadParams { .. })));
-            assert!(matches!(s.execute("type.create", json!({"box": [0, 0, 50, 50], "text": "x", "verticalAlign": bad_val})), Err(EngineError::BadParams { .. })));
+            assert!(matches!(
+                s.execute("type.create", json!({"box": [0, 0, 50, 50], "text": "x", "verticalAlign": bad_val})),
+                Err(EngineError::BadParams { .. })
+            ));
         }
         assert_eq!(s.active().unwrap().history.entries().len(), steps);
         assert_eq!(text_layer(&s, id).vertical_align(), VerticalAlign::Justify);

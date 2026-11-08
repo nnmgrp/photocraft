@@ -1,4 +1,4 @@
-//! The Screentones dock tab: the GenTonik screentone generator's panel.
+//! The Screentones dock tab: the comic screentone generator's panel.
 //!
 //! The tab lives in the Color dock column after Patterns (a `Group::Color` tab in `dock`), and
 //! edits one [`ScreentoneSpec`], turning it into document pixels through `layer.screentone` (a
@@ -20,7 +20,8 @@ use crate::theme::Tokens;
 pub const PANEL: &str = "window.panel.screentone";
 
 /// The pattern types the panel offers, in the commands' own notation.
-const PATTERNS: [&str; 12] = ["dots", "lines", "crosshatch", "noise", "gaussianNoise", "stipple", "hexgrid", "checker", "concentric", "stars", "hearts", "triangles"];
+const PATTERNS: [&str; 12] =
+    ["dots", "lines", "crosshatch", "noise", "gaussianNoise", "stipple", "hexgrid", "checker", "concentric", "stars", "hearts", "triangles"];
 /// The dot shapes the panel offers (the dots' and the satellites').
 const SHAPES: [&str; 4] = ["circle", "square", "diamond", "hexagon"];
 /// The gradient types the panel offers for modulation.
@@ -137,9 +138,14 @@ pub(crate) fn sync_spec_to_active_layer(app: &mut PhotocraftApp) -> bool {
     }
     log::info!(
         "[SCREENTONE:UI] sync_spec_to_active_layer: doc={}, layer={}, backend={:?}, mode={:?}, pattern={:?}, dot_size={:.1}, spacing=({:.1}, {:.1}), density={:.2}",
-        doc_id.0, layer_id.0, app.ui.screentone_ui.spec.backend, app.ui.screentone_ui.spec.mode,
-        app.ui.screentone_ui.spec.pattern_type, app.ui.screentone_ui.spec.dot_size,
-        app.ui.screentone_ui.spec.spacing_x, app.ui.screentone_ui.spec.spacing_y,
+        doc_id.0,
+        layer_id.0,
+        app.ui.screentone_ui.spec.backend,
+        app.ui.screentone_ui.spec.mode,
+        app.ui.screentone_ui.spec.pattern_type,
+        app.ui.screentone_ui.spec.dot_size,
+        app.ui.screentone_ui.spec.spacing_x,
+        app.ui.screentone_ui.spec.spacing_y,
         app.ui.screentone_ui.spec.density
     );
     let mut p = params(&app.ui.screentone_ui);
@@ -156,11 +162,7 @@ pub(crate) fn sync_spec_to_active_layer(app: &mut PhotocraftApp) -> bool {
 /// preserving its layer mask and detaching the on-canvas gizmo so the next screentone can be
 /// created independently.
 pub(crate) fn freeze_active_layer(app: &mut PhotocraftApp) -> bool {
-    let Some(id) = app
-        .session
-        .active()
-        .and_then(|s| s.active_layer.filter(|&id| s.doc.layer(id).is_some_and(photocraft_doc::Layer::is_screentone)))
-    else {
+    let Some(id) = app.session.active().and_then(|s| s.active_layer.filter(|&id| s.doc.layer(id).is_some_and(photocraft_doc::Layer::is_screentone))) else {
         return false;
     };
     let _ = crate::preset_panels::run(app, "layer.rasterize.layer", json!({"layer": id.0}));
@@ -182,19 +184,13 @@ pub(crate) fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
     ui.horizontal(|ui| {
         row(ui, tl!("Mode:"));
-        if ui
-            .selectable_label(st.spec.mode == ScreentoneMode::Shading, tl!("Manga / Shading"))
-            .clicked()
-        {
+        if ui.selectable_label(st.spec.mode == ScreentoneMode::Shading, tl!("Manga / Shading")).clicked() {
             log::info!("[SCREENTONE:UI] Mode switched to: Manga / Shading (use_source_luminance=true)");
             st.spec.mode = ScreentoneMode::Shading;
             st.spec.use_source_luminance = true;
             st.spec.background[3] = 1.0;
         }
-        if ui
-            .selectable_label(st.spec.mode == ScreentoneMode::Sheet, tl!("Sheet / Pattern"))
-            .clicked()
-        {
+        if ui.selectable_label(st.spec.mode == ScreentoneMode::Sheet, tl!("Sheet / Pattern")).clicked() {
             log::info!("[SCREENTONE:UI] Mode switched to: Sheet / Pattern (use_source_luminance=false)");
             st.spec.mode = ScreentoneMode::Sheet;
             st.spec.use_source_luminance = false;
@@ -203,11 +199,7 @@ pub(crate) fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     });
     ui.horizontal(|ui| {
         row(ui, tl!("Engine:"));
-        if ui
-            .selectable_label(st.spec.backend == ScreentoneBackend::Auto, tl!("Auto"))
-            .on_hover_text(tl!("GPU on large canvases, CPU on small"))
-            .clicked()
-        {
+        if ui.selectable_label(st.spec.backend == ScreentoneBackend::Auto, tl!("Auto")).on_hover_text(tl!("GPU on large canvases, CPU on small")).clicked() {
             log::info!("[SCREENTONE:UI] Engine switched to: Auto");
             st.spec.backend = ScreentoneBackend::Auto;
         }
@@ -219,11 +211,7 @@ pub(crate) fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             log::info!("[SCREENTONE:UI] Engine switched to: ⚡ GPU");
             st.spec.backend = ScreentoneBackend::Gpu;
         }
-        if ui
-            .selectable_label(st.spec.backend == ScreentoneBackend::Cpu, tl!("⚙ CPU"))
-            .on_hover_text(tl!("Exact reference CPU engine"))
-            .clicked()
-        {
+        if ui.selectable_label(st.spec.backend == ScreentoneBackend::Cpu, tl!("⚙ CPU")).on_hover_text(tl!("Exact reference CPU engine")).clicked() {
             log::info!("[SCREENTONE:UI] Engine switched to: ⚙ CPU");
             st.spec.backend = ScreentoneBackend::Cpu;
         }
@@ -388,77 +376,71 @@ pub(crate) fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
     ui.add_space(4.0);
 
-    egui::CollapsingHeader::new(tl!("Satellites"))
-        .id_salt("screentone-satellites")
-        .default_open(st.spec.satellite_enabled)
-        .show(ui, |ui| {
-            egui::Grid::new("screentone-satellites-grid").num_columns(2).spacing(egui::vec2(8.0, 4.0)).show(ui, |ui| {
-                row(ui, "");
-                crate::widgets::checkbox(ui, &mut st.spec.satellite_enabled, tl!("Enable"));
-                ui.end_row();
+    egui::CollapsingHeader::new(tl!("Satellites")).id_salt("screentone-satellites").default_open(st.spec.satellite_enabled).show(ui, |ui| {
+        egui::Grid::new("screentone-satellites-grid").num_columns(2).spacing(egui::vec2(8.0, 4.0)).show(ui, |ui| {
+            row(ui, "");
+            crate::widgets::checkbox(ui, &mut st.spec.satellite_enabled, tl!("Enable"));
+            ui.end_row();
 
-                row(ui, tl!("Count:"));
-                let mut count = st.spec.satellite_count as f32;
-                if crate::widgets::value_field(ui, &mut count, 1.0..=4.0, "", 76.0).changed() {
-                    st.spec.satellite_count = count.round().clamp(1.0, 4.0) as u32;
-                }
-                ui.end_row();
+            row(ui, tl!("Count:"));
+            let mut count = st.spec.satellite_count as f32;
+            if crate::widgets::value_field(ui, &mut count, 1.0..=4.0, "", 76.0).changed() {
+                st.spec.satellite_count = count.round().clamp(1.0, 4.0) as u32;
+            }
+            ui.end_row();
 
-                row(ui, tl!("Distance:"));
-                crate::widgets::value_field(ui, &mut st.spec.satellite_distance, 0.0..=1000.0, "px", 76.0);
-                ui.end_row();
+            row(ui, tl!("Distance:"));
+            crate::widgets::value_field(ui, &mut st.spec.satellite_distance, 0.0..=1000.0, "px", 76.0);
+            ui.end_row();
 
-                row(ui, tl!("Size:"));
-                crate::widgets::value_field(ui, &mut st.spec.satellite_size, 0.0..=500.0, "px", 76.0);
-                ui.end_row();
+            row(ui, tl!("Size:"));
+            crate::widgets::value_field(ui, &mut st.spec.satellite_size, 0.0..=500.0, "px", 76.0);
+            ui.end_row();
 
-                row(ui, tl!("Angle:"));
-                crate::widgets::value_field(ui, &mut st.spec.satellite_angle, -180.0..=180.0, "°", 76.0);
-                ui.end_row();
+            row(ui, tl!("Angle:"));
+            crate::widgets::value_field(ui, &mut st.spec.satellite_angle, -180.0..=180.0, "°", 76.0);
+            ui.end_row();
 
-                row(ui, tl!("Shape:"));
-                let mut cur = id_of(&st.spec.satellite_dot_shape);
-                let labels: Vec<String> = SHAPES.iter().map(|s| crate::filter_dialog::source_label(s)).collect();
-                let opts: Vec<(String, &str)> = SHAPES.iter().map(|s| s.to_string()).zip(labels.iter().map(String::as_str)).collect();
-                if crate::widgets::dropdown(ui, "screentone-sat-shape", &mut cur, &opts, 176.0)
-                    && let Some(s) = from_id(&cur)
-                {
-                    st.spec.satellite_dot_shape = s;
-                }
-                ui.end_row();
+            row(ui, tl!("Shape:"));
+            let mut cur = id_of(&st.spec.satellite_dot_shape);
+            let labels: Vec<String> = SHAPES.iter().map(|s| crate::filter_dialog::source_label(s)).collect();
+            let opts: Vec<(String, &str)> = SHAPES.iter().map(|s| s.to_string()).zip(labels.iter().map(String::as_str)).collect();
+            if crate::widgets::dropdown(ui, "screentone-sat-shape", &mut cur, &opts, 176.0)
+                && let Some(s) = from_id(&cur)
+            {
+                st.spec.satellite_dot_shape = s;
+            }
+            ui.end_row();
 
-                row(ui, tl!("Stretch:"));
-                crate::widgets::value_field(ui, &mut st.spec.satellite_stretch, 0.0..=10.0, "", 76.0);
-                ui.end_row();
-            });
+            row(ui, tl!("Stretch:"));
+            crate::widgets::value_field(ui, &mut st.spec.satellite_stretch, 0.0..=10.0, "", 76.0);
+            ui.end_row();
         });
+    });
 
-    egui::CollapsingHeader::new(tl!("Distortion & Jitter"))
-        .id_salt("screentone-distortion")
-        .default_open(false)
-        .show(ui, |ui| {
-            egui::Grid::new("screentone-distortion-grid").num_columns(2).spacing(egui::vec2(8.0, 4.0)).show(ui, |ui| {
-                row(ui, tl!("Aspect X:"));
-                crate::widgets::value_field(ui, &mut st.spec.aspect_x, 0.1..=10.0, "", 76.0);
-                ui.end_row();
+    egui::CollapsingHeader::new(tl!("Distortion & Jitter")).id_salt("screentone-distortion").default_open(false).show(ui, |ui| {
+        egui::Grid::new("screentone-distortion-grid").num_columns(2).spacing(egui::vec2(8.0, 4.0)).show(ui, |ui| {
+            row(ui, tl!("Aspect X:"));
+            crate::widgets::value_field(ui, &mut st.spec.aspect_x, 0.1..=10.0, "", 76.0);
+            ui.end_row();
 
-                row(ui, tl!("Aspect Y:"));
-                crate::widgets::value_field(ui, &mut st.spec.aspect_y, 0.1..=10.0, "", 76.0);
-                ui.end_row();
+            row(ui, tl!("Aspect Y:"));
+            crate::widgets::value_field(ui, &mut st.spec.aspect_y, 0.1..=10.0, "", 76.0);
+            ui.end_row();
 
-                row(ui, tl!("Merge:"));
-                crate::widgets::value_field(ui, &mut st.spec.merge_factor, 0.0..=1.0, "", 76.0);
-                ui.end_row();
+            row(ui, tl!("Merge:"));
+            crate::widgets::value_field(ui, &mut st.spec.merge_factor, 0.0..=1.0, "", 76.0);
+            ui.end_row();
 
-                row(ui, tl!("Jitter Pos:"));
-                crate::widgets::value_field(ui, &mut st.spec.jitter_pos, 0.0..=100.0, "%", 76.0);
-                ui.end_row();
+            row(ui, tl!("Jitter Pos:"));
+            crate::widgets::value_field(ui, &mut st.spec.jitter_pos, 0.0..=100.0, "%", 76.0);
+            ui.end_row();
 
-                row(ui, tl!("Jitter Size:"));
-                crate::widgets::value_field(ui, &mut st.spec.jitter_size, 0.0..=100.0, "%", 76.0);
-                ui.end_row();
-            });
+            row(ui, tl!("Jitter Size:"));
+            crate::widgets::value_field(ui, &mut st.spec.jitter_size, 0.0..=100.0, "%", 76.0);
+            ui.end_row();
         });
+    });
 
     egui::CollapsingHeader::new(tl!("Gradient"))
         .id_salt("screentone-gradient")
@@ -501,10 +483,7 @@ pub(crate) fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     ui.add_space(6.0);
     crate::widgets::hairline(ui);
     ui.add_space(4.0);
-    let can_freeze = app
-        .session
-        .active()
-        .is_some_and(|s| s.active_layer.is_some_and(|id| s.doc.layer(id).is_some_and(photocraft_doc::Layer::is_screentone)));
+    let can_freeze = app.session.active().is_some_and(|s| s.active_layer.is_some_and(|id| s.doc.layer(id).is_some_and(photocraft_doc::Layer::is_screentone)));
     ui.horizontal(|ui| {
         if ui.button(tl!("New Layer")).clicked() {
             action = Some(photocraft_engine::screentone_cmds::LAYER);
@@ -525,11 +504,7 @@ pub(crate) fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         if ui.button(tl!("Save as Pattern")).clicked() {
             action = Some(photocraft_engine::screentone_cmds::PATTERN);
         }
-        ui.add(
-            egui::TextEdit::singleline(&mut st.name)
-                .hint_text(tl!("Pattern Name"))
-                .desired_width(116.0),
-        );
+        ui.add(egui::TextEdit::singleline(&mut st.name).hint_text(tl!("Pattern Name")).desired_width(116.0));
     });
     app.ui.screentone_ui = st;
     if freeze_clicked {
@@ -570,7 +545,7 @@ mod tests {
         let (mut app, ctx) = app(8);
         // The tab lives in the Color dock group after Patterns, in both pro and Studio orders.
         for pro in [false, true] {
-            assert_eq!(crate::dock::Group::Color.tabs(pro).get(COLOR_TAB), Some(&"GenTonik"), "pro {pro}");
+            assert_eq!(crate::dock::Group::Color.tabs(pro).get(COLOR_TAB), Some(&"Screentones"), "pro {pro}");
         }
         assert!(crate::menus::is_live(PANEL), "{PANEL}");
         crate::menus::invoke(&mut app, &ctx, PANEL, Value::Null).unwrap();

@@ -8,7 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// 12 pattern types supported by the GenTonik screentone engine.
+/// 12 pattern types supported by the comic screentone engine.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum PatternType {

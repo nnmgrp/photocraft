@@ -150,14 +150,18 @@ fn apply_mask(s: &mut Session, p: &Value) -> Result<Value> {
         let layer = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         // A live screentone has no editable pixel surface. Applying a mask bakes its rendered
         // cache into pixels first, so the command is a one-step "rasterize, then multiply".
-        let format = layer
-            .surface()
-            .map(|s| s.format())
-            .ok_or_else(|| other("the layer has no pixels to apply a mask to"))?;
+        let format = layer.surface().map(|s| s.format()).ok_or_else(|| other("the layer has no pixels to apply a mask to"))?;
         let mask = layer.mask.take().ok_or_else(|| other("the layer has no layer mask"))?;
         let mut surf = match &mut layer.content {
             LayerContent::Raster(s) => std::mem::replace(s, Surface::new(format)),
-            LayerContent::Screentone(s) => std::mem::replace(&mut s.surface, Surface::new(format)),
+            LayerContent::Screentone(s) => {
+                if s.surface.tile_count() == 0 {
+                    let mb = mask.surface.content_bounds();
+                    let bounds = if !mb.is_empty() { mb } else { Rect::new(0, 0, 1024, 1024) };
+                    let _ = photocraft_algo::screentone::render_screentone_to_surface(&mut s.surface, bounds, &s.spec, s.origin);
+                }
+                std::mem::replace(&mut s.surface, Surface::new(format))
+            }
             _ => return Err(other("not a pixel layer")),
         };
         let r = surf.content_bounds();

@@ -13,8 +13,8 @@ use std::cmp::Ordering;
 use std::path::{Path, PathBuf};
 
 use egui::{
-    self, Align, Color32, CornerRadius, CursorIcon, FontFamily, FontId, Id, Layout, Margin, Pos2,
-    Rect, RichText, Sense, Stroke, StrokeKind, TextureId, Ui, Vec2,
+    self, Align, Color32, CornerRadius, CursorIcon, FontFamily, FontId, Id, Layout, Margin, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, TextureId, Ui,
+    Vec2,
 };
 
 // ============================================================================
@@ -88,11 +88,7 @@ impl PageItemInfo {
     /// Вычисляет процент готовности перевода/верстки страницы (от `0.0` до `1.0`).
     #[must_use]
     pub fn completion_ratio(&self) -> f32 {
-        if self.total_lines == 0 {
-            0.0
-        } else {
-            (self.applied_lines as f32 / self.total_lines as f32).clamp(0.0, 1.0)
-        }
+        if self.total_lines == 0 { 0.0 } else { (self.applied_lines as f32 / self.total_lines as f32).clamp(0.0, 1.0) }
     }
 
     /// Проверяет, завершена ли верстка всех реплик на странице.
@@ -103,10 +99,7 @@ impl PageItemInfo {
 }
 
 pub(crate) fn can_quick_save_page(doc: &photocraft_doc::Document, path: Option<&str>, is_dirty: bool) -> bool {
-    is_dirty
-        && path.is_some_and(|path| {
-            photocraft_engine::file_cmds::saves_in_place(path) && photocraft_engine::file_cmds::holds_at(doc, path)
-        })
+    is_dirty && path.is_some_and(|path| photocraft_engine::file_cmds::saves_in_place(path) && photocraft_engine::file_cmds::holds_at(doc, path))
 }
 
 /// Срез данных о документах сессии, передаваемый в `PagesPanelState::render_embedded` на каждом кадре.
@@ -215,11 +208,7 @@ impl Default for PagesPanelState {
 #[must_use]
 pub fn parse_page_number_from_name(filename: &str) -> Option<usize> {
     // 1. Отделяем имя файла от пути и расширения
-    let stem = Path::new(filename)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or(filename)
-        .trim();
+    let stem = Path::new(filename).file_stem().and_then(|s| s.to_str()).unwrap_or(filename).trim();
 
     if stem.is_empty() {
         return None;
@@ -260,10 +249,8 @@ pub fn parse_page_number_from_name(filename: &str) -> Option<usize> {
         if i > 0 {
             if let Some(&(_, prefix_raw)) = tokens.get(i.saturating_sub(1)) {
                 let prefix = prefix_raw.trim_matches(|c: char| !c.is_alphabetic());
-                let is_page_marker = matches!(prefix, "p" | "pg" | "page" | "pages" | "стр")
-                    || prefix.ends_with("_p")
-                    || prefix.ends_with("-p")
-                    || prefix.ends_with("page");
+                let is_page_marker =
+                    matches!(prefix, "p" | "pg" | "page" | "pages" | "стр") || prefix.ends_with("_p") || prefix.ends_with("-p") || prefix.ends_with("page");
 
                 if is_page_marker {
                     if let Ok(page_num) = num_str.parse::<usize>() {
@@ -289,10 +276,7 @@ pub fn parse_page_number_from_name(filename: &str) -> Option<usize> {
                 .get(i.saturating_sub(1))
                 .map(|&(_, pref)| {
                     let clean = pref.trim_matches(|c: char| !c.is_alphabetic());
-                    matches!(
-                        clean,
-                        "ch" | "c" | "chap" | "chapter" | "vol" | "v" | "volume" | "том" | "гл"
-                    )
+                    matches!(clean, "ch" | "c" | "chap" | "chapter" | "vol" | "v" | "volume" | "том" | "гл")
                 })
                 .unwrap_or(false)
         } else {
@@ -312,11 +296,7 @@ pub fn parse_page_number_from_name(filename: &str) -> Option<usize> {
     }
 
     // 5. Fallback: если в имени было только одно число с префиксом (например "ch01.png"), берем последнее любое число
-    tokens
-        .iter()
-        .rev()
-        .find(|&&(is_digit, _)| is_digit)
-        .and_then(|&(_, num_str)| num_str.parse::<usize>().ok())
+    tokens.iter().rev().find(|&&(is_digit, _)| is_digit).and_then(|&(_, num_str)| num_str.parse::<usize>().ok())
 }
 
 /// Токен для натуральной сортировки строк (текстовый фрагмент или числовое значение).
@@ -335,9 +315,7 @@ impl PartialOrd for NaturalToken {
 impl Ord for NaturalToken {
     fn cmp(&self, other: &Self) -> Ordering {
         match (self, other) {
-            (Self::Number(n1, z1), Self::Number(n2, z2)) => {
-                n1.cmp(n2).then_with(|| z1.cmp(z2))
-            }
+            (Self::Number(n1, z1), Self::Number(n2, z2)) => n1.cmp(n2).then_with(|| z1.cmp(z2)),
             (Self::Text(t1), Self::Text(t2)) => t1.cmp(t2),
             // Числа идут перед буквами при прочих равных
             (Self::Number(..), Self::Text(_)) => Ordering::Less,
@@ -399,22 +377,12 @@ pub fn natural_cmp_str(a: &str, b: &str) -> Ordering {
 /// `"1.png"`, `"2.png"`, `"10.png"`, `"ch1_p2.png"`, `"ch1_p10.png"`.
 pub fn natural_sort_paths(paths: &mut [PathBuf]) {
     paths.sort_by(|a, b| {
-        let name_a = a
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or_default();
-        let name_b = b
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or_default();
+        let name_a = a.file_name().and_then(|s| s.to_str()).unwrap_or_default();
+        let name_b = b.file_name().and_then(|s| s.to_str()).unwrap_or_default();
 
         // Сначала сравниваем имена файлов натурально, а при совпадении — полные пути
         let cmp = natural_cmp_str(name_a, name_b);
-        if cmp == Ordering::Equal {
-            a.cmp(b)
-        } else {
-            cmp
-        }
+        if cmp == Ordering::Equal { a.cmp(b) } else { cmp }
     });
 }
 
@@ -434,11 +402,7 @@ impl PagesPanelState {
     /// Возвращает `Some(PagesPanelAction)`, если пользователь совершил действие
     /// (выбор страницы, закрытие, перестановка, открытие главы и т.д.).
     #[must_use]
-    pub fn render_embedded(
-        &mut self,
-        ui: &mut Ui,
-        view_info: &PagesViewInfo,
-    ) -> Option<PagesPanelAction> {
+    pub fn render_embedded(&mut self, ui: &mut Ui, view_info: &PagesViewInfo) -> Option<PagesPanelAction> {
         let mut triggered_action: Option<PagesPanelAction> = None;
 
         // Внешний отступ и вертикальная компоновка всей панели
@@ -458,11 +422,7 @@ impl PagesPanelState {
         }
 
         // 3. ФИЛЬТРАЦИЯ СПИСКА СТРАНИЦ
-        let filtered_items: Vec<&PageItemInfo> = view_info
-            .items
-            .iter()
-            .filter(|item| self.matches_filter(item))
-            .collect();
+        let filtered_items: Vec<&PageItemInfo> = view_info.items.iter().filter(|item| self.matches_filter(item)).collect();
 
         // 4. ОСНОВНАЯ ОБЛАСТЬ ПРОКРУТКИ КАРТОЧЕК СТРАНИЦ
         if view_info.items.is_empty() {
@@ -472,25 +432,18 @@ impl PagesPanelState {
         } else if filtered_items.is_empty() {
             self.render_no_filter_matches(ui);
         } else {
-            egui::ScrollArea::vertical()
-                .id_salt("photocraft_pages_panel_scroll")
-                .auto_shrink([false, false])
-                .show(ui, |scroll_ui| {
-                    scroll_ui.add_space(2.0);
-                    let list_action = match self.view_mode {
-                        PagesViewMode::SingleColumnList => {
-                            self.render_single_column_list(scroll_ui, &filtered_items, view_info.items.len())
-                        }
-                        PagesViewMode::TwoColumnGrid => {
-                            self.render_two_column_grid(scroll_ui, &filtered_items, view_info.items.len())
-                        }
-                    };
+            egui::ScrollArea::vertical().id_salt("photocraft_pages_panel_scroll").auto_shrink([false, false]).show(ui, |scroll_ui| {
+                scroll_ui.add_space(2.0);
+                let list_action = match self.view_mode {
+                    PagesViewMode::SingleColumnList => self.render_single_column_list(scroll_ui, &filtered_items, view_info.items.len()),
+                    PagesViewMode::TwoColumnGrid => self.render_two_column_grid(scroll_ui, &filtered_items, view_info.items.len()),
+                };
 
-                    if list_action.is_some() {
-                        triggered_action = list_action;
-                    }
-                    scroll_ui.add_space(12.0);
-                });
+                if list_action.is_some() {
+                    triggered_action = list_action;
+                }
+                scroll_ui.add_space(12.0);
+            });
         }
 
         // Сброс состояния Drag-and-Drop при отпускании кнопки мыши вне карточек
@@ -506,11 +459,7 @@ impl PagesPanelState {
     // ВЕРХНИЙ ТУЛБАР И ФИЛЬТРЫ
     // ------------------------------------------------------------------------
 
-    fn render_top_toolbar(
-        &mut self,
-        ui: &mut Ui,
-        view_info: &PagesViewInfo,
-    ) -> Option<PagesPanelAction> {
+    fn render_top_toolbar(&mut self, ui: &mut Ui, view_info: &PagesViewInfo) -> Option<PagesPanelAction> {
         let mut action: Option<PagesPanelAction> = None;
 
         // Строка 1: Главные кнопки управления главой
@@ -518,29 +467,16 @@ impl PagesPanelState {
             let avail_w = ui.available_width();
             let btn_width = ((avail_w - 6.0) * 0.5).max(80.0);
 
-            let open_chapter_btn = egui::Button::new(
-                RichText::new("📂 Открыть главу…").size(12.5).strong(),
-            )
-            .min_size(Vec2::new(btn_width, 26.0));
+            let open_chapter_btn = egui::Button::new(RichText::new("📂 Открыть главу…").size(12.5).strong()).min_size(Vec2::new(btn_width, 26.0));
 
-            if ui
-                .add(open_chapter_btn)
-                .on_hover_text("Выбрать папку с изображениями главы (автоматическая натуральная сортировка)")
-                .clicked()
+            if ui.add(open_chapter_btn).on_hover_text("Выбрать папку с изображениями главы (автоматическая натуральная сортировка)").clicked()
             {
                 action = Some(PagesPanelAction::OpenChapterFolder);
             }
 
-            let add_pages_btn = egui::Button::new(
-                RichText::new("➕ Добавить листы").size(12.5),
-            )
-            .min_size(Vec2::new(btn_width, 26.0));
+            let add_pages_btn = egui::Button::new(RichText::new("➕ Добавить листы").size(12.5)).min_size(Vec2::new(btn_width, 26.0));
 
-            if ui
-                .add(add_pages_btn)
-                .on_hover_text("Добавить отдельные файлы страниц в текущую сессию")
-                .clicked()
-            {
+            if ui.add(add_pages_btn).on_hover_text("Добавить отдельные файлы страниц в текущую сессию").clicked() {
                 action = Some(PagesPanelAction::AddPages);
             }
         });
@@ -549,30 +485,19 @@ impl PagesPanelState {
         ui.horizontal(|ui| {
             // Кнопка режима 1 колонки
             let is_list = self.view_mode == PagesViewMode::SingleColumnList;
-            if ui
-                .selectable_label(is_list, "☰ Список")
-                .on_hover_text("Подробный вид в одну колонку")
-                .clicked()
-            {
+            if ui.selectable_label(is_list, "☰ Список").on_hover_text("Подробный вид в одну колонку").clicked() {
                 self.view_mode = PagesViewMode::SingleColumnList;
             }
 
             // Кнопка режима 2-колоночной сетки
             let is_grid = self.view_mode == PagesViewMode::TwoColumnGrid;
-            if ui
-                .selectable_label(is_grid, "⊞ Сетка")
-                .on_hover_text("Компактная двухколоночная сетка миниатюр")
-                .clicked()
+            if ui.selectable_label(is_grid, "⊞ Сетка").on_hover_text("Компактная двухколоночная сетка миниатюр").clicked()
             {
                 self.view_mode = PagesViewMode::TwoColumnGrid;
             }
 
             // Кнопка натуральной сортировки открытых листов
-            if view_info.items.len() > 1
-                && ui
-                    .button("🔃 А-Я")
-                    .on_hover_text("Отсортировать открытые страницы по номерам (1, 2, 10...)")
-                    .clicked()
+            if view_info.items.len() > 1 && ui.button("🔃 А-Я").on_hover_text("Отсортировать открытые страницы по номерам (1, 2, 10...)").clicked()
             {
                 action = Some(PagesPanelAction::SortPagesNaturally);
             }
@@ -592,9 +517,7 @@ impl PagesPanelState {
                 let mut sync_flag = self.auto_sync_typer;
                 if ui
                     .checkbox(&mut sync_flag, RichText::new("🔗 TypeR").size(12.0))
-                    .on_hover_text(
-                        "Автоматически переключать таблицу реплик TypeR при выборе страницы",
-                    )
+                    .on_hover_text("Автоматически переключать таблицу реплик TypeR при выборе страницы")
                     .changed()
                 {
                     self.auto_sync_typer = sync_flag;
@@ -605,18 +528,12 @@ impl PagesPanelState {
 
         // Строка 3: Быстрый поиск и фильтр по статусу
         ui.horizontal(|ui| {
-            let search_edit = egui::TextEdit::singleline(&mut self.search_query)
-                .hint_text("🔍 Номер или имя файла…")
-                .desired_width(ui.available_width() - 92.0);
+            let search_edit =
+                egui::TextEdit::singleline(&mut self.search_query).hint_text("🔍 Номер или имя файла…").desired_width(ui.available_width() - 92.0);
 
             ui.add(search_edit);
 
-            if !self.search_query.is_empty()
-                && ui
-                    .small_button("✖")
-                    .on_hover_text("Очистить поиск")
-                    .clicked()
-            {
+            if !self.search_query.is_empty() && ui.small_button("✖").on_hover_text("Очистить поиск").clicked() {
                 self.search_query.clear();
             }
 
@@ -631,21 +548,9 @@ impl PagesPanelState {
                 })
                 .show_ui(ui, |ui| {
                     ui.selectable_value(&mut self.status_filter, PageStatusFilter::All, "Все листы");
-                    ui.selectable_value(
-                        &mut self.status_filter,
-                        PageStatusFilter::IncompleteOnly,
-                        "⏳ В работе",
-                    );
-                    ui.selectable_value(
-                        &mut self.status_filter,
-                        PageStatusFilter::CompletedOnly,
-                        "✅ Готовые",
-                    );
-                    ui.selectable_value(
-                        &mut self.status_filter,
-                        PageStatusFilter::DirtyOnly,
-                        "● Несохраненные",
-                    );
+                    ui.selectable_value(&mut self.status_filter, PageStatusFilter::IncompleteOnly, "⏳ В работе");
+                    ui.selectable_value(&mut self.status_filter, PageStatusFilter::CompletedOnly, "✅ Готовые");
+                    ui.selectable_value(&mut self.status_filter, PageStatusFilter::DirtyOnly, "● Несохраненные");
                 });
         });
 
@@ -659,56 +564,28 @@ impl PagesPanelState {
         let applied_lines: usize = view_info.items.iter().map(|i| i.applied_lines).sum();
         let dirty_count = view_info.items.iter().filter(|i| i.is_dirty).count();
 
-        egui::Frame::NONE
-            .fill(ui.visuals().faint_bg_color)
-            .corner_radius(CornerRadius::same(4))
-            .inner_margin(Margin::symmetric(8, 4))
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    let folder_title = view_info
-                        .chapter_folder_name
-                        .as_deref()
-                        .unwrap_or("Сессия главы");
+        egui::Frame::NONE.fill(ui.visuals().faint_bg_color).corner_radius(CornerRadius::same(4)).inner_margin(Margin::symmetric(8, 4)).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                let folder_title = view_info.chapter_folder_name.as_deref().unwrap_or("Сессия главы");
 
-                    ui.label(
-                        RichText::new(format!("📑 {folder_title}: {total_pages} стр."))
-                            .size(11.5)
-                            .strong(),
-                    );
+                ui.label(RichText::new(format!("📑 {folder_title}: {total_pages} стр.")).size(11.5).strong());
 
-                    if dirty_count > 0 {
-                        ui.label(
-                            RichText::new(format!("• {dirty_count} не сохр."))
-                                .size(11.0)
-                                .color(Color32::from_rgb(240, 160, 50)),
-                        );
-                    }
+                if dirty_count > 0 {
+                    ui.label(RichText::new(format!("• {dirty_count} не сохр.")).size(11.0).color(Color32::from_rgb(240, 160, 50)));
+                }
 
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if total_lines > 0 {
-                            let all_done = applied_lines >= total_lines;
-                            let badge_color = if all_done {
-                                Color32::from_rgb(46, 160, 67)
-                            } else {
-                                Color32::from_rgb(88, 166, 255)
-                            };
-                            ui.label(
-                                RichText::new(format!("📝 {applied_lines}/{total_lines}"))
-                                    .size(11.5)
-                                    .strong()
-                                    .color(badge_color),
-                            )
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if total_lines > 0 {
+                        let all_done = applied_lines >= total_lines;
+                        let badge_color = if all_done { Color32::from_rgb(46, 160, 67) } else { Color32::from_rgb(88, 166, 255) };
+                        ui.label(RichText::new(format!("📝 {applied_lines}/{total_lines}")).size(11.5).strong().color(badge_color))
                             .on_hover_text("Общий прогресс вставки реплик TypeR по всей главе");
-                        } else {
-                            ui.label(
-                                RichText::new("📝 0/0")
-                                    .size(11.0)
-                                    .color(ui.visuals().weak_text_color()),
-                            );
-                        }
-                    });
+                    } else {
+                        ui.label(RichText::new("📝 0/0").size(11.0).color(ui.visuals().weak_text_color()));
+                    }
                 });
             });
+        });
     }
 
     // ------------------------------------------------------------------------
@@ -720,9 +597,7 @@ impl PagesPanelState {
         // 1. Проверка фильтра по статусу
         let status_ok = match self.status_filter {
             PageStatusFilter::All => true,
-            PageStatusFilter::IncompleteOnly => {
-                item.total_lines == 0 || item.applied_lines < item.total_lines
-            }
+            PageStatusFilter::IncompleteOnly => item.total_lines == 0 || item.applied_lines < item.total_lines,
             PageStatusFilter::CompletedOnly => item.is_translation_complete(),
             PageStatusFilter::DirtyOnly => item.is_dirty,
         };
@@ -763,18 +638,11 @@ impl PagesPanelState {
     // РЕЖИМ 1: СПИСОК В ОДНУ КОЛОНКУ (SINGLE COLUMN LIST)
     // ------------------------------------------------------------------------
 
-    fn render_single_column_list(
-        &mut self,
-        ui: &mut Ui,
-        items: &[&PageItemInfo],
-        total_session_docs: usize,
-    ) -> Option<PagesPanelAction> {
+    fn render_single_column_list(&mut self, ui: &mut Ui, items: &[&PageItemInfo], total_session_docs: usize) -> Option<PagesPanelAction> {
         let mut action: Option<PagesPanelAction> = None;
 
         for &item in items {
-            if let Some(card_action) =
-                self.render_page_card_list_mode(ui, item, total_session_docs)
-            {
+            if let Some(card_action) = self.render_page_card_list_mode(ui, item, total_session_docs) {
                 action = Some(card_action);
             }
         }
@@ -783,24 +651,17 @@ impl PagesPanelState {
     }
 
     /// Отрисовывает горизонтальную карточку страницы для режима одной колонки.
-    fn render_page_card_list_mode(
-        &mut self,
-        ui: &mut Ui,
-        item: &PageItemInfo,
-        total_session_docs: usize,
-    ) -> Option<PagesPanelAction> {
+    fn render_page_card_list_mode(&mut self, ui: &mut Ui, item: &PageItemInfo, total_session_docs: usize) -> Option<PagesPanelAction> {
         let mut action: Option<PagesPanelAction> = None;
 
         let card_height = 76.0;
         let avail_width = ui.available_width();
         let card_id = Id::new(("photocraft_page_card_list", item.doc_index));
 
-        let (rect, response) =
-            ui.allocate_exact_size(Vec2::new(avail_width, card_height), Sense::click_and_drag());
+        let (rect, response) = ui.allocate_exact_size(Vec2::new(avail_width, card_height), Sense::click_and_drag());
 
         // Обработка Drag-and-Drop
-        if let Some(dnd_action) = self.handle_card_drag_and_drop(ui, &response, rect, item.doc_index)
-        {
+        if let Some(dnd_action) = self.handle_card_drag_and_drop(ui, &response, rect, item.doc_index) {
             action = Some(dnd_action);
         }
 
@@ -809,135 +670,65 @@ impl PagesPanelState {
         let (bg_color, border_stroke) = self.compute_card_style(ui, item.is_active, is_hovered, item.doc_index);
 
         // Отрисовка подложки карточки
-        ui.painter().rect(
-            rect,
-            CornerRadius::same(6),
-            bg_color,
-            border_stroke,
-            StrokeKind::Inside,
-        );
+        ui.painter().rect(rect, CornerRadius::same(6), bg_color, border_stroke, StrokeKind::Inside);
 
         // Левая полоска-акцент для активной страницы
         if item.is_active {
-            let accent_rect = Rect::from_min_max(
-                rect.min,
-                Pos2::new(rect.min.x + 4.0, rect.max.y),
-            );
-            ui.painter().rect_filled(
-                accent_rect,
-                CornerRadius {
-                    nw: 6,
-                    sw: 6,
-                    ne: 0,
-                    se: 0,
-                },
-                Color32::from_rgb(56, 139, 253),
-            );
+            let accent_rect = Rect::from_min_max(rect.min, Pos2::new(rect.min.x + 4.0, rect.max.y));
+            ui.painter().rect_filled(accent_rect, CornerRadius { nw: 6, sw: 6, ne: 0, se: 0 }, Color32::from_rgb(56, 139, 253));
         }
 
         // 1. Миниатюра пропорций 3:4 слева
         let thumb_h = card_height - 12.0;
         let thumb_w = (thumb_h * 0.75).round();
-        let thumb_rect = Rect::from_min_size(
-            Pos2::new(rect.min.x + 10.0, rect.min.y + 6.0),
-            Vec2::new(thumb_w, thumb_h),
-        );
+        let thumb_rect = Rect::from_min_size(Pos2::new(rect.min.x + 10.0, rect.min.y + 6.0), Vec2::new(thumb_w, thumb_h));
         self.paint_thumbnail_preview(ui, thumb_rect, item);
 
         // 2. Правая информационная часть карточки
         let content_min_x = thumb_rect.max.x + 10.0;
         let content_max_x = rect.max.x - 8.0;
-        let content_rect = Rect::from_min_max(
-            Pos2::new(content_min_x, rect.min.y + 6.0),
-            Pos2::new(content_max_x.max(content_min_x + 10.0), rect.max.y - 6.0),
-        );
+        let content_rect = Rect::from_min_max(Pos2::new(content_min_x, rect.min.y + 6.0), Pos2::new(content_max_x.max(content_min_x + 10.0), rect.max.y - 6.0));
 
-        let mut child_ui = ui.new_child(
-            egui::UiBuilder::new()
-                .max_rect(content_rect)
-                .layout(Layout::top_down(Align::Min))
-                .id_salt(card_id),
-        );
+        let mut child_ui = ui.new_child(egui::UiBuilder::new().max_rect(content_rect).layout(Layout::top_down(Align::Min)).id_salt(card_id));
 
         // Верхняя строка: "Стр. X", индикатор несохраненных изменений и кнопки быстрого перемещения/закрытия
         child_ui.horizontal(|ui| {
-            let page_label_color = if item.is_active {
-                Color32::from_rgb(100, 180, 255)
-            } else {
-                ui.visuals().strong_text_color()
-            };
+            let page_label_color = if item.is_active { Color32::from_rgb(100, 180, 255) } else { ui.visuals().strong_text_color() };
 
-            ui.label(
-                RichText::new(format!("Стр. {}", item.detected_page))
-                    .size(13.5)
-                    .strong()
-                    .color(page_label_color),
-            );
+            ui.label(RichText::new(format!("Стр. {}", item.detected_page)).size(13.5).strong().color(page_label_color));
 
             if item.is_dirty {
-                ui.label(
-                    RichText::new("●")
-                        .size(11.0)
-                        .color(Color32::from_rgb(245, 166, 35)),
-                )
-                .on_hover_text("Есть несохраненные изменения (is_dirty)");
+                ui.label(RichText::new("●").size(11.0).color(Color32::from_rgb(245, 166, 35))).on_hover_text("Есть несохраненные изменения (is_dirty)");
             }
 
             // Кнопки управления справа (вверх, вниз, закрыть)
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
 
-                if ui
-                    .small_button("✖")
-                    .on_hover_text("Закрыть страницу")
-                    .clicked()
-                {
+                if ui.small_button("✖").on_hover_text("Закрыть страницу").clicked() {
                     action = Some(PagesPanelAction::ClosePage(item.doc_index));
                 }
 
                 if item.can_quick_save {
-                    if ui
-                        .small_button("💾")
-                        .on_hover_text("Сохранить страницу в её файл")
-                        .clicked()
-                    {
+                    if ui.small_button("💾").on_hover_text("Сохранить страницу в её файл").clicked() {
                         action = Some(PagesPanelAction::SavePage(item.doc_index));
                     }
                 }
 
-                if item.doc_index + 1 < total_session_docs
-                    && ui
-                        .small_button("↓")
-                        .on_hover_text("Переместить страницу ниже")
-                        .clicked()
+                if item.doc_index + 1 < total_session_docs && ui.small_button("↓").on_hover_text("Переместить страницу ниже").clicked()
                 {
-                    action = Some(PagesPanelAction::ReorderPages {
-                        from_idx: item.doc_index,
-                        to_idx: item.doc_index + 1,
-                    });
+                    action = Some(PagesPanelAction::ReorderPages { from_idx: item.doc_index, to_idx: item.doc_index + 1 });
                 }
 
-                if item.doc_index > 0
-                    && ui
-                        .small_button("↑")
-                        .on_hover_text("Переместить страницу выше")
-                        .clicked()
-                {
-                    action = Some(PagesPanelAction::ReorderPages {
-                        from_idx: item.doc_index,
-                        to_idx: item.doc_index.saturating_sub(1),
-                    });
+                if item.doc_index > 0 && ui.small_button("↑").on_hover_text("Переместить страницу выше").clicked() {
+                    action = Some(PagesPanelAction::ReorderPages { from_idx: item.doc_index, to_idx: item.doc_index.saturating_sub(1) });
                 }
             });
         });
 
         // Средняя строка: обрезанное имя файла
         let truncated_title = truncate_middle(&item.title, 24);
-        child_ui.label(
-            RichText::new(truncated_title)
-                .size(11.5)
-                .color(child_ui.visuals().text_color()),
-        );
+        child_ui.label(RichText::new(truncated_title).size(11.5).color(child_ui.visuals().text_color()));
 
         child_ui.add_space(2.0);
 
@@ -962,9 +753,7 @@ impl PagesPanelState {
 
         // Контекстное меню (ПКМ по карточке)
         response.context_menu(|menu_ui| {
-            if let Some(menu_action) =
-                self.render_card_context_menu(menu_ui, item, total_session_docs)
-            {
+            if let Some(menu_action) = self.render_card_context_menu(menu_ui, item, total_session_docs) {
                 action = Some(menu_action);
             }
         });
@@ -976,12 +765,7 @@ impl PagesPanelState {
     // РЕЖИМ 2: ДВУХКОЛОНОЧНАЯ СЕТКА МИНИАТЮР (TWO COLUMN GRID)
     // ------------------------------------------------------------------------
 
-    fn render_two_column_grid(
-        &mut self,
-        ui: &mut Ui,
-        items: &[&PageItemInfo],
-        total_session_docs: usize,
-    ) -> Option<PagesPanelAction> {
+    fn render_two_column_grid(&mut self, ui: &mut Ui, items: &[&PageItemInfo], total_session_docs: usize) -> Option<PagesPanelAction> {
         let mut action: Option<PagesPanelAction> = None;
 
         let spacing = 8.0;
@@ -994,9 +778,7 @@ impl PagesPanelState {
                 row_ui.spacing_mut().item_spacing.x = spacing;
 
                 for &item in row_pair {
-                    if let Some(card_action) =
-                        self.render_page_card_grid_mode(row_ui, item, col_width, total_session_docs)
-                    {
+                    if let Some(card_action) = self.render_page_card_grid_mode(row_ui, item, col_width, total_session_docs) {
                         action = Some(card_action);
                     }
                 }
@@ -1008,13 +790,7 @@ impl PagesPanelState {
     }
 
     /// Отрисовывает компактную вертикальную карточку страницы для 2-колоночной сетки.
-    fn render_page_card_grid_mode(
-        &mut self,
-        ui: &mut Ui,
-        item: &PageItemInfo,
-        card_width: f32,
-        total_session_docs: usize,
-    ) -> Option<PagesPanelAction> {
+    fn render_page_card_grid_mode(&mut self, ui: &mut Ui, item: &PageItemInfo, card_width: f32, total_session_docs: usize) -> Option<PagesPanelAction> {
         let mut action: Option<PagesPanelAction> = None;
 
         // Пропорции миниатюры 3:4 + место под заголовок и бейдж
@@ -1022,32 +798,20 @@ impl PagesPanelState {
         let thumb_h = (thumb_w * (4.0 / 3.0) * self.thumbnail_scale).round();
         let card_height = thumb_h + 54.0;
 
-        let (rect, response) =
-            ui.allocate_exact_size(Vec2::new(card_width, card_height), Sense::click_and_drag());
+        let (rect, response) = ui.allocate_exact_size(Vec2::new(card_width, card_height), Sense::click_and_drag());
 
         // Обработка Drag-and-Drop
-        if let Some(dnd_action) = self.handle_card_drag_and_drop(ui, &response, rect, item.doc_index)
-        {
+        if let Some(dnd_action) = self.handle_card_drag_and_drop(ui, &response, rect, item.doc_index) {
             action = Some(dnd_action);
         }
 
         let is_hovered = response.hovered();
-        let (bg_color, border_stroke) =
-            self.compute_card_style(ui, item.is_active, is_hovered, item.doc_index);
+        let (bg_color, border_stroke) = self.compute_card_style(ui, item.is_active, is_hovered, item.doc_index);
 
-        ui.painter().rect(
-            rect,
-            CornerRadius::same(6),
-            bg_color,
-            border_stroke,
-            StrokeKind::Inside,
-        );
+        ui.painter().rect(rect, CornerRadius::same(6), bg_color, border_stroke, StrokeKind::Inside);
 
         // 1. Область миниатюры 3:4 сверху
-        let thumb_rect = Rect::from_min_size(
-            Pos2::new(rect.min.x + 6.0, rect.min.y + 6.0),
-            Vec2::new(thumb_w, thumb_h),
-        );
+        let thumb_rect = Rect::from_min_size(Pos2::new(rect.min.x + 6.0, rect.min.y + 6.0), Vec2::new(thumb_w, thumb_h));
         self.paint_thumbnail_preview(ui, thumb_rect, item);
 
         // Оверлей-бейдж готовности реплик прямо поверх нижнего правого угла миниатюры
@@ -1056,55 +820,30 @@ impl PagesPanelState {
         // Индикатор несохраненных изменений в левом верхнем углу миниатюры
         if item.is_dirty {
             let dirty_center = Pos2::new(thumb_rect.min.x + 10.0, thumb_rect.min.y + 10.0);
-            ui.painter()
-                .circle_filled(dirty_center, 5.5, Color32::from_rgba_unmultiplied(20, 20, 25, 200));
-            ui.painter()
-                .circle_filled(dirty_center, 4.0, Color32::from_rgb(245, 166, 35));
+            ui.painter().circle_filled(dirty_center, 5.5, Color32::from_rgba_unmultiplied(20, 20, 25, 200));
+            ui.painter().circle_filled(dirty_center, 4.0, Color32::from_rgb(245, 166, 35));
         }
 
         // 2. Подпись под миниатюрой: "Стр. X" и сокращенное имя файла
-        let footer_rect = Rect::from_min_max(
-            Pos2::new(rect.min.x + 6.0, thumb_rect.max.y + 4.0),
-            Pos2::new(rect.max.x - 6.0, rect.max.y - 4.0),
-        );
+        let footer_rect = Rect::from_min_max(Pos2::new(rect.min.x + 6.0, thumb_rect.max.y + 4.0), Pos2::new(rect.max.x - 6.0, rect.max.y - 4.0));
 
         let mut footer_ui = ui.new_child(
-            egui::UiBuilder::new()
-                .max_rect(footer_rect)
-                .layout(Layout::top_down(Align::Min))
-                .id_salt(("photocraft_page_card_grid_footer", item.doc_index)),
+            egui::UiBuilder::new().max_rect(footer_rect).layout(Layout::top_down(Align::Min)).id_salt(("photocraft_page_card_grid_footer", item.doc_index)),
         );
 
         footer_ui.horizontal(|ui| {
-            let title_color = if item.is_active {
-                Color32::from_rgb(100, 180, 255)
-            } else {
-                ui.visuals().strong_text_color()
-            };
+            let title_color = if item.is_active { Color32::from_rgb(100, 180, 255) } else { ui.visuals().strong_text_color() };
 
             let dirty_suffix = if item.is_dirty { " *" } else { "" };
-            ui.label(
-                RichText::new(format!("Стр. {}{}", item.detected_page, dirty_suffix))
-                    .size(12.5)
-                    .strong()
-                    .color(title_color),
-            );
+            ui.label(RichText::new(format!("Стр. {}{}", item.detected_page, dirty_suffix)).size(12.5).strong().color(title_color));
 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui
-                    .small_button("✖")
-                    .on_hover_text("Закрыть страницу")
-                    .clicked()
-                {
+                if ui.small_button("✖").on_hover_text("Закрыть страницу").clicked() {
                     action = Some(PagesPanelAction::ClosePage(item.doc_index));
                 }
 
                 if item.can_quick_save {
-                    if ui
-                        .small_button("💾")
-                        .on_hover_text("Сохранить страницу в её файл")
-                        .clicked()
-                    {
+                    if ui.small_button("💾").on_hover_text("Сохранить страницу в её файл").clicked() {
                         action = Some(PagesPanelAction::SavePage(item.doc_index));
                     }
                 }
@@ -1112,11 +851,7 @@ impl PagesPanelState {
         });
 
         let short_name = truncate_middle(&item.title, 15);
-        footer_ui.label(
-            RichText::new(short_name)
-                .size(11.0)
-                .color(footer_ui.visuals().weak_text_color()),
-        );
+        footer_ui.label(RichText::new(short_name).size(11.0).color(footer_ui.visuals().weak_text_color()));
 
         if response.clicked() && action.is_none() {
             action = Some(PagesPanelAction::SelectPage(item.doc_index));
@@ -1131,9 +866,7 @@ impl PagesPanelState {
         });
 
         response.context_menu(|menu_ui| {
-            if let Some(menu_action) =
-                self.render_card_context_menu(menu_ui, item, total_session_docs)
-            {
+            if let Some(menu_action) = self.render_card_context_menu(menu_ui, item, total_session_docs) {
                 action = Some(menu_action);
             }
         });
@@ -1177,11 +910,7 @@ impl PagesPanelState {
         } else {
             // Заглушка в виде классического листа манги с рамками кадров и номером
             let paper_rect = rect.shrink(3.0);
-            let paper_color = if item.is_active {
-                Color32::from_rgb(242, 245, 250)
-            } else {
-                Color32::from_rgb(215, 220, 228)
-            };
+            let paper_color = if item.is_active { Color32::from_rgb(242, 245, 250) } else { Color32::from_rgb(215, 220, 228) };
             painter.rect_filled(paper_rect, CornerRadius::same(2), paper_color);
 
             // Имитация фреймов раскадровки манги на листе-заглушке
@@ -1191,21 +920,10 @@ impl PagesPanelState {
                 let split_y = inner.min.y + inner.height() * 0.42;
 
                 let top_panel = Rect::from_min_max(inner.min, Pos2::new(inner.max.x, split_y - 1.5));
-                let bottom_panel =
-                    Rect::from_min_max(Pos2::new(inner.min.x, split_y + 1.5), inner.max);
+                let bottom_panel = Rect::from_min_max(Pos2::new(inner.min.x, split_y + 1.5), inner.max);
 
-                painter.rect_stroke(
-                    top_panel,
-                    CornerRadius::ZERO,
-                    frame_stroke,
-                    StrokeKind::Inside,
-                );
-                painter.rect_stroke(
-                    bottom_panel,
-                    CornerRadius::ZERO,
-                    frame_stroke,
-                    StrokeKind::Inside,
-                );
+                painter.rect_stroke(top_panel, CornerRadius::ZERO, frame_stroke, StrokeKind::Inside);
+                painter.rect_stroke(bottom_panel, CornerRadius::ZERO, frame_stroke, StrokeKind::Inside);
             }
 
             // Крупный номер страницы по центру заглушки
@@ -1231,18 +949,9 @@ impl PagesPanelState {
     fn render_typer_progress_badge(&self, ui: &mut Ui, item: &PageItemInfo) {
         let (badge_bg, badge_fg, badge_text) = Self::compute_badge_visuals(item);
 
-        egui::Frame::NONE
-            .fill(badge_bg)
-            .corner_radius(CornerRadius::same(4))
-            .inner_margin(Margin::symmetric(6, 2))
-            .show(ui, |ui| {
-                ui.label(
-                    RichText::new(badge_text)
-                        .size(11.0)
-                        .strong()
-                        .color(badge_fg),
-                );
-            });
+        egui::Frame::NONE.fill(badge_bg).corner_radius(CornerRadius::same(4)).inner_margin(Margin::symmetric(6, 2)).show(ui, |ui| {
+            ui.label(RichText::new(badge_text).size(11.0).strong().color(badge_fg));
+        });
 
         // Если есть реплики, рисуем компактный прогресс-бар рядом с бейджем
         if item.total_lines > 0 {
@@ -1250,23 +959,13 @@ impl PagesPanelState {
             let bar_width = ui.available_width().clamp(24.0, 64.0);
             let (bar_rect, _) = ui.allocate_exact_size(Vec2::new(bar_width, 5.0), Sense::hover());
 
-            ui.painter().rect_filled(
-                bar_rect,
-                CornerRadius::same(2),
-                Color32::from_rgba_unmultiplied(120, 130, 145, 50),
-            );
+            ui.painter().rect_filled(bar_rect, CornerRadius::same(2), Color32::from_rgba_unmultiplied(120, 130, 145, 50));
 
             if ratio > 0.0 {
                 let fill_w = (bar_rect.width() * ratio).max(2.0);
-                let fill_rect =
-                    Rect::from_min_size(bar_rect.min, Vec2::new(fill_w, bar_rect.height()));
-                let fill_color = if item.is_translation_complete() {
-                    Color32::from_rgb(46, 160, 67)
-                } else {
-                    Color32::from_rgb(56, 139, 253)
-                };
-                ui.painter()
-                    .rect_filled(fill_rect, CornerRadius::same(2), fill_color);
+                let fill_rect = Rect::from_min_size(bar_rect.min, Vec2::new(fill_w, bar_rect.height()));
+                let fill_color = if item.is_translation_complete() { Color32::from_rgb(46, 160, 67) } else { Color32::from_rgb(56, 139, 253) };
+                ui.painter().rect_filled(fill_rect, CornerRadius::same(2), fill_color);
             }
         }
     }
@@ -1275,26 +974,14 @@ impl PagesPanelState {
     fn paint_grid_badge_overlay(&self, ui: &mut Ui, thumb_rect: Rect, item: &PageItemInfo) {
         let (badge_bg, badge_fg, badge_text) = Self::compute_badge_visuals(item);
 
-        let galley = ui.painter().layout_no_wrap(
-            badge_text,
-            FontId::new(10.5, FontFamily::Proportional),
-            badge_fg,
-        );
+        let galley = ui.painter().layout_no_wrap(badge_text, FontId::new(10.5, FontFamily::Proportional), badge_fg);
 
         let pad = Vec2::new(5.0, 2.5);
         let badge_size = galley.size() + pad * 2.0;
-        let badge_rect = Rect::from_min_size(
-            Pos2::new(
-                thumb_rect.max.x - badge_size.x - 4.0,
-                thumb_rect.max.y - badge_size.y - 4.0,
-            ),
-            badge_size,
-        );
+        let badge_rect = Rect::from_min_size(Pos2::new(thumb_rect.max.x - badge_size.x - 4.0, thumb_rect.max.y - badge_size.y - 4.0), badge_size);
 
-        ui.painter()
-            .rect_filled(badge_rect, CornerRadius::same(4), badge_bg);
-        ui.painter()
-            .galley(badge_rect.min + pad, galley, badge_fg);
+        ui.painter().rect_filled(badge_rect, CornerRadius::same(4), badge_bg);
+        ui.painter().galley(badge_rect.min + pad, galley, badge_fg);
     }
 
     /// Вычисляет цвета и текст бейджа готовности реплик:
@@ -1304,41 +991,19 @@ impl PagesPanelState {
     #[must_use]
     fn compute_badge_visuals(item: &PageItemInfo) -> (Color32, Color32, String) {
         if item.total_lines == 0 {
-            (
-                Color32::from_rgba_unmultiplied(60, 65, 75, 210),
-                Color32::from_rgb(165, 175, 190),
-                "📝 0/0".to_string(),
-            )
+            (Color32::from_rgba_unmultiplied(60, 65, 75, 210), Color32::from_rgb(165, 175, 190), "📝 0/0".to_string())
         } else if item.applied_lines >= item.total_lines {
-            (
-                Color32::from_rgba_unmultiplied(28, 115, 52, 230),
-                Color32::from_rgb(220, 255, 230),
-                format!("📝 {}/{} ✔", item.applied_lines, item.total_lines),
-            )
+            (Color32::from_rgba_unmultiplied(28, 115, 52, 230), Color32::from_rgb(220, 255, 230), format!("📝 {}/{} ✔", item.applied_lines, item.total_lines))
         } else if item.applied_lines > 0 {
-            (
-                Color32::from_rgba_unmultiplied(30, 85, 165, 230),
-                Color32::from_rgb(220, 240, 255),
-                format!("📝 {}/{}", item.applied_lines, item.total_lines),
-            )
+            (Color32::from_rgba_unmultiplied(30, 85, 165, 230), Color32::from_rgb(220, 240, 255), format!("📝 {}/{}", item.applied_lines, item.total_lines))
         } else {
-            (
-                Color32::from_rgba_unmultiplied(95, 70, 25, 225),
-                Color32::from_rgb(255, 225, 165),
-                format!("📝 0/{}", item.total_lines),
-            )
+            (Color32::from_rgba_unmultiplied(95, 70, 25, 225), Color32::from_rgb(255, 225, 165), format!("📝 0/{}", item.total_lines))
         }
     }
 
     /// Вычисляет цвет фона и обводки карточки страницы с учетом активности, наведения и Drag-and-Drop.
     #[must_use]
-    fn compute_card_style(
-        &self,
-        ui: &Ui,
-        is_active: bool,
-        is_hovered: bool,
-        doc_index: usize,
-    ) -> (Color32, Stroke) {
+    fn compute_card_style(&self, ui: &Ui, is_active: bool, is_hovered: bool, doc_index: usize) -> (Color32, Stroke) {
         let is_dragged = self.dragged_doc_index == Some(doc_index);
         let is_drop_target = self.drop_target_doc_index == Some(doc_index);
 
@@ -1369,18 +1034,10 @@ impl PagesPanelState {
     }
 
     /// Обрабатывает перетаскивание карточки мышью (Drag-and-Drop) для изменения порядка страниц.
-    fn handle_card_drag_and_drop(
-        &mut self,
-        ui: &Ui,
-        response: &egui::Response,
-        rect: Rect,
-        doc_index: usize,
-    ) -> Option<PagesPanelAction> {
+    fn handle_card_drag_and_drop(&mut self, ui: &Ui, response: &egui::Response, rect: Rect, doc_index: usize) -> Option<PagesPanelAction> {
         if response.drag_started() {
             let pointer_pos = ui.input(|i| i.pointer.press_origin());
-            let is_in_buttons = pointer_pos.is_some_and(|pos| {
-                pos.x > rect.max.x - 70.0 && pos.y < rect.min.y + 28.0
-            });
+            let is_in_buttons = pointer_pos.is_some_and(|pos| pos.x > rect.max.x - 70.0 && pos.y < rect.min.y + 28.0);
             if !is_in_buttons {
                 self.dragged_doc_index = Some(doc_index);
             }
@@ -1394,23 +1051,14 @@ impl PagesPanelState {
                         self.drop_target_doc_index = Some(doc_index);
 
                         // Рисуем линию индикации места вставки
-                        let line_y = if from_idx < doc_index {
-                            rect.max.y
-                        } else {
-                            rect.min.y
-                        };
-                        ui.painter().line_segment(
-                            [Pos2::new(rect.min.x, line_y), Pos2::new(rect.max.x, line_y)],
-                            Stroke::new(2.5, Color32::from_rgb(63, 185, 80)),
-                        );
+                        let line_y = if from_idx < doc_index { rect.max.y } else { rect.min.y };
+                        ui.painter()
+                            .line_segment([Pos2::new(rect.min.x, line_y), Pos2::new(rect.max.x, line_y)], Stroke::new(2.5, Color32::from_rgb(63, 185, 80)));
 
                         if ui.input(|i| i.pointer.any_released()) {
                             self.dragged_doc_index = None;
                             self.drop_target_doc_index = None;
-                            return Some(PagesPanelAction::ReorderPages {
-                                from_idx,
-                                to_idx: doc_index,
-                            });
+                            return Some(PagesPanelAction::ReorderPages { from_idx, to_idx: doc_index });
                         }
                     }
                 }
@@ -1421,52 +1069,27 @@ impl PagesPanelState {
     }
 
     /// Контекстное меню карточки страницы (ПКМ).
-    fn render_card_context_menu(
-        &self,
-        ui: &mut Ui,
-        item: &PageItemInfo,
-        total_session_docs: usize,
-    ) -> Option<PagesPanelAction> {
+    fn render_card_context_menu(&self, ui: &mut Ui, item: &PageItemInfo, total_session_docs: usize) -> Option<PagesPanelAction> {
         let mut action: Option<PagesPanelAction> = None;
 
-        ui.label(
-            RichText::new(format!("📄 Стр. {} — {}", item.detected_page, item.title))
-                .size(11.5)
-                .strong(),
-        );
+        ui.label(RichText::new(format!("📄 Стр. {} — {}", item.detected_page, item.title)).size(11.5).strong());
         ui.separator();
 
-        if !item.is_active
-            && ui
-                .button("🎯 Сделать активной")
-                .clicked()
-        {
+        if !item.is_active && ui.button("🎯 Сделать активной").clicked() {
             action = Some(PagesPanelAction::SelectPage(item.doc_index));
             ui.close();
         }
 
         // Перемещение вверх / вниз
         let can_move_up = item.doc_index > 0;
-        if ui
-            .add_enabled(can_move_up, egui::Button::new("⬆ Переместить вверх"))
-            .clicked()
-        {
-            action = Some(PagesPanelAction::ReorderPages {
-                from_idx: item.doc_index,
-                to_idx: item.doc_index.saturating_sub(1),
-            });
+        if ui.add_enabled(can_move_up, egui::Button::new("⬆ Переместить вверх")).clicked() {
+            action = Some(PagesPanelAction::ReorderPages { from_idx: item.doc_index, to_idx: item.doc_index.saturating_sub(1) });
             ui.close();
         }
 
         let can_move_down = item.doc_index + 1 < total_session_docs;
-        if ui
-            .add_enabled(can_move_down, egui::Button::new("⬇ Переместить вниз"))
-            .clicked()
-        {
-            action = Some(PagesPanelAction::ReorderPages {
-                from_idx: item.doc_index,
-                to_idx: item.doc_index + 1,
-            });
+        if ui.add_enabled(can_move_down, egui::Button::new("⬇ Переместить вниз")).clicked() {
+            action = Some(PagesPanelAction::ReorderPages { from_idx: item.doc_index, to_idx: item.doc_index + 1 });
             ui.close();
         }
 
@@ -1479,28 +1102,19 @@ impl PagesPanelState {
                 ui.close();
             }
         } else {
-            ui.add_enabled(
-                false,
-                egui::Button::new("📂 Показать в проводнике (не сохранен)"),
-            );
+            ui.add_enabled(false, egui::Button::new("📂 Показать в проводнике (не сохранен)"));
         }
 
         ui.separator();
 
         if item.can_quick_save {
-            if ui.button("💾 Сохранить страницу").clicked()
-            {
+            if ui.button("💾 Сохранить страницу").clicked() {
                 action = Some(PagesPanelAction::SavePage(item.doc_index));
                 ui.close();
             }
         }
 
-        if ui
-            .button(
-                RichText::new("✖ Закрыть страницу").color(Color32::from_rgb(240, 90, 90)),
-            )
-            .clicked()
-        {
+        if ui.button(RichText::new("✖ Закрыть страницу").color(Color32::from_rgb(240, 90, 90))).clicked() {
             action = Some(PagesPanelAction::ClosePage(item.doc_index));
             ui.close();
         }
@@ -1510,19 +1124,11 @@ impl PagesPanelState {
 
     /// Подробная всплывающая подсказка при наведении на карточку страницы.
     fn render_card_tooltip(&self, ui: &mut Ui, item: &PageItemInfo) {
-        ui.label(
-            RichText::new(format!("Страница #{}", item.detected_page))
-                .strong()
-                .size(13.0),
-        );
+        ui.label(RichText::new(format!("Страница #{}", item.detected_page)).strong().size(13.0));
         ui.label(format!("Файл: {}", item.title));
 
         if let Some(path) = &item.path {
-            ui.label(
-                RichText::new(path.display().to_string())
-                    .size(11.0)
-                    .color(ui.visuals().weak_text_color()),
-            );
+            ui.label(RichText::new(path.display().to_string()).size(11.0).color(ui.visuals().weak_text_color()));
         }
 
         if let Some((w, h)) = item.dimensions {
@@ -1532,19 +1138,13 @@ impl PagesPanelState {
         ui.separator();
         if item.total_lines > 0 {
             let pct = (item.completion_ratio() * 100.0).round() as usize;
-            ui.label(format!(
-                "Реплики TypeR: {} из {} вставлено ({pct}%)",
-                item.applied_lines, item.total_lines
-            ));
+            ui.label(format!("Реплики TypeR: {} из {} вставлено ({pct}%)", item.applied_lines, item.total_lines));
         } else {
             ui.label("Реплики TypeR: нет привязанных строк для этой страницы");
         }
 
         if item.is_dirty {
-            ui.label(
-                RichText::new("● Имеются несохраненные правки")
-                    .color(Color32::from_rgb(245, 166, 35)),
-            );
+            ui.label(RichText::new("● Имеются несохраненные правки").color(Color32::from_rgb(245, 166, 35)));
         }
     }
 
@@ -1559,25 +1159,16 @@ impl PagesPanelState {
             ui.add_space(36.0);
             ui.label(RichText::new("📚").size(32.0));
             ui.add_space(6.0);
-            ui.label(
-                RichText::new("Нет открытых страниц главы")
-                    .size(13.5)
-                    .strong(),
-            );
+            ui.label(RichText::new("Нет открытых страниц главы").size(13.5).strong());
             ui.add_space(4.0);
             ui.label(
-                RichText::new(
-                    "Откройте папку с главой манги или добавьте\nотдельные листы для синхронной верстки с TypeR.",
-                )
-                .size(11.5)
-                .color(ui.visuals().weak_text_color()),
+                RichText::new("Откройте папку с главой манги или добавьте\nотдельные листы для синхронной верстки с TypeR.")
+                    .size(11.5)
+                    .color(ui.visuals().weak_text_color()),
             );
             ui.add_space(12.0);
 
-            if ui
-                .button(RichText::new("📂 Открыть папку главы…").strong())
-                .clicked()
-            {
+            if ui.button(RichText::new("📂 Открыть папку главы…").strong()).clicked() {
                 action = Some(PagesPanelAction::OpenChapterFolder);
             }
         });
@@ -1590,11 +1181,7 @@ impl PagesPanelState {
             ui.add_space(28.0);
             ui.label(RichText::new("🔍 Страницы не найдены").strong());
             ui.add_space(4.0);
-            ui.label(
-                RichText::new("Ни одна страница не соответствует условиям фильтра.")
-                    .size(11.5)
-                    .color(ui.visuals().weak_text_color()),
-            );
+            ui.label(RichText::new("Ни одна страница не соответствует условиям фильтра.").size(11.5).color(ui.visuals().weak_text_color()));
             ui.add_space(8.0);
             if ui.button("Сбросить фильтр").clicked() {
                 self.search_query.clear();
@@ -1621,10 +1208,7 @@ fn truncate_middle(text: &str, max_chars: usize) -> String {
     let tail_len = max_chars.saturating_sub(1).saturating_sub(head_len);
 
     let head: String = text.chars().take(head_len).collect();
-    let tail: String = text
-        .chars()
-        .skip(char_count.saturating_sub(tail_len))
-        .collect();
+    let tail: String = text.chars().skip(char_count.saturating_sub(tail_len)).collect();
 
     format!("{head}…{tail}")
 }
@@ -1650,23 +1234,12 @@ mod tests {
 
     #[test]
     fn test_natural_sort_paths() {
-        let mut paths = vec![
-            PathBuf::from("10.png"),
-            PathBuf::from("2.png"),
-            PathBuf::from("1.png"),
-            PathBuf::from("ch1_p10.png"),
-            PathBuf::from("ch1_p2.png"),
-        ];
+        let mut paths =
+            vec![PathBuf::from("10.png"), PathBuf::from("2.png"), PathBuf::from("1.png"), PathBuf::from("ch1_p10.png"), PathBuf::from("ch1_p2.png")];
 
         natural_sort_paths(&mut paths);
 
-        let expected = vec![
-            PathBuf::from("1.png"),
-            PathBuf::from("2.png"),
-            PathBuf::from("10.png"),
-            PathBuf::from("ch1_p2.png"),
-            PathBuf::from("ch1_p10.png"),
-        ];
+        let expected = vec![PathBuf::from("1.png"), PathBuf::from("2.png"), PathBuf::from("10.png"), PathBuf::from("ch1_p2.png"), PathBuf::from("ch1_p10.png")];
 
         assert_eq!(paths, expected);
     }
@@ -1760,11 +1333,7 @@ mod tests {
         app.handle_pages_action(&egui::Context::default(), PagesPanelAction::ClosePage(0));
 
         assert!(app.discard.is_some(), "closing a dirty page must ask before discarding it");
-        assert_eq!(
-            app.session.documents().len(),
-            1,
-            "the document must stay open until the unsaved-changes prompt is answered"
-        );
+        assert_eq!(app.session.documents().len(), 1, "the document must stay open until the unsaved-changes prompt is answered");
     }
 
     #[test]
@@ -1788,13 +1357,7 @@ mod tests {
         assert!(!can_quick_save_page(doc, Some("chapter/page01"), true), "a path without an extension cannot save in place");
         assert!(!can_quick_save_page(doc, None, true));
         assert!(!can_quick_save_page(doc, Some("chapter/page01.psd"), false));
-        for path in [
-            "chapter/page01.png",
-            "chapter/page01.jpg",
-            "chapter/page01.jpeg",
-            "chapter/page01.webp",
-            "chapter/page01.tga",
-        ] {
+        for path in ["chapter/page01.png", "chapter/page01.jpg", "chapter/page01.jpeg", "chapter/page01.webp", "chapter/page01.tga"] {
             assert!(!can_quick_save_page(doc, Some(path), true), "{path} must require Save As");
         }
 
@@ -1812,11 +1375,7 @@ mod tests {
 
         let mut app = PhotocraftApp::new(
             Session::new(),
-            Services {
-                export: Some(Box::new(|_, _, _| Ok((Vec::new(), Vec::new())))),
-                write: Some(Box::new(|_, _| Ok(()))),
-                ..Default::default()
-            },
+            Services { export: Some(Box::new(|_, _, _| Ok((Vec::new(), Vec::new())))), write: Some(Box::new(|_, _| Ok(()))), ..Default::default() },
         );
         app.run("file.new", json!({"width": 10, "height": 10, "name": "page01.psd"})).unwrap();
         app.session.active_mut().unwrap().path = Some("F:/quick-save-test.psd".into());
@@ -1902,11 +1461,7 @@ mod tests {
 
         let mut app = PhotocraftApp::new(
             Session::new(),
-            Services {
-                export: Some(Box::new(|_, _, _| Ok((Vec::new(), Vec::new())))),
-                write: Some(Box::new(|_, _| Ok(()))),
-                ..Default::default()
-            },
+            Services { export: Some(Box::new(|_, _, _| Ok((Vec::new(), Vec::new())))), write: Some(Box::new(|_, _| Ok(()))), ..Default::default() },
         );
         app.pages.auto_sync_typer = true;
         app.run("file.new", json!({"width": 10, "height": 10, "name": "page_007.psd"})).unwrap();

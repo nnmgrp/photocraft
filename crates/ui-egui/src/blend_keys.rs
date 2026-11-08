@@ -357,13 +357,7 @@ mod tests {
         assert_eq!(a.session.active().unwrap().history.past_len(), steps);
         // An event with repeat: true for a different mode is ignored as well.
         ctx.input_mut(|i| {
-            i.events.push(egui::Event::Key {
-                key: Key::S,
-                physical_key: None,
-                pressed: true,
-                repeat: true,
-                modifiers: SHIFT_ALT,
-            });
+            i.events.push(egui::Event::Key { key: Key::S, physical_key: None, pressed: true, repeat: true, modifiers: SHIFT_ALT });
         });
         handle(&mut a, &ctx);
         assert_eq!(layer_blend(&a), BlendMode::Multiply, "a held key does not repeat");

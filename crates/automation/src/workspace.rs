@@ -375,9 +375,10 @@ fn preferences_may_grant_ambient_paths(id: &str, params: &Value) -> bool {
     if id != "prefs.set" {
         return false;
     }
-    let direct = params.get("path").and_then(Value::as_str).is_some_and(|path| {
-        preference_uses_ambient_filesystem(path) || remembered_dialog_grants_paths(path, params.get("value").unwrap_or(&Value::Null))
-    });
+    let direct = params
+        .get("path")
+        .and_then(Value::as_str)
+        .is_some_and(|path| preference_uses_ambient_filesystem(path) || remembered_dialog_grants_paths(path, params.get("value").unwrap_or(&Value::Null)));
     let batch = params
         .get("values")
         .and_then(Value::as_object)
@@ -957,6 +958,12 @@ mod tests {
                 | "shape.info"
                 | "shape.presets.list"
                 | "shape.presets.new"
+                | "shape.balloon.stroke"
+                | "shape.balloon.tail"
+                | "shape.balloon.create"
+                | "shape.vectorCurve.create"
+                | "shape.vectorCurve.updateNode"
+                | "shape.vectorCurve.insertNode"
                 | "path.list"
                 | "path.info"
                 | "path.set"

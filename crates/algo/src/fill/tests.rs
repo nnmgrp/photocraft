@@ -355,7 +355,9 @@ fn the_spot_box_gives_what_the_whole_page_gave() {
         for click in 0..6 {
             let (x, y) = ((page as i32 * 37 + click * 29) % 97, (page as i32 * 11 + click * 41) % 83);
             for gap in [0.0, 3.0, 6.0, 11.0] {
-                for (scaling, amount) in [(Scaling::Darkest, 0.0), (Scaling::Darkest, 3.0), (Scaling::Round, 2.0), (Scaling::Square, 2.0), (Scaling::Round, -2.0)] {
+                for (scaling, amount) in
+                    [(Scaling::Darkest, 0.0), (Scaling::Darkest, 3.0), (Scaling::Round, 2.0), (Scaling::Square, 2.0), (Scaling::Round, -2.0)]
+                {
                     for border in [false, true] {
                         let o = FillOptions { close_gap: gap, scale: amount, scaling, image_border: border, tolerance: 20.0, ..FillOptions::default() };
                         let got = click_region(&img.px, img.area(), (x, y), &o);
@@ -369,7 +371,6 @@ fn the_spot_box_gives_what_the_whole_page_gave() {
     }
     assert!(checked > 2000);
 }
-
 
 /// With Image Border off the canvas carries on blank past its edge, but a fill still never goes
 /// round a line that reaches the edge into the next spot (it once did, through that margin).
@@ -525,5 +526,8 @@ fn the_editing_layers_paint_closes_an_enclosed_area() {
     let o = hard();
     let r = enclosed_region_blocked(&img.px, img.area(), &lasso, Target::Transparent, &o, Some(&block)).unwrap();
     assert!(filled(&r, 20, 20));
-    assert!(enclosed_region(&img.px, img.area(), &lasso, Target::Transparent, &o).is_none_or(|r| !filled(&r, 20, 20)), "without the block the inside leaks out past the lasso");
+    assert!(
+        enclosed_region(&img.px, img.area(), &lasso, Target::Transparent, &o).is_none_or(|r| !filled(&r, 20, 20)),
+        "without the block the inside leaks out past the lasso"
+    );
 }

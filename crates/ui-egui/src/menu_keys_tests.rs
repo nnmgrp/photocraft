@@ -334,4 +334,3 @@ fn every_menu_row_starts_its_label_after_one_checkmark_column() {
     });
     out.textures_delta.clear();
 }
-

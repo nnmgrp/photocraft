@@ -1,4 +1,4 @@
-//! Procedural screentone generator (GenTonik engine) for manga, comics and graphic arts.
+//! Procedural screentone generator (Comic screentone engine) for manga, comics and graphic arts.
 //!
 //! Features:
 //! * 12 pattern types: dots, lines, crosshatch, noise, gaussian_noise, stipple,
@@ -35,37 +35,19 @@ pub fn built_in_presets() -> Vec<ScreentonePreset> {
             id: "classic-10",
             name: "Deleter 10% Dot",
             category: "Classic Dots",
-            spec: ScreentoneSpec {
-                dot_size: 3.0,
-                spacing_x: 25.0,
-                spacing_y: 25.0,
-                density: 0.1,
-                ..Default::default()
-            },
+            spec: ScreentoneSpec { dot_size: 3.0, spacing_x: 25.0, spacing_y: 25.0, density: 0.1, ..Default::default() },
         },
         ScreentonePreset {
             id: "classic-30",
             name: "Deleter 30% Dot",
             category: "Classic Dots",
-            spec: ScreentoneSpec {
-                dot_size: 5.5,
-                spacing_x: 22.0,
-                spacing_y: 22.0,
-                density: 0.3,
-                ..Default::default()
-            },
+            spec: ScreentoneSpec { dot_size: 5.5, spacing_x: 22.0, spacing_y: 22.0, density: 0.3, ..Default::default() },
         },
         ScreentonePreset {
             id: "classic-60",
             name: "Deleter 60% Dot",
             category: "Classic Dots",
-            spec: ScreentoneSpec {
-                dot_size: 8.0,
-                spacing_x: 20.0,
-                spacing_y: 20.0,
-                density: 0.6,
-                ..Default::default()
-            },
+            spec: ScreentoneSpec { dot_size: 8.0, spacing_x: 20.0, spacing_y: 20.0, density: 0.6, ..Default::default() },
         },
         ScreentonePreset {
             id: "square-dots",
@@ -85,27 +67,13 @@ pub fn built_in_presets() -> Vec<ScreentonePreset> {
             id: "diamond-dots",
             name: "Diamond Dots",
             category: "Classic Dots",
-            spec: ScreentoneSpec {
-                dot_shape: DotShape::Diamond,
-                dot_size: 7.0,
-                spacing_x: 22.0,
-                spacing_y: 22.0,
-                density: 0.4,
-                ..Default::default()
-            },
+            spec: ScreentoneSpec { dot_shape: DotShape::Diamond, dot_size: 7.0, spacing_x: 22.0, spacing_y: 22.0, density: 0.4, ..Default::default() },
         },
         ScreentonePreset {
             id: "lines-45",
             name: "Parallel Lines 45°",
             category: "Lines & Hatching",
-            spec: ScreentoneSpec {
-                pattern_type: PatternType::Lines,
-                spacing_y: 12.0,
-                line_width: 1.5,
-                angle: 45.0,
-                density: 0.5,
-                ..Default::default()
-            },
+            spec: ScreentoneSpec { pattern_type: PatternType::Lines, spacing_y: 12.0, line_width: 1.5, angle: 45.0, density: 0.5, ..Default::default() },
         },
         ScreentonePreset {
             id: "crosshatch",
@@ -125,14 +93,7 @@ pub fn built_in_presets() -> Vec<ScreentonePreset> {
             id: "fine-lines",
             name: "Fine Lines 0°",
             category: "Lines & Hatching",
-            spec: ScreentoneSpec {
-                pattern_type: PatternType::Lines,
-                spacing_y: 8.0,
-                line_width: 0.8,
-                angle: 0.0,
-                density: 0.3,
-                ..Default::default()
-            },
+            spec: ScreentoneSpec { pattern_type: PatternType::Lines, spacing_y: 8.0, line_width: 0.8, angle: 0.0, density: 0.3, ..Default::default() },
         },
         ScreentonePreset {
             id: "gauze",
@@ -197,26 +158,13 @@ pub fn built_in_presets() -> Vec<ScreentonePreset> {
             id: "checker",
             name: "Checkerboard",
             category: "Geometric",
-            spec: ScreentoneSpec {
-                pattern_type: PatternType::Checker,
-                spacing_x: 20.0,
-                spacing_y: 20.0,
-                density: 0.5,
-                ..Default::default()
-            },
+            spec: ScreentoneSpec { pattern_type: PatternType::Checker, spacing_x: 20.0, spacing_y: 20.0, density: 0.5, ..Default::default() },
         },
         ScreentonePreset {
             id: "triangles",
             name: "Triangles",
             category: "Geometric",
-            spec: ScreentoneSpec {
-                pattern_type: PatternType::Triangles,
-                dot_size: 10.0,
-                spacing_x: 30.0,
-                spacing_y: 30.0,
-                density: 0.4,
-                ..Default::default()
-            },
+            spec: ScreentoneSpec { pattern_type: PatternType::Triangles, dot_size: 10.0, spacing_x: 30.0, spacing_y: 30.0, density: 0.4, ..Default::default() },
         },
         ScreentonePreset {
             id: "concentric",
@@ -317,11 +265,7 @@ pub fn sheet_spec(spec: &ScreentoneSpec, bounds: Rect, origin: (f32, f32)) -> Sc
     let cy = bounds.y0 as f32 + bounds.height().max(1) as f32 * 0.5;
     let (dx, dy) = (origin.0 - cx, origin.1 - cy);
     let (sin, cos) = spec.rot_canvas.to_radians().sin_cos();
-    ScreentoneSpec {
-        origin_x: dx * cos + dy * sin,
-        origin_y: -dx * sin + dy * cos,
-        ..spec.clone()
-    }
+    ScreentoneSpec { origin_x: dx * cos + dy * sin, origin_y: -dx * sin + dy * cos, ..spec.clone() }
 }
 
 /// Render a procedural sheet into `surface`, anchored at the document-space `origin`.
@@ -386,11 +330,7 @@ fn mid_bias_curve(t: f32, midpoint: f32) -> f32 {
         return t;
     }
     let exponent = 0.5f32.ln() / midpoint.clamp(0.001, 0.999).ln();
-    if exponent.is_finite() {
-        t.powf(exponent).clamp(0.0, 1.0)
-    } else {
-        t
-    }
+    if exponent.is_finite() { t.powf(exponent).clamp(0.0, 1.0) } else { t }
 }
 
 /// Stable integer grid hash returning [0.0, 1.0).
@@ -575,10 +515,7 @@ fn eval_shape_sdf(px: f32, py: f32, shape: DotShape, size: f32, xf: ShapeXform) 
     if size <= 0.05 {
         return 1e6;
     }
-    if (shape == DotShape::Circle || xf.roundness >= 0.95)
-        && (xf.stretch_x - 1.0).abs() <= 1e-4
-        && (xf.stretch_y - 1.0).abs() <= 1e-4
-    {
+    if (shape == DotShape::Circle || xf.roundness >= 0.95) && (xf.stretch_x - 1.0).abs() <= 1e-4 && (xf.stretch_y - 1.0).abs() <= 1e-4 {
         return sdist2(px, py) - size;
     }
     let (sin_p, cos_p) = xf.rot_pattern_rad.sin_cos();
@@ -632,11 +569,7 @@ fn eval_special_shape_sdf(px: f32, py: f32, pattern: PatternType, size: f32, xf:
 /// Convert Signed Distance to coverage in [0.0, 1.0].
 #[inline]
 fn coverage_from_sdf(dist: f32, smoothness: f32) -> f32 {
-    if smoothness < 0.05 {
-        if dist <= 0.0 { 1.0 } else { 0.0 }
-    } else {
-        ((0.5 - dist) / smoothness).clamp(0.0, 1.0)
-    }
+    if smoothness < 0.05 { if dist <= 0.0 { 1.0 } else { 0.0 } } else { ((0.5 - dist) / smoothness).clamp(0.0, 1.0) }
 }
 
 // ────────────────────────────────────────────────────────────
@@ -711,11 +644,7 @@ pub fn screentone(src: &Image, out: Rect, ctx: &Ctx, spec: &ScreentoneSpec) -> V
     // detection, dilation, and morphological tone de-lining run once per pixel in O(1).
     let max_sp = spacing_x.max(spacing_y).clamp(1.0, 256.0);
     let reach = (max_sp * 1.5).ceil() as i32 + 16;
-    let work_rect = if use_shading {
-        out.inflate(reach).intersect(&src.rect)
-    } else {
-        Rect::new(0, 0, 0, 0)
-    };
+    let work_rect = if use_shading { out.inflate(reach).intersect(&src.rect) } else { Rect::new(0, 0, 0, 0) };
     let ww = work_rect.width().max(0) as usize;
     let wh = work_rect.height().max(0) as usize;
 
@@ -791,18 +720,9 @@ pub fn screentone(src: &Image, out: Rect, ctx: &Ctx, spec: &ScreentoneSpec) -> V
                         .max(grid_luma(ix + 2, iy + 2));
 
                     let local_dip = (nb_max - l_c).max(0.0);
-                    let contrast_nb = (l_l - l_c)
-                        .max(l_r - l_c)
-                        .max(l_u - l_c)
-                        .max(l_d - l_c)
-                        .max(l_ul - l_c)
-                        .max(l_ur - l_c)
-                        .max(l_dl - l_c)
-                        .max(l_dr - l_c)
-                        .max(0.0);
-                    let edge_mag = sdist2(l_r - l_l, l_d - l_u)
-                        .max(sdist2(l_dr - l_ul, l_ur - l_dl))
-                        .max(contrast_nb);
+                    let contrast_nb =
+                        (l_l - l_c).max(l_r - l_c).max(l_u - l_c).max(l_d - l_c).max(l_ul - l_c).max(l_ur - l_c).max(l_dl - l_c).max(l_dr - l_c).max(0.0);
+                    let edge_mag = sdist2(l_r - l_l, l_d - l_u).max(sdist2(l_dr - l_ul, l_ur - l_dl)).max(contrast_nb);
 
                     let mut max_valley = 0.0f32;
                     for &(dx, dy) in &AXES_4 {
@@ -864,9 +784,7 @@ pub fn screentone(src: &Image, out: Rect, ctx: &Ctx, spec: &ScreentoneSpec) -> V
                                 if nx < 0 || nx >= ww as i32 {
                                     continue;
                                 }
-                                if (dx * dx + dy * dy) as f32 <= r_sq
-                                    && line_edge_grid[ny as usize * ww + nx as usize] != 0
-                                {
+                                if (dx * dx + dy * dy) as f32 <= r_sq && line_edge_grid[ny as usize * ww + nx as usize] != 0 {
                                     hit = true;
                                     break 'dilate;
                                 }
@@ -1002,17 +920,10 @@ pub fn screentone(src: &Image, out: Rect, ctx: &Ctx, spec: &ScreentoneSpec) -> V
         preserved_grid[grid_idx(x, y)] != 0
     };
 
-    let sample_ink_at_int = |ix: i32, iy: i32| -> f32 {
-        if !ambient_ink_grid.is_empty() {
-            ambient_ink_grid[grid_idx(ix, iy)]
-        } else {
-            luma_to_ink(raw_paper_luma(ix, iy))
-        }
-    };
+    let sample_ink_at_int =
+        |ix: i32, iy: i32| -> f32 { if !ambient_ink_grid.is_empty() { ambient_ink_grid[grid_idx(ix, iy)] } else { luma_to_ink(raw_paper_luma(ix, iy)) } };
 
-    let sample_ink = |doc_x: f32, doc_y: f32| -> f32 {
-        sample_ink_at_int(doc_x.floor() as i32, doc_y.floor() as i32)
-    };
+    let sample_ink = |doc_x: f32, doc_y: f32| -> f32 { sample_ink_at_int(doc_x.floor() as i32, doc_y.floor() as i32) };
 
     for (i, px) in res.chunks_exact_mut(n).enumerate() {
         let (x, y) = xy(out, i);
@@ -1044,12 +955,7 @@ pub fn screentone(src: &Image, out: Rect, ctx: &Ctx, spec: &ScreentoneSpec) -> V
             fg
         };
 
-        let xf = ShapeXform {
-            stretch_x: mod_aspect_x,
-            stretch_y: mod_aspect_y,
-            roundness: spec.roundness,
-            rot_pattern_rad,
-        };
+        let xf = ShapeXform { stretch_x: mod_aspect_x, stretch_y: mod_aspect_y, roundness: spec.roundness, rot_pattern_rad };
 
         // A shifted origin phase-moves the whole lattice (cells, dots, satellites, line
         // stripes). The gradient factor and the ink sampling above were already computed from
@@ -1059,11 +965,8 @@ pub fn screentone(src: &Image, out: Rect, ctx: &Ctx, spec: &ScreentoneSpec) -> V
         // Rotate the lattice by `spec.angle` (Grid Rotation) around the phase-shifted origin so
         // Dots, Hexgrid, Checker, Stipple, Stars, Hearts, Triangles, Lines and Crosshatch all
         // rotate smoothly at any angle (e.g. classic 45° Polka Dot).
-        let (grid_x, grid_y) = if spec.angle == 0.0 {
-            (local_x, local_y)
-        } else {
-            (local_x * cos_ang + local_y * sin_ang, -local_x * sin_ang + local_y * cos_ang)
-        };
+        let (grid_x, grid_y) =
+            if spec.angle == 0.0 { (local_x, local_y) } else { (local_x * cos_ang + local_y * sin_ang, -local_x * sin_ang + local_y * cos_ang) };
         let mut cov = 0.0f32;
 
         if use_shading && is_preserved_line(x, y) {
@@ -1271,12 +1174,7 @@ pub fn screentone(src: &Image, out: Rect, ctx: &Ctx, spec: &ScreentoneSpec) -> V
 
                                 // Satellites
                                 if spec.satellite_enabled && ssize > 0.05 {
-                                    let sat_offsets: [(f32, f32); 4] = [
-                                        (0.0, -sdist),
-                                        (0.0, sdist),
-                                        (sdist, 0.0),
-                                        (-sdist, 0.0),
-                                    ];
+                                    let sat_offsets: [(f32, f32); 4] = [(0.0, -sdist), (0.0, sdist), (sdist, 0.0), (-sdist, 0.0)];
                                     let sat_count = (spec.satellite_count as usize).min(4);
                                     for &(ox, oy) in sat_offsets.iter().take(sat_count) {
                                         let rsx = ox * cos_sat - oy * sin_sat;
@@ -1317,30 +1215,16 @@ pub fn screentone(src: &Image, out: Rect, ctx: &Ctx, spec: &ScreentoneSpec) -> V
                 // halftone sheets and smart filters do not leave the unmodulated source behind
                 // between the dots.
                 let alpha = cov * cur_fg[3];
-                if alpha <= 1e-6 {
-                    [0.0, 0.0, 0.0, 0.0]
-                } else {
-                    [cur_fg[0], cur_fg[1], cur_fg[2], alpha]
-                }
+                if alpha <= 1e-6 { [0.0, 0.0, 0.0, 0.0] } else { [cur_fg[0], cur_fg[1], cur_fg[2], alpha] }
             } else {
                 // Opaque surface without an alpha channel: blend pattern foreground over base.
                 let base_c = rgba(ctx, px);
                 let alpha = cov * cur_fg[3];
-                [
-                    lerp(base_c[0], cur_fg[0], alpha),
-                    lerp(base_c[1], cur_fg[1], alpha),
-                    lerp(base_c[2], cur_fg[2], alpha),
-                    base_c[3].max(alpha),
-                ]
+                [lerp(base_c[0], cur_fg[0], alpha), lerp(base_c[1], cur_fg[1], alpha), lerp(base_c[2], cur_fg[2], alpha), base_c[3].max(alpha)]
             }
         } else {
             // Opaque or specified background: blend between background and foreground
-            [
-                lerp(bg[0], cur_fg[0], cov),
-                lerp(bg[1], cur_fg[1], cov),
-                lerp(bg[2], cur_fg[2], cov),
-                lerp(bg[3], cur_fg[3], cov),
-            ]
+            [lerp(bg[0], cur_fg[0], cov), lerp(bg[1], cur_fg[1], cov), lerp(bg[2], cur_fg[2], cov), lerp(bg[3], cur_fg[3], cov)]
         };
 
         set_rgba(ctx, px, out_color);
@@ -1454,14 +1338,8 @@ mod tests {
         let ctx = Ctx { bounds, mode: ColorMode::Rgb, alpha: false };
 
         for grad in [ScreentoneGradientType::Linear, ScreentoneGradientType::Radial] {
-            let spec = ScreentoneSpec {
-                grad_type: grad,
-                grad_angle: 45.0,
-                grad_size_start: 2.0,
-                grad_size_end: 0.1,
-                grad_color_trans: true,
-                ..Default::default()
-            };
+            let spec =
+                ScreentoneSpec { grad_type: grad, grad_angle: 45.0, grad_size_start: 2.0, grad_size_end: 0.1, grad_color_trans: true, ..Default::default() };
             let out_px = screentone(&img, bounds, &ctx, &spec);
             assert_eq!(out_px.len(), 40 * 40 * 3);
             assert!(out_px.iter().all(|v| v.is_finite()));
@@ -1656,7 +1534,10 @@ mod tests {
         }
         let deep_ink: f32 = (0..32usize).flat_map(|y| (0..24usize).map(move |x| out_slice[(y * 96 + x) * 4 + 3])).sum();
         let mid_ink: f32 = (0..32usize).flat_map(|y| (38..58usize).map(move |x| out_slice[(y * 96 + x) * 4 + 3])).sum();
-        assert!(deep_ink > mid_ink, "deep shadow region (ink=1.0) renders higher ink coverage ({deep_ink}) than midtone ({mid_ink}) without binary flat clipping");
+        assert!(
+            deep_ink > mid_ink,
+            "deep shadow region (ink=1.0) renders higher ink coverage ({deep_ink}) than midtone ({mid_ink}) without binary flat clipping"
+        );
         assert!(mid_ink > 20.0, "midtone region renders partial halftone + satellites (got {mid_ink})");
 
         // In Sheet mode, the same image renders uniform pattern even over the 0.92 highlight zone.
@@ -1788,10 +1669,7 @@ mod tests {
             for x in (22..28usize).chain(36..42usize) {
                 let a_line = gray_line_out[(y * 64 + x) * 4 + 3];
                 let a_ref = gray_ref_out[(y * 64 + x) * 4 + 3];
-                assert!(
-                    (a_line - a_ref).abs() < 1e-4,
-                    "white staircase halo or fringe distortion at ({x}, {y}): got {a_line}, expected {a_ref}"
-                );
+                assert!((a_line - a_ref).abs() < 1e-4, "white staircase halo or fringe distortion at ({x}, {y}): got {a_line}, expected {a_ref}");
             }
         }
 
@@ -1831,11 +1709,7 @@ mod tests {
         // between strokes are darkened by overlapping anti-aliasing to 0.62..0.74 (< white_threshold 0.85).
         for y in 12..52usize {
             for x in 19..=37usize {
-                let dist_to_stroke = [20isize, 24, 28, 32, 36]
-                    .iter()
-                    .map(|&sx| (x as isize - sx).abs())
-                    .min()
-                    .unwrap_or(10);
+                let dist_to_stroke = [20isize, 24, 28, 32, 36].iter().map(|&sx| (x as isize - sx).abs()).min().unwrap_or(10);
                 let v = match dist_to_stroke {
                     0 => 0.12, // hatch stroke core
                     1 => 0.62, // 1px anti-aliased fringe
@@ -1941,10 +1815,7 @@ mod tests {
             for x in 24..92usize {
                 let a = out_px[(y * 96 + x) * 4 + 3];
                 let a_ref = ref_px[(y * 96 + x) * 4 + 3];
-                assert!(
-                    (a - a_ref).abs() < 1e-4,
-                    "coarse dot staircase / missing dot near white outline at ({x}, {y}): got {a}, expected {a_ref}"
-                );
+                assert!((a - a_ref).abs() < 1e-4, "coarse dot staircase / missing dot near white outline at ({x}, {y}): got {a}, expected {a_ref}");
             }
         }
     }
@@ -1964,37 +1835,24 @@ mod tests {
                 let std_hypot = a.hypot(b);
 
                 // 1. Exact bit-level identity between sdist2(a, b) and WGSL length(vec2f(a, b))
-                assert_eq!(
-                    cpu_sdist2.to_bits(),
-                    wgsl_length.to_bits(),
-                    "sdist2({a}, {b}) must match WGSL sqrt(a*a + b*b) to 0 ULP"
-                );
+                assert_eq!(cpu_sdist2.to_bits(), wgsl_length.to_bits(), "sdist2({a}, {b}) must match WGSL sqrt(a*a + b*b) to 0 ULP");
 
                 // 2. Track 1-2 ULP divergences against f32::hypot while proving tight numerical tolerance
                 let ulp_diff = cpu_sdist2.to_bits().abs_diff(std_hypot.to_bits());
                 if ulp_diff > 0 {
                     hypot_ulp_divergences += 1;
                 }
-                assert!(
-                    ulp_diff <= 2,
-                    "sdist2({a}, {b}) vs hypot({a}, {b}) exceeded 2 ULP: {ulp_diff} ULP"
-                );
+                assert!(ulp_diff <= 2, "sdist2({a}, {b}) vs hypot({a}, {b}) exceeded 2 ULP: {ulp_diff} ULP");
 
                 let abs_err = (cpu_sdist2 - std_hypot).abs();
                 let rel_tol = 2.0 * f32::EPSILON * std_hypot.max(1.0);
-                assert!(
-                    abs_err <= rel_tol,
-                    "Relative error {abs_err} exceeded tolerance {rel_tol} at ({a}, {b})"
-                );
+                assert!(abs_err <= rel_tol, "Relative error {abs_err} exceeded tolerance {rel_tol} at ({a}, {b})");
 
                 tested_pairs += 1;
             }
         }
 
         assert!(tested_pairs > 65_000);
-        assert!(
-            hypot_ulp_divergences > 0,
-            "Expected f32::hypot to exhibit 1-2 ULP scaling divergences across test grid"
-        );
+        assert!(hypot_ulp_divergences > 0, "Expected f32::hypot to exhibit 1-2 ULP scaling divergences across test grid");
     }
 }

@@ -303,7 +303,8 @@ fn rewrite_field(msg: &[u8], num: u32, f: &mut Replace<'_>) -> Result<(Vec<u8>, 
     let mut changed = false;
     let mut r = Reader::new(msg);
     while let Some(field) = r.next()? {
-        if field.num == num && field.wire == LEN
+        if field.num == num
+            && field.wire == LEN
             && let Some(new) = f(field.bytes)?
         {
             put_len(&mut out, num, &new);

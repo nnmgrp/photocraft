@@ -7,10 +7,7 @@ use egui_kittest::Harness;
 use photocraft_doc::{LayerContent, LayerId, comps::position_bounds};
 use serde_json::json;
 
-use super::{
-    CAP, TRANSLIT_PENALTY, Query, LAYOUT_PAIRS, activate, collect_hits, flatten_text, layout_variants,
-    remap_layout, score_hit, substring_matches,
-};
+use super::{CAP, LAYOUT_PAIRS, Query, TRANSLIT_PENALTY, activate, collect_hits, flatten_text, layout_variants, remap_layout, score_hit, substring_matches};
 use crate::{PhotocraftApp, theme::ThemeKind};
 
 // ---------------------------------------------------------------------------------------------
@@ -35,23 +32,9 @@ struct Ids {
 fn fixture() -> (PhotocraftApp, Ids) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 800, "height": 600})).unwrap();
-    let reply = LayerId(
-        app.run("type.create", json!({"text": "Привет, мир!\r\nКак дела?", "name": "Reply 1"}))
-            .unwrap()["layer"]
-            .as_u64()
-            .unwrap(),
-    );
+    let reply = LayerId(app.run("type.create", json!({"text": "Привет, мир!\r\nКак дела?", "name": "Reply 1"})).unwrap()["layer"].as_u64().unwrap());
     app.run("layer.groupLayers", json!({})).unwrap();
-    let group = app
-        .session
-        .active()
-        .unwrap()
-        .doc
-        .walk()
-        .into_iter()
-        .find(|(_, _, l)| l.is_group())
-        .map(|(_, _, l)| l.id)
-        .unwrap();
+    let group = app.session.active().unwrap().doc.walk().into_iter().find(|(_, _, l)| l.is_group()).map(|(_, _, l)| l.id).unwrap();
     app.run("layer.renameLayer", json!({"layer": group.0, "name": "Диалоги"})).unwrap();
     app.run("layer.setExpanded", json!({"layer": group.0, "expanded": false})).unwrap();
     app.run("layer.new.layer", json!({"name": "Фон"})).unwrap();
@@ -273,10 +256,7 @@ fn activate_switches_tabs_selects_and_expands_groups() {
     let st = app.session.active().unwrap();
     assert_eq!(app.session.active_index(), Some(0), "switched to the page with the hit");
     assert_eq!(st.active_layer, Some(ids.reply), "the hit's layer is selected");
-    assert!(
-        matches!(&st.doc.layer(ids.group).unwrap().content, LayerContent::Group(g) if g.expanded),
-        "the collapsed parent group opened"
-    );
+    assert!(matches!(&st.doc.layer(ids.group).unwrap().content, LayerContent::Group(g) if g.expanded), "the collapsed parent group opened");
     assert_eq!(app.ui.views[0].center, expected_center(&app, 0, ids.reply), "the viewport centres on the layer");
     assert!(!app.ui.views[0].fit_pending);
 }

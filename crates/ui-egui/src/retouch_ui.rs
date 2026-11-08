@@ -831,11 +831,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                                 tl!("Close up"),
                                 tl!("Nano Banana gets the area around what you remove, so it draws it at about twice the page's resolution"),
                             ),
-                            (
-                                "page".to_string(),
-                                tl!("Whole page"),
-                                tl!("Nano Banana gets the whole page: more to go on, but a softer result"),
-                            ),
+                            ("page".to_string(), tl!("Whole page"), tl!("Nano Banana gets the whole page: more to go on, but a softer result")),
                         ];
                         crate::widgets::dropdown_with_tooltips(ui, "remove-area", &mut o.remove_area, &areas, 100.0);
                         crate::widgets::checkbox(ui, &mut o.remove_creative, tl!("Creative")).on_hover_text(tl!(

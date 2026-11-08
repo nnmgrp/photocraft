@@ -1,5 +1,5 @@
 //! Manga & comic screentone generator (`filter.screentone`, `layer.screentone`) backed by
-//! [`photocraft_algo::screentone`] (the GenTonik engine).
+//! [`photocraft_algo::screentone`] (the comic screentone engine).
 //!
 //! `filter.screentone` runs through [`crate::filters::run_filter`] like every other filter, so
 //! selection, smart objects, history and `filter.lastFilter` work the same way; with

@@ -156,6 +156,8 @@ pub struct TypesetterOptions {
     pub optical_baseline_factor: f32,
     #[serde(default = "default_true")]
     pub hanging_punctuation: bool,
+    #[serde(default = "default_true")]
+    pub auto_clean: bool,
 }
 
 impl Default for TypesetterOptions {
@@ -167,6 +169,7 @@ impl Default for TypesetterOptions {
             strip_dash_prefix: true,
             optical_baseline_factor: 0.35,
             hanging_punctuation: true,
+            auto_clean: true,
         }
     }
 }

@@ -30,7 +30,6 @@ pub fn side_of(rgb: &[f32], mask: &[f32]) -> Option<usize> {
     SIDES.into_iter().find(|s| mask.len() == s * s && rgb.len() == 3 * s * s)
 }
 
-
 /// What the model is doing, for the UI.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum State {

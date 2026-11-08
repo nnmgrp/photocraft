@@ -55,7 +55,8 @@ mod camera_raw_scope_ui;
 pub mod camera_raw_ui;
 pub mod canvas;
 pub mod canvas_autoscroll;
-pub mod canvas_capsule;
+pub mod comic_canvas_capsule;
+pub use comic_canvas_capsule as canvas_capsule;
 mod canvas_popup;
 pub mod canvas_tool_menu;
 pub mod cas_transform;
@@ -175,7 +176,8 @@ mod opacity_keys;
 pub mod open_prompt;
 pub mod outline;
 mod page_keys;
-pub mod pages_panel;
+pub mod comic_pages_panel;
+pub use comic_pages_panel as pages_panel;
 pub mod paint_mouse;
 pub mod palette;
 mod panel_docking;
@@ -206,8 +208,10 @@ pub mod rotate_view;
 pub mod rulers;
 pub mod screen_picker;
 pub mod screen_sample;
-pub mod screentone_gizmo;
-pub mod screentone_panel;
+pub mod comic_screentone_gizmo;
+pub use comic_screentone_gizmo as screentone_gizmo;
+pub mod comic_screentone_panel;
+pub use comic_screentone_panel as screentone_panel;
 
 pub mod scrollbars;
 mod scrub_wrap;
@@ -230,6 +234,9 @@ pub mod spring_tools;
 pub mod stack_dialog;
 pub mod state;
 pub use snow_typesetter_ui as typesetter_ui;
+pub mod snow_breaks_ui;
+pub mod snow_clean;
+pub mod snow_typer_style;
 pub mod stroke_constraint;
 pub mod stroke_trace;
 pub mod stroke_trail;
@@ -1393,6 +1400,20 @@ impl PhotocraftApp {
             if !bounds.is_empty() { Some([bounds.x0 as f32, bounds.y0 as f32, bounds.width() as f32, bounds.height() as f32]) } else { None }
         });
 
+        // Подготовка авто-клина: если выделен баббл и включена опция auto_clean,
+        // вычисляем цвет заливки (белый/черный по средней яркости арта) до вызова мутабельных команд.
+        let auto_clean_params = if selection_box.is_some() && self.typesetter.state.options.auto_clean {
+            st.doc.selection.as_ref().map(|sel| {
+                let artwork_surface = st.active_layer.and_then(|id| st.doc.layer(id)).and_then(|l| l.surface());
+                let fill_rgb = crate::snow_clean::clean_fill_color(artwork_surface, sel);
+                let hex_fill = format!("#{:02x}{:02x}{:02x}", fill_rgb[0], fill_rgb[1], fill_rgb[2]);
+                let clean_layer_id = st.doc.layers.iter().find(|l| l.name == crate::snow_clean::CLEAN_LAYER).map(|l| l.id);
+                (clean_layer_id, hex_fill)
+            })
+        } else {
+            None
+        };
+
         // Готовим финальный текст (применяем ALL_CAPS если задано в стиле TypeR)
         let mut final_text = if action.preset.all_caps { action.text.to_uppercase() } else { action.text };
 
@@ -1564,6 +1585,16 @@ impl PhotocraftApp {
 
         if !action.preset.font_postscript.is_empty() {
             type_params["postscriptName"] = serde_json::Value::String(action.preset.font_postscript.clone());
+        }
+
+        // Авто-клин: если был баббл с активным выделением, очищаем подложку на слое TypeR Clean
+        if let Some((clean_layer_id, hex_fill)) = auto_clean_params {
+            if let Some(clean_id) = clean_layer_id {
+                let _ = self.run("layer.select", serde_json::json!({"layer": clean_id.0, "mode": "replace"}));
+            } else {
+                let _ = self.run("layer.new.layer", serde_json::json!({"name": crate::snow_clean::CLEAN_LAYER}));
+            }
+            let _ = self.run("edit.fill", serde_json::json!({"color": hex_fill}));
         }
 
         let res = self.run("type.create", type_params);
@@ -4753,3 +4784,5 @@ mod options_hit_area_tests;
 mod select_and_mask_button_tests;
 #[cfg(test)]
 mod balloon_tool_tests;
+#[cfg(test)]
+mod snow_paste_tests;

@@ -34,6 +34,7 @@ pub mod color_to_alpha_cmds;
 pub mod commands;
 pub mod snow_typesetter;
 pub use snow_typesetter as typesetter;
+pub mod snow_hyphenation;
 pub mod snow_knuth_plass;
 pub use snow_knuth_plass as knuth_plass;
 pub mod comps_cmds;
@@ -119,7 +120,8 @@ pub mod render_cmds;
 pub mod retouch_cmds;
 pub mod sample_cmds;
 pub mod sampler_cmds;
-pub mod screentone_cmds;
+pub mod comic_screentone_cmds;
+pub use comic_screentone_cmds as screentone_cmds;
 pub mod second_mask_cmds;
 
 pub mod select_extra_cmds;

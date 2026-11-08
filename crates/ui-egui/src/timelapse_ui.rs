@@ -128,7 +128,8 @@ fn choose_output(app: &mut PhotocraftApp, o: ExportSettings) -> Result<Value, St
     if o.encoder == "frames" {
         app.ask_folder(run)
     } else {
-        let name = app.session.active().map_or_else(|| "Untitled".to_string(), |d| d.doc.name.rsplit_once('.').map_or(d.doc.name.clone(), |(a, _)| a.to_string()));
+        let name =
+            app.session.active().map_or_else(|| "Untitled".to_string(), |d| d.doc.name.rsplit_once('.').map_or(d.doc.name.clone(), |(a, _)| a.to_string()));
         app.pick_save(&format!("{name} timelapse.mp4"), run)
     }
 }
@@ -162,7 +163,9 @@ pub fn on_job_event(app: &mut PhotocraftApp, e: &JobEvent) -> bool {
 
 /// Once per frame: follow edits and capture, pass on messages.
 pub fn frame(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    let input = ctx.input(|i| i.pointer.any_down() || i.events.iter().any(|e| matches!(e, egui::Event::Key { .. } | egui::Event::PointerButton { .. } | egui::Event::Text(_))));
+    let input = ctx.input(|i| {
+        i.pointer.any_down() || i.events.iter().any(|e| matches!(e, egui::Event::Key { .. } | egui::Event::PointerButton { .. } | egui::Event::Text(_)))
+    });
     if let Some(ms) = app.session.timelapse_tick(input) {
         ctx.request_repaint_after(std::time::Duration::from_millis(ms.clamp(16.0, 60_000.0) as u64));
     }
@@ -277,7 +280,8 @@ const LENGTHS: [(Option<u32>, &str); 11] = [
 /// "Show finished drawing first" lengths (tenths of a second, so they compare exactly).
 const INTROS: [(u32, &str); 6] = [(5, "0.5 s"), (10, "1 s"), (15, "1.5 s"), (20, "2 s"), (30, "3 s"), (50, "5 s")];
 const HOLDS: [(u32, &str); 7] = [(10, "1 s"), (20, "2 s"), (30, "3 s"), (40, "4 s"), (50, "5 s"), (80, "8 s"), (100, "10 s")];
-const IDLES: [(u32, &str); 7] = [(5, "5 seconds"), (10, "10 seconds"), (15, "15 seconds"), (20, "20 seconds"), (30, "30 seconds"), (45, "45 seconds"), (60, "1 minute")];
+const IDLES: [(u32, &str); 7] =
+    [(5, "5 seconds"), (10, "10 seconds"), (15, "15 seconds"), (20, "20 seconds"), (30, "30 seconds"), (45, "45 seconds"), (60, "1 minute")];
 
 fn quality_desc(q: &str) -> &'static str {
     match q {
@@ -415,7 +419,16 @@ fn button(ui: &mut Ui, t: &Tokens, text: &str, look: Look, icon: Icon, width: Op
 /// one raised (or filled with `on_fill`). `dot` puts a status dot before the first label. Returns
 /// the clicked cell.
 #[allow(clippy::too_many_arguments)]
-fn segmented(ui: &mut Ui, t: &Tokens, id: &str, items: &[&str], selected: Option<usize>, on_fill: Option<Color32>, dot: Option<Color32>, enabled: bool) -> Option<usize> {
+fn segmented(
+    ui: &mut Ui,
+    t: &Tokens,
+    id: &str,
+    items: &[&str],
+    selected: Option<usize>,
+    on_fill: Option<Color32>,
+    dot: Option<Color32>,
+    enabled: bool,
+) -> Option<usize> {
     let h = 28.0;
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::hover());
     let p = ui.painter();
@@ -480,7 +493,13 @@ fn pill(ui: &mut Ui, t: &Tokens, on: bool, label: &str) -> bool {
         p.rect_stroke(sw, 6.0, Stroke::new(1.0, t.text_faint), StrokeKind::Inside);
         p.circle_filled(egui::pos2(sw.left() + 5.0, sw.center().y), 3.0, t.text_faint);
     }
-    let color = if on { Color32::WHITE } else if hovered { t.text } else { t.text_dim };
+    let color = if on {
+        Color32::WHITE
+    } else if hovered {
+        t.text
+    } else {
+        t.text_dim
+    };
     let text_rect = Rect::from_min_max(egui::pos2(sw.right() + 7.0, rect.top()), egui::pos2(rect.right() - 8.0, rect.bottom()));
     let galley = ui.painter().layout_no_wrap(label.to_string(), egui::FontId::proportional(11.0), color);
     ui.painter().with_clip_rect(text_rect).galley(egui::pos2(text_rect.left(), rect.center().y - galley.size().y / 2.0), galley, color);
@@ -778,7 +797,8 @@ fn record_view(ui: &mut Ui, t: &Tokens, st: &RecordState, settings: &Settings, s
                     *ask = Some(Ask::Settings(json!({"export": {"lengthSec": len.map_or(json!("auto"), |v| json!(v))}})));
                 }
                 if let Some((secs, frames, ..)) = st.estimate {
-                    let line = crate::i18n::fmt(tl!("≈ {seconds} video from {frames}."), &[("seconds", &seconds_text(secs)), ("frames", &frames_text(frames as u64))]);
+                    let line =
+                        crate::i18n::fmt(tl!("≈ {seconds} video from {frames}."), &[("seconds", &seconds_text(secs)), ("frames", &frames_text(frames as u64))]);
                     desc(ui, t, &line);
                 }
                 ui.horizontal(|ui| {
@@ -831,22 +851,25 @@ fn record_view(ui: &mut Ui, t: &Tokens, st: &RecordState, settings: &Settings, s
             stat(ui, t, w * 1.3, tl!("Timer"), &if st.rec { clock_text(st.work) } else { dash.clone() }, st.idle, true);
             stat(ui, t, w, tl!("On disk"), &if st.rec { size_text(st.bytes) } else { dash }, false, false);
         });
-        egui::Frame::new().fill(t.field).stroke(Stroke::new(1.0, t.field_border)).corner_radius(7.0).inner_margin(egui::Margin::symmetric(9, 7)).show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.horizontal(|ui| {
-                let name = st.doc.clone().unwrap_or_else(|| tl!("No document open").to_string());
-                let link_w = if st.doc.is_some() { 72.0 } else { 0.0 };
-                left_label(ui, ui.available_width() - link_w, 16.0, RichText::new(name).size(11.0).strong().color(t.text));
-                if st.doc.is_some() {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let tip = if s.preview { tl!("Hide the live preview") } else { tl!("Show the newest frame") };
-                        if arrow_link(ui, t, tl!("Preview"), s.preview).on_hover_text(tip).clicked() {
-                            s.preview = !s.preview;
-                        }
-                    });
-                }
-            });
-        });
+        egui::Frame::new().fill(t.field).stroke(Stroke::new(1.0, t.field_border)).corner_radius(7.0).inner_margin(egui::Margin::symmetric(9, 7)).show(
+            ui,
+            |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    let name = st.doc.clone().unwrap_or_else(|| tl!("No document open").to_string());
+                    let link_w = if st.doc.is_some() { 72.0 } else { 0.0 };
+                    left_label(ui, ui.available_width() - link_w, 16.0, RichText::new(name).size(11.0).strong().color(t.text));
+                    if st.doc.is_some() {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let tip = if s.preview { tl!("Hide the live preview") } else { tl!("Show the newest frame") };
+                            if arrow_link(ui, t, tl!("Preview"), s.preview).on_hover_text(tip).clicked() {
+                                s.preview = !s.preview;
+                            }
+                        });
+                    }
+                });
+            },
+        );
         if s.preview && st.doc.is_some() {
             let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 160.0), Sense::hover());
             ui.painter().rect_filled(rect, 7.0, t.canvas);
@@ -948,7 +971,14 @@ fn export_view(ui: &mut Ui, t: &Tokens, st: &RecordState, settings: &Settings, s
         }
         ui.columns(2, |cols| {
             let mut enc = o.encoder.clone();
-            if labelled_dropdown(&mut cols[0], t, "timelapse-encoder", tl!("Make video with"), &mut enc, &[("ffmpeg".to_string(), "ffmpeg (fast)"), ("frames".to_string(), "JPEG frames")]) {
+            if labelled_dropdown(
+                &mut cols[0],
+                t,
+                "timelapse-encoder",
+                tl!("Make video with"),
+                &mut enc,
+                &[("ffmpeg".to_string(), "ffmpeg (fast)"), ("frames".to_string(), "JPEG frames")],
+            ) {
                 *ask = set(json!({"encoder": enc}));
             }
             let mut bars = o.letterbox.clone();
@@ -1008,7 +1038,8 @@ fn export_view(ui: &mut Ui, t: &Tokens, st: &RecordState, settings: &Settings, s
         let mut corner = o.corner.clone();
         let mut corner_changed = false;
         if row(ui, o.timer, tl!("Show work-time counter"), &mut |ui| {
-            let corners = [("br".to_string(), "Bottom right"), ("bl".to_string(), "Bottom left"), ("tr".to_string(), "Top right"), ("tl".to_string(), "Top left")];
+            let corners =
+                [("br".to_string(), "Bottom right"), ("bl".to_string(), "Bottom left"), ("tr".to_string(), "Top right"), ("tl".to_string(), "Top left")];
             ui.add_enabled_ui(o.timer, |ui| corner_changed = crate::widgets::dropdown(ui, "timelapse-corner", &mut corner, &corners, 88.0));
         }) {
             *ask = set(json!({"timer": !o.timer}));
@@ -1031,7 +1062,13 @@ fn export_view(ui: &mut Ui, t: &Tokens, st: &RecordState, settings: &Settings, s
                     desc(ui, t, tl!("The canvas size changed during recording; earlier frames are fitted inside the final size."));
                 }
                 if o.deflicker {
-                    desc(ui, t, tl!("Remove flicker leaves out frames that flash in and out (a layer hidden for a moment, a stroke undone right away), so the video can be a bit shorter."));
+                    desc(
+                        ui,
+                        t,
+                        tl!(
+                            "Remove flicker leaves out frames that flash in and out (a layer hidden for a moment, a stroke undone right away), so the video can be a bit shorter."
+                        ),
+                    );
                 }
             }
         }

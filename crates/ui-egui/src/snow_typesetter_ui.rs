@@ -311,6 +311,57 @@ impl TypesetterUi {
         }
         self.auto_save();
     }
+
+    /// Splits the current script line before `char_index` (the break preview click), adding the
+    /// hyphen and a line break, then rebuilding the queue from the buffer.
+    pub fn split_current_line_at(&mut self, char_index: usize, hyphenate: bool) {
+        let Some(line) = self.state.lines.get(self.state.current_line_idx) else { return };
+        let start: usize = self.state.lines.iter().take(self.state.current_line_idx).map(|l| l.raw.chars().count() + 1).sum();
+        let line_len = line.raw.chars().count();
+        let (left, right) = crate::snow_breaks_ui::split_line(&line.raw, char_index, hyphenate);
+        if right.is_empty() {
+            return;
+        }
+        let buffer: Vec<char> = self.script_buffer.chars().collect();
+        if start + line_len > buffer.len() {
+            return;
+        }
+        let mut updated: Vec<char> = buffer.get(..start).map(<[char]>::to_vec).unwrap_or_default();
+        updated.extend(left.chars());
+        updated.push('\n');
+        updated.extend(right.chars());
+        let tail = (start + line_len).min(buffer.len());
+        updated.extend(buffer.get(tail..).unwrap_or_default());
+        self.script_buffer = updated.into_iter().collect();
+        self.sync_state_from_script_buffer();
+        self.request_bubble_contour();
+        self.auto_save();
+    }
+
+    /// Joins the current line with the next one when it ends with a hyphen.
+    pub fn merge_current_line(&mut self) {
+        let Some(line) = self.state.lines.get(self.state.current_line_idx) else { return };
+        let Some(next) = self.state.lines.get(self.state.current_line_idx + 1) else { return };
+        if !line.raw.trim_end().ends_with('-') {
+            return;
+        }
+        let start: usize = self.state.lines.iter().take(self.state.current_line_idx).map(|l| l.raw.chars().count() + 1).sum();
+        let line_len = line.raw.chars().count();
+        let next_len = next.raw.chars().count();
+        let merged = crate::snow_breaks_ui::merge_lines(&line.raw, &next.raw);
+        let buffer: Vec<char> = self.script_buffer.chars().collect();
+        if start + line_len + 1 + next_len > buffer.len() {
+            return;
+        }
+        let mut updated: Vec<char> = buffer.get(..start).map(<[char]>::to_vec).unwrap_or_default();
+        updated.extend(merged.chars());
+        updated.extend(buffer.get(start + line_len + 1 + next_len..).unwrap_or_default());
+        self.script_buffer = updated.into_iter().collect();
+        self.sync_state_from_script_buffer();
+        self.request_bubble_contour();
+        self.auto_save();
+    }
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -1106,6 +1157,23 @@ impl TypesetterUi {
                     });
                 });
             return;
+        }
+
+        // Интерактивный предпросмотр переносов строки TypeR Breaks: наведение показывает точки слогов,
+        // клик делит строку на две с дефисом (Alt+клик без дефиса), клик на метке объединения склеивает со следующей.
+        let break_idx = self.state.current_line_idx;
+        if let Some(raw) = self.state.lines.get(break_idx).map(|l| l.raw.clone()) {
+            let next_raw = self.state.lines.get(break_idx + 1).map(|l| l.raw.clone());
+            match crate::snow_breaks_ui::show(ui, &raw, next_raw.as_deref()) {
+                Some(crate::snow_breaks_ui::BreakAction::Split { char_index, hyphenate }) => {
+                    self.split_current_line_at(char_index, hyphenate);
+                }
+                Some(crate::snow_breaks_ui::BreakAction::Merge) => {
+                    self.merge_current_line();
+                }
+                None => {}
+            }
+            ui.add_space(4.0);
         }
 
         ScrollArea::vertical().id_salt("typer_script_unified_scroll").max_height(max_height).auto_shrink([false, false]).show(ui, |ui| {
@@ -2477,6 +2545,14 @@ impl TypesetterUi {
             if ui
                 .checkbox(&mut self.state.options.hanging_punctuation, tl!("Компенсация знаков в строках"))
                 .on_hover_text(tl!("Оптическая компенсация и вынос знаков препинания за границы строк (висячая пунктуация)"))
+                .changed()
+            {
+                self.auto_save();
+            }
+
+            if ui
+                .checkbox(&mut self.state.options.auto_clean, tl!("Авто-клин баббла перед вставкой"))
+                .on_hover_text(tl!("Автоматическая очистка содержимого баббла на слое TypeR Clean перед вставкой реплики"))
                 .changed()
             {
                 self.auto_save();
@@ -4060,5 +4136,49 @@ mod tests {
             (leading_value.right() - leading_block.right()).abs() <= 1.0,
             "the Leading value ends at the 445-point column's right edge: {leading_value:?} vs {leading_block:?}"
         );
+    }
+
+    #[test]
+    fn test_split_and_merge_current_line() {
+        let mut typer = TypesetterUi::default();
+        typer.script_buffer = "Привет мир!\nКак дела?".into();
+        typer.sync_state_from_script_buffer();
+        assert_eq!(typer.state.lines.len(), 2);
+        typer.state.current_line_idx = 0;
+
+        // 1. Слоговой перенос внутри слова ("При-" / "вет мир!")
+        typer.split_current_line_at(3, true);
+        assert_eq!(typer.state.lines.len(), 3);
+        assert_eq!(typer.state.lines[0].raw, "При-");
+        assert_eq!(typer.state.lines[1].raw, "вет мир!");
+
+        // 2. Слияние строки с дефисом обратно
+        typer.state.current_line_idx = 0;
+        typer.merge_current_line();
+        assert_eq!(typer.state.lines.len(), 2);
+        assert_eq!(typer.state.lines[0].raw, "Привет мир!");
+
+        // 3. Пробельный перенос между словами (без дефиса: "Привет" / "мир!")
+        typer.split_current_line_at(7, true);
+        assert_eq!(typer.state.lines.len(), 3);
+        assert_eq!(typer.state.lines[0].raw, "Привет");
+        assert_eq!(typer.state.lines[1].raw, "мир!");
+    }
+
+    #[test]
+    fn test_auto_clean_creates_clean_layer_on_selection() {
+        let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 400, "height": 400})).unwrap();
+        app.run("select.rect", json!({"x": 50, "y": 50, "width": 100, "height": 100})).unwrap();
+
+        app.typesetter.state.options.auto_clean = true;
+        app.handle_typesetter_action(TypesetterAction {
+            text: "Hello clean world".into(),
+            preset: TextStylePreset::default(),
+        });
+
+        let st = app.session.active().unwrap();
+        let clean_layer = st.doc.layers.iter().find(|l| l.name == crate::snow_clean::CLEAN_LAYER);
+        assert!(clean_layer.is_some(), "TypeR Clean layer must be created when auto_clean is enabled");
     }
 }

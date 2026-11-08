@@ -300,8 +300,6 @@ fn balloon_stroke(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 pub fn specs() -> Vec<CommandSpec> {
-    let stroke = r##""stroke":{"width":px,"color":"#rrggbb"|fill,"opacity":0..100,"align":"inside|center|outside","cap":"butt|round|square","join":"miter|round|bevel","miterLimit":n,"dashes":[multiples of width],"dashOffset":n}|null"##;
-    let fill = r##""fill":"#rrggbb"|[r,g,b,a]|{"gradient":{тАж}}|{"pattern":name}|null (no fill)"##;
     vec![
         spec!(
             "shape.balloon.tail",

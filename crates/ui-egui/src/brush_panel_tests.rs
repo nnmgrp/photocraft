@@ -2017,7 +2017,12 @@ fn a_pinned_group_stays_on_top_while_the_list_scrolls() {
     // Scroll the list: the pinned group stays where it is, the rest moves up under it.
     for _ in 0..6 {
         h.hover_at(listed.center() + vec2(0.0, 60.0));
-        h.event(egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: vec2(0.0, -300.0), phase: egui::TouchPhase::Move, modifiers: egui::Modifiers::NONE });
+        h.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: vec2(0.0, -300.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+        });
         h.run_steps(2);
     }
     let still = row(&h, &last).expect("still drawn");

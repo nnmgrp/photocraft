@@ -226,7 +226,8 @@ impl Trail {
         let filled = photocraft_algo::remove::close_loops(bw, bh, &mask);
         let mut changed = false;
         for (i, (&was, &now)) in mask.iter().zip(&filled).enumerate() {
-            if now && !was
+            if now
+                && !was
                 && let Some(v) = self.cov.get_mut(at(i % bw, i / bw))
             {
                 *v = 255;

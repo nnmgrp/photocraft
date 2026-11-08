@@ -206,7 +206,9 @@ fn the_options_bar_and_the_layer_menu_offer_the_fill_tool() {
     let st = h.state().session.active().unwrap();
     let lines = st.doc.walk().iter().find(|(_, _, l)| l.name == "Lines").map(|(_, _, l)| (*l).clone()).unwrap();
     let colour = st.doc.layer(st.active_layer.unwrap()).unwrap().clone();
-    let item = |l: &photocraft_doc::Layer| crate::layer_menu_ui::entries(l, false, false).into_iter().flatten().find(|(_, id)| *id == "layer.setReference").map(|(label, _)| label);
+    let item = |l: &photocraft_doc::Layer| {
+        crate::layer_menu_ui::entries(l, false, false).into_iter().flatten().find(|(_, id)| *id == "layer.setReference").map(|(label, _)| label)
+    };
     assert_eq!(item(&lines), Some("Clear Reference Layer"));
     assert_eq!(item(&colour), Some("Set as Reference Layer"));
     assert!(crate::layer_menu_ui::entries(&colour, true, false).into_iter().flatten().all(|(_, id)| id != "layer.setReference"));

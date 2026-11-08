@@ -432,6 +432,10 @@ pub fn remap_surface(s: &Surface, map: impl Fn(i32, i32) -> (i32, i32)) -> Surfa
 
 /// Merge `upper` onto `lower` producing a raster layer (Layer → Merge Down).
 pub fn merge_down(doc: &Document, lower: &Layer, upper: &Layer) -> Layer {
+    let mut lower = lower.clone();
+    let mut upper = upper.clone();
+    crate::screentone_cmds::ensure_layer_screentone_baked(doc, &mut lower);
+    crate::screentone_cmds::ensure_layer_screentone_baked(doc, &mut upper);
     let format = doc.pixel_format();
     let stack = vec![lower.clone(), upper.clone()];
     let mut tmp = Document::new("merge", doc.size, format.mode, format.sample);

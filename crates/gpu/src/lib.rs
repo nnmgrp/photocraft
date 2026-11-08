@@ -1723,7 +1723,10 @@ impl Compositor {
                 if kernel == Kernel::Screentone {
                     log::info!(
                         "[SCREENTONE:GPU_EXEC] Drawing Kernel::Screentone pass on GPU: pass_idx={}, chunk={:?}, scissor={:?}, dst_slot={}",
-                        i, c, scissor, dst
+                        i,
+                        c,
+                        scissor,
+                        dst
                     );
                 }
                 pass.set_pipeline(&self.kit.pipelines[&(kernel, self.acc_format)]);

@@ -540,9 +540,15 @@ pub fn release_after_os_resize(ctx: &egui::Context, raw: &mut egui::RawInput) {
     // that keep moving the pointer with the button still down and the window where it was mean
     // the move never started: the press stays the app's, which moves the window
     // ([`follow_manual_move`]).
-    let outer = raw.viewports.get(&egui::ViewportId::ROOT).and_then(|v| v.outer_rect).map(|r| r.min).or_else(|| ctx.input(|i| i.viewport().outer_rect.map(|r| r.min)));
+    let outer =
+        raw.viewports.get(&egui::ViewportId::ROOT).and_then(|v| v.outer_rect).map(|r| r.min).or_else(|| ctx.input(|i| i.viewport().outer_rect.map(|r| r.min)));
     let pointer_moved = raw.events.iter().any(|e| matches!(e, egui::Event::PointerMoved(_)));
-    if cfg!(target_os = "windows") && h.moved_from.is_some() && !os_released && pointer_moved && outer.unwrap_or(Pos2::ZERO) == h.moved_from.unwrap_or(Pos2::ZERO) {
+    if cfg!(target_os = "windows")
+        && h.moved_from.is_some()
+        && !os_released
+        && pointer_moved
+        && outer.unwrap_or(Pos2::ZERO) == h.moved_from.unwrap_or(Pos2::ZERO)
+    {
         let still_moves = h.still_moves.saturating_add(1);
         let manual = still_moves >= 2;
         if manual {

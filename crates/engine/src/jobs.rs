@@ -817,7 +817,8 @@ impl Session {
         let before = self.active().map(|st| st.doc.clone());
         // A click on the layer already selected selects nothing new: recording leaves it out, as
         // Photoshop does, so an action doesn't fill up with redundant Select steps.
-        let selection_before = (id == "layer.select" && (recording.is_some() || self.actions.recording.is_some())).then(|| self.active().map(|st| (st.selected_layers(), st.active_layer)));
+        let selection_before = (id == "layer.select" && (recording.is_some() || self.actions.recording.is_some()))
+            .then(|| self.active().map(|st| (st.selected_layers(), st.active_layer)));
         // A step naming a layer by id is recorded by the current layer or the layer's name, taken
         // before a rename changes it.
         let recorded_layer = (recording.is_some() || self.actions.recording.is_some()).then(|| crate::layer_refs::record(self, id, &params)).flatten();

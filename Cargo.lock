@@ -5222,6 +5222,7 @@ dependencies = [
  "photocraft-geom",
  "photocraft-raster",
  "rayon",
+ "serde",
 ]
 
 [[package]]

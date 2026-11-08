@@ -206,13 +206,14 @@ pub enum Tool {
     /// Comic speech / thought balloon tool (shape.balloon.*): drag a tail from a balloon body or
     /// drag out a procedural cloud / spiky balloon.
     Balloon,
+    VectorCurve,
     Slice,
     SliceSelect,
     Frame,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 69] = [
+    pub const ALL: [Tool; 70] = [
         Tool::Move,
         Tool::Artboard,
         Tool::RectMarquee,
@@ -279,6 +280,7 @@ impl Tool {
         Tool::Line,
         Tool::CustomShape,
         Tool::Balloon,
+        Tool::VectorCurve,
         Tool::Slice,
         Tool::SliceSelect,
         Tool::Frame,
@@ -355,6 +357,7 @@ impl Tool {
             Tool::Line => "Line Tool",
             Tool::CustomShape => "Custom Shape Tool",
             Tool::Balloon => "Balloon Tool",
+            Tool::VectorCurve => "Vector Curve Tool",
         }
     }
     pub fn is_type(self) -> bool {
@@ -418,7 +421,7 @@ impl Tool {
             Tool::SingleRowMarquee | Tool::SingleColumnMarquee => '\0',
             Tool::Dodge | Tool::Burn | Tool::Sponge => 'O',
             Tool::QuickSelection | Tool::ObjectSelection => 'W',
-            Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen | Tool::AddAnchorPoint | Tool::DeleteAnchorPoint | Tool::ConvertPoint => 'P',
+            Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen | Tool::AddAnchorPoint | Tool::DeleteAnchorPoint | Tool::ConvertPoint | Tool::VectorCurve => 'P',
             Tool::PathSelection | Tool::DirectSelection => 'A',
             Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Line | Tool::CustomShape | Tool::Balloon => 'U',
         }
@@ -832,6 +835,16 @@ pub struct ToolOptions {
     pub balloon_inward: bool,
     #[serde(default = "default_balloon_seed")]
     pub balloon_seed: u32,
+    #[serde(default = "default_vector_curve_width")]
+    pub vector_curve_width: f32,
+    #[serde(default = "default_vector_curve_tapered")]
+    pub vector_curve_tapered: bool,
+    #[serde(default = "default_vector_curve_closed")]
+    pub vector_curve_closed: bool,
+    #[serde(default = "default_vector_curve_min_ratio")]
+    pub vector_curve_min_ratio: f32,
+    #[serde(default = "default_vector_curve_tension")]
+    pub vector_curve_tension: f32,
     /// Freeform Pen › Curve Fit: how far (px) the fitted path may stray from the pointer trace.
     #[serde(default = "default_curve_fit")]
     pub curve_fit: f32,
@@ -1017,6 +1030,26 @@ fn default_balloon_seed() -> u32 {
     1
 }
 
+fn default_vector_curve_width() -> f32 {
+    6.0
+}
+
+fn default_vector_curve_tapered() -> bool {
+    true
+}
+
+fn default_vector_curve_closed() -> bool {
+    false
+}
+
+fn default_vector_curve_min_ratio() -> f32 {
+    0.05
+}
+
+fn default_vector_curve_tension() -> f32 {
+    0.65
+}
+
 fn default_move_target() -> String {
     "layer".into()
 }
@@ -1199,6 +1232,11 @@ impl Default for ToolOptions {
             balloon_smooth: false,
             balloon_inward: false,
             balloon_seed: default_balloon_seed(),
+            vector_curve_width: default_vector_curve_width(),
+            vector_curve_tapered: default_vector_curve_tapered(),
+            vector_curve_closed: default_vector_curve_closed(),
+            vector_curve_min_ratio: default_vector_curve_min_ratio(),
+            vector_curve_tension: default_vector_curve_tension(),
             shape_fill: true,
             stroke_width: 0.0,
             shape_stroke: Default::default(),
@@ -1611,6 +1649,9 @@ pub struct UiState {
     /// Pen path under construction.
     #[serde(default)]
     pub pen: Option<crate::vector_ui::PenPath>,
+    /// Active PaintTool SAI vector curve state under construction.
+    #[serde(default)]
+    pub vector_curve: Option<crate::vector_ui::VectorCurveState>,
     /// The document the pen path is drawn on; switching away commits it to that Work Path.
     #[serde(default)]
     pub pen_doc: Option<photocraft_doc::DocId>,
@@ -1652,7 +1693,7 @@ pub struct UiState {
     /// Preset panels (Gradients, Patterns, Styles, Shapes, Tool Presets, Clone Source).
     #[serde(default)]
     pub presets_ui: crate::preset_panels::PresetUi,
-    /// The Screentones panel (GenTonik screentone generator, see `screentone_panel`).
+    /// The Screentones panel (comic screentone generator, see `comic_screentone_panel`).
     #[serde(default)]
     pub screentone_ui: crate::screentone_panel::ScreentoneUi,
     /// The Canvas Capsule (CraftBar, see `canvas_capsule`).
@@ -1879,6 +1920,7 @@ impl Default for UiState {
             crop_rect: None,
             crop_angle: 0.0,
             perspective_crop: None,
+            vector_curve: None,
             next_id: 1,
             status: String::new(),
             status_error: false,

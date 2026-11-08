@@ -1087,7 +1087,17 @@ mod tests {
                 hole[y * 200 + x] = true;
             }
         }
-        let req = Request { canvas, window: canvas, hole: &hole, pixels: &pixels, ch: 3, colours: Colours::Rgb, alpha: None, linear: false, transparent_unknown: false };
+        let req = Request {
+            canvas,
+            window: canvas,
+            hole: &hole,
+            pixels: &pixels,
+            ch: 3,
+            colours: Colours::Rgb,
+            alpha: None,
+            linear: false,
+            transparent_unknown: false,
+        };
         let read = |r: Rect| (r.y0..r.y1).flat_map(|y| (r.x0..r.x1).flat_map(move |x| value(x, y))).collect::<Vec<f32>>();
         let (side, n) = (256usize, 256 * 256);
         let at = |x: i32, y: i32| ((y + 68) as usize) * side + (x + 28) as usize;
@@ -1301,7 +1311,17 @@ mod tests {
                 hole[y * w + x] = true;
             }
         }
-        let req = Request { canvas, window: canvas, hole: &hole, pixels: &pixels, ch: 3, colours: Colours::Rgb, alpha: None, linear: false, transparent_unknown: false };
+        let req = Request {
+            canvas,
+            window: canvas,
+            hole: &hole,
+            pixels: &pixels,
+            ch: 3,
+            colours: Colours::Rgb,
+            alpha: None,
+            linear: false,
+            transparent_unknown: false,
+        };
         let mut runs = 0;
         let out = fill_with(
             &req,

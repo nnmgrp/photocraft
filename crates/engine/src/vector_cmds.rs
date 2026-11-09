@@ -1078,8 +1078,7 @@ fn vector_curve_insert_node(s: &mut Session, p: &Value) -> Result<Value> {
             let (n_i, _) = insert_vector_curve_node_at(&mut lw.strokes[0], x, y, max_dist).map_err(|e| bad(CMD, e))?;
             (0, n_i)
         } else {
-            lw.insert_node_at_pos((x, y), max_dist)
-                .ok_or_else(|| bad(CMD, "shape.vectorCurve.insertNode: no curve segment within hit radius"))?
+            lw.insert_node_at_pos((x, y), max_dist).ok_or_else(|| bad(CMD, "shape.vectorCurve.insertNode: no curve segment within hit radius"))?
         };
         let updated = lw.strokes[target_s].clone();
         let path = if multi { lw.rebuild_path() } else { updated.rebuild_path() };

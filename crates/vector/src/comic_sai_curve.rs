@@ -619,7 +619,14 @@ pub fn tapered_outline(points: &[SaiPoint], base_width: f64, min_ratio: f64) -> 
 /// Computes the left and right offset contour chains `(left, right, samples)` for a stroke.
 /// When `closed == true`, normals are averaged cyclically across the seam at `points[0]` so
 /// the closed ring is $C^1$-continuous with zero notch or gap at the joint.
-pub fn tapered_rings_ex(points: &[SaiPoint], base_width: f64, min_ratio: f64, closed: bool, tension: f64, max_step_px: f64) -> (Vec<P>, Vec<P>, Vec<CurveSample>) {
+pub fn tapered_rings_ex(
+    points: &[SaiPoint],
+    base_width: f64,
+    min_ratio: f64,
+    closed: bool,
+    tension: f64,
+    max_step_px: f64,
+) -> (Vec<P>, Vec<P>, Vec<CurveSample>) {
     // When a closed loop still carries auto-tapered endpoint pressures (~0.08) at node 0 or n-1,
     // normalize them to the interior pressure so the closed ring doesn't pinch at the seam.
     let normalized_storage: Option<Vec<SaiPoint>> = if closed && points.len() >= 3 {
@@ -643,11 +650,7 @@ pub fn tapered_rings_ex(points: &[SaiPoint], base_width: f64, min_ratio: f64, cl
     let eff_points = normalized_storage.as_deref().unwrap_or(points);
 
     let mut samples = sample_sai_curve(eff_points, base_width, min_ratio, closed, tension, max_step_px);
-    if closed
-        && samples.len() > 3
-        && !eff_points[0].corner
-        && dist(samples[0].p, samples[samples.len() - 1].p) < 1e-3
-    {
+    if closed && samples.len() > 3 && !eff_points[0].corner && dist(samples[0].p, samples[samples.len() - 1].p) < 1e-3 {
         samples.pop();
     }
     let m = samples.len();
@@ -799,11 +802,7 @@ pub fn tapered_curve_path(points: &[SaiPoint], base_width: f64, min_ratio: f64, 
             return Path::default();
         }
         let outer = Subpath::polygon(&left_clean);
-        let inner = Subpath {
-            closed: true,
-            knots: right_clean.iter().map(|&(x, y)| Knot::corner(x, y)).collect(),
-            op: PathOp::Join,
-        };
+        let inner = Subpath { closed: true, knots: right_clean.iter().map(|&(x, y)| Knot::corner(x, y)).collect(), op: PathOp::Join };
         Path::new(vec![outer, inner])
     } else {
         let outline = tapered_outline_ex(points, base_width, min_ratio, false, tension, 1.5);
@@ -984,14 +983,8 @@ mod tests {
             8.0,
             true,
         );
-        let s2 = LiveVectorStroke::new(
-            vec![
-                SaiPoint::with_pressure((50.0, 220.0), 1.0, false),
-                SaiPoint::with_pressure((250.0, 220.0), 1.0, false),
-            ],
-            12.0,
-            false,
-        );
+        let s2 =
+            LiveVectorStroke::new(vec![SaiPoint::with_pressure((50.0, 220.0), 1.0, false), SaiPoint::with_pressure((250.0, 220.0), 1.0, false)], 12.0, false);
         let mut linework = LiveLinework::new(vec![s1, s2]);
         let combined = linework.rebuild_path();
         assert_eq!(combined.subpaths.len(), 2);

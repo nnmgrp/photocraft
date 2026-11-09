@@ -13,9 +13,7 @@ use crate::PhotocraftApp;
 use crate::canvas::ViewXform;
 use crate::state::{Tool, ToolOptions};
 use crate::theme::Tokens;
-use photocraft_vector::sai_curve::{
-    SAI_DEFAULT_TENSION, SaiPoint, closest_point_on_curve, insert_node_on_curve, sample_sai_curve, tapered_rings_ex, width_at,
-};
+use photocraft_vector::sai_curve::{SAI_DEFAULT_TENSION, SaiPoint, closest_point_on_curve, insert_node_on_curve, sample_sai_curve, tapered_rings_ex, width_at};
 
 /// Sub-mode of `Tool::VectorCurve`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1808,11 +1806,7 @@ pub fn vector_curve_down(app: &mut PhotocraftApp, x: f64, y: f64, ctrl: bool, al
                 return;
             }
             let node = lw.strokes[s_idx].nodes[n_idx];
-            let kind = if cur_mode == VectorCurveMode::Weight || alt {
-                LayerDragKind::AdjustNodePressure
-            } else {
-                LayerDragKind::MoveNode
-            };
+            let kind = if cur_mode == VectorCurveMode::Weight || alt { LayerDragKind::AdjustNodePressure } else { LayerDragKind::MoveNode };
             let vc = app.ui.vector_curve.get_or_insert_with(VectorCurveState::default);
             vc.layer_drag = Some(ActiveLayerDrag {
                 layer_id: active_id,
@@ -1963,11 +1957,7 @@ pub fn vector_curve_up(app: &mut PhotocraftApp, alt: bool) {
 /// and commits the stroke immediately without discarding it.
 pub fn vector_curve_escape(app: &mut PhotocraftApp) {
     let zoom = app.point_zoom() as f64;
-    let ready = if let Some(vc) = app.ui.vector_curve.as_mut() {
-        vc.finish_at_cursor(zoom)
-    } else {
-        false
-    };
+    let ready = if let Some(vc) = app.ui.vector_curve.as_mut() { vc.finish_at_cursor(zoom) } else { false };
     if ready {
         vector_curve_commit(app);
     } else if let Some(vc) = app.ui.vector_curve.as_mut() {
@@ -2086,11 +2076,7 @@ pub fn draw_vector_curve_overlay(app: &PhotocraftApp, painter: &egui::Painter, x
     }
 
     // 2. Build live spline points including real-time rubber-band preview to mouse cursor `hover_pos`
-    let mut preview_pts: Vec<SaiPoint> = vc
-        .points
-        .iter()
-        .map(|p| SaiPoint::with_pressure((p[0], p[1]), p[2] as f32, p[3] > 0.5))
-        .collect();
+    let mut preview_pts: Vec<SaiPoint> = vc.points.iter().map(|p| SaiPoint::with_pressure((p[0], p[1]), p[2] as f32, p[3] > 0.5)).collect();
     let mut preview_closed = o.vector_curve_closed || vc.closed_loop;
     let mut snapping_to_start = false;
 
@@ -2143,9 +2129,7 @@ pub fn draw_vector_curve_overlay(app: &PhotocraftApp, painter: &egui::Painter, x
         // Render PaintTool SAI smooth blue spline guide centerline (including live curved arc to cursor)
         if samples.len() >= 2 {
             let mut scr_line: Vec<Pos2> = samples.iter().map(|s| to_scr([s.p.0, s.p.1])).collect();
-            if preview_closed
-                && let Some(&first) = scr_line.first()
-            {
+            if preview_closed && let Some(&first) = scr_line.first() {
                 scr_line.push(first);
             }
             painter.add(egui::Shape::line(scr_line, Stroke::new(1.5, accent)));
@@ -2158,11 +2142,7 @@ pub fn draw_vector_curve_overlay(app: &PhotocraftApp, painter: &egui::Painter, x
         && let Some(h) = vc.hover_pos
         && vc.node_at(h, hit_radius).is_none()
     {
-        let sai_pts: Vec<SaiPoint> = vc
-            .points
-            .iter()
-            .map(|p| SaiPoint::with_pressure((p[0], p[1]), p[2] as f32, p[3] > 0.5))
-            .collect();
+        let sai_pts: Vec<SaiPoint> = vc.points.iter().map(|p| SaiPoint::with_pressure((p[0], p[1]), p[2] as f32, p[3] > 0.5)).collect();
         if let Some(proj) = closest_point_on_curve(&sai_pts, (h[0], h[1]), preview_closed, vc.tension)
             && proj.distance <= seg_radius
         {

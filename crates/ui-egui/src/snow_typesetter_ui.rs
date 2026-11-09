@@ -156,7 +156,7 @@ pub struct TypesetterUi {
 impl Default for TypesetterUi {
     fn default() -> Self {
         let mut ui = Self {
-            is_open: true,
+            is_open: false,
             dock_mode: TypesetterDockMode::Floating,
             current_tab: TypesetterTab::Queue,
             state: TypesetterState::default(),

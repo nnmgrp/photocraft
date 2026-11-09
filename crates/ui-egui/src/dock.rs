@@ -853,7 +853,7 @@ fn snapshot(app: &PhotocraftApp) -> Value {
         "dockingHidden": app.ui.docking_hidden,
         "dockingCollapsed": app.ui.docking_collapsed,
         "canvasCapsule": app.ui.canvas_capsule,
-        "typesetterOpen": app.ui.panels.typesetter || app.typesetter.is_open,
+        "typesetterOpen": app.ui.panels.typesetter,
     })
 }
 

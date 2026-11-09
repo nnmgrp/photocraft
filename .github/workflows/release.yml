@@ -33,6 +33,10 @@ jobs:
       app-title: PhotoCraft
       craft-fonts-ref: abb83316d96aa59c1cf64784289e378fe9fa5695
       version: ${{ inputs.version }}
+      # The FreeBSD aarch64 leg cross-compiles a tier-3 Rust target that rustup publishes no
+      # toolchain for, so it fails in every run of this fork. The called workflow skips the job
+      # instead of failing it, which also keeps its "Draft GitHub Release" guard satisfied.
+      has-freebsd: false
     secrets:
       APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
       APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}

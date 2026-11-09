@@ -37,6 +37,12 @@ jobs:
       # toolchain for, so it fails in every run of this fork. The called workflow skips the job
       # instead of failing it, which also keeps its "Draft GitHub Release" guard satisfied.
       has-freebsd: false
+      # This fork ships the Windows build. The called workflow has no toggle for the macOS, Linux
+      # and Flatpak legs, so they always run; these four are the ones the caller can switch off.
+      has-web: false
+      has-riscv64: false
+      has-arch: false
+      has-server: false
     secrets:
       APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
       APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}

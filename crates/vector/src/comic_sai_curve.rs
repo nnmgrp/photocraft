@@ -92,10 +92,88 @@ impl LiveVectorStroke {
         }
     }
 
+    /// Rebuilds this stroke as a filled outline `Path` (even when `tapered == false`, using
+    /// uniform `base_width`), so multiple strokes with different widths/tapering can coexist on
+    /// a single multi-stroke `LiveLinework` layer.
+    pub fn rebuild_outline_path(&self) -> Path {
+        if self.tapered {
+            tapered_curve_path(&self.nodes, self.base_width, self.min_ratio, self.closed, self.tension)
+        } else {
+            let uniform_nodes: Vec<SaiPoint> = self.nodes.iter().map(|pt| SaiPoint::with_pressure(pt.p, 1.0, pt.corner)).collect();
+            tapered_curve_path(&uniform_nodes, self.base_width, 1.0, self.closed, self.tension)
+        }
+    }
+
     /// Inserts a new smooth node on the closest curve segment within `max_dist_px` (used by `Ctrl + Click`).
     /// Returns the index of the newly inserted node if within hit distance.
     pub fn insert_node_at_pos(&mut self, pos: P, max_dist_px: f64) -> Option<usize> {
         insert_node_on_curve(&mut self.nodes, pos, self.closed, self.tension, max_dist_px)
+    }
+}
+
+/// Multi-stroke PaintTool SAI Linework Layer container.
+///
+/// Stores all vector strokes drawn on a single Linework layer so new curves append to the active
+/// Linework layer instead of spawning a new layer per stroke, and existing strokes remain
+/// editable via `Ctrl`-drag, `Weight`, and `Edit` tools at any time.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct LiveLinework {
+    pub strokes: Vec<LiveVectorStroke>,
+}
+
+impl LiveLinework {
+    pub fn new(strokes: Vec<LiveVectorStroke>) -> Self {
+        Self { strokes }
+    }
+
+    /// Rebuilds the combined multi-component `Path` for all strokes on this Linework layer.
+    pub fn rebuild_path(&self) -> Path {
+        let mut subpaths = Vec::new();
+        for stroke in &self.strokes {
+            let p = stroke.rebuild_outline_path();
+            for (i, mut sp) in p.subpaths.into_iter().enumerate() {
+                sp.op = if i == 0 { PathOp::Combine } else { PathOp::Join };
+                subpaths.push(sp);
+            }
+        }
+        Path::new(subpaths)
+    }
+
+    /// Finds the topmost stroke and node index within `hit_radius_doc` of `pos`.
+    pub fn node_at(&self, pos: P, hit_radius_doc: f64) -> Option<(usize, usize)> {
+        let r2 = hit_radius_doc * hit_radius_doc;
+        for (s_idx, stroke) in self.strokes.iter().enumerate().rev() {
+            for (n_idx, pt) in stroke.nodes.iter().enumerate().rev() {
+                let dx = pt.p.0 - pos.0;
+                let dy = pt.p.1 - pos.1;
+                if dx * dx + dy * dy <= r2 {
+                    return Some((s_idx, n_idx));
+                }
+            }
+        }
+        None
+    }
+
+    /// Finds the closest curve segment across all strokes on this Linework layer within `max_dist_px`.
+    pub fn closest_segment(&self, pos: P, max_dist_px: f64) -> Option<(usize, CurveHitProjection)> {
+        let mut best: Option<(usize, CurveHitProjection)> = None;
+        for (s_idx, stroke) in self.strokes.iter().enumerate().rev() {
+            if let Some(hit) = closest_point_on_curve(&stroke.nodes, pos, stroke.closed, stroke.tension)
+                && hit.distance <= max_dist_px
+                && best.as_ref().is_none_or(|(_, b)| hit.distance < b.distance)
+            {
+                best = Some((s_idx, hit));
+            }
+        }
+        best
+    }
+
+    /// Inserts a new node onto the closest stroke segment within `max_dist_px`.
+    /// Returns `Some((stroke_index, inserted_node_index))`.
+    pub fn insert_node_at_pos(&mut self, pos: P, max_dist_px: f64) -> Option<(usize, usize)> {
+        let (s_idx, _) = self.closest_segment(pos, max_dist_px)?;
+        let n_idx = self.strokes.get_mut(s_idx)?.insert_node_at_pos(pos, max_dist_px)?;
+        Some((s_idx, n_idx))
     }
 }
 
@@ -257,8 +335,25 @@ pub fn sai_knots(points: &[SaiPoint], closed: bool, tension: f64) -> Vec<Knot> {
         let w_out = if d_next > 1e-6 { 1.0 / d_next.sqrt() } else { 0.0 };
         let tangent_dir = if w_in + w_out > 1e-6 { norm(add(mul(dir_in, w_in), mul(dir_out, w_out))) } else { (0.0, 0.0) };
 
+        // Circular-arc handle boost + tight hairpin damping (from VectorCraft's smooth_handles):
+        // Prevents flat "iron" ("утюг") tops on arches while damping sharp V-turns so they never loop.
+        let turn_scale = if d_prev > 1e-6 && d_next > 1e-6 {
+            let cos_turn = dot(dir_in, dir_out).clamp(-1.0, 1.0);
+            if cos_turn < -0.35 {
+                // Sharp hairpin turn (> 110°): damp handles smoothly toward the vertex
+                let t = ((cos_turn + 1.0) / 0.65).clamp(0.15, 1.0);
+                t * t
+            } else {
+                // Smooth circular arc factor: 2 / (1 + cos(alpha/2)), gently bounded for SAI feel
+                let cos_half = dot(dir_in, tangent_dir).clamp(0.0, 1.0);
+                (2.0 / (1.0 + cos_half)).clamp(1.0, 1.28)
+            }
+        } else {
+            1.0
+        };
+
         // SAI tight handle length: proportional to local segment length so short segments never loop
-        let handle_factor = (tension / 3.0) * 1.15;
+        let handle_factor = (tension / 3.0) * 1.15 * turn_scale;
         let prev_corner_damp = if points[prev_idx].corner && prev_idx != i { 0.78 } else { 1.0 };
         let next_corner_damp = if points[next_idx].corner && next_idx != i { 0.78 } else { 1.0 };
 
@@ -269,6 +364,49 @@ pub fn sai_knots(points: &[SaiPoint], closed: bool, tension: f64) -> Vec<Knot> {
         let out_ctrl = add(anchor, mul(tangent_dir, out_len));
         knots.push(Knot::smooth(Point::new(anchor.0, anchor.1), Point::new(in_ctrl.0, in_ctrl.1), Point::new(out_ctrl.0, out_ctrl.1)));
     }
+
+    // Open-path endpoint tangent reflection (VectorCraft `end_handle` rule):
+    // Reflect the adjacent interior knot's tangent across the end chord so the first and last
+    // segments follow a natural circular arc instead of pulling flat toward the chord.
+    if !closed && n >= 3 {
+        if !points[0].corner && knots[1].smooth {
+            let p0 = points[0].p;
+            let p1 = points[1].p;
+            let chord_len = dist(p0, p1);
+            if chord_len > 1e-6 {
+                let c = norm(sub(p1, p0));
+                let k1_in = (knots[1].in_ctrl.x, knots[1].in_ctrl.y);
+                let t1 = norm(sub(p1, k1_in));
+                if t1 != (0.0, 0.0) {
+                    let reflected = norm(sub(mul(c, 2.0 * dot(t1, c)), t1));
+                    let dir = norm(add(mul(reflected, 0.75), mul(c, 0.25)));
+                    let out_len = chord_len * (tension / 3.0) * 1.15;
+                    let out_ctrl = add(p0, mul(dir, out_len));
+                    knots[0].out_ctrl = Point::new(out_ctrl.0, out_ctrl.1);
+                    knots[0].in_ctrl = Point::new(p0.0, p0.1);
+                }
+            }
+        }
+        if !points[n - 1].corner && knots[n - 2].smooth {
+            let pn = points[n - 1].p;
+            let prev = points[n - 2].p;
+            let chord_len = dist(prev, pn);
+            if chord_len > 1e-6 {
+                let c = norm(sub(prev, pn));
+                let kn2_out = (knots[n - 2].out_ctrl.x, knots[n - 2].out_ctrl.y);
+                let tn2 = norm(sub(prev, kn2_out));
+                if tn2 != (0.0, 0.0) {
+                    let reflected = norm(sub(mul(c, 2.0 * dot(tn2, c)), tn2));
+                    let dir = norm(add(mul(reflected, 0.75), mul(c, 0.25)));
+                    let in_len = chord_len * (tension / 3.0) * 1.15;
+                    let in_ctrl = add(pn, mul(dir, in_len));
+                    knots[n - 1].in_ctrl = Point::new(in_ctrl.0, in_ctrl.1);
+                    knots[n - 1].out_ctrl = Point::new(pn.0, pn.1);
+                }
+            }
+        }
+    }
+
     knots
 }
 
@@ -478,11 +616,43 @@ pub fn tapered_outline(points: &[SaiPoint], base_width: f64, min_ratio: f64) -> 
     tapered_outline_ex(points, base_width, min_ratio, false, SAI_DEFAULT_TENSION, 1.5)
 }
 
-pub fn tapered_outline_ex(points: &[SaiPoint], base_width: f64, min_ratio: f64, closed: bool, tension: f64, max_step_px: f64) -> Vec<P> {
-    let samples = sample_sai_curve(points, base_width, min_ratio, closed, tension, max_step_px);
+/// Computes the left and right offset contour chains `(left, right, samples)` for a stroke.
+/// When `closed == true`, normals are averaged cyclically across the seam at `points[0]` so
+/// the closed ring is $C^1$-continuous with zero notch or gap at the joint.
+pub fn tapered_rings_ex(points: &[SaiPoint], base_width: f64, min_ratio: f64, closed: bool, tension: f64, max_step_px: f64) -> (Vec<P>, Vec<P>, Vec<CurveSample>) {
+    // When a closed loop still carries auto-tapered endpoint pressures (~0.08) at node 0 or n-1,
+    // normalize them to the interior pressure so the closed ring doesn't pinch at the seam.
+    let normalized_storage: Option<Vec<SaiPoint>> = if closed && points.len() >= 3 {
+        let max_interior = points.iter().map(|p| p.pressure).fold(0.0_f32, f32::max);
+        if max_interior > 0.3 && (points[0].pressure < 0.2 || points[points.len() - 1].pressure < 0.2) {
+            let mut copy = points.to_vec();
+            if copy[0].pressure < 0.2 {
+                copy[0].pressure = 1.0;
+            }
+            let last_idx = copy.len() - 1;
+            if copy[last_idx].pressure < 0.2 {
+                copy[last_idx].pressure = 1.0;
+            }
+            Some(copy)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let eff_points = normalized_storage.as_deref().unwrap_or(points);
+
+    let mut samples = sample_sai_curve(eff_points, base_width, min_ratio, closed, tension, max_step_px);
+    if closed
+        && samples.len() > 3
+        && !eff_points[0].corner
+        && dist(samples[0].p, samples[samples.len() - 1].p) < 1e-3
+    {
+        samples.pop();
+    }
     let m = samples.len();
     if m < 2 {
-        return Vec::new();
+        return (Vec::new(), Vec::new(), samples);
     }
 
     const MITER_LIMIT: f64 = 2.75;
@@ -523,9 +693,18 @@ pub fn tapered_outline_ex(points: &[SaiPoint], base_width: f64, min_ratio: f64, 
             continue;
         }
 
-        let normal = if i > 0 && i + 1 < m && !s.is_corner {
-            let n_avg = norm(add(samples[i - 1].normal, add(s.normal, samples[i + 1].normal)));
-            if n_avg != (0.0, 0.0) { n_avg } else { s.normal }
+        let normal = if !s.is_corner {
+            if closed {
+                let prev = samples[(i + m - 1) % m];
+                let next = samples[(i + 1) % m];
+                let n_avg = norm(add(prev.normal, add(s.normal, next.normal)));
+                if n_avg != (0.0, 0.0) { n_avg } else { s.normal }
+            } else if i > 0 && i + 1 < m {
+                let n_avg = norm(add(samples[i - 1].normal, add(s.normal, samples[i + 1].normal)));
+                if n_avg != (0.0, 0.0) { n_avg } else { s.normal }
+            } else {
+                s.normal
+            }
         } else {
             s.normal
         };
@@ -533,6 +712,16 @@ pub fn tapered_outline_ex(points: &[SaiPoint], base_width: f64, min_ratio: f64, 
         left.push(add(s.p, mul(normal, s.half_width)));
         right.push(sub(s.p, mul(normal, s.half_width)));
         i += 1;
+    }
+
+    (left, right, samples)
+}
+
+pub fn tapered_outline_ex(points: &[SaiPoint], base_width: f64, min_ratio: f64, closed: bool, tension: f64, max_step_px: f64) -> Vec<P> {
+    let (left, right, samples) = tapered_rings_ex(points, base_width, min_ratio, closed, tension, max_step_px);
+    let m = samples.len();
+    if m < 2 || left.is_empty() || right.is_empty() {
+        return Vec::new();
     }
 
     let mut poly: Vec<P> = Vec::with_capacity(left.len() + right.len() + 24);
@@ -550,6 +739,8 @@ pub fn tapered_outline_ex(points: &[SaiPoint], base_width: f64, min_ratio: f64, 
                 poly.push(add(last.p, offset));
             }
         }
+    } else if let Some(&first_l) = left.first() {
+        poly.push(first_l);
     }
 
     poly.extend(right.iter().rev().copied());
@@ -566,6 +757,8 @@ pub fn tapered_outline_ex(points: &[SaiPoint], base_width: f64, min_ratio: f64, 
                 poly.push(add(first.p, offset));
             }
         }
+    } else if let Some(&last_r) = right.last() {
+        poly.push(last_r);
     }
 
     clean_polygon(&poly)
@@ -594,9 +787,28 @@ fn clean_polygon(poly: &[P]) -> Vec<P> {
 }
 
 /// Builds a filled `Path` representing the variable-width PaintTool SAI curve.
+/// For closed curves (`closed == true`), constructs two seamless closed ring subpaths
+/// (`PathOp::Combine` + opposite-wound `PathOp::Join`) so there is never a seam cut or gap.
 pub fn tapered_curve_path(points: &[SaiPoint], base_width: f64, min_ratio: f64, closed: bool, tension: f64) -> Path {
-    let outline = tapered_outline_ex(points, base_width, min_ratio, closed, tension, 1.5);
-    if outline.len() < 3 { Path::default() } else { Path::new(vec![Subpath::polygon(&outline)]) }
+    if closed {
+        let (left, right, _) = tapered_rings_ex(points, base_width, min_ratio, true, tension, 1.5);
+        let left_clean = clean_polygon(&left);
+        let right_rev: Vec<P> = right.into_iter().rev().collect();
+        let right_clean = clean_polygon(&right_rev);
+        if left_clean.len() < 3 || right_clean.len() < 3 {
+            return Path::default();
+        }
+        let outer = Subpath::polygon(&left_clean);
+        let inner = Subpath {
+            closed: true,
+            knots: right_clean.iter().map(|&(x, y)| Knot::corner(x, y)).collect(),
+            op: PathOp::Join,
+        };
+        Path::new(vec![outer, inner])
+    } else {
+        let outline = tapered_outline_ex(points, base_width, min_ratio, false, tension, 1.5);
+        if outline.len() < 3 { Path::default() } else { Path::new(vec![Subpath::polygon(&outline)]) }
+    }
 }
 
 /// Drop-in replacement for legacy `balloon::tapered_path`.
@@ -739,5 +951,56 @@ mod tests {
         let path_updated = live.rebuild_path();
         assert!(!path_updated.is_empty());
         assert_ne!(path_initial, path_updated);
+    }
+
+    #[test]
+    fn test_closed_tapered_curve_path_is_seamless_ring_without_seam_gap() {
+        let nodes = vec![
+            SaiPoint::with_pressure((100.0, 200.0), 0.08, false),
+            SaiPoint::with_pressure((200.0, 100.0), 1.0, false),
+            SaiPoint::with_pressure((300.0, 200.0), 1.0, false),
+            SaiPoint::with_pressure((200.0, 300.0), 0.08, false),
+        ];
+        let path = tapered_curve_path(&nodes, 16.0, 0.05, true, SAI_DEFAULT_TENSION);
+        assert_eq!(path.subpaths.len(), 2, "Closed ring must consist of outer Combine and inner Join subpaths");
+        assert_eq!(path.subpaths[0].op, PathOp::Combine);
+        assert_eq!(path.subpaths[1].op, PathOp::Join);
+
+        // Rasterize coverage around the left seam node (100, 200) and verify solid coverage (no seam hole)
+        let seam_rect = photocraft_geom::Rect::new(96, 196, 104, 204);
+        let cov = crate::path_coverage(&path, seam_rect);
+        let center_cov = cov[4 * 8 + 4];
+        assert!(center_cov > 0.95, "Seam at (100, 200) must be monolithically filled without a hole, got coverage {center_cov}");
+    }
+
+    #[test]
+    fn test_live_linework_multi_stroke_layer_and_hit_testing() {
+        let s1 = LiveVectorStroke::new(
+            vec![
+                SaiPoint::with_pressure((50.0, 100.0), 0.2, false),
+                SaiPoint::with_pressure((150.0, 80.0), 1.0, false),
+                SaiPoint::with_pressure((250.0, 100.0), 0.2, false),
+            ],
+            8.0,
+            true,
+        );
+        let s2 = LiveVectorStroke::new(
+            vec![
+                SaiPoint::with_pressure((50.0, 220.0), 1.0, false),
+                SaiPoint::with_pressure((250.0, 220.0), 1.0, false),
+            ],
+            12.0,
+            false,
+        );
+        let mut linework = LiveLinework::new(vec![s1, s2]);
+        let combined = linework.rebuild_path();
+        assert_eq!(combined.subpaths.len(), 2);
+
+        assert_eq!(linework.node_at((150.0, 80.0), 10.0), Some((0, 1)));
+        assert_eq!(linework.node_at((250.0, 220.0), 10.0), Some((1, 1)));
+
+        let inserted = linework.insert_node_at_pos((150.0, 220.0), 12.0);
+        assert_eq!(inserted, Some((1, 1)));
+        assert_eq!(linework.strokes[1].nodes.len(), 3);
     }
 }

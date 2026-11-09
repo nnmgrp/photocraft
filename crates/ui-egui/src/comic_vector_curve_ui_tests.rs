@@ -122,3 +122,39 @@ fn test_vector_curve_to_command_params() {
     assert_eq!(params["tapered"], true);
     assert_eq!(params["points"].as_array().unwrap().len(), 2);
 }
+
+#[test]
+fn test_vector_curve_click_start_node_closes_loop_and_restores_pressures() {
+    let mut state = VectorCurveState::default();
+    state.on_primary_down(100.0, 200.0, false, false, false, false, false, 1.0);
+    state.on_primary_down(200.0, 100.0, false, false, false, false, false, 1.0);
+    state.on_primary_down(300.0, 200.0, false, false, false, false, false, 1.0);
+    state.on_primary_down(200.0, 300.0, false, false, false, false, false, 1.0);
+    assert!(!state.closed_loop);
+    assert_eq!(state.points[0][2], 0.08);
+
+    // Clicking on the starting node (100, 200) closes the loop and commits immediately
+    let commit = state.on_primary_down(101.0, 199.5, false, false, false, false, false, 1.0);
+    assert!(commit, "Clicking start node with >= 3 points must close loop and commit");
+    assert!(state.closed_loop);
+    assert_eq!(state.points.len(), 4);
+    assert_eq!(state.points[0][2], 1.0, "Closed ring start pressure must restore from 0.08 to 1.0");
+    assert_eq!(state.points[3][2], 1.0, "Closed ring end pressure must restore from 0.08 to 1.0");
+}
+
+#[test]
+fn test_vector_curve_escape_finishes_at_cursor_without_discarding() {
+    let mut state = VectorCurveState::default();
+    state.on_primary_down(100.0, 100.0, false, false, false, false, false, 1.0);
+    state.on_primary_down(200.0, 150.0, false, false, false, false, false, 1.0);
+    // Move mouse to (320, 110) — pulling the rubber-band preview
+    state.on_pointer_move(320.0, 110.0);
+
+    // Pressing Esc stops the extension right at the mouse position (320, 110)
+    assert!(state.finish_at_cursor(1.0));
+    assert_eq!(state.points.len(), 3);
+    assert_eq!(state.points[2][0], 320.0);
+    assert_eq!(state.points[2][1], 110.0);
+    assert_eq!(state.points[1][2], 1.0, "Interior node must expand to 1.0 pressure");
+    assert_eq!(state.points[2][2], 0.08, "Terminal cursor node tapers to 0.08");
+}

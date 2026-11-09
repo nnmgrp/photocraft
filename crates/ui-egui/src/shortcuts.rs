@@ -711,7 +711,7 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
             return;
         }
         if pressed(Key::Escape) {
-            app.ui.vector_curve = None;
+            crate::vector_ui::vector_curve_escape(app);
             return;
         }
     }

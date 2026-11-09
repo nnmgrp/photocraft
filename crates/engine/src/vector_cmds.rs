@@ -26,7 +26,7 @@ use photocraft_geom::{Affine, Point, Rect};
 use photocraft_vector as vector;
 use serde_json::{Value, json};
 use std::sync::Arc;
-use vector::sai_curve::{LiveVectorStroke, SAI_DEFAULT_TENSION, SaiPoint};
+use vector::sai_curve::{LiveLinework, LiveVectorStroke, SAI_DEFAULT_TENSION, SaiPoint};
 
 use crate::commands::{CommandSpec, blend_from_str};
 use crate::{EngineError, Result, Session};
@@ -725,6 +725,7 @@ fn shape_create(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 pub const SAI_CURVE_BLOCK: [u8; 4] = *b"saiC";
+pub const SAI_LINEWORK_BLOCK: [u8; 4] = *b"saiL";
 
 /// Retrieves `LiveVectorStroke` parametric data preserved on a layer's PSD blocks if present.
 pub fn get_live_vector_stroke(layer: &Layer) -> Option<LiveVectorStroke> {
@@ -733,6 +734,28 @@ pub fn get_live_vector_stroke(layer: &Layer) -> Option<LiveVectorStroke> {
             && let Ok(stroke) = serde_json::from_slice::<LiveVectorStroke>(data)
         {
             return Some(stroke);
+        }
+    }
+    if let Some(lw) = get_live_linework(layer) {
+        return lw.strokes.last().cloned();
+    }
+    None
+}
+
+/// Retrieves the multi-stroke `LiveLinework` container preserved on a Linework layer's PSD blocks.
+pub fn get_live_linework(layer: &Layer) -> Option<LiveLinework> {
+    for (k, data) in &layer.psd_blocks {
+        if *k == SAI_LINEWORK_BLOCK
+            && let Ok(lw) = serde_json::from_slice::<LiveLinework>(data)
+        {
+            return Some(lw);
+        }
+    }
+    for (k, data) in &layer.psd_blocks {
+        if *k == SAI_CURVE_BLOCK
+            && let Ok(stroke) = serde_json::from_slice::<LiveVectorStroke>(data)
+        {
+            return Some(LiveLinework::new(vec![stroke]));
         }
     }
     None
@@ -747,6 +770,22 @@ pub fn set_live_vector_stroke(layer: &mut Layer, live: &LiveVectorStroke) {
         } else {
             layer.psd_blocks.push((SAI_CURVE_BLOCK, arc));
         }
+    }
+}
+
+/// Stores or updates a multi-stroke `LiveLinework` container on a layer's PSD blocks,
+/// keeping `SAI_CURVE_BLOCK` synchronized with the latest stroke.
+pub fn set_live_linework(layer: &mut Layer, linework: &LiveLinework) {
+    if let Ok(bytes) = serde_json::to_vec(linework) {
+        let arc = Arc::new(bytes);
+        if let Some(entry) = layer.psd_blocks.iter_mut().find(|(k, _)| *k == SAI_LINEWORK_BLOCK) {
+            entry.1 = arc;
+        } else {
+            layer.psd_blocks.push((SAI_LINEWORK_BLOCK, arc));
+        }
+    }
+    if let Some(last) = linework.strokes.last() {
+        set_live_vector_stroke(layer, last);
     }
 }
 
@@ -814,7 +853,7 @@ pub fn build_vector_curve_layer(p: &Value) -> std::result::Result<VectorCurveCom
         return Err(format!("{CMD}: the points produce no drawable path"));
     }
 
-    let name = p.get("name").and_then(Value::as_str).unwrap_or("SAI Vector Curve").to_string();
+    let name = p.get("name").and_then(Value::as_str).unwrap_or("Linework").to_string();
 
     Ok(VectorCurveCommandOutput { name, path, live_stroke })
 }
@@ -893,9 +932,40 @@ pub fn live_stroke_to_json(id: u64, name: &str, live: &LiveVectorStroke) -> Valu
 fn vector_curve_create(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "shape.vectorCurve.create";
     let output = build_vector_curve_layer(p).map_err(|e| bad(CMD, e))?;
+    let append_to_active = p.get("appendToActive").and_then(Value::as_bool).unwrap_or(false);
+
+    // If `appendToActive` is true and the currently active layer is already a SAI Linework layer,
+    // append the stroke directly to that Linework layer instead of spawning a new layer!
+    if append_to_active
+        && let Some(active_id) = s.active().and_then(|st| st.active_layer)
+        && let Some(existing_lw) = s.active().and_then(|st| st.doc.layer(active_id)).and_then(get_live_linework)
+    {
+        let mut lw = existing_lw;
+        lw.strokes.push(output.live_stroke.clone());
+        let combined_path = lw.rebuild_path();
+        if !combined_path.is_empty() {
+            let fg = s.tools.foreground;
+            let fgc = Color::rgba(fg[0], fg[1], fg[2], fg[3]);
+            with_shape(s, active_id, "Add Linework Stroke", |sh, layer| {
+                vector::flatten::validate_shape(&combined_path, None).map_err(|e| bad(CMD, e))?;
+                if sh.fill.is_none() {
+                    sh.fill = Some(Fill::Solid(fgc));
+                }
+                sh.stroke = None;
+                sh.path = combined_path;
+                set_live_linework(layer, &lw);
+                Ok(())
+            })?;
+            let layer_name = s.active().and_then(|st| st.doc.layer(active_id).map(|l| l.name.clone())).unwrap_or(output.name);
+            let mut resp = live_stroke_to_json(active_id.0, &layer_name, &output.live_stroke);
+            resp["strokeCount"] = json!(lw.strokes.len());
+            return Ok(resp);
+        }
+    }
+
     let fg = s.tools.foreground;
     let fgc = Color::rgba(fg[0], fg[1], fg[2], fg[3]);
-    let (fill, stroke) = if output.live_stroke.tapered {
+    let (fill, stroke) = if output.live_stroke.tapered || append_to_active {
         let fill = match p.get("fill") {
             Some(v) => parse_fill(v).map_err(|e| bad(CMD, e))?,
             None => Some(Fill::Solid(fgc)),
@@ -909,17 +979,19 @@ fn vector_curve_create(s: &mut Session, p: &Value) -> Result<Value> {
         };
         (None, stroke)
     };
-    vector::flatten::validate_shape(&output.path, stroke.as_ref()).map_err(|e| bad(CMD, e))?;
+    let initial_path = if append_to_active { output.live_stroke.rebuild_outline_path() } else { output.path };
+    vector::flatten::validate_shape(&initial_path, stroke.as_ref()).map_err(|e| bad(CMD, e))?;
 
     let name = output.name;
-    let mut sh = ShapeLayer { path: output.path, fill, stroke, live: None, ..Default::default() };
+    let mut sh = ShapeLayer { path: initial_path, fill, stroke, live: None, ..Default::default() };
 
     let live_stroke_clone = output.live_stroke.clone();
     let id = s.edit("New Vector Curve", |doc, active| {
         refresh_shape(doc, &mut sh);
         let name = doc.next_layer_name(&name);
         let mut layer = Layer::new(name, LayerContent::Shape(sh));
-        set_live_vector_stroke(&mut layer, &live_stroke_clone);
+        let lw = LiveLinework::new(vec![live_stroke_clone]);
+        set_live_linework(&mut layer, &lw);
         let id = doc.insert_new(*active, layer);
         *active = Some(id);
         Ok(id)
@@ -931,7 +1003,10 @@ fn vector_curve_create(s: &mut Session, p: &Value) -> Result<Value> {
 fn vector_curve_update_node(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "shape.vectorCurve.updateNode";
     let id = layer_id(s, p)?;
-    let idx = p.get("index").and_then(Value::as_u64).ok_or_else(|| bad(CMD, "missing `index`"))? as usize;
+    let stroke_idx_opt = p.get("strokeIndex").and_then(Value::as_u64).map(|v| v as usize);
+    let delete_node = p.get("deleteNode").and_then(Value::as_bool).unwrap_or(false);
+    let new_base_width = p.get("baseWidth").and_then(Value::as_f64);
+    let idx = p.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
     let new_pos = if let Some(pos) = p.get("pos").and_then(Value::as_array) {
         if pos.len() >= 2 {
             let x = pos[0].as_f64().ok_or_else(|| bad(CMD, "invalid pos.x"))?;
@@ -947,12 +1022,34 @@ fn vector_curve_update_node(s: &mut Session, p: &Value) -> Result<Value> {
     let toggle_corner = p.get("toggleCorner").and_then(Value::as_bool).unwrap_or(false);
 
     let updated_live = with_shape(s, id, "Update Vector Curve Node", |sh, layer| {
-        let mut live = get_live_vector_stroke(layer).ok_or_else(|| bad(CMD, "layer has no live vector curve data"))?;
-        let path = update_vector_curve_node(&mut live, idx, new_pos, new_pressure, toggle_corner).map_err(|e| bad(CMD, e))?;
+        let mut lw = get_live_linework(layer).ok_or_else(|| bad(CMD, "layer has no live vector curve data"))?;
+        if lw.strokes.is_empty() {
+            return Err(bad(CMD, "linework layer has no strokes"));
+        }
+        let s_idx = stroke_idx_opt.unwrap_or(lw.strokes.len() - 1);
+        let multi = lw.strokes.len() > 1 || stroke_idx_opt.is_some() || sh.stroke.is_none();
+        let stroke = lw.strokes.get_mut(s_idx).ok_or_else(|| bad(CMD, format!("strokeIndex {s_idx} out of bounds")))?;
+
+        if let Some(bw) = new_base_width
+            && bw.is_finite()
+        {
+            stroke.base_width = bw.clamp(0.1, 100_000.0);
+        }
+
+        if delete_node {
+            if stroke.nodes.len() > 2 && idx < stroke.nodes.len() {
+                stroke.nodes.remove(idx);
+            }
+        } else if p.get("index").is_some() {
+            let _ = update_vector_curve_node(stroke, idx, new_pos, new_pressure, toggle_corner).map_err(|e| bad(CMD, e))?;
+        }
+
+        let updated = stroke.clone();
+        let path = if multi { lw.rebuild_path() } else { updated.rebuild_path() };
         vector::flatten::validate_shape(&path, sh.stroke.as_ref()).map_err(|e| bad(CMD, e))?;
         sh.path = path;
-        set_live_vector_stroke(layer, &live);
-        Ok(live)
+        set_live_linework(layer, &lw);
+        Ok(updated)
     })?;
 
     let name = s.active().and_then(|st| st.doc.layer(id).map(|l| l.name.clone())).unwrap_or_default();
@@ -962,21 +1059,39 @@ fn vector_curve_update_node(s: &mut Session, p: &Value) -> Result<Value> {
 fn vector_curve_insert_node(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "shape.vectorCurve.insertNode";
     let id = layer_id(s, p)?;
+    let stroke_idx_opt = p.get("strokeIndex").and_then(Value::as_u64).map(|v| v as usize);
     let x = p.get("x").and_then(Value::as_f64).ok_or_else(|| bad(CMD, "missing `x`"))?;
     let y = p.get("y").and_then(Value::as_f64).ok_or_else(|| bad(CMD, "missing `y`"))?;
     let max_dist = p.get("maxDist").and_then(Value::as_f64).unwrap_or(20.0);
 
-    let (inserted_idx, updated_live) = with_shape(s, id, "Insert Vector Curve Node", |sh, layer| {
-        let mut live = get_live_vector_stroke(layer).ok_or_else(|| bad(CMD, "layer has no live vector curve data"))?;
-        let (idx, path) = insert_vector_curve_node_at(&mut live, x, y, max_dist).map_err(|e| bad(CMD, e))?;
+    let (s_idx, inserted_idx, updated_live) = with_shape(s, id, "Insert Vector Curve Node", |sh, layer| {
+        let mut lw = get_live_linework(layer).ok_or_else(|| bad(CMD, "layer has no live vector curve data"))?;
+        if lw.strokes.is_empty() {
+            return Err(bad(CMD, "linework layer has no strokes"));
+        }
+        let multi = lw.strokes.len() > 1 || stroke_idx_opt.is_some() || sh.stroke.is_none();
+        let (target_s, idx) = if let Some(s_i) = stroke_idx_opt {
+            let stroke = lw.strokes.get_mut(s_i).ok_or_else(|| bad(CMD, format!("strokeIndex {s_i} out of bounds")))?;
+            let (n_i, _) = insert_vector_curve_node_at(stroke, x, y, max_dist).map_err(|e| bad(CMD, e))?;
+            (s_i, n_i)
+        } else if lw.strokes.len() == 1 {
+            let (n_i, _) = insert_vector_curve_node_at(&mut lw.strokes[0], x, y, max_dist).map_err(|e| bad(CMD, e))?;
+            (0, n_i)
+        } else {
+            lw.insert_node_at_pos((x, y), max_dist)
+                .ok_or_else(|| bad(CMD, "shape.vectorCurve.insertNode: no curve segment within hit radius"))?
+        };
+        let updated = lw.strokes[target_s].clone();
+        let path = if multi { lw.rebuild_path() } else { updated.rebuild_path() };
         vector::flatten::validate_shape(&path, sh.stroke.as_ref()).map_err(|e| bad(CMD, e))?;
         sh.path = path;
-        set_live_vector_stroke(layer, &live);
-        Ok((idx, live))
+        set_live_linework(layer, &lw);
+        Ok((target_s, idx, updated))
     })?;
 
     let name = s.active().and_then(|st| st.doc.layer(id).map(|l| l.name.clone())).unwrap_or_default();
     let mut resp = live_stroke_to_json(id.0, &name, &updated_live);
+    resp["strokeIndex"] = json!(s_idx);
     resp["insertedIndex"] = json!(inserted_idx);
     Ok(resp)
 }

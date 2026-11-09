@@ -1231,3 +1231,55 @@ fn test_vector_curve_create_update_and_insert() {
     assert!((pressure - 1.8).abs() < 1e-6);
     assert_eq!(upd["nodes"][1]["corner"], true);
 }
+
+#[test]
+fn test_linework_layer_appends_multiple_strokes_to_single_layer() {
+    let mut s = session(400, 400, 8);
+    let r1 = s
+        .execute(
+            "shape.vectorCurve.create",
+            json!({
+                "points": [
+                    {"x": 40.0, "y": 100.0, "pressure": 0.1, "corner": false},
+                    {"x": 140.0, "y": 80.0, "pressure": 1.0, "corner": false},
+                    {"x": 240.0, "y": 100.0, "pressure": 0.1, "corner": false}
+                ],
+                "width": 8.0,
+                "tapered": true,
+                "appendToActive": true
+            }),
+        )
+        .unwrap();
+    let layer_id = r1["id"].as_u64().unwrap();
+
+    // Second stroke with appendToActive=true must append to the SAME Linework layer
+    let r2 = s
+        .execute(
+            "shape.vectorCurve.create",
+            json!({
+                "points": [
+                    {"x": 40.0, "y": 240.0, "pressure": 1.0, "corner": false},
+                    {"x": 240.0, "y": 240.0, "pressure": 1.0, "corner": false}
+                ],
+                "width": 12.0,
+                "tapered": false,
+                "appendToActive": true
+            }),
+        )
+        .unwrap();
+    assert_eq!(r2["id"].as_u64().unwrap(), layer_id, "Second stroke must remain on the same Linework layer");
+    assert_eq!(r2["strokeCount"], 2);
+
+    // Update stroke 0's baseWidth via Weight tool command
+    let upd = s
+        .execute(
+            "shape.vectorCurve.updateNode",
+            json!({
+                "layer": layer_id,
+                "strokeIndex": 0,
+                "baseWidth": 18.0
+            }),
+        )
+        .unwrap();
+    assert_eq!(upd["baseWidth"], 18.0);
+}

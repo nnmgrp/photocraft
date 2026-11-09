@@ -213,22 +213,11 @@ fn label_key(ctx: &egui::Context, family: &str, text: &str, size: f32) -> LabelK
     (family.to_owned(), text.to_owned(), scale_key(render_scale(ctx)), photocraft_text::fonts::shared_generation(), size as u32)
 }
 
-fn render_label(
-    engine: &mut photocraft_text::TextEngine,
-    family: &str,
-    text: &str,
-    scale: f32,
-    size: f32,
-) -> Option<(ColorImage, [f32; 2])> {
+fn render_label(engine: &mut photocraft_text::TextEngine, family: &str, text: &str, scale: f32, size: f32) -> Option<(ColorImage, [f32; 2])> {
     if text.trim().is_empty() || !engine.fonts.has_family(family) {
         return None;
     }
-    let layer = TextLayer {
-        text: text.into(),
-        font_family: family.into(),
-        size_pt: size * scale,
-        ..Default::default()
-    };
+    let layer = TextLayer { text: text.into(), font_family: family.into(), size_pt: size * scale, ..Default::default() };
     let layout = engine.layout(&layer, 72.0);
     let bounds = layout.bounds()?;
     let width = ((bounds[2] - bounds[0]).abs().ceil() as usize).saturating_add(2);
@@ -241,20 +230,10 @@ fn render_label(
     if ink.is_empty() {
         return None;
     }
-    let rendered = photocraft_text::render::rasterize(
-        &layout,
-        &transform,
-        PixelFormat::new(ColorMode::Rgb, SampleType::U8, true),
-        layer.antialias,
-    );
+    let rendered = photocraft_text::render::rasterize(&layout, &transform, PixelFormat::new(ColorMode::Rgb, SampleType::U8, true), layer.antialias);
     let mut rgba = vec![[0u8; 4]; width * height];
-    rendered
-        .surface
-        .read_rgba8_into(photocraft_geom::Rect::new(0, 0, width as i32, height as i32), &mut rgba);
-    let image = ColorImage::from_rgba_unmultiplied(
-        [width, height],
-        &rgba.into_iter().flat_map(|p| [255, 255, 255, p[3]]).collect::<Vec<_>>(),
-    );
+    rendered.surface.read_rgba8_into(photocraft_geom::Rect::new(0, 0, width as i32, height as i32), &mut rgba);
+    let image = ColorImage::from_rgba_unmultiplied([width, height], &rgba.into_iter().flat_map(|p| [255, 255, 255, p[3]]).collect::<Vec<_>>());
     Some((image, [width as f32 / scale, height as f32 / scale]))
 }
 
@@ -274,17 +253,10 @@ fn label_sample(ctx: &egui::Context, family: &str, text: &str, size: f32) -> Opt
     }
     let scale = render_scale(ctx);
     let point_size = size;
-    let sample = render_label(
-        &mut photocraft_text::shared().lock().unwrap_or_else(PoisonError::into_inner),
-        family,
-        text,
-        scale,
-        size,
-    )
-    .map(|(image, logical)| LabelSample {
-        texture: ctx.load_texture(format!("font-name-{family}-{text}-{point_size}-{scale}"), image, TextureOptions::LINEAR),
-        size: logical,
-    });
+    let sample =
+        render_label(&mut photocraft_text::shared().lock().unwrap_or_else(PoisonError::into_inner), family, text, scale, size).map(|(image, logical)| {
+            LabelSample { texture: ctx.load_texture(format!("font-name-{family}-{text}-{point_size}-{scale}"), image, TextureOptions::LINEAR), size: logical }
+        });
     ctx.data_mut(|d| {
         let cache = d.get_temp_mut_or_default::<LabelCache>(id);
         if cache.0.len() >= CACHE_LIMIT {
@@ -307,16 +279,8 @@ pub(crate) fn paint_name(ui: &egui::Ui, family: &str, text: &str, size: f32, rec
         return;
     };
     let [w, h] = sample.size;
-    let target = Rect::from_min_size(
-        pos2(snap(ui.ctx(), rect.left()), snap(ui.ctx(), rect.center().y - h / 2.0)),
-        vec2(w, h),
-    );
-    ui.painter().image(
-        sample.texture.id(),
-        target,
-        Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
-        color,
-    );
+    let target = Rect::from_min_size(pos2(snap(ui.ctx(), rect.left()), snap(ui.ctx(), rect.center().y - h / 2.0)), vec2(w, h));
+    ui.painter().image(sample.texture.id(), target, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), color);
 }
 
 #[cfg(test)]

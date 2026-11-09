@@ -224,9 +224,8 @@ fn a_plug_in_recording_loads_and_exports() {
     let listed = s.execute(LIST, json!({})).unwrap();
     assert_eq!(listed["recordings"][0]["frames"], 2);
     let out = dir.join("seq");
-    let done = s
-        .execute(EXPORT, json!({"recording": r.meta.id, "path": out.to_string_lossy(), "encoder": "frames", "lengthSec": 1, "remember": false}))
-        .unwrap();
+    let done =
+        s.execute(EXPORT, json!({"recording": r.meta.id, "path": out.to_string_lossy(), "encoder": "frames", "lengthSec": 1, "remember": false})).unwrap();
     assert_eq!(done["videoFrames"], 30);
     assert!(out.join("frame_000030.jpg").is_file());
     // The export is written back, with the plug-in's own keys intact.
@@ -367,7 +366,10 @@ fn export_writes_a_frame_sequence_with_the_plan() {
     }
     let out = dir.join("out");
     let r = s
-        .execute(EXPORT, json!({"path": out.to_string_lossy(), "encoder": "frames", "lengthSec": 2, "holdSec": 1, "flash": true, "timer": true, "deflicker": true}))
+        .execute(
+            EXPORT,
+            json!({"path": out.to_string_lossy(), "encoder": "frames", "lengthSec": 2, "holdSec": 1, "flash": true, "timer": true, "deflicker": true}),
+        )
         .unwrap();
     assert_eq!(r["frames"], 4);
     assert_eq!(r["videoFrames"], 60 + 30 + 18);
@@ -657,7 +659,9 @@ fn bad_params_are_errors() {
     ] {
         assert!(s.execute(SETTINGS, p.clone()).is_err(), "{p}");
     }
-    for p in [json!({}), json!({"path": ""}), json!({"path": 5}), json!({"path": "x.mp4", "fps": 0}), json!({"path": "x.mp4", "introSec": f64::MAX}), json!(null)] {
+    for p in
+        [json!({}), json!({"path": ""}), json!({"path": 5}), json!({"path": "x.mp4", "fps": 0}), json!({"path": "x.mp4", "introSec": f64::MAX}), json!(null)]
+    {
         assert!(s.execute(EXPORT, p.clone()).is_err(), "{p}");
     }
     assert!(s.execute(EXPORT, json!({"path": "x.mp4", "recording": "missing"})).is_err());

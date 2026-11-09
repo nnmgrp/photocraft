@@ -1,8 +1,10 @@
 name: Release
 
 on:
-  push:
-    branches: [release]
+  # This fork does not publish signed releases: it has no Apple/Windows signing credentials, and
+  # the called workflow refuses to start on refs/heads/release without them ("Require signing
+  # secrets on the release branch"). The push trigger is removed on purpose — packages are built
+  # by a manual `workflow_dispatch` (branch picker), which skips that guard.
   workflow_dispatch:
     inputs:
       version:
@@ -12,6 +14,11 @@ on:
 
 permissions:
   contents: write
+  # The called workflow's `flatpak` job requests `packages: write`. A called workflow can only
+  # narrow the caller's token, never widen it: every scope the caller leaves out becomes `none`,
+  # and the call fails to start with "The nested job 'flatpak' is requesting 'packages: write',
+  # but is only allowed 'packages: none'".
+  packages: write
 
 concurrency:
   group: release-${{ github.ref }}

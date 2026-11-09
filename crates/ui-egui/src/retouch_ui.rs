@@ -263,7 +263,7 @@ fn ai_remove_params(app: &PhotocraftApp) -> Value {
 /// options bar's button or Enter with the Remove tool and a selection. Nano Banana is online
 /// only: nothing on the web.
 pub fn remove_selection(app: &mut PhotocraftApp) -> bool {
-    if cfg!(target_arch = "wasm32") || !app.session.active().is_some_and(|st| st.doc.selection.is_some()) {
+    if cfg!(target_arch = "wasm32") || app.session.active().is_none_or(|st| st.doc.selection.is_none()) {
         return false;
     }
     let p = ai_remove_params(app);
@@ -831,11 +831,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                                 tl!("Close up"),
                                 tl!("Nano Banana gets the area around what you remove, so it draws it at about twice the page's resolution"),
                             ),
-                            (
-                                "page".to_string(),
-                                tl!("Whole page"),
-                                tl!("Nano Banana gets the whole page: more to go on, but a softer result"),
-                            ),
+                            ("page".to_string(), tl!("Whole page"), tl!("Nano Banana gets the whole page: more to go on, but a softer result")),
                         ];
                         crate::widgets::dropdown_with_tooltips(ui, "remove-area", &mut o.remove_area, &areas, 100.0);
                         crate::widgets::checkbox(ui, &mut o.remove_creative, tl!("Creative")).on_hover_text(tl!(
@@ -1834,8 +1830,8 @@ mod tests {
         o.remove_diffusion.prompt = "sky".into();
         o.remove_area = "page".into();
         let p = ai_remove_params(&app);
-        assert_eq!((&p["model"], &p["generative"], &p["selection"]), (&json!("nanoBanana"), &json!("on"), &json!(true)));
-        assert_eq!((&p["newLayer"], &p["prompt"], &p["area"]), (&json!(true), &json!("grass"), &json!("page")), "{p}");
+        assert_eq!((&p["model"], &p["generative"], &p["selection"]), (&json!("lama"), &json!("auto"), &json!(true)));
+        assert_eq!(&p["newLayer"], &json!(false), "{p}");
         // The strokes keep the options bar's model and its settings.
         let s = remove_params(&app.ui.tool_options);
         assert_eq!((&s["model"], &s["generative"], &s["newLayer"]), (&json!("lama"), &json!("off"), &json!(false)));

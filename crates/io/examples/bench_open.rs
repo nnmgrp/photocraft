@@ -35,6 +35,7 @@ fn main() {
                 photocraft_doc::LayerContent::Group(_) => "group",
                 photocraft_doc::LayerContent::Adjustment(_) => "adjustment",
                 photocraft_doc::LayerContent::Fill(_) => "fill",
+                photocraft_doc::LayerContent::Screentone(_) => "screentone",
             };
             *kinds.entry(k).or_insert(0) += 1;
             if photocraft_compose::effects::has_effects(l) {

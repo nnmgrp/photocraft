@@ -13,6 +13,356 @@ use crate::PhotocraftApp;
 use crate::canvas::ViewXform;
 use crate::state::{Tool, ToolOptions};
 use crate::theme::Tokens;
+use photocraft_vector::sai_curve::{SAI_DEFAULT_TENSION, SaiPoint, closest_point_on_curve, insert_node_on_curve, sample_sai_curve, tapered_rings_ex, width_at};
+
+/// Sub-mode of `Tool::VectorCurve`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum VectorCurveMode {
+    /// Click to append nodes, Ctrl+click on curve to insert a node, drag nodes to move, Alt+drag for weight.
+    #[default]
+    Draw,
+    /// Dedicated PaintTool SAI "Weight" (Толщина) mode: dragging any node or stroke scales its thickness.
+    Weight,
+    /// Edit nodes on Live Vector / Linework layers (Ctrl+click inserts node on segment).
+    Edit,
+}
+
+/// Active gesture mode while dragging a node.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NodeDragKind {
+    /// Moving node coordinates `(x, y)`.
+    MovePosition,
+    /// Adjusting node pressure (`0.0..=2.0`) via vertical or horizontal mouse delta.
+    AdjustPressure,
+}
+
+/// Dragging a node or stroke on an already-committed Linework layer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LayerDragKind {
+    MoveNode,
+    AdjustNodePressure,
+    ScaleStrokeWidth,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ActiveLayerDrag {
+    pub layer_id: u64,
+    pub stroke_idx: usize,
+    pub node_idx: usize,
+    pub kind: LayerDragKind,
+    pub origin: [f64; 2],
+    pub initial_val: f64,
+    pub moved: bool,
+}
+
+/// PaintTool SAI Linework Curve tool state in `egui`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct VectorCurveState {
+    /// Nodes stored as `[x, y, pressure, corner_flag]`.
+    pub points: Vec<[f64; 4]>,
+    pub mode: VectorCurveMode,
+    /// PaintTool SAI curve stiffness (`0.65` default for authentic tight feel).
+    pub tension: f64,
+    /// When enabled, newly drawn curves automatically taper their start/end nodes (`0.08` pressure)
+    /// while interior nodes expand to `1.0` pressure, just like SAI's Linework Curve tool.
+    pub auto_taper_ends: bool,
+    /// Set to `true` when the user clicks the starting node (`points[0]`) to close the loop.
+    #[serde(default)]
+    pub closed_loop: bool,
+    pub selected_node: Option<usize>,
+    #[serde(skip)]
+    pub drag_node: Option<usize>,
+    #[serde(skip)]
+    pub drag_kind: Option<NodeDragKind>,
+    #[serde(skip)]
+    pub drag_origin: [f64; 2],
+    #[serde(skip)]
+    pub drag_initial_pressure: f64,
+    #[serde(skip)]
+    pub drag_moved: bool,
+    /// Active drag on an already-committed stroke of the current Linework layer.
+    #[serde(skip)]
+    pub layer_drag: Option<ActiveLayerDrag>,
+    /// Live cursor position in document coordinates for rubber-band spline preview.
+    #[serde(skip)]
+    pub hover_pos: Option<[f64; 2]>,
+}
+
+impl Default for VectorCurveState {
+    fn default() -> Self {
+        Self {
+            points: Vec::new(),
+            mode: VectorCurveMode::Draw,
+            tension: SAI_DEFAULT_TENSION,
+            auto_taper_ends: true,
+            closed_loop: false,
+            selected_node: None,
+            drag_node: None,
+            drag_kind: None,
+            drag_origin: [0.0, 0.0],
+            drag_initial_pressure: 1.0,
+            drag_moved: false,
+            layer_drag: None,
+            hover_pos: None,
+        }
+    }
+}
+
+pub const NODE_HIT_RADIUS_PX: f64 = 9.5;
+pub const SEGMENT_INSERT_RADIUS_PX: f64 = 12.0;
+
+impl VectorCurveState {
+    pub fn node_at(&self, pos: [f64; 2], hit_radius_doc: f64) -> Option<usize> {
+        let r2 = hit_radius_doc * hit_radius_doc;
+        self.points.iter().enumerate().rev().find_map(|(i, pt)| {
+            let dx = pt[0] - pos[0];
+            let dy = pt[1] - pos[1];
+            if dx * dx + dy * dy <= r2 { Some(i) } else { None }
+        })
+    }
+
+    pub fn try_insert_node_on_segment(&mut self, x: f64, y: f64, max_dist_doc: f64, closed: bool) -> Option<usize> {
+        let mut sai_pts: Vec<SaiPoint> = self.points.iter().map(|p| SaiPoint::with_pressure((p[0], p[1]), p[2] as f32, p[3] > 0.5)).collect();
+
+        let inserted_idx = insert_node_on_curve(&mut sai_pts, (x, y), closed || self.closed_loop, self.tension, max_dist_doc)?;
+        self.points = sai_pts.into_iter().map(|pt| [pt.p.0, pt.p.1, f64::from(pt.pressure), if pt.corner { 1.0 } else { 0.0 }]).collect();
+        self.selected_node = Some(inserted_idx);
+        Some(inserted_idx)
+    }
+
+    /// Restores auto-tapered endpoint pressures (`0.08`) to `1.0` when closing a loop so the
+    /// closed ring has uniform continuous thickness across the seam.
+    pub fn restore_closed_loop_pressures(&mut self) {
+        if self.points.len() >= 2 {
+            if (self.points[0][2] - 0.08).abs() < 0.05 {
+                self.points[0][2] = 1.0;
+            }
+            let last_idx = self.points.len() - 1;
+            if (self.points[last_idx][2] - 0.08).abs() < 0.05 {
+                self.points[last_idx][2] = 1.0;
+            }
+        }
+    }
+
+    /// PaintTool SAI `Esc` behavior: stops the rubber-band extension right where the mouse cursor
+    /// currently is (without discarding the stroke) and returns `true` if the stroke has >= 2 nodes
+    /// and is ready to commit.
+    pub fn finish_at_cursor(&mut self, zoom: f64) -> bool {
+        if self.points.is_empty() {
+            return false;
+        }
+        let hit_radius = NODE_HIT_RADIUS_PX / zoom.max(0.05);
+        if self.mode == VectorCurveMode::Draw
+            && let Some(h) = self.hover_pos
+        {
+            if self.points.len() >= 3 && (self.points[0][0] - h[0]).hypot(self.points[0][1] - h[1]) <= hit_radius {
+                self.closed_loop = true;
+                self.restore_closed_loop_pressures();
+                return true;
+            }
+            let last = self.points[self.points.len() - 1];
+            if (last[0] - h[0]).hypot(last[1] - h[1]) > hit_radius {
+                let end_pressure = if self.auto_taper_ends { 0.08 } else { 1.0 };
+                self.points.push([h[0], h[1], end_pressure, 0.0]);
+                self.apply_auto_taper_on_append();
+            }
+        }
+        self.points.len() >= 2
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn on_primary_down(
+        &mut self,
+        x: f64,
+        y: f64,
+        ctrl_held: bool,
+        alt_held: bool,
+        shift_held: bool,
+        double_clicked: bool,
+        closed: bool,
+        zoom: f64,
+    ) -> bool {
+        let hit_radius = NODE_HIT_RADIUS_PX / zoom.max(0.05);
+        let seg_radius = SEGMENT_INSERT_RADIUS_PX / zoom.max(0.05);
+
+        if double_clicked && self.points.len() >= 2 {
+            let last = self.points[self.points.len() - 1];
+            let dist_to_cursor = (last[0] - x).hypot(last[1] - y);
+            if dist_to_cursor <= hit_radius * 2.0 {
+                if self.points.len() >= 3 {
+                    let n = self.points.len();
+                    let prev = self.points[n - 2];
+                    let dist = (last[0] - prev[0]).hypot(last[1] - prev[1]);
+                    if dist <= hit_radius * 1.2 {
+                        self.points.pop();
+                        if self.auto_taper_ends && !self.closed_loop && !closed && self.points.len() >= 2 {
+                            let new_last = self.points.len() - 1;
+                            self.points[new_last][2] = 0.08;
+                        }
+                    }
+                }
+                return true;
+            }
+        }
+
+        // PaintTool SAI Closed Loop: clicking the starting node (idx == 0) in Draw mode when >= 3 nodes
+        // closes the curve seamlessly into a ring and immediately finishes the stroke.
+        if self.mode == VectorCurveMode::Draw
+            && !ctrl_held
+            && !alt_held
+            && self.points.len() >= 3
+            && (self.points[0][0] - x).hypot(self.points[0][1] - y) <= hit_radius
+        {
+            self.closed_loop = true;
+            self.restore_closed_loop_pressures();
+            return true;
+        }
+
+        if let Some(idx) = self.node_at([x, y], hit_radius) {
+            if ctrl_held && alt_held && self.points.len() > 2 {
+                self.points.remove(idx);
+                self.selected_node = Some(idx.min(self.points.len() - 1));
+                return false;
+            }
+
+            self.selected_node = Some(idx);
+            self.drag_node = Some(idx);
+            self.drag_origin = [x, y];
+            self.drag_initial_pressure = self.points[idx][2];
+            self.drag_moved = false;
+
+            self.drag_kind =
+                if self.mode == VectorCurveMode::Weight || alt_held { Some(NodeDragKind::AdjustPressure) } else { Some(NodeDragKind::MovePosition) };
+            return false;
+        }
+
+        if (ctrl_held || self.mode == VectorCurveMode::Edit)
+            && self.points.len() >= 2
+            && let Some(inserted_idx) = self.try_insert_node_on_segment(x, y, seg_radius, closed)
+        {
+            self.drag_node = Some(inserted_idx);
+            self.drag_origin = [x, y];
+            self.drag_initial_pressure = self.points[inserted_idx][2];
+            self.drag_moved = false;
+            self.drag_kind = Some(NodeDragKind::MovePosition);
+            return false;
+        }
+
+        if self.mode != VectorCurveMode::Draw {
+            self.selected_node = None;
+            return false;
+        }
+
+        let corner_val = if shift_held { 1.0 } else { 0.0 };
+        let initial_pressure = if self.auto_taper_ends && !closed { 0.08 } else { 1.0 };
+        self.points.push([x, y, initial_pressure, corner_val]);
+        self.apply_auto_taper_on_append();
+        let new_idx = self.points.len() - 1;
+        self.selected_node = Some(new_idx);
+        false
+    }
+
+    fn apply_auto_taper_on_append(&mut self) {
+        if !self.auto_taper_ends {
+            return;
+        }
+        let n = self.points.len();
+        if n >= 3 {
+            let prev_last = n - 2;
+            if (self.points[prev_last][2] - 0.08).abs() < 0.05 {
+                self.points[prev_last][2] = 1.0;
+            }
+        }
+    }
+
+    pub fn on_pointer_move(&mut self, x: f64, y: f64) {
+        self.hover_pos = Some([x, y]);
+        let Some(idx) = self.drag_node else { return };
+        let Some(kind) = self.drag_kind else { return };
+
+        let dx = x - self.drag_origin[0];
+        let dy = y - self.drag_origin[1];
+        if dx.hypot(dy) > 2.0 {
+            self.drag_moved = true;
+        }
+
+        let Some(node) = self.points.get_mut(idx) else {
+            self.drag_node = None;
+            return;
+        };
+
+        match kind {
+            NodeDragKind::MovePosition => {
+                node[0] = x;
+                node[1] = y;
+            }
+            NodeDragKind::AdjustPressure => {
+                let delta = ((self.drag_origin[1] - y) + (x - self.drag_origin[0]) * 0.5) / 120.0;
+                node[2] = (self.drag_initial_pressure + delta).clamp(0.0, 2.0);
+            }
+        }
+    }
+
+    pub fn on_primary_up(&mut self, alt_held: bool) {
+        if let Some(idx) = self.drag_node.take()
+            && alt_held
+            && !self.drag_moved
+            && self.mode != VectorCurveMode::Weight
+            && let Some(node) = self.points.get_mut(idx)
+        {
+            node[3] = if node[3] > 0.5 { 0.0 } else { 1.0 };
+        }
+        self.drag_kind = None;
+        self.drag_moved = false;
+        self.layer_drag = None;
+    }
+
+    pub fn delete_active_node(&mut self) -> bool {
+        if self.points.is_empty() {
+            return false;
+        }
+        let target = self.selected_node.unwrap_or_else(|| self.points.len().saturating_sub(1));
+        if target < self.points.len() {
+            self.points.remove(target);
+            self.selected_node = if self.points.is_empty() { None } else { Some(target.min(self.points.len() - 1)) };
+            return true;
+        }
+        false
+    }
+
+    pub fn to_command_params(&self, base_width: f64, min_ratio: f64, tapered: bool, closed: bool) -> std::result::Result<Value, String> {
+        if self.points.len() < 2 {
+            return Err("Vector Curve: at least two nodes are needed to commit a stroke".into());
+        }
+        let effective_closed = closed || self.closed_loop;
+        let pts: Vec<Value> = self
+            .points
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                let mut pressure = p[2];
+                if effective_closed && (i == 0 || i + 1 == self.points.len()) && (pressure - 0.08).abs() < 0.05 {
+                    pressure = 1.0;
+                }
+                json!({
+                    "x": p[0],
+                    "y": p[1],
+                    "pressure": pressure,
+                    "corner": p[3] > 0.5,
+                })
+            })
+            .collect();
+
+        Ok(json!({
+            "points": pts,
+            "width": base_width.clamp(0.1, 100_000.0),
+            "minRatio": min_ratio.clamp(0.0, 1.0),
+            "tapered": tapered,
+            "closed": effective_closed,
+            "tension": self.tension.clamp(0.0, 1.0),
+        }))
+    }
+}
 
 /// Pen tool path under construction: knots as [anchor, in, out] (document px).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -149,6 +499,128 @@ pub fn finish_shape(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [
     if let Err(e) = create_shape(app, p) {
         app.ui.status = e;
         app.ui.status_error = true;
+    }
+}
+
+/// The Balloon tool: tails unioned with a balloon body and procedural cloud / spiky balloons.
+pub fn is_balloon_tool(t: Tool) -> bool {
+    t == Tool::Balloon
+}
+
+/// Normalised drag rectangle `[x, y, w, h]` for a balloon creation drag; `None` when it is a click.
+fn balloon_rect(start: [f64; 2], end: [f64; 2]) -> Option<[f64; 4]> {
+    let x0 = start[0].min(end[0]);
+    let y0 = start[1].min(end[1]);
+    let w = (start[0] - end[0]).abs();
+    let h = (start[1] - end[1]).abs();
+    (w >= 2.0 && h >= 2.0).then_some([x0, y0, w, h])
+}
+
+fn is_shape_layer(layer: &photocraft_doc::Layer) -> bool {
+    matches!(layer.content, LayerContent::Shape(_))
+}
+
+/// The top-most shape layer whose cached bounds cover `p`, or the active layer when it is a shape.
+fn balloon_body_at(app: &PhotocraftApp, p: [f64; 2]) -> Option<u64> {
+    let st = app.session.active()?;
+    if let Some(id) = st.active_layer
+        && st.doc.layer(id).is_some_and(is_shape_layer)
+    {
+        return Some(id.0);
+    }
+    let (x, y) = (p[0].floor(), p[1].floor());
+    for layer in st.doc.layers.iter().rev() {
+        let LayerContent::Shape(shape) = &layer.content else { continue };
+        let Some(cache) = shape.cache.as_ref() else { continue };
+        let r = cache.content_bounds();
+        if r.x0 as f64 <= x && x < r.x1 as f64 && r.y0 as f64 <= y && y < r.y1 as f64 {
+            return Some(layer.id.0);
+        }
+    }
+    None
+}
+
+/// Finish a Balloon-tool drag: a tail from the balloon body to the pointer, or a cloud / spiky
+/// balloon drawn inside the drag rectangle.
+pub fn finish_balloon(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
+    let o = app.ui.tool_options.clone();
+    let result = match o.balloon_mode.as_str() {
+        "cloud" | "spiky" => {
+            let Some(rect) = balloon_rect(start, end) else { return };
+            let mut params = json!({
+                "kind": o.balloon_mode,
+                "rect": rect,
+                "seed": o.balloon_seed,
+                "fill": fill_param(app),
+                "stroke": stroke_param(app),
+            });
+            if o.balloon_mode == "cloud" {
+                params["bumps"] = json!(o.balloon_bumps);
+                params["amplitude"] = json!(o.balloon_amplitude);
+                params["jitter"] = json!(o.balloon_jitter);
+            } else {
+                params["spikes"] = json!(o.balloon_spikes);
+                params["length"] = json!(o.balloon_length);
+                params["jitter"] = json!(o.balloon_jitter);
+                params["smooth"] = json!(o.balloon_smooth);
+                params["inward"] = json!(o.balloon_inward);
+            }
+            app.run("shape.balloon.create", params)
+        }
+        _ => {
+            let length = (end[0] - start[0]).hypot(end[1] - start[1]);
+            if length < 3.0 {
+                return;
+            }
+            let Some(layer) = balloon_body_at(app, start) else {
+                app.ui.status = "Balloon: select a shape layer (the balloon body) or press on one".into();
+                app.ui.status_error = true;
+                return;
+            };
+            let curve = if o.balloon_preset == "arc" { 0.45 } else { 0.15 };
+            let mut params = json!({
+                "layer": layer,
+                "preset": o.balloon_preset,
+                "from": start,
+                "tip": end,
+                "mouthWidth": o.balloon_mouth,
+                "curve": curve,
+            });
+            if o.balloon_preset == "thought" {
+                params["bubbles"] = json!(3);
+                params["bubbleRadius"] = json!((length * 0.12).clamp(3.0, 18.0));
+            }
+            app.run("shape.balloon.tail", params)
+        }
+    };
+    if let Err(e) = result {
+        app.ui.status = e;
+        app.ui.status_error = true;
+    }
+}
+
+/// Balloon-tool drag preview: a dashed tail axis for tails, the balloon box for cloud / spiky.
+pub fn draw_balloon_preview(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, start: [f64; 2], end: [f64; 2]) {
+    let accent = Tokens::get(painter.ctx()).accent;
+    let stroke = Stroke::new(1.5, accent);
+    let a = xf.to_screen(start[0] as f32, start[1] as f32);
+    let b = xf.to_screen(end[0] as f32, end[1] as f32);
+    match app.ui.tool_options.balloon_mode.as_str() {
+        "cloud" | "spiky" => {
+            let r = Rect::from_two_pos(a, b);
+            painter.rect_stroke(r, 2.0, stroke, egui::StrokeKind::Inside);
+        }
+        _ => {
+            let steps = 12;
+            for i in 0..steps {
+                let t0 = i as f32 / steps as f32;
+                let t1 = (i as f32 + 0.6) / steps as f32;
+                painter.line_segment([a + (b - a) * t0, a + (b - a) * t1], stroke);
+            }
+            let dir = (b - a).normalized();
+            let side = vec2(-dir.y, dir.x) * (app.ui.tool_options.balloon_mouth * 0.5 * xf.zoom);
+            painter.line_segment([a - side, a + side], stroke);
+        }
     }
 }
 
@@ -1221,6 +1693,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
         let st = app.session.active();
         if let Some(l) = st.and_then(|s| s.active_layer.and_then(|id| s.doc.layer(id)))
             && let LayerContent::Shape(sh) = &l.content
+            && !(tool == Tool::VectorCurve && photocraft_engine::vector_cmds::get_live_linework(l).is_some())
         {
             draw_path(&sh.path, anchors);
         }
@@ -1295,6 +1768,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
     }
     // The segment the Pen's Auto Add/Delete would add an anchor to, or the anchor it would delete,
     // over the path being drawn. While drawing, the other paths can be hidden: it edits none of them.
+    draw_vector_curve_overlay(app, painter, xf);
     if paths || app.ui.pen.is_some() {
         crate::anchor_tools::draw_pen_hover(app, painter, &to_scr, accent, painter.ctx().input(|i| i.modifiers));
     }
@@ -1303,9 +1777,421 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
 // ---------------------------------------------------------------------------------------------
 // Options bars
 
+#[allow(clippy::too_many_arguments)]
+pub fn vector_curve_down(app: &mut PhotocraftApp, x: f64, y: f64, ctrl: bool, alt: bool, shift: bool, double_clicked: bool, zoom: f64) {
+    let closed = app.ui.tool_options.vector_curve_closed;
+    let cur_mode = app.ui.vector_curve.as_ref().map_or(VectorCurveMode::Draw, |vc| vc.mode);
+    let points_empty = app.ui.vector_curve.as_ref().is_none_or(|vc| vc.points.is_empty());
+
+    // Direct non-modal interaction with committed strokes on the active Linework layer:
+    // Works whenever `Ctrl` or `Alt` is held in Draw mode, or in Weight / Edit modes!
+    if points_empty
+        && (ctrl || alt || cur_mode != VectorCurveMode::Draw)
+        && let Some((active_id, lw)) = active_linework(app)
+    {
+        let hit_radius = NODE_HIT_RADIUS_PX / zoom.max(0.05);
+        let seg_radius = SEGMENT_INSERT_RADIUS_PX / zoom.max(0.05);
+
+        if let Some((s_idx, n_idx)) = lw.node_at((x, y), hit_radius) {
+            if ctrl && alt && lw.strokes[s_idx].nodes.len() > 2 {
+                let _ = app.run(
+                    "shape.vectorCurve.updateNode",
+                    json!({
+                        "layer": active_id,
+                        "strokeIndex": s_idx,
+                        "index": n_idx,
+                        "deleteNode": true,
+                    }),
+                );
+                return;
+            }
+            let node = lw.strokes[s_idx].nodes[n_idx];
+            let kind = if cur_mode == VectorCurveMode::Weight || alt { LayerDragKind::AdjustNodePressure } else { LayerDragKind::MoveNode };
+            let vc = app.ui.vector_curve.get_or_insert_with(VectorCurveState::default);
+            vc.layer_drag = Some(ActiveLayerDrag {
+                layer_id: active_id,
+                stroke_idx: s_idx,
+                node_idx: n_idx,
+                kind,
+                origin: [x, y],
+                initial_val: f64::from(node.pressure),
+                moved: false,
+            });
+            return;
+        }
+
+        if cur_mode == VectorCurveMode::Weight
+            && let Some((s_idx, _)) = lw.closest_segment((x, y), seg_radius)
+        {
+            let bw = lw.strokes[s_idx].base_width;
+            let vc = app.ui.vector_curve.get_or_insert_with(VectorCurveState::default);
+            vc.layer_drag = Some(ActiveLayerDrag {
+                layer_id: active_id,
+                stroke_idx: s_idx,
+                node_idx: 0,
+                kind: LayerDragKind::ScaleStrokeWidth,
+                origin: [x, y],
+                initial_val: bw,
+                moved: false,
+            });
+            return;
+        }
+
+        if (ctrl || cur_mode == VectorCurveMode::Edit)
+            && let Some((s_idx, _)) = lw.closest_segment((x, y), seg_radius)
+            && let Ok(resp) = app.run(
+                "shape.vectorCurve.insertNode",
+                json!({
+                    "layer": active_id,
+                    "strokeIndex": s_idx,
+                    "x": x,
+                    "y": y,
+                    "maxDist": seg_radius,
+                }),
+            )
+            && let Some(ins_idx) = resp.get("insertedIndex").and_then(Value::as_u64)
+        {
+            let vc = app.ui.vector_curve.get_or_insert_with(VectorCurveState::default);
+            vc.layer_drag = Some(ActiveLayerDrag {
+                layer_id: active_id,
+                stroke_idx: s_idx,
+                node_idx: ins_idx as usize,
+                kind: LayerDragKind::MoveNode,
+                origin: [x, y],
+                initial_val: 1.0,
+                moved: false,
+            });
+            return;
+        }
+    }
+
+    let commit_now = {
+        let vc = app.ui.vector_curve.get_or_insert_with(VectorCurveState::default);
+        vc.on_primary_down(x, y, ctrl, alt, shift, double_clicked, closed, zoom)
+    };
+    if commit_now {
+        vector_curve_commit(app);
+    }
+}
+
+fn active_linework(app: &PhotocraftApp) -> Option<(u64, photocraft_vector::sai_curve::LiveLinework)> {
+    let st = app.session.active()?;
+    let id = st.active_layer?;
+    let layer = st.doc.layer(id)?;
+    let lw = photocraft_engine::vector_cmds::get_live_linework(layer)?;
+    Some((id.0, lw))
+}
+
+pub fn vector_curve_move(app: &mut PhotocraftApp, x: f64, y: f64) {
+    let layer_cmd = {
+        let vc = app.ui.vector_curve.get_or_insert_with(VectorCurveState::default);
+        vc.on_pointer_move(x, y);
+        if let Some(ld) = vc.layer_drag.as_mut() {
+            let dx = x - ld.origin[0];
+            let dy = y - ld.origin[1];
+            if dx.hypot(dy) > 1.5 {
+                ld.moved = true;
+            }
+            match ld.kind {
+                LayerDragKind::MoveNode => Some(json!({
+                    "layer": ld.layer_id,
+                    "strokeIndex": ld.stroke_idx,
+                    "index": ld.node_idx,
+                    "pos": [x, y],
+                })),
+                LayerDragKind::AdjustNodePressure => {
+                    let delta = ((ld.origin[1] - y) + (x - ld.origin[0]) * 0.5) / 120.0;
+                    let p = (ld.initial_val + delta).clamp(0.0, 2.0);
+                    Some(json!({
+                        "layer": ld.layer_id,
+                        "strokeIndex": ld.stroke_idx,
+                        "index": ld.node_idx,
+                        "pressure": p,
+                    }))
+                }
+                LayerDragKind::ScaleStrokeWidth => {
+                    let delta = ((ld.origin[1] - y) + (x - ld.origin[0]) * 0.5) / 15.0;
+                    let bw = (ld.initial_val + delta).clamp(0.5, 500.0);
+                    Some(json!({
+                        "layer": ld.layer_id,
+                        "strokeIndex": ld.stroke_idx,
+                        "baseWidth": bw,
+                    }))
+                }
+            }
+        } else {
+            None
+        }
+    };
+    if let Some(params) = layer_cmd {
+        let _ = app.run("shape.vectorCurve.updateNode", params);
+    }
+}
+
+pub fn vector_curve_up(app: &mut PhotocraftApp, alt: bool) {
+    let toggle_cmd = {
+        let Some(vc) = app.ui.vector_curve.as_mut() else { return };
+        let cmd = if let Some(ld) = vc.layer_drag.take()
+            && alt
+            && !ld.moved
+            && vc.mode != VectorCurveMode::Weight
+        {
+            Some(json!({
+                "layer": ld.layer_id,
+                "strokeIndex": ld.stroke_idx,
+                "index": ld.node_idx,
+                "toggleCorner": true,
+            }))
+        } else {
+            None
+        };
+        vc.on_primary_up(alt);
+        cmd
+    };
+    if let Some(params) = toggle_cmd {
+        let _ = app.run("shape.vectorCurve.updateNode", params);
+    }
+}
+
+/// PaintTool SAI `Esc` key handler: stops the rubber-band extension right at the mouse position
+/// and commits the stroke immediately without discarding it.
+pub fn vector_curve_escape(app: &mut PhotocraftApp) {
+    let zoom = app.point_zoom() as f64;
+    let ready = if let Some(vc) = app.ui.vector_curve.as_mut() { vc.finish_at_cursor(zoom) } else { false };
+    if ready {
+        vector_curve_commit(app);
+    } else if let Some(vc) = app.ui.vector_curve.as_mut() {
+        vc.points.clear();
+        vc.closed_loop = false;
+        vc.selected_node = None;
+        vc.drag_node = None;
+    }
+}
+
+pub fn vector_curve_commit(app: &mut PhotocraftApp) {
+    let Some(mut vc) = app.ui.vector_curve.take() else { return };
+    if vc.points.len() == 1 {
+        let zoom = app.point_zoom() as f64;
+        let _ = vc.finish_at_cursor(zoom);
+    }
+    if vc.points.len() < 2 {
+        vc.points.clear();
+        vc.closed_loop = false;
+        app.ui.vector_curve = Some(vc);
+        return;
+    }
+    let o = &app.ui.tool_options;
+    let saved_mode = vc.mode;
+    let saved_tension = vc.tension;
+    let saved_auto_taper = vc.auto_taper_ends;
+    let saved_hover = vc.hover_pos;
+
+    match vc.to_command_params(f64::from(o.vector_curve_width), f64::from(o.vector_curve_min_ratio), o.vector_curve_tapered, o.vector_curve_closed) {
+        Ok(mut params) => {
+            params["appendToActive"] = json!(true);
+            if let Err(e) = app.run("shape.vectorCurve.create", params) {
+                app.ui.status = e;
+                app.ui.status_error = true;
+                app.ui.vector_curve = Some(vc);
+            } else {
+                // Keep tool armed non-modally for the next stroke immediately!
+                app.ui.vector_curve = Some(VectorCurveState {
+                    mode: saved_mode,
+                    tension: saved_tension,
+                    auto_taper_ends: saved_auto_taper,
+                    hover_pos: saved_hover,
+                    ..VectorCurveState::default()
+                });
+            }
+        }
+        Err(err) => {
+            app.ui.status = err;
+            app.ui.status_error = true;
+            app.ui.vector_curve = Some(vc);
+        }
+    }
+}
+
+pub fn draw_vector_curve_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) {
+    if app.ui.tool != Tool::VectorCurve {
+        return;
+    }
+    let to_scr = |q: [f64; 2]| xf.to_screen(q[0] as f32, q[1] as f32);
+    let accent = Tokens::get(painter.ctx()).accent;
+    let o = &app.ui.tool_options;
+    let mods = painter.ctx().input(|i| i.modifiers);
+    let ctrl_held = mods.ctrl || mods.command;
+    let alt_held = mods.alt;
+    let cur_mode = app.ui.vector_curve.as_ref().map_or(VectorCurveMode::Draw, |vc| vc.mode);
+    let hover_pos = app.ui.vector_curve.as_ref().and_then(|vc| vc.hover_pos);
+    let zoom = (xf.zoom as f64).max(0.05);
+    let hit_radius = NODE_HIT_RADIUS_PX / zoom;
+    let seg_radius = SEGMENT_INSERT_RADIUS_PX / zoom;
+
+    // 1. Render editable spline guide & nodes for committed strokes on the active Linework layer
+    // when holding Ctrl/Alt or in Weight / Edit submodes.
+    let drawing_new = app.ui.vector_curve.as_ref().is_some_and(|vc| !vc.points.is_empty());
+    if !drawing_new
+        && (ctrl_held || alt_held || cur_mode != VectorCurveMode::Draw)
+        && let Some((_, lw)) = active_linework(app)
+    {
+        for stroke in &lw.strokes {
+            let samples = sample_sai_curve(&stroke.nodes, stroke.base_width, stroke.min_ratio, stroke.closed, stroke.tension, 2.5);
+            if samples.len() >= 2 {
+                let mut line_pts: Vec<Pos2> = samples.iter().map(|s| to_scr([s.p.0, s.p.1])).collect();
+                if stroke.closed
+                    && let Some(&first) = line_pts.first()
+                {
+                    line_pts.push(first);
+                }
+                painter.add(egui::Shape::line(line_pts, Stroke::new(1.25, accent.gamma_multiply(0.85))));
+            }
+            for pt in &stroke.nodes {
+                let c = to_scr([pt.p.0, pt.p.1]);
+                let r_doc = width_at(stroke.base_width, stroke.min_ratio, pt.pressure) * 0.5;
+                let r_scr = (r_doc * zoom).max(3.0) as f32;
+                if cur_mode == VectorCurveMode::Weight || alt_held {
+                    painter.circle_stroke(c, r_scr, Stroke::new(1.0, accent.gamma_multiply(0.65)));
+                }
+                let s = 3.2;
+                let rect = Rect::from_min_max(pos2(c.x - s, c.y - s), pos2(c.x + s, c.y + s));
+                painter.rect_filled(rect, 0.0, Color32::WHITE);
+                painter.rect_stroke(rect, 0.0, Stroke::new(1.0, accent), egui::StrokeKind::Outside);
+            }
+        }
+        if (ctrl_held || cur_mode == VectorCurveMode::Edit)
+            && let Some(h) = hover_pos
+            && lw.node_at((h[0], h[1]), hit_radius).is_none()
+            && let Some((_, proj)) = lw.closest_segment((h[0], h[1]), seg_radius)
+        {
+            let p_scr = to_scr([proj.projected_point.0, proj.projected_point.1]);
+            painter.circle_filled(p_scr, 4.5, accent);
+            painter.circle_stroke(p_scr, 4.5, Stroke::new(1.0, Color32::WHITE));
+        }
+    }
+
+    let Some(vc) = app.ui.vector_curve.as_ref() else { return };
+    if vc.points.is_empty() {
+        return;
+    }
+
+    // 2. Build live spline points including real-time rubber-band preview to mouse cursor `hover_pos`
+    let mut preview_pts: Vec<SaiPoint> = vc.points.iter().map(|p| SaiPoint::with_pressure((p[0], p[1]), p[2] as f32, p[3] > 0.5)).collect();
+    let mut preview_closed = o.vector_curve_closed || vc.closed_loop;
+    let mut snapping_to_start = false;
+
+    if vc.mode == VectorCurveMode::Draw
+        && vc.drag_node.is_none()
+        && let Some(h) = vc.hover_pos
+    {
+        if !preview_closed && vc.points.len() >= 3 && (vc.points[0][0] - h[0]).hypot(vc.points[0][1] - h[1]) <= hit_radius {
+            preview_closed = true;
+            snapping_to_start = true;
+        } else if !preview_closed {
+            let last = vc.points[vc.points.len() - 1];
+            if (last[0] - h[0]).hypot(last[1] - h[1]) > 1.5 / zoom {
+                if vc.auto_taper_ends && preview_pts.len() >= 2 {
+                    let prev_last = preview_pts.len() - 1;
+                    if (preview_pts[prev_last].pressure - 0.08).abs() < 0.05 {
+                        preview_pts[prev_last].pressure = 1.0;
+                    }
+                }
+                let end_p = if vc.auto_taper_ends { 0.08 } else { 1.0 };
+                preview_pts.push(SaiPoint::with_pressure((h[0], h[1]), end_p, false));
+            }
+        }
+    }
+
+    if preview_pts.len() >= 2 {
+        let base_w = f64::from(o.vector_curve_width);
+        let min_r = if o.vector_curve_tapered { f64::from(o.vector_curve_min_ratio) } else { 1.0 };
+        let fg = app.session.tools.foreground;
+        let stroke_col = rgb32(fg).gamma_multiply(0.85);
+
+        let (left, right, samples) = tapered_rings_ex(&preview_pts, base_w, min_r, preview_closed, vc.tension, 2.0);
+
+        // Render true stroke ribbon quads along the curve (NO convex hull fill across the bow!)
+        let count = left.len().min(right.len());
+        if count >= 2 {
+            let segs = if preview_closed { count } else { count - 1 };
+            for i in 0..segs {
+                let next = (i + 1) % count;
+                let quad = vec![
+                    to_scr([left[i].0, left[i].1]),
+                    to_scr([left[next].0, left[next].1]),
+                    to_scr([right[next].0, right[next].1]),
+                    to_scr([right[i].0, right[i].1]),
+                ];
+                painter.add(egui::Shape::convex_polygon(quad, stroke_col, Stroke::NONE));
+            }
+        }
+
+        // Render PaintTool SAI smooth blue spline guide centerline (including live curved arc to cursor)
+        if samples.len() >= 2 {
+            let mut scr_line: Vec<Pos2> = samples.iter().map(|s| to_scr([s.p.0, s.p.1])).collect();
+            if preview_closed && let Some(&first) = scr_line.first() {
+                scr_line.push(first);
+            }
+            painter.add(egui::Shape::line(scr_line, Stroke::new(1.5, accent)));
+        }
+    }
+
+    // Highlight segment projection when holding Ctrl in Draw mode or in Edit mode
+    if (ctrl_held || vc.mode == VectorCurveMode::Edit)
+        && vc.points.len() >= 2
+        && let Some(h) = vc.hover_pos
+        && vc.node_at(h, hit_radius).is_none()
+    {
+        let sai_pts: Vec<SaiPoint> = vc.points.iter().map(|p| SaiPoint::with_pressure((p[0], p[1]), p[2] as f32, p[3] > 0.5)).collect();
+        if let Some(proj) = closest_point_on_curve(&sai_pts, (h[0], h[1]), preview_closed, vc.tension)
+            && proj.distance <= seg_radius
+        {
+            let p_scr = to_scr([proj.projected_point.0, proj.projected_point.1]);
+            painter.circle_filled(p_scr, 4.5, accent);
+            painter.circle_stroke(p_scr, 4.5, Stroke::new(1.0, Color32::WHITE));
+        }
+    }
+
+    // Highlight start-node snap ring when cursor approaches `points[0]` to close loop
+    if snapping_to_start {
+        let c0 = to_scr([vc.points[0][0], vc.points[0][1]]);
+        painter.circle_stroke(c0, 8.0, Stroke::new(2.0, accent));
+    }
+
+    for (i, pt) in vc.points.iter().enumerate() {
+        let c = to_scr([pt[0], pt[1]]);
+        let is_selected = vc.selected_node == Some(i);
+        let is_corner = pt[3] > 0.5;
+
+        let base_w = f64::from(o.vector_curve_width);
+        let min_r = f64::from(o.vector_curve_min_ratio);
+        let r_doc = width_at(base_w, min_r, pt[2] as f32) * 0.5;
+        let r_scr = (r_doc * xf.zoom as f64).max(3.0) as f32;
+
+        if is_selected || vc.drag_node == Some(i) || vc.mode == VectorCurveMode::Weight {
+            painter.circle_stroke(c, r_scr, Stroke::new(1.0, accent.gamma_multiply(0.6)));
+        }
+
+        if is_corner {
+            let d = 4.5;
+            let diamond = vec![pos2(c.x, c.y - d), pos2(c.x + d, c.y), pos2(c.x, c.y + d), pos2(c.x - d, c.y)];
+            let fill = if is_selected { accent } else { Color32::WHITE };
+            painter.add(egui::Shape::convex_polygon(diamond, fill, Stroke::new(1.0, Color32::BLACK)));
+        } else {
+            let s = 3.5;
+            let rect = Rect::from_min_max(pos2(c.x - s, c.y - s), pos2(c.x + s, c.y + s));
+            let fill = if is_selected { accent } else { Color32::WHITE };
+            painter.rect_filled(rect, 0.0, fill);
+            painter.rect_stroke(rect, 0.0, Stroke::new(1.0, Color32::BLACK), egui::StrokeKind::Outside);
+        }
+    }
+}
+
 /// Options bar for vector tools; false for other tools.
 pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bool {
     if !(is_shape_tool(tool)
+        || tool == Tool::Balloon
+        || tool == Tool::VectorCurve
         || matches!(
             tool,
             Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen | Tool::AddAnchorPoint | Tool::DeleteAnchorPoint | Tool::PathSelection | Tool::DirectSelection
@@ -1471,6 +2357,72 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             crate::widgets::vline(ui, 22.0);
             lbl(ui, tl!("Weight:"));
             crate::widgets::value_field(ui, &mut o.line_weight, 1.0..=1000.0, "px", 58.0);
+        }
+        Tool::Balloon => {
+            crate::widgets::vline(ui, 22.0);
+            for (mode, label) in [("tail", "Tail"), ("cloud", "Cloud"), ("spiky", "Spiky")] {
+                if crate::widgets::pill_tab(ui, tl!(label), o.balloon_mode == mode).clicked() {
+                    o.balloon_mode = mode.to_string();
+                }
+            }
+            crate::widgets::vline(ui, 22.0);
+            match o.balloon_mode.as_str() {
+                "cloud" => {
+                    lbl(ui, tl!("Bumps:"));
+                    let mut bumps = o.balloon_bumps as f32;
+                    if crate::widgets::value_field(ui, &mut bumps, 3.0..=64.0, "", 42.0).changed() {
+                        o.balloon_bumps = bumps.round().clamp(3.0, 64.0) as u32;
+                    }
+                    lbl(ui, tl!("Depth:"));
+                    crate::widgets::value_field(ui, &mut o.balloon_amplitude, 0.0..=1.0, "", 52.0);
+                    lbl(ui, tl!("Jitter:"));
+                    crate::widgets::value_field(ui, &mut o.balloon_jitter, 0.0..=1.0, "", 52.0);
+                }
+                "spiky" => {
+                    lbl(ui, tl!("Spikes:"));
+                    let mut spikes = o.balloon_spikes as f32;
+                    if crate::widgets::value_field(ui, &mut spikes, 3.0..=128.0, "", 42.0).changed() {
+                        o.balloon_spikes = spikes.round().clamp(3.0, 128.0) as u32;
+                    }
+                    lbl(ui, tl!("Length:"));
+                    crate::widgets::value_field(ui, &mut o.balloon_length, 0.0..=2.0, "", 52.0);
+                    lbl(ui, tl!("Jitter:"));
+                    crate::widgets::value_field(ui, &mut o.balloon_jitter, 0.0..=1.0, "", 52.0);
+                    ui.checkbox(&mut o.balloon_smooth, tl!("Round"));
+                    ui.checkbox(&mut o.balloon_inward, tl!("In"));
+                }
+                _ => {
+                    const PRESETS: [(&str, &str); 4] = [("wedge", "Wedge"), ("arc", "Arc"), ("double", "Double"), ("thought", "Thought")];
+                    let idx = PRESETS.iter().position(|(id, _)| *id == o.balloon_preset).unwrap_or(0);
+                    let label = format!("{}: {}", tl!("Tail"), tl!(PRESETS[idx].1));
+                    if ui.button(label).on_hover_text(tl!("Drag from the balloon towards the speaker")).clicked() {
+                        o.balloon_preset = PRESETS[(idx + 1) % PRESETS.len()].0.to_string();
+                    }
+                    lbl(ui, tl!("Mouth:"));
+                    crate::widgets::value_field(ui, &mut o.balloon_mouth, 2.0..=400.0, "px", 56.0);
+                }
+            }
+        }
+        Tool::VectorCurve => {
+            crate::widgets::vline(ui, 22.0);
+            let cur_mode = app.ui.vector_curve.as_ref().map_or(VectorCurveMode::Draw, |vc| vc.mode);
+            for (mode, label) in [(VectorCurveMode::Draw, "Draw"), (VectorCurveMode::Weight, "Weight"), (VectorCurveMode::Edit, "Edit")] {
+                if crate::widgets::pill_tab(ui, tl!(label), cur_mode == mode).clicked() {
+                    let vc = app.ui.vector_curve.get_or_insert_with(VectorCurveState::default);
+                    vc.mode = mode;
+                }
+            }
+            crate::widgets::vline(ui, 22.0);
+            lbl(ui, tl!("Width:"));
+            crate::widgets::value_field(ui, &mut o.vector_curve_width, 0.5..=200.0, "px", 54.0);
+            ui.checkbox(&mut o.vector_curve_tapered, tl!("Taper"));
+            lbl(ui, tl!("Tension:"));
+            crate::widgets::value_field(ui, &mut o.vector_curve_tension, 0.0..=1.0, "", 44.0);
+            let vc = app.ui.vector_curve.get_or_insert_with(VectorCurveState::default);
+            ui.checkbox(&mut vc.auto_taper_ends, tl!("Auto Taper"));
+            vc.tension = o.vector_curve_tension as f64;
+            crate::widgets::vline(ui, 22.0);
+            lbl(ui, "Click: node · Start point: close · Enter/Esc/Dbl-Click: finish · Ctrl+Drag: bend · Alt+Drag: weight");
         }
         Tool::CustomShape => {
             crate::widgets::vline(ui, 22.0);
@@ -3702,3 +4654,7 @@ mod pen_draw_tests;
 #[cfg(test)]
 #[path = "vector_paint_tests.rs"]
 mod paint_tests;
+
+#[cfg(test)]
+#[path = "comic_vector_curve_ui_tests.rs"]
+mod comic_vector_curve_ui_tests;

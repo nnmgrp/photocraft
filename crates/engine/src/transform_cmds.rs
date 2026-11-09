@@ -461,6 +461,15 @@ fn apply_transform(
         // A transform the tone's parameters cannot describe: bake the rendered sheet exactly like
         // a pixel layer, so the transformed pixels stay what the user saw.
         LayerContent::Screentone(s) => {
+            if s.surface.tile_count() == 0 {
+                let bounds = if let Some(m) = &l.mask {
+                    let mb = m.surface.content_bounds();
+                    if !mb.is_empty() { mb } else { Rect::new(0, 0, 1024, 1024) }
+                } else {
+                    Rect::new(0, 0, 1024, 1024)
+                };
+                let _ = photocraft_algo::screentone::render_screentone_to_surface(&mut s.surface, bounds, &s.spec, s.origin);
+            }
             let surf = &mut s.surface;
             baked_screentone = Some(match doc_sel {
                 Some(sel) => {
@@ -502,7 +511,6 @@ fn apply_transform(
         l.content = LayerContent::Raster(surface);
     }
     for m in l.pixel_masks_mut().filter(|m| m.linked) {
-
         m.surface = match mask_sel {
             Some(sel) => warp_gray_selected(&m.surface, sel, h, interp)?,
             None => warp_gray(&m.surface, h, interp)?,

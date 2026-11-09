@@ -924,15 +924,8 @@ fn favorite_fonts_head_the_menu_and_keep_their_place() {
     let names: Vec<String> = rows.into_iter().map(|(f, _)| f.clone()).collect();
     assert_eq!(n_fav, 2, "2 favorites");
     assert_eq!(n_recent, 1, "1 recent (Courier is already in favorites, so de-duplicated from recents)");
-    let expected: Vec<String> = vec![
-        "Courier".into(),
-        "Zeta Sans".into(),
-        "Baskerville".into(),
-        "Arial".into(),
-        "Baskerville".into(),
-        "Courier".into(),
-        "Zeta Sans".into(),
-    ];
+    let expected: Vec<String> =
+        vec!["Courier".into(), "Zeta Sans".into(), "Baskerville".into(), "Arial".into(), "Baskerville".into(), "Courier".into(), "Zeta Sans".into()];
     assert_eq!(names, expected);
 
     // Searching matches favorites first

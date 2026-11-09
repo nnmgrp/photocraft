@@ -197,10 +197,8 @@ impl GpuCanvas {
                 return;
             }
             let (device, format) = (self.rs.device.clone(), photocraft_gpu::Compositor::preferred_acc_format(&self.rs.adapter));
-            res.compositor_warmup = std::thread::Builder::new()
-                .name("gpu-compositor".into())
-                .spawn(move || photocraft_gpu::Compositor::try_new_with_format(&device, format))
-                .ok();
+            res.compositor_warmup =
+                std::thread::Builder::new().name("gpu-compositor".into()).spawn(move || photocraft_gpu::Compositor::try_new_with_format(&device, format)).ok();
         }
     }
 
@@ -562,10 +560,7 @@ impl GpuCanvas {
             let fit = LayerFit { doc: doc.id.0, needed: comp.working_set(doc, region), budget: comp.resident_budget() };
             res.layer_fit = Some(fit);
             if !fit.fits() {
-                log::warn!(
-                    "[SCREENTONE:CANVAS] Layer working set exceeds resident budget: needed {} MB, budget {} MB",
-                    fit.needed >> 20, fit.budget >> 20
-                );
+                log::warn!("[SCREENTONE:CANVAS] Layer working set exceeds resident budget: needed {} MB, budget {} MB", fit.needed >> 20, fit.budget >> 20);
                 res.compositor = Some(comp);
                 return Err(photocraft_gpu::Unsupported(OVER_BUDGET.into()));
             }
@@ -685,7 +680,11 @@ impl GpuCanvas {
             let budget = self.canvas_budget.load(Ordering::Relaxed);
             log::warn!(
                 "[SCREENTONE:CANVAS] Document {} ({}x{}) DOES NOT FIT CANVAS BUDGET: needed {} MB, budget {} MB. CPU fallback!",
-                doc.id.0, doc.size.width, doc.size.height, bytes >> 20, budget >> 20
+                doc.id.0,
+                doc.size.width,
+                doc.size.height,
+                bytes >> 20,
+                budget >> 20
             );
             // Neither compositor can fill textures that are never created: the CPU canvas draws
             // it. A set left from before the canvas grew is stale, so it goes too.
@@ -714,7 +713,12 @@ impl GpuCanvas {
                 if has_screentone {
                     log::info!(
                         "[SCREENTONE:CANVAS] GPU refresh SUCCESS: doc={}, region={:?}, passes={}, uploaded_tiles={}, gpu_time={:?}, encode_ms={:.2}",
-                        doc.id.0, region, stats.passes, stats.tiles_uploaded, stats.gpu_time, now_ms() - t0
+                        doc.id.0,
+                        region,
+                        stats.passes,
+                        stats.tiles_uploaded,
+                        stats.gpu_time,
+                        now_ms() - t0
                     );
                 }
                 out.kind = if damage.is_some() { "gpu-rect" } else { "gpu-full" };
@@ -727,10 +731,7 @@ impl GpuCanvas {
             }
             Err(e) => {
                 if has_screentone {
-                    log::warn!(
-                        "[SCREENTONE:CANVAS] GPU refresh FAILED: doc={}, error={:?}. Falling back to CPU composite!",
-                        doc.id.0, e
-                    );
+                    log::warn!("[SCREENTONE:CANVAS] GPU refresh FAILED: doc={}, error={:?}. Falling back to CPU composite!", doc.id.0, e);
                 }
                 out.fallback = Some(e.0);
             }
@@ -941,6 +942,36 @@ impl GpuCanvas {
             }
         }
         Some((d.format, d.size, out))
+    }
+
+    /// Renders `doc` on the GPU via `photocraft_gpu::render_to_vec` and returns straight RGBA f32 pixels.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn render_doc_to_vec(&self, doc: &photocraft_doc::Document, rect: photocraft_geom::Rect) -> Option<Vec<[f32; 4]>> {
+        if !self.health.is_ok() {
+            return None;
+        }
+        let mut renderer = self.rs.renderer.write();
+        let res = renderer.callback_resources.get_mut::<Resources>()?;
+        let comp = res.compositor.as_mut()?;
+        photocraft_gpu::render_to_vec(comp, &self.rs.device, &self.rs.queue, doc, rect).ok()
+    }
+
+    /// Renders `doc` on the GPU into a native `Surface` for freezing/baking procedural layers.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn render_doc_to_surface(&self, doc: &photocraft_doc::Document, rect: photocraft_geom::Rect) -> Option<photocraft_raster::Surface> {
+        let pixels = self.render_doc_to_vec(doc, rect)?;
+        let fmt = doc.pixel_format();
+        let mut surf = photocraft_raster::Surface::new(fmt);
+        let ch = fmt.channels();
+        let mut buf = Vec::with_capacity(pixels.len() * ch);
+        let mut enc = [0.0f32; 8];
+        for q in &pixels {
+            let m = photocraft_raster::from_rgba_into(&fmt, *q, &mut enc);
+            buf.extend_from_slice(&enc[..m]);
+        }
+        surf.write_region(rect, &buf);
+        surf.prune();
+        Some(surf)
     }
 
     /// Add the paint callback drawing `params` into `rect` (clipped by the painter's clip rect).

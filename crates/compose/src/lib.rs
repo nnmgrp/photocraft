@@ -1247,12 +1247,8 @@ pub fn layer_bounds(layer: &Layer, canvas: Rect) -> Rect {
         LayerContent::Fill(_) => canvas,
         LayerContent::Screentone(st) => {
             let b = bounds::content_bounds(&st.surface);
-            if !b.is_empty() {
-                b
-            } else {
-                canvas
-            }
-        },
+            if !b.is_empty() { b } else { canvas }
+        }
         _ => {
             let b = layer.surface().map_or(Rect::EMPTY, bounds::content_bounds);
             let b = match &layer.content {
@@ -1666,10 +1662,12 @@ fn empty_in(layer: &Layer, rect: Rect) -> bool {
     }
     match &layer.content {
         LayerContent::Screentone(st) if st.surface.tile_count() == 0 => false,
-        LayerContent::Raster(_) | LayerContent::Text(_) | LayerContent::Shape(_) | LayerContent::Smart(_) | LayerContent::Screentone(_) => match layer.surface() {
-            Some(s) => !s.has_tiles_in(rect) && s.default_pixel().last().is_some_and(|a| *a <= 0.0) && s.format().alpha,
-            None => true,
-        },
+        LayerContent::Raster(_) | LayerContent::Text(_) | LayerContent::Shape(_) | LayerContent::Smart(_) | LayerContent::Screentone(_) => {
+            match layer.surface() {
+                Some(s) => !s.has_tiles_in(rect) && s.default_pixel().last().is_some_and(|a| *a <= 0.0) && s.format().alpha,
+                None => true,
+            }
+        }
         _ => false,
     }
 }

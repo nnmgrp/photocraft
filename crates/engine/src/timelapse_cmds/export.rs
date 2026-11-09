@@ -308,7 +308,14 @@ pub fn run(job: &Job, ctx: &JobCtx) -> Result<Exported> {
     }
     let p = plan::plan_export(
         frames.len(),
-        &PlanOptions { fps: job.fps, length_sec: job.o.length_sec, intro_sec: job.o.intro_sec, flash: job.o.flash, hold_sec: job.o.hold_sec, slow_end: job.o.slow_end },
+        &PlanOptions {
+            fps: job.fps,
+            length_sec: job.o.length_sec,
+            intro_sec: job.o.intro_sec,
+            flash: job.o.flash,
+            hold_sec: job.o.hold_sec,
+            slow_end: job.o.slow_end,
+        },
     );
     let bg = bg_of(&job.o.letterbox);
     let corner = Corner::parse(&job.o.corner).unwrap_or(Corner::BottomRight);

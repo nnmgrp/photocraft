@@ -1565,12 +1565,12 @@ fn fs_mstroke(in: VOut) -> @location(0) vec4<f32> {
     return mout(clamp(op.p0.x + 0.5 - d, 0.0, 1.0));
 }
 
-// ---- GenTonik procedural screentone (photocraft_algo::screentone) ----------------------------
+// ---- comic_screentone procedural screentone -----------------------------------------------
 //
-// Evaluates all 12 GenTonik procedural screentone patterns, 4 geometric dot shapes, corner
+// Evaluates all 12 procedural screentone patterns, 4 geometric dot shapes, corner
 // roundness, orbital satellites, positional/size jitter, and gradient modulation on the GPU.
 // Every Euclidean distance uses `length(vec2<f32>(a, b))` = `sqrt(a*a + b*b)`, matching
-// `sdist2(a, b)` in `crates/algo/src/screentone.rs` (Step 7 parity).
+// `sdist2(a, b)` in `crates/algo/src/comic_screentone.rs` (Step 7 parity).
 
 const ST_PI: f32 = 3.14159265358979323846;
 const ST_FRAC_PI_2: f32 = 1.57079632679489661923;
@@ -1981,7 +1981,7 @@ fn screentone_tone(d: vec2<i32>, loc: vec2<i32>) -> vec4<f32> {
     let grid_y = select(-local_x * sin_ang + local_y * cos_ang, local_y, angle_rad == 0.0);
     let grid_p = vec2<f32>(grid_x, grid_y);
 
-    // 4. Evaluate pattern coverage across all 12 GenTonik patterns (`op.kind` = 0..11)
+    // 4. Evaluate pattern coverage across all 12 patterns (`op.kind` = 0..11)
     var cov = 0.0;
     var ink = 1.0;
     var solid_line = false;
@@ -2282,7 +2282,7 @@ fn screentone_tone(d: vec2<i32>, loc: vec2<i32>) -> vec4<f32> {
     return mix(bg, cur_fg, cov);
 }
 
-// Fragment entry point for `Kernel::Screentone`: evaluates the procedural GenTonik screentone
+// Fragment entry point for `Kernel::Screentone`: evaluates the procedural screentone
 // and applies the layer's mask (`mask_value(d)`).
 @fragment
 fn fs_screentone(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {

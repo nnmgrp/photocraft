@@ -829,7 +829,6 @@ fn the_dock_can_be_as_wide_as_the_window_allows() {
     }
 }
 
-
 #[test]
 fn multi_sided_docking_edge_snapping_and_typesetter_registration() {
     // 1. Verify typesetter is registered in PANELS
@@ -865,7 +864,6 @@ fn multi_sided_docking_edge_snapping_and_typesetter_registration() {
     assert!(!test_app.ui.docking.as_ref().unwrap().floating.iter().any(|g| g.panels.contains(&"typesetter".into())));
     assert!(test_app.ui.docking.as_ref().unwrap().contains(&"typesetter".into()));
 }
-
 
 #[test]
 fn test_multi_sided_docking_edge_drops_and_transitions() {

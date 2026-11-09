@@ -919,7 +919,8 @@ impl Surface {
         // One tile row of the default pixel, to compare a finished tile with a row at a time.
         let default_row = self.default_pixel.repeat(TILE_SIZE.unsigned_abs() as usize);
         // A big layer (a Move drag shifts it every frame) shifts on every core.
-        let threads = if cfg!(target_arch = "wasm32") { 1 } else { std::thread::available_parallelism().map_or(1, |n| n.get()).min(targets.len() / 16).clamp(1, 32) };
+        let threads =
+            if cfg!(target_arch = "wasm32") { 1 } else { std::thread::available_parallelism().map_or(1, |n| n.get()).min(targets.len() / 16).clamp(1, 32) };
         let uniform = UniformTiles::find(&sources().map(|(_, t)| t).collect::<Vec<_>>(), bpp, threads);
         // One target tile: shared, copied, or `None` when it holds only the default pixel.
         let make = |dc: TileCoord| -> Option<Arc<Tile>> {

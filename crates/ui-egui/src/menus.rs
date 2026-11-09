@@ -132,7 +132,7 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
     if let Some(r) = crate::workspace_ui::menu(app, id, &params) {
         return r;
     }
-    // Window › Screentones (GenTonik) panel and Filter › Pixelate › Screentone dialog.
+    // Window › Screentones panel and Filter › Pixelate › Screentone dialog.
     if let Some(r) = crate::screentone_panel::menu(app, id, &params) {
         return r;
     }
@@ -729,7 +729,9 @@ fn open_path(app: &mut PhotocraftApp, path: &str) -> Result<Value, String> {
 }
 
 pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
-    if crate::screentone_panel::handles(id) { return true; }
+    if crate::screentone_panel::handles(id) {
+        return true;
+    }
     if crate::tool_shortcuts::tool(id).is_some() {
         return true;
     }

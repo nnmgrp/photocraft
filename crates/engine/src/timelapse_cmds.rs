@@ -341,7 +341,8 @@ fn library_target(s: &mut Session, p: &Value, cmd: &str) -> Result<(Option<photo
     if folder.is_empty() {
         return Err(EngineError::Other("no recordings folder chosen yet".into()));
     }
-    let rec = store::scan(std::path::Path::new(&folder)).into_iter().find(|r| r.meta.id == id).ok_or_else(|| bad(cmd, format!("no recording with id `{id}`")))?;
+    let rec =
+        store::scan(std::path::Path::new(&folder)).into_iter().find(|r| r.meta.id == id).ok_or_else(|| bad(cmd, format!("no recording with id `{id}`")))?;
     Ok((None, rec))
 }
 
@@ -365,7 +366,11 @@ fn delete_frames(s: &mut Session, p: &Value) -> Result<Value> {
 fn delete_recording(s: &mut Session, p: &Value) -> Result<Value> {
     let (doc, rec) = library_target(s, p, DELETE_RECORDING)?;
     if !rec.meta.frames.is_empty() {
-        return Err(EngineError::Other(format!("“{}” still has {} frames: delete them first (file.timelapse.deleteFrames)", rec.meta.name, rec.meta.frames.len())));
+        return Err(EngineError::Other(format!(
+            "“{}” still has {} frames: delete them first (file.timelapse.deleteFrames)",
+            rec.meta.name,
+            rec.meta.frames.len()
+        )));
     }
     if let Some(d) = doc {
         s.timelapse.forget(d);
@@ -483,7 +488,15 @@ macro_rules! spec {
 pub fn specs() -> Vec<CommandSpec> {
     let m = &["File", "Timelapse"] as &[&str];
     vec![
-        spec!(RECORD, "Start Recording", m, "{} → status (records the active document: a frame shortly after each edit; needs a recordings folder, see file.timelapse.settings)", can_record, true, record),
+        spec!(
+            RECORD,
+            "Start Recording",
+            m,
+            "{} → status (records the active document: a frame shortly after each edit; needs a recordings folder, see file.timelapse.settings)",
+            can_record,
+            true,
+            record
+        ),
         spec!(PAUSE, "Pause Recording", m, "{} → status", can_pause, true, pause),
         spec!(
             EXPORT,
@@ -494,8 +507,24 @@ pub fn specs() -> Vec<CommandSpec> {
             true,
             export
         ),
-        spec!(REFERENCE, "Reference Layer", m, r##"{"reference":bool? (default: toggle)} → {reference,changed,tag} (tags the targeted layers' names: visible to you, hidden in the timelapse)"##, has_layer, true, reference_layer),
-        spec!(STATUS, "Timelapse Status", &[], "{} → {available,document,recording:{id,name,folder,recording,idle,frames,allFrames,workMs,bytes,exports,lastExport,framesSinceExport,previewRev}|null,settings}", always, false, |s, _| Ok(status(s))),
+        spec!(
+            REFERENCE,
+            "Reference Layer",
+            m,
+            r##"{"reference":bool? (default: toggle)} → {reference,changed,tag} (tags the targeted layers' names: visible to you, hidden in the timelapse)"##,
+            has_layer,
+            true,
+            reference_layer
+        ),
+        spec!(
+            STATUS,
+            "Timelapse Status",
+            &[],
+            "{} → {available,document,recording:{id,name,folder,recording,idle,frames,allFrames,workMs,bytes,exports,lastExport,framesSinceExport,previewRev}|null,settings}",
+            always,
+            false,
+            |s, _| Ok(status(s))
+        ),
         spec!(
             SETTINGS,
             "Timelapse Settings",

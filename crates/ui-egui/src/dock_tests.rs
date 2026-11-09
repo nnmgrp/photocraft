@@ -48,7 +48,10 @@ fn short_columns_squeeze_groups_down_to_their_minimum_and_never_go_negative() {
 #[test]
 fn bad_stored_values_are_sanitised() {
     let mut l = DockLayout { order: vec![Group::Layers, Group::Layers, Group::Color], ..Default::default() };
-    assert_eq!(l.order(), vec![Group::Layers, Group::Timelapse, Group::Color, Group::Properties, Group::Character, Group::Brushes, Group::Navigator, Group::History]);
+    assert_eq!(
+        l.order(),
+        vec![Group::Layers, Group::Timelapse, Group::Color, Group::Properties, Group::Character, Group::Brushes, Group::Navigator, Group::History]
+    );
     for bad in [f32::NAN, -10.0, f32::INFINITY, 1e12] {
         l.heights.insert(Group::Color, bad);
         let h = l.height(Group::Color);
@@ -56,7 +59,10 @@ fn bad_stored_values_are_sanitised() {
     }
     // Unknown fields, wrong types and old UI state all load.
     let back: DockLayout = serde_json::from_value(json!({"order": ["layers"], "bogus": 1})).unwrap();
-    assert_eq!(back.order(), vec![Group::Layers, Group::Timelapse, Group::Color, Group::Properties, Group::Character, Group::Brushes, Group::Navigator, Group::History]);
+    assert_eq!(
+        back.order(),
+        vec![Group::Layers, Group::Timelapse, Group::Color, Group::Properties, Group::Character, Group::Brushes, Group::Navigator, Group::History]
+    );
     let mut ui = serde_json::to_value(crate::state::UiState::default()).unwrap();
     ui.as_object_mut().unwrap().remove("dock");
     let ui: crate::state::UiState = serde_json::from_value(ui).unwrap();
@@ -595,8 +601,8 @@ fn closing_tabs_keeps_stable_names_across_themes_and_workspace_round_trips() {
     let mut dock = DockLayout::default();
     // In Pro the first Color group tab is Color; in Studio it is Swatches.
     dock.hide_tab(Group::Color, 0, true);
-    assert_eq!(dock.visible_tabs(Group::Color, true).iter().map(|(_, n)| *n).collect::<Vec<_>>(), vec!["Swatches", "Gradients", "Patterns", "GenTonik"]);
-    assert_eq!(dock.visible_tabs(Group::Color, false).iter().map(|(_, n)| *n).collect::<Vec<_>>(), vec!["Swatches", "Gradients", "Patterns", "GenTonik"]);
+    assert_eq!(dock.visible_tabs(Group::Color, true).iter().map(|(_, n)| *n).collect::<Vec<_>>(), vec!["Swatches", "Gradients", "Patterns", "Screentones"]);
+    assert_eq!(dock.visible_tabs(Group::Color, false).iter().map(|(_, n)| *n).collect::<Vec<_>>(), vec!["Swatches", "Gradients", "Patterns", "Screentones"]);
     dock.hide_tab(Group::Color, 999, true);
     assert_eq!(dock.hidden_tabs[&Group::Color], vec!["Color"]);
     let saved = serde_json::to_value(&dock).unwrap();
@@ -851,7 +857,10 @@ fn window_character_opens_its_own_group_and_keeps_properties() {
     let old = DockLayout { order: vec![Group::Color, Group::Properties, Group::Navigator, Group::History, Group::Layers], ..Default::default() };
     assert_eq!(old.order(), Group::ALL.to_vec());
     let moved = DockLayout { order: vec![Group::Layers, Group::Color], ..Default::default() };
-    assert_eq!(moved.order(), vec![Group::Layers, Group::Timelapse, Group::Color, Group::Properties, Group::Character, Group::Brushes, Group::Navigator, Group::History]);
+    assert_eq!(
+        moved.order(),
+        vec![Group::Layers, Group::Timelapse, Group::Color, Group::Properties, Group::Character, Group::Brushes, Group::Navigator, Group::History]
+    );
 }
 
 type StripProbe = Option<(Vec<(usize, Rect)>, Rect, Option<Rect>, Rect)>;
@@ -1109,11 +1118,11 @@ fn move_tab_reorders_by_name_and_bad_saved_orders_fall_back() {
     }
     // Names, not positions: the order survives the Pro/Studio swap of Color and Swatches.
     l.move_tab(Group::Color, 3, Some(0), true);
-    assert_eq!(names(&l, Group::Color, true), ["Patterns", "Color", "Swatches", "Gradients", "GenTonik"]);
-    assert_eq!(names(&l, Group::Color, false), ["Patterns", "Color", "Swatches", "Gradients", "GenTonik"]);
+    assert_eq!(names(&l, Group::Color, true), ["Patterns", "Color", "Swatches", "Gradients", "Screentones"]);
+    assert_eq!(names(&l, Group::Color, false), ["Patterns", "Color", "Swatches", "Gradients", "Screentones"]);
     // Hidden tabs keep their place for when they come back.
     l.hide_tab(Group::Color, 1, true);
-    assert_eq!(names(&l, Group::Color, true), ["Patterns", "Color", "Gradients", "GenTonik"]);
+    assert_eq!(names(&l, Group::Color, true), ["Patterns", "Color", "Gradients", "Screentones"]);
     // Garbage in a saved layout falls back per group, and never loses the rest of the layout.
     for bad in [
         json!(5),

@@ -1100,22 +1100,21 @@ pub fn quick_export_png(app: &mut PhotocraftApp) -> Result<Value, String> {
         let suggested_name = format!("{stem}.{fmt}");
         let doc = st.doc.id;
 
-        let start_dir = app.save_dirs.get(&doc).cloned()
+        let start_dir = app
+            .save_dirs
+            .get(&doc)
+            .cloned()
             .or_else(|| app.session.prefs().export.last_export_dir.as_ref().map(std::path::PathBuf::from))
             .or_else(|| st.path.as_deref().and_then(|p| std::path::Path::new(p).parent()).map(std::path::Path::to_path_buf));
 
-        let suggested = if let Some(dir) = start_dir {
-            dir.join(&suggested_name)
-        } else {
-            std::path::PathBuf::from(&suggested_name)
-        };
+        let suggested = if let Some(dir) = start_dir { dir.join(&suggested_name) } else { std::path::PathBuf::from(&suggested_name) };
 
         return app.pick_save(&suggested.to_string_lossy(), move |app, path| {
             if let Some(dir) = std::path::Path::new(&path).parent().filter(|p| !p.as_os_str().is_empty()) {
                 let dir_str = dir.to_string_lossy().to_string();
                 app.session.edit_prefs(|p| p.export.last_export_dir = Some(dir_str));
                 app.save_dirs.insert(doc, dir.to_path_buf());
-                let prefs_json = serde_json::to_value(&app.session.prefs().clone()).unwrap_or_default();
+                let prefs_json = serde_json::to_value(app.session.prefs().clone()).unwrap_or_default();
                 let _ = crate::prefs_ui::write_prefs(app, &prefs_json);
             }
             app.refocus(doc)?;

@@ -83,12 +83,39 @@ const TRANSLIT_PENALTY: i32 = 25;
 /// query is also tried re-mapped through this table. The punctuation keys that carry Cyrillic
 /// letters on ЙЦУКЕН (`х`, `ъ`, `ж`, `э`, `б`, `ю`, `ё`) are included.
 const LAYOUT_PAIRS: &[(char, char)] = &[
-    ('q', 'й'), ('w', 'ц'), ('e', 'у'), ('r', 'к'), ('t', 'е'), ('y', 'н'),
-    ('u', 'г'), ('i', 'ш'), ('o', 'щ'), ('p', 'з'), ('[', 'х'), (']', 'ъ'),
-    ('a', 'ф'), ('s', 'ы'), ('d', 'в'), ('f', 'а'), ('g', 'п'), ('h', 'р'),
-    ('j', 'о'), ('k', 'л'), ('l', 'д'), (';', 'ж'), ('\'', 'э'),
-    ('z', 'я'), ('x', 'ч'), ('c', 'с'), ('v', 'м'), ('b', 'и'), ('n', 'т'),
-    ('m', 'ь'), (',', 'б'), ('.', 'ю'), ('`', 'ё'),
+    ('q', 'й'),
+    ('w', 'ц'),
+    ('e', 'у'),
+    ('r', 'к'),
+    ('t', 'е'),
+    ('y', 'н'),
+    ('u', 'г'),
+    ('i', 'ш'),
+    ('o', 'щ'),
+    ('p', 'з'),
+    ('[', 'х'),
+    (']', 'ъ'),
+    ('a', 'ф'),
+    ('s', 'ы'),
+    ('d', 'в'),
+    ('f', 'а'),
+    ('g', 'п'),
+    ('h', 'р'),
+    ('j', 'о'),
+    ('k', 'л'),
+    ('l', 'д'),
+    (';', 'ж'),
+    ('\'', 'э'),
+    ('z', 'я'),
+    ('x', 'ч'),
+    ('c', 'с'),
+    ('v', 'м'),
+    ('b', 'и'),
+    ('n', 'т'),
+    ('m', 'ь'),
+    (',', 'б'),
+    ('.', 'ю'),
+    ('`', 'ё'),
 ];
 
 /// Re-map each char of `text` through the keyboard layout: QWERTY → ЙЦУКЕН when `to_cyr`, the
@@ -114,9 +141,7 @@ fn remap_layout(text: &str, to_cyr: bool) -> String {
 /// body with no mappable letters (digits, punctuation, other scripts) has no variants.
 fn layout_variants(body: &str) -> Vec<String> {
     let has_latin = body.chars().any(|c| c.is_ascii_alphabetic());
-    let has_cyr = body
-        .chars()
-        .any(|c| matches!(c, '\u{0410}'..='\u{044F}' | '\u{0401}' | '\u{0451}'));
+    let has_cyr = body.chars().any(|c| matches!(c, '\u{0410}'..='\u{044F}' | '\u{0401}' | '\u{0451}'));
     let mut out = Vec::with_capacity(2);
     if has_latin {
         out.push(remap_layout(body, true));
@@ -158,13 +183,7 @@ impl Query {
         let mut variants: Vec<(String, i32)> = Vec::with_capacity(3);
         variants.push((body.clone(), 0));
         variants.extend(layout_variants(&body).into_iter().map(|v| (v, TRANSLIT_PENALTY)));
-        Self {
-            text_only,
-            groups_only,
-            hidden_only,
-            body,
-            variants,
-        }
+        Self { text_only, groups_only, hidden_only, body, variants }
     }
 }
 
@@ -208,11 +227,7 @@ fn substring_matches(query: &str, text: &str) -> Option<Vec<usize>> {
         if t[window..window + q.len()] == q[..] {
             // Map back to byte offsets in the lower-cased string.
             let mut byte_offs = Vec::with_capacity(q.len());
-            let mut at = text
-                .char_indices()
-                .nth(window)
-                .map(|(b, _)| b)
-                .unwrap_or(0);
+            let mut at = text.char_indices().nth(window).map(|(b, _)| b).unwrap_or(0);
             for c in &q {
                 byte_offs.push(at);
                 at += c.len_utf8();
@@ -271,10 +286,7 @@ fn specificity(label_lower: &str) -> i32 {
 /// translit variants (ties are impossible: only the re-mapped variants carry a penalty). Returns
 /// the byte offsets of the matched chars and the variant's rank penalty.
 fn best_substring(variants: &[(String, i32)], text: &str) -> Option<(Vec<usize>, i32)> {
-    variants
-        .iter()
-        .filter_map(|(v, penalty)| substring_matches(v, text).map(|offs| (offs, *penalty)))
-        .min_by_key(|&(_, penalty)| penalty)
+    variants.iter().filter_map(|(v, penalty)| substring_matches(v, text).map(|offs| (offs, *penalty))).min_by_key(|&(_, penalty)| penalty)
 }
 
 /// Score and pick the best match for one layer. Tries a substring match against the name and (for
@@ -325,12 +337,7 @@ fn collect_hits(app: &PhotocraftApp, query: &Query) -> Vec<Hit> {
         }
     }
     // Sort: active doc first, then by descending score, then by shorter label (more specific).
-    out.sort_by(|a, b| {
-        b.active_doc
-            .cmp(&a.active_doc)
-            .then_with(|| b.score.cmp(&a.score))
-            .then_with(|| a.label.cmp(&b.label))
-    });
+    out.sort_by(|a, b| b.active_doc.cmp(&a.active_doc).then_with(|| b.score.cmp(&a.score)).then_with(|| a.label.cmp(&b.label)));
     out.truncate(CAP);
     out
 }
@@ -386,16 +393,13 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let t = Tokens::get(ctx);
     let screen = ctx.content_rect();
     // Scrim: full-screen, dimmed, click to dismiss (mirrors `palette::show`).
-    egui::Area::new(egui::Id::new("layer-search-scrim"))
-        .order(egui::Order::Foreground)
-        .fixed_pos(screen.min)
-        .show(ctx, |ui| {
-            let r = ui.allocate_exact_size(screen.size(), Sense::click()).1;
-            ui.painter().rect_filled(screen, 0.0, Color32::from_black_alpha(110));
-            if r.clicked() {
-                app.ui.layer_search_open = false;
-            }
-        });
+    egui::Area::new(egui::Id::new("layer-search-scrim")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
+        let r = ui.allocate_exact_size(screen.size(), Sense::click()).1;
+        ui.painter().rect_filled(screen, 0.0, Color32::from_black_alpha(110));
+        if r.clicked() {
+            app.ui.layer_search_open = false;
+        }
+    });
     // The window itself, on top of the scrim.
     let mut run: Option<(Hit, bool)> = None;
     egui::Area::new(egui::Id::new("layer-search"))
@@ -467,8 +471,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     for (i, hit) in hits.iter().enumerate() {
                         let (rect, resp) = ui.allocate_exact_size(vec2(WIDTH, 30.0), Sense::click());
                         if i == sel || resp.hovered() {
-                            ui.painter()
-                                .rect_filled(rect, t.radius_sm, if i == sel { t.accent_soft } else { t.hover });
+                            ui.painter().rect_filled(rect, t.radius_sm, if i == sel { t.accent_soft } else { t.hover });
                         }
                         let badge_color = if hit.hidden { t.text_faint } else { t.text_dim };
                         // Document tab badge (e.g. `[01.png]`), at the left.
@@ -481,13 +484,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                         };
                         let doc_label = format!("[{doc_display}]");
                         let doc_w = 90.0;
-                        ui.painter().text(
-                            rect.left_center() + vec2(10.0, 0.0),
-                            Align2::LEFT_CENTER,
-                            doc_label,
-                            egui::FontId::proportional(11.0),
-                            badge_color,
-                        );
+                        ui.painter().text(rect.left_center() + vec2(10.0, 0.0), Align2::LEFT_CENTER, doc_label, egui::FontId::proportional(11.0), badge_color);
                         // Layer-type badge (`[T]`, `[G]`, …) after the document badge.
                         ui.painter().text(
                             rect.left_center() + vec2(10.0 + doc_w, 0.0),
@@ -500,11 +497,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                         // Layer name (highlighted).
                         let name_left = 10.0 + doc_w + badge_w;
                         let mut job = egui::text::LayoutJob::default();
-                        let max_name_w = if hit.text.is_some() {
-                            190.0
-                        } else {
-                            (rect.right() - 12.0 - (rect.left() + name_left)).max(60.0)
-                        };
+                        let max_name_w = if hit.text.is_some() { 190.0 } else { (rect.right() - 12.0 - (rect.left() + name_left)).max(60.0) };
                         job.wrap.max_width = max_name_w;
                         job.wrap.max_rows = 1;
                         let name_plain = TextFormat { color: if hit.hidden { t.text_faint } else { plain.color }, ..plain.clone() };
@@ -545,11 +538,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                         ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
                     }
                     ui.add_space(4.0);
-                    ui.label(
-                        RichText::new(tl!("Enter: Jump • Shift+Enter: Peek • Esc: Close"))
-                            .small()
-                            .color(t.text_faint),
-                    );
+                    ui.label(RichText::new(tl!("Enter: Jump • Shift+Enter: Peek • Esc: Close")).small().color(t.text_faint));
                     ui.data_mut(|d| {
                         d.insert_temp(qid, q);
                         d.insert_temp(sel_id, sel);
@@ -616,12 +605,7 @@ fn snippet_around(text: &str, matches: &[usize], radius: usize) -> (String, usiz
 /// start offset `start`. Offsets that fall outside the snippet are dropped.
 fn relative_matches(snippet: &str, matches: &[usize], start: usize) -> Vec<usize> {
     let end = start + snippet.len();
-    matches
-        .iter()
-        .copied()
-        .filter(|&m| m >= start && m <= end)
-        .map(|m| m - start)
-        .collect()
+    matches.iter().copied().filter(|&m| m >= start && m <= end).map(|m| m - start).collect()
 }
 
 /// Jump to a search result: switch tabs, select the layer, expand its collapsed parent groups, and
@@ -647,9 +631,7 @@ fn activate(app: &mut PhotocraftApp, hit: &Hit) -> Result<(), String> {
     if app.session.active().and_then(|d| d.doc.layer(hit.layer)).is_none() {
         return Err("that layer is no longer in the document".into());
     }
-    app.session
-        .select_layer(hit.layer)
-        .map_err(|e| e.to_string())?;
+    app.session.select_layer(hit.layer).map_err(|e| e.to_string())?;
     // Expand every collapsed parent group, outermost first (a view change; not a history step).
     // We collect the parent group ids first (under the immutable borrow of `app.session`) and then
     // drop that borrow before calling `app.session.execute` (which takes `&mut`).
@@ -689,10 +671,7 @@ fn activate(app: &mut PhotocraftApp, hit: &Hit) -> Result<(), String> {
             // document's own centre so the viewport lands somewhere sensible.
             [doc_size.width as f32 / 2.0, doc_size.height as f32 / 2.0]
         } else {
-            [
-                ((bounds.x0 as f32) + (bounds.x1 as f32)) / 2.0,
-                ((bounds.y0 as f32) + (bounds.y1 as f32)) / 2.0,
-            ]
+            [((bounds.x0 as f32) + (bounds.x1 as f32)) / 2.0, ((bounds.y0 as f32) + (bounds.y1 as f32)) / 2.0]
         };
         app.ui.views[i].center = center;
         app.ui.views[i].fit_pending = false;

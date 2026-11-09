@@ -1507,13 +1507,7 @@ pub fn is_favorite_font(ctx: &egui::Context, family: &str) -> bool {
 }
 
 /// Draws a 5-pointed star icon at `center`.
-pub(crate) fn paint_star_icon(
-    painter: &egui::Painter,
-    center: egui::Pos2,
-    filled: bool,
-    hovered: bool,
-    faint: egui::Color32,
-) {
+pub(crate) fn paint_star_icon(painter: &egui::Painter, center: egui::Pos2, filled: bool, hovered: bool, faint: egui::Color32) {
     let outer_r = if hovered { 5.8 } else { 5.0 };
     let inner_r = outer_r * 0.42;
     let mut pts = Vec::with_capacity(10);
@@ -1522,11 +1516,7 @@ pub(crate) fn paint_star_icon(
         let r = if k % 2 == 0 { outer_r } else { inner_r };
         pts.push(egui::pos2(center.x + r * angle.cos(), center.y + r * angle.sin()));
     }
-    let gold = if hovered {
-        egui::Color32::from_rgb(255, 215, 80)
-    } else {
-        egui::Color32::from_rgb(240, 190, 50)
-    };
+    let gold = if hovered { egui::Color32::from_rgb(255, 215, 80) } else { egui::Color32::from_rgb(240, 190, 50) };
     if filled {
         let mut mesh = egui::Mesh::default();
         mesh.colored_vertex(center, gold);
@@ -1585,15 +1575,11 @@ pub(crate) fn font_menu_rows_with_favorites<'a>(
         }
         return (rows, 0, 0);
     }
-    let fav_rows: Vec<(&String, &str)> =
-        favorites.iter().filter_map(|fav| rows.iter().find(|(f, _)| *f == fav).copied()).collect();
+    let fav_rows: Vec<(&String, &str)> = favorites.iter().filter_map(|fav| rows.iter().find(|(f, _)| *f == fav).copied()).collect();
     let n_fav = fav_rows.len();
 
-    let recent: Vec<(&String, &str)> = recents
-        .iter()
-        .filter(|r| !favorites.iter().any(|fav| fav == *r))
-        .filter_map(|r| rows.iter().find(|(f, _)| *f == r).copied())
-        .collect();
+    let recent: Vec<(&String, &str)> =
+        recents.iter().filter(|r| !favorites.iter().any(|fav| fav == *r)).filter_map(|r| rows.iter().find(|(f, _)| *f == r).copied()).collect();
     let n_recent = recent.len();
 
     let combined: Vec<(&'a String, &'a str)> = fav_rows.into_iter().chain(recent).chain(rows).collect();
@@ -2381,9 +2367,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             apply(app, ui.ctx(), json!({"align": align}));
         }
     }
-    let cur_valign = styles_at(app)
-        .map(|(_, p)| p.vertical_align)
-        .unwrap_or_else(|| default_styles(app).1.vertical_align);
+    let cur_valign = styles_at(app).map(|(_, p)| p.vertical_align).unwrap_or_else(|| default_styles(app).1.vertical_align);
     ui.spacing_mut().item_spacing.x = 8.0;
     crate::widgets::vline(ui, 22.0);
     ui.spacing_mut().item_spacing.x = 2.0;
@@ -2470,15 +2454,15 @@ pub(crate) fn capsule_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         ui.label(egui::RichText::new("T").strong().color(t.text));
 
         // Font family dropdown with dedicated capsule ID salt
-        if fonts_ready(ui, 120.0) {
-            if family_picker_in(ui, "capsule-type-font", &mut fam, 120.0, &families(), app.session.prefs().type_.font_preview, &app.ui.recent_fonts) {
-                app.note_recent_font(&fam);
-                app.ui.tool_options.type_font = fam.clone();
-                let st = styles(&fam);
-                style = if st.contains(&style) { style } else { st.first().cloned().unwrap_or_else(|| "Regular".into()) };
-                app.ui.tool_options.type_style = style.clone();
-                apply(app, ui.ctx(), json!({"font": fam}));
-            }
+        if fonts_ready(ui, 120.0)
+            && family_picker_in(ui, "capsule-type-font", &mut fam, 120.0, &families(), app.session.prefs().type_.font_preview, &app.ui.recent_fonts)
+        {
+            app.note_recent_font(&fam);
+            app.ui.tool_options.type_font = fam.clone();
+            let st = styles(&fam);
+            style = if st.contains(&style) { style } else { st.first().cloned().unwrap_or_else(|| "Regular".into()) };
+            app.ui.tool_options.type_style = style.clone();
+            apply(app, ui.ctx(), json!({"font": fam}));
         }
 
         // Font size field
@@ -2492,11 +2476,9 @@ pub(crate) fn capsule_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
         // Alignment buttons
         ui.spacing_mut().item_spacing.x = 2.0;
-        for (align, icon, tip) in [
-            ("left", "align-left", tl!("Left align text")),
-            ("center", "align-center", tl!("Center text")),
-            ("right", "align-right", tl!("Right align text")),
-        ] {
+        for (align, icon, tip) in
+            [("left", "align-left", tl!("Left align text")), ("center", "align-center", tl!("Center text")), ("right", "align-right", tl!("Right align text"))]
+        {
             if crate::icons::button(ui, icon, 18.0, o.type_align == align, tip).clicked() {
                 app.ui.tool_options.type_align = align.into();
                 apply(app, ui.ctx(), json!({"align": align}));
@@ -2506,9 +2488,7 @@ pub(crate) fn capsule_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         crate::widgets::vline(ui, 18.0);
         ui.spacing_mut().item_spacing.x = 2.0;
 
-        let cur_valign = styles_at(app)
-            .map(|(_, p)| p.vertical_align)
-            .unwrap_or_else(|| default_styles(app).1.vertical_align);
+        let cur_valign = styles_at(app).map(|(_, p)| p.vertical_align).unwrap_or_else(|| default_styles(app).1.vertical_align);
         for (key, tip, va) in vertical_align_items() {
             if vertical_align_button(ui, va, cur_valign == va, tip, 18.0).clicked() {
                 apply_vertical_align(app, ui.ctx(), key);

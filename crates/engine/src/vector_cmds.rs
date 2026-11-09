@@ -25,6 +25,8 @@ use photocraft_doc::{
 use photocraft_geom::{Affine, Point, Rect};
 use photocraft_vector as vector;
 use serde_json::{Value, json};
+use std::sync::Arc;
+use vector::sai_curve::{LiveLinework, LiveVectorStroke, SAI_DEFAULT_TENSION, SaiPoint};
 
 use crate::commands::{CommandSpec, blend_from_str};
 use crate::{EngineError, Result, Session};
@@ -256,7 +258,7 @@ fn fill_json(f: &Fill) -> Value {
 
 /// `"#rrggbb"` / `[r,g,b,a]` / `{"gradient":{"stops":[[t,"#hex"],…],"angle","scale","style","reverse"}}` /
 /// `{"pattern":name,"scale"}`. `null` → `Ok(None)` (no fill).
-fn parse_fill(v: &Value) -> std::result::Result<Option<Fill>, String> {
+pub(crate) fn parse_fill(v: &Value) -> std::result::Result<Option<Fill>, String> {
     if v.is_null() {
         return Ok(None);
     }
@@ -616,7 +618,7 @@ pub(crate) fn map_shape(sh: &mut ShapeLayer, h: Option<&photocraft_algo::transfo
     Ok(())
 }
 
-fn shape_info(s: &Session, id: LayerId) -> Result<Value> {
+pub(crate) fn shape_info(s: &Session, id: LayerId) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let l = d.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
     let LayerContent::Shape(sh) = &l.content else {
@@ -630,6 +632,7 @@ fn shape_info(s: &Session, id: LayerId) -> Result<Value> {
         "fill": sh.fill.as_ref().map(fill_json),
         "stroke": sh.stroke.as_ref().map(stroke_json),
         "live": sh.live.as_ref().map(live_json),
+        "liveVectorStroke": get_live_vector_stroke(l).map(|live| live_stroke_to_json(id.0, &l.name, &live)),
         "kind": sh.live.as_ref().map_or("path", live_kind),
         "bounds": bounds,
     }))
@@ -719,6 +722,377 @@ fn shape_create(s: &mut Session, p: &Value) -> Result<Value> {
         Ok(id)
     })?;
     shape_info(s, id)
+}
+
+pub const SAI_CURVE_BLOCK: [u8; 4] = *b"saiC";
+pub const SAI_LINEWORK_BLOCK: [u8; 4] = *b"saiL";
+
+/// Retrieves `LiveVectorStroke` parametric data preserved on a layer's PSD blocks if present.
+pub fn get_live_vector_stroke(layer: &Layer) -> Option<LiveVectorStroke> {
+    for (k, data) in &layer.psd_blocks {
+        if *k == SAI_CURVE_BLOCK
+            && let Ok(stroke) = serde_json::from_slice::<LiveVectorStroke>(data)
+        {
+            return Some(stroke);
+        }
+    }
+    if let Some(lw) = get_live_linework(layer) {
+        return lw.strokes.last().cloned();
+    }
+    None
+}
+
+/// Retrieves the multi-stroke `LiveLinework` container preserved on a Linework layer's PSD blocks.
+pub fn get_live_linework(layer: &Layer) -> Option<LiveLinework> {
+    for (k, data) in &layer.psd_blocks {
+        if *k == SAI_LINEWORK_BLOCK
+            && let Ok(lw) = serde_json::from_slice::<LiveLinework>(data)
+        {
+            return Some(lw);
+        }
+    }
+    for (k, data) in &layer.psd_blocks {
+        if *k == SAI_CURVE_BLOCK
+            && let Ok(stroke) = serde_json::from_slice::<LiveVectorStroke>(data)
+        {
+            return Some(LiveLinework::new(vec![stroke]));
+        }
+    }
+    None
+}
+
+/// Stores or updates `LiveVectorStroke` on a layer's PSD blocks.
+pub fn set_live_vector_stroke(layer: &mut Layer, live: &LiveVectorStroke) {
+    if let Ok(bytes) = serde_json::to_vec(live) {
+        let arc = Arc::new(bytes);
+        if let Some(entry) = layer.psd_blocks.iter_mut().find(|(k, _)| *k == SAI_CURVE_BLOCK) {
+            entry.1 = arc;
+        } else {
+            layer.psd_blocks.push((SAI_CURVE_BLOCK, arc));
+        }
+    }
+}
+
+/// Stores or updates a multi-stroke `LiveLinework` container on a layer's PSD blocks,
+/// keeping `SAI_CURVE_BLOCK` synchronized with the latest stroke.
+pub fn set_live_linework(layer: &mut Layer, linework: &LiveLinework) {
+    if let Ok(bytes) = serde_json::to_vec(linework) {
+        let arc = Arc::new(bytes);
+        if let Some(entry) = layer.psd_blocks.iter_mut().find(|(k, _)| *k == SAI_LINEWORK_BLOCK) {
+            entry.1 = arc;
+        } else {
+            layer.psd_blocks.push((SAI_LINEWORK_BLOCK, arc));
+        }
+    }
+    if let Some(last) = linework.strokes.last() {
+        set_live_vector_stroke(layer, last);
+    }
+}
+
+/// Parses a single `SaiPoint` from JSON (`[x, y, pressure?, corner?]` or `{"x", "y", "pressure", "corner"}`).
+pub fn parse_sai_point(v: &Value) -> Option<SaiPoint> {
+    let (x, y, pressure, corner) = if let Some(a) = v.as_array() {
+        let x = a.first().and_then(Value::as_f64)?;
+        let y = a.get(1).and_then(Value::as_f64)?;
+        let pressure = a.get(2).and_then(Value::as_f64).unwrap_or(1.0);
+        let corner = a.get(3).and_then(Value::as_bool).or_else(|| a.get(2).and_then(Value::as_bool)).unwrap_or(false);
+        (x, y, pressure, corner)
+    } else {
+        let x = v.get("x").and_then(Value::as_f64)?;
+        let y = v.get("y").and_then(Value::as_f64)?;
+        let pressure = v.get("pressure").and_then(Value::as_f64).unwrap_or(1.0);
+        let corner = v.get("corner").and_then(Value::as_bool).unwrap_or(false);
+        (x, y, pressure, corner)
+    };
+    if !x.is_finite() || !y.is_finite() || !pressure.is_finite() {
+        return None;
+    }
+    Some(SaiPoint::with_pressure((x, y), pressure as f32, corner))
+}
+
+/// Validates and parses an array of `SaiPoint` nodes from command JSON parameters.
+pub fn parse_sai_points(p: &Value, cmd: &str) -> std::result::Result<Vec<SaiPoint>, String> {
+    let raw = p.get("points").and_then(Value::as_array).ok_or_else(|| format!("{cmd}: `points` must be an array"))?;
+    if !(2..=4096).contains(&raw.len()) {
+        return Err(format!("{cmd}: `points` must contain 2..=4096 nodes"));
+    }
+    let mut points = Vec::with_capacity(raw.len());
+    for item in raw {
+        points.push(parse_sai_point(item).ok_or_else(|| format!("{cmd}: every point needs finite `x`, `y` and `pressure`"))?);
+    }
+    Ok(points)
+}
+
+/// Result of building a live vector curve layer in the engine.
+#[derive(Clone, Debug)]
+pub struct VectorCurveCommandOutput {
+    pub name: String,
+    pub path: Path,
+    pub live_stroke: LiveVectorStroke,
+}
+
+/// Core command handler for `shape.vectorCurve.create`.
+pub fn build_vector_curve_layer(p: &Value) -> std::result::Result<VectorCurveCommandOutput, String> {
+    const CMD: &str = "shape.vectorCurve.create";
+    let points = parse_sai_points(p, CMD)?;
+
+    let width = p.get("width").and_then(Value::as_f64).unwrap_or(6.0);
+    if !(0.01..=1.0e5).contains(&width) || !width.is_finite() {
+        return Err(format!("{CMD}: `width` must be between 0.01 and 100000 px"));
+    }
+
+    let min_ratio = p.get("minRatio").and_then(Value::as_f64).unwrap_or(0.05).clamp(0.0, 1.0);
+    let tapered = p.get("tapered").and_then(Value::as_bool).unwrap_or(true);
+    let closed = p.get("closed").and_then(Value::as_bool).unwrap_or(false);
+    let tension = p.get("tension").and_then(Value::as_f64).unwrap_or(SAI_DEFAULT_TENSION).clamp(0.0, 1.0);
+
+    let live_stroke = LiveVectorStroke { nodes: points, base_width: width, min_ratio, tapered, closed, tension };
+
+    let path = live_stroke.rebuild_path();
+    if path.is_empty() {
+        return Err(format!("{CMD}: the points produce no drawable path"));
+    }
+
+    let name = p.get("name").and_then(Value::as_str).unwrap_or("Linework").to_string();
+
+    Ok(VectorCurveCommandOutput { name, path, live_stroke })
+}
+
+/// Command handler for `shape.vectorCurve.updateNode`:
+/// Non-destructively updates a node's pressure, position, or corner state on an existing
+/// `LiveVectorStroke` and regenerates the smooth `Path`.
+pub fn update_vector_curve_node(
+    live: &mut LiveVectorStroke,
+    node_index: usize,
+    new_pos: Option<(f64, f64)>,
+    new_pressure: Option<f32>,
+    toggle_corner: bool,
+) -> std::result::Result<Path, String> {
+    let node = live.nodes.get_mut(node_index).ok_or_else(|| format!("shape.vectorCurve.updateNode: node index {node_index} out of bounds"))?;
+
+    if let Some((x, y)) = new_pos
+        && x.is_finite()
+        && y.is_finite()
+    {
+        node.p = (x, y);
+    }
+    if let Some(pressure) = new_pressure
+        && pressure.is_finite()
+    {
+        node.pressure = pressure.clamp(0.0, 2.0);
+    }
+    if toggle_corner {
+        node.corner = !node.corner;
+    }
+
+    let path = live.rebuild_path();
+    if path.is_empty() {
+        return Err("shape.vectorCurve.updateNode: updated parameters produced an empty path".into());
+    }
+    Ok(path)
+}
+
+/// Command handler for `shape.vectorCurve.insertNode` (`Ctrl + Click` on a curve segment).
+/// Projects `(x, y)` onto the closest cubic Bézier segment of `live`, inserts a new `SaiPoint`
+/// with interpolated pressure `P(t)`, and rebuilds the `Path`.
+pub fn insert_vector_curve_node_at(live: &mut LiveVectorStroke, x: f64, y: f64, max_dist_px: f64) -> std::result::Result<(usize, Path), String> {
+    let idx = live.insert_node_at_pos((x, y), max_dist_px).ok_or_else(|| "shape.vectorCurve.insertNode: no curve segment within hit radius".to_string())?;
+    let path = live.rebuild_path();
+    Ok((idx, path))
+}
+
+/// Serializes `LiveVectorStroke` into the engine's JSON response format.
+pub fn live_stroke_to_json(id: u64, name: &str, live: &LiveVectorStroke) -> Value {
+    let nodes: Vec<Value> = live
+        .nodes
+        .iter()
+        .map(|pt| {
+            json!({
+                "x": pt.p.0,
+                "y": pt.p.1,
+                "pressure": pt.pressure,
+                "corner": pt.corner,
+            })
+        })
+        .collect();
+
+    json!({
+        "id": id,
+        "name": name,
+        "command": "shape.vectorCurve.create",
+        "baseWidth": live.base_width,
+        "minRatio": live.min_ratio,
+        "tapered": live.tapered,
+        "closed": live.closed,
+        "tension": live.tension,
+        "nodes": nodes,
+    })
+}
+
+fn vector_curve_create(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "shape.vectorCurve.create";
+    let output = build_vector_curve_layer(p).map_err(|e| bad(CMD, e))?;
+    let append_to_active = p.get("appendToActive").and_then(Value::as_bool).unwrap_or(false);
+
+    // If `appendToActive` is true and the currently active layer is already a SAI Linework layer,
+    // append the stroke directly to that Linework layer instead of spawning a new layer!
+    if append_to_active
+        && let Some(active_id) = s.active().and_then(|st| st.active_layer)
+        && let Some(existing_lw) = s.active().and_then(|st| st.doc.layer(active_id)).and_then(get_live_linework)
+    {
+        let mut lw = existing_lw;
+        lw.strokes.push(output.live_stroke.clone());
+        let combined_path = lw.rebuild_path();
+        if !combined_path.is_empty() {
+            let fg = s.tools.foreground;
+            let fgc = Color::rgba(fg[0], fg[1], fg[2], fg[3]);
+            with_shape(s, active_id, "Add Linework Stroke", |sh, layer| {
+                vector::flatten::validate_shape(&combined_path, None).map_err(|e| bad(CMD, e))?;
+                if sh.fill.is_none() {
+                    sh.fill = Some(Fill::Solid(fgc));
+                }
+                sh.stroke = None;
+                sh.path = combined_path;
+                set_live_linework(layer, &lw);
+                Ok(())
+            })?;
+            let layer_name = s.active().and_then(|st| st.doc.layer(active_id).map(|l| l.name.clone())).unwrap_or(output.name);
+            let mut resp = live_stroke_to_json(active_id.0, &layer_name, &output.live_stroke);
+            resp["strokeCount"] = json!(lw.strokes.len());
+            return Ok(resp);
+        }
+    }
+
+    let fg = s.tools.foreground;
+    let fgc = Color::rgba(fg[0], fg[1], fg[2], fg[3]);
+    let (fill, stroke) = if output.live_stroke.tapered || append_to_active {
+        let fill = match p.get("fill") {
+            Some(v) => parse_fill(v).map_err(|e| bad(CMD, e))?,
+            None => Some(Fill::Solid(fgc)),
+        };
+        (fill, None)
+    } else {
+        let base = ShapeStroke { width: output.live_stroke.base_width as f32, paint: Fill::Solid(fgc), ..Default::default() };
+        let stroke = match p.get("stroke") {
+            Some(v) => parse_stroke(v, Some(base), fgc).map_err(|e| bad(CMD, e))?,
+            None => Some(base),
+        };
+        (None, stroke)
+    };
+    let initial_path = if append_to_active { output.live_stroke.rebuild_outline_path() } else { output.path };
+    vector::flatten::validate_shape(&initial_path, stroke.as_ref()).map_err(|e| bad(CMD, e))?;
+
+    let name = output.name;
+    let mut sh = ShapeLayer { path: initial_path, fill, stroke, live: None, ..Default::default() };
+
+    let live_stroke_clone = output.live_stroke.clone();
+    let id = s.edit("New Vector Curve", |doc, active| {
+        refresh_shape(doc, &mut sh);
+        let name = doc.next_layer_name(&name);
+        let mut layer = Layer::new(name, LayerContent::Shape(sh));
+        let lw = LiveLinework::new(vec![live_stroke_clone]);
+        set_live_linework(&mut layer, &lw);
+        let id = doc.insert_new(*active, layer);
+        *active = Some(id);
+        Ok(id)
+    })?;
+
+    Ok(live_stroke_to_json(id.0, &name, &output.live_stroke))
+}
+
+fn vector_curve_update_node(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "shape.vectorCurve.updateNode";
+    let id = layer_id(s, p)?;
+    let stroke_idx_opt = p.get("strokeIndex").and_then(Value::as_u64).map(|v| v as usize);
+    let delete_node = p.get("deleteNode").and_then(Value::as_bool).unwrap_or(false);
+    let new_base_width = p.get("baseWidth").and_then(Value::as_f64);
+    let idx = p.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+    let new_pos = if let Some(pos) = p.get("pos").and_then(Value::as_array) {
+        if pos.len() >= 2 {
+            let x = pos[0].as_f64().ok_or_else(|| bad(CMD, "invalid pos.x"))?;
+            let y = pos[1].as_f64().ok_or_else(|| bad(CMD, "invalid pos.y"))?;
+            Some((x, y))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let new_pressure = p.get("pressure").and_then(Value::as_f64).map(|v| v as f32);
+    let toggle_corner = p.get("toggleCorner").and_then(Value::as_bool).unwrap_or(false);
+
+    let updated_live = with_shape(s, id, "Update Vector Curve Node", |sh, layer| {
+        let mut lw = get_live_linework(layer).ok_or_else(|| bad(CMD, "layer has no live vector curve data"))?;
+        if lw.strokes.is_empty() {
+            return Err(bad(CMD, "linework layer has no strokes"));
+        }
+        let s_idx = stroke_idx_opt.unwrap_or(lw.strokes.len() - 1);
+        let multi = lw.strokes.len() > 1 || stroke_idx_opt.is_some() || sh.stroke.is_none();
+        let stroke = lw.strokes.get_mut(s_idx).ok_or_else(|| bad(CMD, format!("strokeIndex {s_idx} out of bounds")))?;
+
+        if let Some(bw) = new_base_width
+            && bw.is_finite()
+        {
+            stroke.base_width = bw.clamp(0.1, 100_000.0);
+        }
+
+        if delete_node {
+            if stroke.nodes.len() > 2 && idx < stroke.nodes.len() {
+                stroke.nodes.remove(idx);
+            }
+        } else if p.get("index").is_some() {
+            let _ = update_vector_curve_node(stroke, idx, new_pos, new_pressure, toggle_corner).map_err(|e| bad(CMD, e))?;
+        }
+
+        let updated = stroke.clone();
+        let path = if multi { lw.rebuild_path() } else { updated.rebuild_path() };
+        vector::flatten::validate_shape(&path, sh.stroke.as_ref()).map_err(|e| bad(CMD, e))?;
+        sh.path = path;
+        set_live_linework(layer, &lw);
+        Ok(updated)
+    })?;
+
+    let name = s.active().and_then(|st| st.doc.layer(id).map(|l| l.name.clone())).unwrap_or_default();
+    Ok(live_stroke_to_json(id.0, &name, &updated_live))
+}
+
+fn vector_curve_insert_node(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "shape.vectorCurve.insertNode";
+    let id = layer_id(s, p)?;
+    let stroke_idx_opt = p.get("strokeIndex").and_then(Value::as_u64).map(|v| v as usize);
+    let x = p.get("x").and_then(Value::as_f64).ok_or_else(|| bad(CMD, "missing `x`"))?;
+    let y = p.get("y").and_then(Value::as_f64).ok_or_else(|| bad(CMD, "missing `y`"))?;
+    let max_dist = p.get("maxDist").and_then(Value::as_f64).unwrap_or(20.0);
+
+    let (s_idx, inserted_idx, updated_live) = with_shape(s, id, "Insert Vector Curve Node", |sh, layer| {
+        let mut lw = get_live_linework(layer).ok_or_else(|| bad(CMD, "layer has no live vector curve data"))?;
+        if lw.strokes.is_empty() {
+            return Err(bad(CMD, "linework layer has no strokes"));
+        }
+        let multi = lw.strokes.len() > 1 || stroke_idx_opt.is_some() || sh.stroke.is_none();
+        let (target_s, idx) = if let Some(s_i) = stroke_idx_opt {
+            let stroke = lw.strokes.get_mut(s_i).ok_or_else(|| bad(CMD, format!("strokeIndex {s_i} out of bounds")))?;
+            let (n_i, _) = insert_vector_curve_node_at(stroke, x, y, max_dist).map_err(|e| bad(CMD, e))?;
+            (s_i, n_i)
+        } else if lw.strokes.len() == 1 {
+            let (n_i, _) = insert_vector_curve_node_at(&mut lw.strokes[0], x, y, max_dist).map_err(|e| bad(CMD, e))?;
+            (0, n_i)
+        } else {
+            lw.insert_node_at_pos((x, y), max_dist).ok_or_else(|| bad(CMD, "shape.vectorCurve.insertNode: no curve segment within hit radius"))?
+        };
+        let updated = lw.strokes[target_s].clone();
+        let path = if multi { lw.rebuild_path() } else { updated.rebuild_path() };
+        vector::flatten::validate_shape(&path, sh.stroke.as_ref()).map_err(|e| bad(CMD, e))?;
+        sh.path = path;
+        set_live_linework(layer, &lw);
+        Ok((target_s, idx, updated))
+    })?;
+
+    let name = s.active().and_then(|st| st.doc.layer(id).map(|l| l.name.clone())).unwrap_or_default();
+    let mut resp = live_stroke_to_json(id.0, &name, &updated_live);
+    resp["strokeIndex"] = json!(s_idx);
+    resp["insertedIndex"] = json!(inserted_idx);
+    Ok(resp)
 }
 
 fn shape_edit(s: &mut Session, p: &Value) -> Result<Value> {
@@ -1974,6 +2348,30 @@ pub fn specs() -> Vec<CommandSpec> {
             r##"{"layer":id?,"tolerance":px=0.1} (bakes the path operations into plain combined outlines, traced from the exact coverage; no layer and several shape layers selected: merges them into the top-most first)"##,
             has_layer,
             merge_components
+        ),
+        spec!(
+            "shape.vectorCurve.create",
+            "New Vector Curve",
+            [],
+            r##"{"points":[{"x":x,"y":y,"pressure":0..2=1,"corner":bool=false}],"width":px=6,"minRatio":0..1=0.05,"tapered":bool=true,"closed":bool=false,"tension":0..1=0.65,"name":str?} → {id,name,command,nodes,baseWidth,minRatio,tapered,closed,tension}"##,
+            has_doc,
+            vector_curve_create
+        ),
+        spec!(
+            "shape.vectorCurve.updateNode",
+            "Update Vector Curve Node",
+            [],
+            r##"{"layer":id?,"index":n,"pos":[x,y]?,"pressure":0..2?,"toggleCorner":bool?} → {id,name,command,nodes,baseWidth,minRatio,tapered,closed,tension}"##,
+            has_layer,
+            vector_curve_update_node
+        ),
+        spec!(
+            "shape.vectorCurve.insertNode",
+            "Insert Vector Curve Node",
+            [],
+            r##"{"layer":id?,"x":x,"y":y,"maxDist":px=20} → {id,name,command,nodes,insertedIndex,baseWidth,minRatio,tapered,closed,tension}"##,
+            has_layer,
+            vector_curve_insert_node
         ),
         spec!("select.convertToShape", "Convert to Shape", [], r##"{"tolerance":0.5..10 px=2} → shape.info"##, has_selection, selection_to_shape),
         CommandSpec {

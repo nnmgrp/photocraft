@@ -701,7 +701,17 @@ fn cmd_is_not_the_move_tool_for_selection_hand_zoom_pen_shape_or_type_mask_tools
         let want = (tool == Tool::Hand).then_some(Temporary::ZoomIn);
         assert_eq!(held_tool(h.state(), &h.ctx), want, "{tool:?}");
     }
-    for tool in [Tool::Brush, Tool::Eraser, Tool::Gradient, Tool::CloneStamp, Tool::Eyedropper, Tool::MagneticLasso, Tool::QuickSelection, Tool::Type, Tool::VerticalType] {
+    for tool in [
+        Tool::Brush,
+        Tool::Eraser,
+        Tool::Gradient,
+        Tool::CloneStamp,
+        Tool::Eyedropper,
+        Tool::MagneticLasso,
+        Tool::QuickSelection,
+        Tool::Type,
+        Tool::VerticalType,
+    ] {
         assert!(cmd_moves(tool), "{tool:?}");
     }
 }

@@ -121,6 +121,10 @@ pub fn installed() -> Option<Installed> {
 fn enabled(s: &Session) -> std::result::Result<(), String> {
     let st = s.active().ok_or("no document open")?;
     check_document(&st.doc).map_err(|e| e.to_string())?;
+    #[cfg(test)]
+    if FAKE_CLI.with(|f| f.borrow().is_some()) {
+        return Ok(());
+    }
     if installed().is_none() {
         return Err("Topaz Gigapixel AI is not installed (or set PHOTOCRAFT_GIGAPIXEL to its executable)".into());
     }
@@ -423,11 +427,13 @@ pub fn settings_from_description(text: &str) -> Option<Value> {
     }
     // "key: value" pairs; Redefine's are not the strengths the tool takes, so they're left out.
     let pairs = |part: &str| -> Vec<(String, f64)> {
-        part.split(',').filter_map(|kv| {
-            let (k, v) = kv.split_once(':')?;
-            let v: f64 = v.split_whitespace().next()?.parse().ok()?;
-            v.is_finite().then(|| (k.trim().to_lowercase(), v))
-        }).collect()
+        part.split(',')
+            .filter_map(|kv| {
+                let (k, v) = kv.split_once(':')?;
+                let v: f64 = v.split_whitespace().next()?.parse().ok()?;
+                v.is_finite().then(|| (k.trim().to_lowercase(), v))
+            })
+            .collect()
     };
     let percent = |v: f64| (v.clamp(0.0, 1.0) * 100.0).round();
     if model != "redefine" {
@@ -650,8 +656,11 @@ fn upscale(s: &mut Session, p: &Value) -> Result<Value> {
                 ctx.progress(0.05, &format!("Upscaling with {}", names.join(" and ")));
                 let (cli, input, folder) = (&cli, &input, &folder);
                 let results: Vec<Result<PathBuf>> = std::thread::scope(|scope| {
-                    let runs: Vec<_> =
-                        steps.iter().enumerate().map(|(i, step)| scope.spawn(move || run_cli(cli, &step.params, input, &folder.join(format!("step{}", i + 1)), ctx))).collect();
+                    let runs: Vec<_> = steps
+                        .iter()
+                        .enumerate()
+                        .map(|(i, step)| scope.spawn(move || run_cli(cli, &step.params, input, &folder.join(format!("step{}", i + 1)), ctx)))
+                        .collect();
                     runs.into_iter().map(|h| h.join().unwrap_or_else(|_| Err(EngineError::Other("the Gigapixel run stopped".into())))).collect()
                 });
                 for (i, (step, result)) in steps.iter().zip(results).enumerate() {

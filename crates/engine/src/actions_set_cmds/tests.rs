@@ -105,8 +105,12 @@ fn set_step_replaces_the_values() {
     s.actions.list.push(Action::new("A", vec![layer("Old")]));
     s.execute("actions.setStep", json!({"action": 0, "step": 0, "params": {"name": "New"}})).unwrap();
     assert_eq!(s.actions.list[0].steps, [layer("New")]);
-    for bad in [json!({"action": 0, "step": 1, "params": {}}), json!({"action": 0, "step": 0}), json!({"action": 0, "params": {}}), json!({"action": 0, "step": 0, "params": 3})]
-    {
+    for bad in [
+        json!({"action": 0, "step": 1, "params": {}}),
+        json!({"action": 0, "step": 0}),
+        json!({"action": 0, "params": {}}),
+        json!({"action": 0, "step": 0, "params": 3}),
+    ] {
         assert!(s.execute("actions.setStep", bad.clone()).is_err(), "{bad}");
     }
 }

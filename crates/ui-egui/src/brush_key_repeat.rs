@@ -127,7 +127,8 @@ pub fn settings_button(ui: &mut Ui, r: &mut KeyRepeat) {
     egui::Popup::menu(&button).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
         ui.set_min_width(240.0);
         ui.label(egui::RichText::new(tl!("Holding [ or ] to resize the brush")).strong());
-        widgets::checkbox(ui, &mut r.pause, tl!("Pause before repeating")).on_hover_text(tl!("Wait half a second before the size keeps changing, as typing does"));
+        widgets::checkbox(ui, &mut r.pause, tl!("Pause before repeating"))
+            .on_hover_text(tl!("Wait half a second before the size keeps changing, as typing does"));
         ui.horizontal(|ui| {
             ui.label(tl!("Change every"));
             widgets::value_field(ui, &mut r.interval_ms, MIN_INTERVAL_MS..=MAX_INTERVAL_MS, "ms", 72.0);

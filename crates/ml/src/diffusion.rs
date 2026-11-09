@@ -203,7 +203,10 @@ pub fn model_dir() -> Result<PathBuf, MlError> {
     let ok = |d: &PathBuf| d.join("model.json").is_file() && ["unet.onnx", "unet16.onnx", "unet8.onnx"].iter().any(|u| d.join(u).is_file());
     if let Some(chosen) = std::env::var_os("PHOTOCRAFT_DIFFUSION_MODEL").filter(|v| !v.is_empty()) {
         let chosen = PathBuf::from(chosen);
-        return std::iter::once(chosen.clone()).chain(dirs.iter().map(|d| d.join(&chosen))).find(|p| ok(p)).ok_or_else(|| MlError::Load(format!("PHOTOCRAFT_DIFFUSION_MODEL: no model in {} (looked in {})", chosen.display(), crate::list(&dirs))));
+        return std::iter::once(chosen.clone())
+            .chain(dirs.iter().map(|d| d.join(&chosen)))
+            .find(|p| ok(p))
+            .ok_or_else(|| MlError::Load(format!("PHOTOCRAFT_DIFFUSION_MODEL: no model in {} (looked in {})", chosen.display(), crate::list(&dirs))));
     }
     for name in [XL_FOLDER, DEFAULT_FOLDER] {
         for d in &dirs {
@@ -531,14 +534,16 @@ pub fn fill(
     // Removal: LaMa's fill first, redrawn from `lama_start`.
     let start = match settings.lama_start {
         None => None,
-        Some(_) => match crate::inpaint::fill_with(req, read, &mut |rgb, mask, _| crate::lama::inpaint(rgb, mask).map(|(o, _)| o), ctl, &crate::inpaint::LAMA) {
-            Ok(v) => Some(v),
-            Err(MlError::Cancelled) => return Err(MlError::Cancelled),
-            Err(e) => {
-                log::warn!("[ml] {NAME}: no LaMa fill to start from ({e}); starting from noise");
-                None
+        Some(_) => {
+            match crate::inpaint::fill_with(req, read, &mut |rgb, mask, _| crate::lama::inpaint(rgb, mask).map(|(o, _)| o), ctl, &crate::inpaint::LAMA) {
+                Ok(v) => Some(v),
+                Err(MlError::Cancelled) => return Err(MlError::Cancelled),
+                Err(e) => {
+                    log::warn!("[ml] {NAME}: no LaMa fill to start from ({e}); starting from noise");
+                    None
+                }
             }
-        },
+        }
     };
     // LaMa's graphics memory is SDXL's: with LaMa left loaded from a 1024 fill, an SDXL fill
     // on an 8 GB GPU took 310 s instead of about 160. LaMa loads again in seconds.
@@ -806,7 +811,7 @@ mod native {
             let mut builder = match device {
                 Device::DirectMl => directml(builder).map_err(|e| fail(&e))?,
                 Device::Cpu => builder.with_execution_providers([ort::ep::CPU::default().build().error_on_failure()]).map_err(|e| fail(&e))?,
-            Device::Google => return Err(fail(&"not a device local models run on")),
+                Device::Google => return Err(fail(&"not a device local models run on")),
             };
             let session = builder.commit_from_file(file).map_err(|e| fail(&e))?;
             let outputs: Vec<String> = session.outputs().iter().map(|o| o.name().to_string()).collect();
@@ -875,7 +880,8 @@ mod native {
                 return Ok((run_net(&mut self.text, ort::inputs!["input_ids" => t])?, Vec::new()));
             }
             // SDXL: the hidden states and the pooled embedding.
-            let pooled_name = self.text.outputs.get(1).cloned().ok_or_else(|| MlError::Inference("the text encoder has no pooled output (is it an SDXL export?)".into()))?;
+            let pooled_name =
+                self.text.outputs.get(1).cloned().ok_or_else(|| MlError::Inference("the text encoder has no pooled output (is it an SDXL export?)".into()))?;
             let outputs = self.text.session.run(ort::inputs!["input_ids" => t]).map_err(fail)?;
             let read = |name: &str| -> Result<Vec<f32>, MlError> {
                 let value = outputs.get(name).ok_or_else(|| MlError::Inference("the text encoder gave no output".into()))?;
@@ -911,7 +917,10 @@ mod native {
                     let ppart = pooled.get(i * p_len..(i + 1) * p_len).ok_or_else(|| MlError::Inference("bad pooled text input".into()))?;
                     let pe = Tensor::from_array(([1usize, p_len], ppart.to_vec().into_boxed_slice())).map_err(fail)?;
                     let ids = Tensor::from_array(([1usize, 6], vec![px, px, 0.0, 0.0, px, px].into_boxed_slice())).map_err(fail)?;
-                    run_net(&mut self.unet, ort::inputs!["sample" => s, "timestep" => ts, "encoder_hidden_states" => h, "text_embeds" => pe, "time_ids" => ids])?
+                    run_net(
+                        &mut self.unet,
+                        ort::inputs!["sample" => s, "timestep" => ts, "encoder_hidden_states" => h, "text_embeds" => pe, "time_ids" => ids],
+                    )?
                 } else {
                     run_net(&mut self.unet, ort::inputs!["sample" => s, "timestep" => ts, "encoder_hidden_states" => h])?
                 };
@@ -1144,7 +1153,8 @@ mod tests {
         let (rgb, mut mask) = (vec![0.5f32; 3 * n], vec![0f32; n]);
         mask[..n / 2].fill(1.0);
         let s = Settings { steps: 5, ..Settings::default() };
-        let mut f = Fake { target: 0.5 * m.scaling, unet_calls: 0, timesteps: Vec::new(), guided: Vec::new(), cum: cum.clone(), pooled: 6, decoded: Vec::new() };
+        let mut f =
+            Fake { target: 0.5 * m.scaling, unet_calls: 0, timesteps: Vec::new(), guided: Vec::new(), cum: cum.clone(), pooled: 6, decoded: Vec::new() };
         let out = run(&mut f, &m, &s, &rgb, &mask, None, side, &|_| false).unwrap();
         assert_eq!(f.unet_calls, 5);
         assert!(out.iter().all(|v| v.is_finite()));

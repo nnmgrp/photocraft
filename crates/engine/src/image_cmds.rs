@@ -73,6 +73,15 @@ pub(crate) fn bake_procedural_layers(layers: &mut [Layer]) {
         let baked = match &mut l.content {
             LayerContent::Screentone(s) => {
                 let format = s.surface.format();
+                if s.surface.tile_count() == 0 {
+                    let bounds = if let Some(m) = &l.mask {
+                        let mb = m.surface.content_bounds();
+                        if !mb.is_empty() { mb } else { Rect::new(0, 0, 1024, 1024) }
+                    } else {
+                        Rect::new(0, 0, 1024, 1024)
+                    };
+                    let _ = photocraft_algo::screentone::render_screentone_to_surface(&mut s.surface, bounds, &s.spec, s.origin);
+                }
                 Some(std::mem::replace(&mut s.surface, Surface::new(format)))
             }
             LayerContent::Group(g) => {
@@ -322,6 +331,7 @@ pub(crate) fn resample_doc(doc: &mut Document, nw: u32, nh: u32, filter: Resampl
     }
     // Resampling changes the pixel geometry the tone's parameters describe; bake the rendered
     // sheet so the cached appearance and the document stay in step.
+    crate::screentone_cmds::ensure_doc_screentones_baked(doc);
     bake_procedural_layers(&mut doc.layers);
     // Content that reaches the canvas edge keeps it: a Background stays opaque to the border.
     let canvas = Rect::from_xywh(0, 0, ow, oh);
@@ -898,6 +908,7 @@ pub(crate) fn change_depth(doc: &mut Document, depth: SampleType) {
     // pixels cross the 32-bit boundary, keep the encoded pixels rather than a spec that would
     // re-render them differently.
     if crosses {
+        crate::screentone_cmds::ensure_doc_screentones_baked(doc);
         crate::image_cmds::bake_procedural_layers(&mut doc.layers);
     }
     if crosses && !to_linear {

@@ -4517,6 +4517,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                 Tool::MagneticLasso if response.double_clicked() || response.triple_clicked() => crate::magnetic_lasso_ui::close(app, mods.alt),
                 // The first click placed (or grabbed) the point; the second toggles it.
                 Tool::CurvaturePen if response.double_clicked() => crate::vector_ui::curvature_toggle(app, d[0], d[1]),
+                Tool::VectorCurve if response.double_clicked() => crate::vector_ui::vector_curve_commit(app),
                 // Double-clicking a guide opens Preferences › Guides, Grid & Slices, as in Photoshop.
                 Tool::Move if response.double_clicked() && crate::rulers::guide_at(app, d[0], d[1]).is_some() => {
                     if let Err(e) = crate::menus::invoke(app, &ctx, "edit.preferences.guidesGridAndSlices", json!({})) {
@@ -4737,10 +4738,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                 let toward = xf.to_screen((d[0] + k[0] * 16.0) as f32, (d[1] + k[1] * 16.0) as f32) - p;
                 crate::crop_ui::draw_turn_cursor(&ctx, p, toward);
             }
-        } else if let Some(c) = response
-            .hover_pos()
-            .and_then(|p| crate::screentone_gizmo::hover_cursor(app, &xf, xf.to_doc(p)))
-        {
+        } else if let Some(c) = response.hover_pos().and_then(|p| crate::screentone_gizmo::hover_cursor(app, &xf, xf.to_doc(p))) {
             ui.ctx().set_cursor_icon(c);
         } else if let Some(p) = response.hover_pos()
             && let Some(c) = selection_cursor(app, tool, xf.to_doc(p), crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers)))
@@ -4887,7 +4885,13 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                 }
                 // The pen tools: their own icon with its nib on the point, or the crosshair for
                 // precise Other Cursors (#4639).
-                Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen | Tool::AddAnchorPoint | Tool::DeleteAnchorPoint | Tool::ConvertPoint => {
+                Tool::Pen
+                | Tool::FreeformPen
+                | Tool::CurvaturePen
+                | Tool::AddAnchorPoint
+                | Tool::DeleteAnchorPoint
+                | Tool::ConvertPoint
+                | Tool::VectorCurve => {
                     if precise_other_cursor(app) {
                         egui::CursorIcon::Crosshair
                     } else {
@@ -4904,7 +4908,9 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                 // layer under it is marked by the hover outline, not by a different cursor. With
                 // ⌥ a drag duplicates, and the arrow gets Photoshop's duplicate badge, so ⌥ and
                 // ⌘ (the temporary Move tool) don't look alike.
-                Tool::Move => crate::tool_cursor::move_arrow(ui.ctx(), p, move_duplicates(app, crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers)))),
+                Tool::Move => {
+                    crate::tool_cursor::move_arrow(ui.ctx(), p, move_duplicates(app, crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers))))
+                }
                 // Photoshop's tool pointers for the lassos, the wand, the crops, the slice knife
                 // and the ruler (Other Cursors: Standard), where every one was the crosshair.
                 t if !precise_other_cursor(app) && standard_icon_cursor(t).is_some() => {
@@ -5936,6 +5942,7 @@ fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &View
             trail.draw(painter, doc_rect, xf.flip, col);
         }
         t if crate::vector_ui::is_shape_tool(t) => crate::vector_ui::draw_shape_preview(app, painter, xf, t, d.start, last, d.live),
+        Tool::Balloon => crate::vector_ui::draw_balloon_preview(app, painter, xf, d.start, last),
         Tool::SingleRowMarquee | Tool::SingleColumnMarquee => {
             // Mapped corner by corner like the other marquees, so a rotated view shows the line
             // where the release commits it (#2512).
@@ -6160,6 +6167,8 @@ fn tool_move(app: &mut PhotocraftApp, x: f64, y: f64, pressure: f32, mods: egui:
         crate::vector_ui::pen_move(app, x, y, mods.shift);
     } else if tool == Tool::CurvaturePen {
         crate::vector_ui::curvature_move(app, x, y);
+    } else if tool == Tool::VectorCurve {
+        crate::vector_ui::vector_curve_move(app, x, y);
     }
     let zoom = app.point_zoom();
     if let Some(d) = app.drag.as_mut().filter(|d| d.reposition) {
@@ -6364,7 +6373,8 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
                 // A locked layer under the pointer (the Background) can't move. Photoshop draws
                 // the layer marquee instead of reporting the lock (#4058). Probe without
                 // selecting so a locked hit doesn't become the selection first.
-                let probe = app.run("layer.pickAt", json!({"x": x, "y": y, "minOpacity": app.ui.tool_options.move_pick_opacity, "target": target, "select": false}));
+                let probe =
+                    app.run("layer.pickAt", json!({"x": x, "y": y, "minOpacity": app.ui.tool_options.move_pick_opacity, "target": target, "select": false}));
                 let locked_hit = probe.as_ref().ok().and_then(|v| v["layer"].as_u64()).is_some_and(|id| {
                     app.session.active().is_some_and(|st| {
                         let id = photocraft_doc::LayerId(id);
@@ -6376,12 +6386,14 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
                     if locked_hit {
                         // A click still selects the locked layer, as in Photoshop; a drag's
                         // marquee then replaces that selection on release.
-                        let _ = app.run("layer.pickAt", json!({"x": x, "y": y, "minOpacity": app.ui.tool_options.move_pick_opacity, "target": target, "mode": mode}));
+                        let _ = app
+                            .run("layer.pickAt", json!({"x": x, "y": y, "minOpacity": app.ui.tool_options.move_pick_opacity, "target": target, "mode": mode}));
                     }
                     crate::move_box::begin(app, [x, y], mods.shift);
                     return;
                 }
-                let picked = app.run("layer.pickAt", json!({"x": x, "y": y, "minOpacity": app.ui.tool_options.move_pick_opacity, "target": target, "mode": mode}));
+                let picked =
+                    app.run("layer.pickAt", json!({"x": x, "y": y, "minOpacity": app.ui.tool_options.move_pick_opacity, "target": target, "mode": mode}));
                 // No pixels there at all (an empty spot, or off the canvas): drag a marquee that
                 // selects the layers it touches instead (move_box.rs).
                 if picked.is_ok_and(|v| v["layer"].is_null()) && crate::move_box::empty_at(app, [x, y]) {
@@ -6500,6 +6512,10 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
                     crate::vector_ui::curvature_down(app, x, y);
                     return;
                 }
+                Tool::VectorCurve => {
+                    crate::vector_ui::vector_curve_down(app, x, y, mods.ctrl || mods.command, mods.alt, mods.shift, false, app.point_zoom() as f64);
+                    return;
+                }
                 Tool::CloneStamp | Tool::Healing if mods.alt => {
                     crate::retouch_ui::set_source(app, x, y);
                     return;
@@ -6612,6 +6628,8 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
                 crate::vector_ui::pen_up(app);
             } else if tool == Tool::CurvaturePen {
                 crate::vector_ui::curvature_up(app);
+            } else if tool == Tool::VectorCurve {
+                crate::vector_ui::vector_curve_up(app, mods.alt);
             }
             let zoom = app.point_zoom();
             let Some(mut d) = app.drag.take() else { return };
@@ -6953,6 +6971,7 @@ pub(crate) fn finish_gesture(app: &mut PhotocraftApp, d: Drag) {
     }
     match d.tool {
         Tool::ObjectSelection => crate::retouch_ui::finish_object_selection(app, d.start, [end[0], end[1]], d.modifiers),
+        Tool::Balloon => crate::vector_ui::finish_balloon(app, d.start, [end[0], end[1]]),
         Tool::FreeformPen => crate::vector_ui::freeform_finish(app, &d.points, d.lasso.as_ref().map_or(&[], |l| l.straight())),
         // Photoshop: a click without dragging opens Create Rectangle / Ellipse / … instead.
         t if crate::vector_ui::is_shape_tool(t)

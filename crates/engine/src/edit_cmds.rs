@@ -597,6 +597,7 @@ fn merge_visible(s: &mut Session) -> Result<Value> {
         // Composite of visible layers only (hidden ones stay where they are).
         let mut solo = doc.clone();
         solo.layers.retain(|l| l.visible);
+        crate::screentone_cmds::ensure_doc_screentones_baked(&mut solo);
         let fmt = doc.pixel_format();
         let fmt = if is_background { fmt } else { PixelFormat::new(fmt.mode, fmt.sample, true) };
         let mut merged = Layer::raster(base.name.clone(), fmt);

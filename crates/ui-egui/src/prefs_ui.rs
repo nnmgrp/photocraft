@@ -3300,8 +3300,8 @@ mod tests {
                 }
                 let Some(obj) = v.get(sec).and_then(Value::as_object) else { continue };
                 for k in obj.keys() {
-                    if sec == "interface" && k == "favoriteThemes" {
-                        continue; // Rendered as star controls beside the theme choices.
+                    if (sec == "interface" && k == "favoriteThemes") || (sec == "export" && k == "lastExportDir") {
+                        continue; // favoriteThemes: star controls; lastExportDir: internal remembered folder path.
                     }
                     let mut labels = vec![humanize(k)];
                     labels.extend(prefs::choices(&format!("{sec}.{k}")).into_iter().flatten().map(|c| choice_label(c)));
@@ -3857,13 +3857,13 @@ mod tests {
         app.session.tools.brush.size = 77.0;
         app.session.tools.brush_changed();
         crate::last_brush::persist(&mut app, &ctx);
-                // The Brush's tip becomes a big sampled one, then the Eraser takes over that brush.
+        // The Brush's tip becomes a big sampled one, then the Eraser takes over that brush.
         app.session.tools.brush.tip = TipShape::Sampled(GrayTile::from_fn(400, 300, |x, y| ((x * y) % 7) as f32 / 7.0));
         app.session.tools.brush_changed();
         app.ui.tool = Tool::Eraser;
         crate::paint_mouse::sync_tool_brush(&mut app);
         crate::last_brush::persist(&mut app, &ctx);
-                tick(&mut app, &ctx);
+        tick(&mut app, &ctx);
         let saved = stored(&store);
         assert_eq!(saved["lastBrush"]["brush"]["size"], json!(77.0), "the big tip is not remembered yet");
         assert_ne!(saved["toolBrushes"]["active"], json!("Eraser"), "{saved}");
@@ -3877,7 +3877,7 @@ mod tests {
         app.session.tools.brush.size = 33.0;
         app.session.tools.brush_changed();
         crate::last_brush::persist(&mut app, &ctx);
-                tick(&mut app, &ctx);
+        tick(&mut app, &ctx);
         let saved = stored(&store);
         assert_eq!(saved["toolBrushes"]["active"], json!("Eraser"), "{saved}");
         assert_eq!(saved["lastBrush"]["brush"]["size"], json!(33.0));

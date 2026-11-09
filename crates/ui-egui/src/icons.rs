@@ -57,7 +57,8 @@ pub fn cursor(ctx: &egui::Context, name: &str, p: egui::Pos2, hot: Vec2, size: f
     let rect = Rect::from_min_size(p - hot * size, Vec2::splat(size));
     let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("pc-icon-cursor")));
     // Flipped left to right by its texture coordinates.
-    let uv = if mirrored { Rect::from_min_max(egui::pos2(1.0, 0.0), egui::pos2(0.0, 1.0)) } else { Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)) };
+    let uv =
+        if mirrored { Rect::from_min_max(egui::pos2(1.0, 0.0), egui::pos2(0.0, 1.0)) } else { Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)) };
     let paint = |tint: Color32, r: Rect| {
         if let Some(tex) = image(name, size, tint).load_for_size(ctx, r.size()).ok().and_then(|t| t.texture_id()) {
             painter.image(tex, r, uv, tint);
@@ -170,6 +171,8 @@ pub fn tool_icon(t: Tool) -> &'static str {
         Tool::Polygon => "pentagon",
         Tool::Line => "slash",
         Tool::CustomShape => "cloud",
+        Tool::Balloon => "message-square",
+        Tool::VectorCurve => "pen-curvature",
     }
 }
 

@@ -338,6 +338,7 @@ fn remap_pixels(doc: &mut Document, map: &dyn Fn(i32, i32) -> (i32, i32)) {
 pub(crate) fn turn_canvas(doc: &mut Document, turn: Turn) {
     // A turn changes the tone's own geometry (angles, spacings, origin phase); bake the rendered
     // sheet first so the pixels turn with the canvas instead of keeping their old orientation.
+    crate::screentone_cmds::ensure_doc_screentones_baked(doc);
     crate::image_cmds::bake_procedural_layers(&mut doc.layers);
     let (w, h) = (doc.size.width as i32, doc.size.height as i32);
     let map = turn.pixel_map(w, h);

@@ -14,8 +14,8 @@
 //!   interactive scrubby sliders per row.
 
 use egui::{Color32, Id, Modifiers, Pos2, Sense, Stroke, pos2, vec2};
-use photocraft_doc::effects::Effect;
 use photocraft_doc::LayerId;
+use photocraft_doc::effects::Effect;
 use serde_json::{Value, json};
 
 use crate::theme::Tokens;
@@ -53,27 +53,15 @@ impl FxParamDesc {
 }
 
 fn fmt_pixels(val: f32, unit: &'static str) -> String {
-    if val.fract().abs() < 1e-3 {
-        format!("{:.0} {unit}", val.round())
-    } else {
-        format!("{:.1} {unit}", val)
-    }
+    if val.fract().abs() < 1e-3 { format!("{:.0} {unit}", val.round()) } else { format!("{:.1} {unit}", val) }
 }
 
 fn fmt_percent(val: f32, unit: &'static str) -> String {
-    if val.fract().abs() < 1e-3 {
-        format!("{:.0}{unit}", val.round())
-    } else {
-        format!("{:.1}{unit}", val)
-    }
+    if val.fract().abs() < 1e-3 { format!("{:.0}{unit}", val.round()) } else { format!("{:.1}{unit}", val) }
 }
 
 fn fmt_degrees(val: f32, unit: &'static str) -> String {
-    if val.fract().abs() < 1e-3 {
-        format!("{:.0}{unit}", val.round())
-    } else {
-        format!("{:.1}{unit}", val)
-    }
+    if val.fract().abs() < 1e-3 { format!("{:.0}{unit}", val.round()) } else { format!("{:.1}{unit}", val) }
 }
 
 /// Returns the primary numeric parameter for an effect kind (e.g. Stroke -> Size).
@@ -762,18 +750,13 @@ pub fn all_numeric_params(effect: &Effect) -> Vec<FxParamDesc> {
 }
 
 /// The state of the mouse scrubby slider gesture.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub enum ScrubGestureState {
     /// No gesture active.
+    #[default]
     Idle,
     /// Mouse pressed down, awaiting disambiguation threshold.
-    Pending {
-        layer_id: LayerId,
-        effect_idx: usize,
-        start_pos: Pos2,
-        initial_val: f32,
-        param_key: &'static str,
-    },
+    Pending { layer_id: LayerId, effect_idx: usize, start_pos: Pos2, initial_val: f32, param_key: &'static str },
     /// Scrubbing active: dragging horizontally adjusts the parameter.
     Scrubbing {
         layer_id: LayerId,
@@ -787,12 +770,6 @@ pub enum ScrubGestureState {
     },
     /// Disambiguated as vertical Drag-and-Drop layer transfer.
     DelegatedToDnD,
-}
-
-impl Default for ScrubGestureState {
-    fn default() -> Self {
-        Self::Idle
-    }
 }
 
 /// Key in egui Context temp storage for the active scrub gesture.
@@ -917,25 +894,13 @@ pub fn handle_effect_drag(
     // 1. Check for cancellation via Escape
     if escape_pressed {
         match state {
-            ScrubGestureState::Scrubbing {
-                layer_id: s_layer,
-                effect_idx: s_idx,
-                initial_val,
-                param: s_param,
-                coalesce_token,
-                ..
-            } => {
+            ScrubGestureState::Scrubbing { layer_id: s_layer, effect_idx: s_idx, initial_val, param: s_param, coalesce_token, .. } => {
                 if s_layer == layer_id && s_idx == effect_idx && s_param.key == param.key {
                     out.action = Some(make_replace_action(layer_id, effect_idx, all_effects, param.key, initial_val, coalesce_token));
                     ctx.data_mut(|d| d.insert_temp(scrub_state_id(), ScrubGestureState::Idle));
                 }
             }
-            ScrubGestureState::Pending {
-                layer_id: p_layer,
-                effect_idx: p_idx,
-                param_key: p_key,
-                ..
-            } => {
+            ScrubGestureState::Pending { layer_id: p_layer, effect_idx: p_idx, param_key: p_key, .. } => {
                 if p_layer == layer_id && p_idx == effect_idx && p_key == param.key {
                     ctx.data_mut(|d| d.insert_temp(scrub_state_id(), ScrubGestureState::Idle));
                 }
@@ -951,25 +916,13 @@ pub fn handle_effect_drag(
     // 2. Handle release (mouseup)
     if released {
         match state {
-            ScrubGestureState::Scrubbing {
-                layer_id: s_layer,
-                effect_idx: s_idx,
-                current_val,
-                param: s_param,
-                coalesce_token,
-                ..
-            } => {
+            ScrubGestureState::Scrubbing { layer_id: s_layer, effect_idx: s_idx, current_val, param: s_param, coalesce_token, .. } => {
                 if s_layer == layer_id && s_idx == effect_idx && s_param.key == param.key {
                     out.action = Some(make_replace_action(layer_id, effect_idx, all_effects, param.key, current_val, coalesce_token));
                     ctx.data_mut(|d| d.insert_temp(scrub_state_id(), ScrubGestureState::Idle));
                 }
             }
-            ScrubGestureState::Pending {
-                layer_id: p_layer,
-                effect_idx: p_idx,
-                param_key: p_key,
-                ..
-            } => {
+            ScrubGestureState::Pending { layer_id: p_layer, effect_idx: p_idx, param_key: p_key, .. } => {
                 if p_layer == layer_id && p_idx == effect_idx && p_key == param.key {
                     ctx.data_mut(|d| d.insert_temp(scrub_state_id(), ScrubGestureState::Idle));
                 }
@@ -989,30 +942,18 @@ pub fn handle_effect_drag(
     }
 
     // 3. Initiate gesture on press
-    if resp.drag_started() || (resp.is_pointer_button_down_on() && matches!(state, ScrubGestureState::Idle)) {
-        if matches!(state, ScrubGestureState::Idle) {
-            let start_pos = ctx.input(|i| i.pointer.press_origin()).or(pointer_pos).unwrap_or_default();
-            let initial_val = all_effects.get(effect_idx).map_or(0.0, |fx| (param.getter)(fx));
-            state = ScrubGestureState::Pending {
-                layer_id,
-                effect_idx,
-                start_pos,
-                initial_val,
-                param_key: param.key,
-            };
-            ctx.data_mut(|d| d.insert_temp(scrub_state_id(), state.clone()));
-        }
+    if (resp.is_pointer_button_down_on() || resp.drag_started()) && matches!(state, ScrubGestureState::Idle) {
+        let start_pos = ctx.input(|i| i.pointer.press_origin()).or(pointer_pos).unwrap_or_default();
+        let initial_val = all_effects.get(effect_idx).map_or(0.0, |fx| (param.getter)(fx));
+        state = ScrubGestureState::Pending { layer_id, effect_idx, start_pos, initial_val, param_key: param.key };
+        ctx.data_mut(|d| d.insert_temp(scrub_state_id(), state.clone()));
     }
 
     // 4. Update gesture state machine while pointer is held down
     match state {
-        ScrubGestureState::Pending {
-            layer_id: p_layer,
-            effect_idx: p_idx,
-            start_pos,
-            initial_val,
-            param_key: p_key,
-        } if p_layer == layer_id && p_idx == effect_idx && p_key == param.key => {
+        ScrubGestureState::Pending { layer_id: p_layer, effect_idx: p_idx, start_pos, initial_val, param_key: p_key }
+            if p_layer == layer_id && p_idx == effect_idx && p_key == param.key =>
+        {
             if let Some(pos) = pointer_pos {
                 let delta = pos - start_pos;
                 let dist = delta.length();
@@ -1079,16 +1020,7 @@ pub fn handle_effect_drag(
             ctx.data_mut(|d| {
                 d.insert_temp(
                     scrub_state_id(),
-                    ScrubGestureState::Scrubbing {
-                        layer_id,
-                        effect_idx,
-                        start_pos,
-                        initial_val,
-                        current_val,
-                        param,
-                        coalesce_token,
-                        accumulator,
-                    },
+                    ScrubGestureState::Scrubbing { layer_id, effect_idx, start_pos, initial_val, current_val, param, coalesce_token, accumulator },
                 );
             });
             ctx.request_repaint();
@@ -1104,12 +1036,9 @@ pub fn draw_scrub_badge(ctx: &egui::Context, cursor: Pos2, label: &str, formatte
     let t = Tokens::get(ctx);
     let font = egui::FontId::proportional(11.5);
 
-    egui::Area::new(Id::new("pc-fx-scrub-tooltip"))
-        .order(egui::Order::Tooltip)
-        .fixed_pos(cursor + vec2(16.0, 18.0))
-        .interactable(false)
-        .constrain(true)
-        .show(ctx, |ui| {
+    egui::Area::new(Id::new("pc-fx-scrub-tooltip")).order(egui::Order::Tooltip).fixed_pos(cursor + vec2(16.0, 18.0)).interactable(false).constrain(true).show(
+        ctx,
+        |ui| {
             egui::Frame::new()
                 .fill(t.card)
                 .stroke(Stroke::new(1.0, t.card_border))
@@ -1117,29 +1046,17 @@ pub fn draw_scrub_badge(ctx: &egui::Context, cursor: Pos2, label: &str, formatte
                 .inner_margin(egui::Margin::symmetric(8, 4))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        ui.add(egui::Label::new(
-                            egui::RichText::new(format!("{}:", tl!(label)))
-                                .font(font.clone())
-                                .color(t.text_dim),
-                        ));
+                        ui.add(egui::Label::new(egui::RichText::new(format!("{}:", tl!(label))).font(font.clone()).color(t.text_dim)));
                         ui.add_space(4.0);
-                        ui.add(egui::Label::new(
-                            egui::RichText::new(formatted_value)
-                                .font(font)
-                                .color(t.text)
-                                .strong(),
-                        ));
+                        ui.add(egui::Label::new(egui::RichText::new(formatted_value).font(font).color(t.text).strong()));
                     });
                 });
-        });
+        },
+    );
 }
 
 /// Renders the compact HUD popup overlay for compound effect parameters.
-pub fn render_fx_hud(
-    ctx: &egui::Context,
-    doc: &photocraft_doc::Document,
-    actions: &mut Vec<(String, Value)>,
-) {
+pub fn render_fx_hud(ctx: &egui::Context, doc: &photocraft_doc::Document, actions: &mut Vec<(String, Value)>) {
     let Some(hud) = ctx.data(|d| d.get_temp::<FxHudState>(hud_state_id())) else { return };
     let Some(layer) = doc.layer(hud.layer_id) else {
         ctx.data_mut(|d| d.remove::<FxHudState>(hud_state_id()));
@@ -1160,88 +1077,76 @@ pub fn render_fx_hud(
     let mut close_hud = ctx.input(|i| i.key_pressed(egui::Key::Escape));
     let is_scrubbing = ctx.data(|d| matches!(d.get_temp::<ScrubGestureState>(scrub_state_id()), Some(ScrubGestureState::Scrubbing { .. })));
 
-    let area_resp = egui::Area::new(Id::new("pc-fx-hud-area"))
-        .order(egui::Order::Foreground)
-        .fixed_pos(hud.anchor_pos)
-        .constrain(true)
-        .show(ctx, |ui| {
-            egui::Frame::new()
-                .fill(t.card)
-                .stroke(Stroke::new(1.0, t.card_border))
-                .corner_radius(t.radius_sm)
-                .shadow(egui::epaint::Shadow {
-                    spread: 2,
-                    blur: 8,
-                    color: Color32::from_black_alpha(60),
-                    offset: [0, 4],
-                })
-                .inner_margin(egui::Margin::symmetric(10, 8))
-                .show(ui, |ui| {
-                    ui.set_min_width(190.0);
-                    // Title Bar
-                    ui.horizontal(|ui| {
-                        ui.add(egui::Label::new(
-                            egui::RichText::new(format!("{} Properties", effect.label()))
-                                .font(egui::FontId::proportional(12.0))
-                                .strong()
-                                .color(t.text),
-                        ));
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.add(egui::Button::new("×").frame(false)).clicked() {
-                                close_hud = true;
-                            }
-                        });
+    let area_resp = egui::Area::new(Id::new("pc-fx-hud-area")).order(egui::Order::Foreground).fixed_pos(hud.anchor_pos).constrain(true).show(ctx, |ui| {
+        egui::Frame::new()
+            .fill(t.card)
+            .stroke(Stroke::new(1.0, t.card_border))
+            .corner_radius(t.radius_sm)
+            .shadow(egui::epaint::Shadow { spread: 2, blur: 8, color: Color32::from_black_alpha(60), offset: [0, 4] })
+            .inner_margin(egui::Margin::symmetric(10, 8))
+            .show(ui, |ui| {
+                ui.set_min_width(190.0);
+                // Title Bar
+                ui.horizontal(|ui| {
+                    ui.add(egui::Label::new(
+                        egui::RichText::new(format!("{} Properties", effect.label())).font(egui::FontId::proportional(12.0)).strong().color(t.text),
+                    ));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.add(egui::Button::new("×").frame(false)).clicked() {
+                            close_hud = true;
+                        }
                     });
-                    ui.add_space(4.0);
-                    ui.separator();
-                    ui.add_space(4.0);
-
-                    // Parameter Rows with interactive scrubby sliders
-                    for p in params {
-                        let cur_val = (p.getter)(effect);
-                        let row_resp = ui.allocate_response(vec2(ui.available_width(), 22.0), Sense::click_and_drag());
-                        let is_active = row_resp.hovered() || row_resp.dragged();
-
-                        if is_active {
-                            ui.painter().rect_filled(row_resp.rect, t.radius_sm, t.hover.gamma_multiply(0.35));
-                            ctx.set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
-                        }
-
-                        // Parameter label
-                        ui.painter().text(
-                            pos2(row_resp.rect.left() + 4.0, row_resp.rect.center().y),
-                            egui::Align2::LEFT_CENTER,
-                            tl!(p.label),
-                            egui::FontId::proportional(11.5),
-                            if is_active { t.text } else { t.text_dim },
-                        );
-
-                        // Formatted value badge
-                        let val_str = p.format(cur_val);
-                        ui.painter().text(
-                            pos2(row_resp.rect.right() - 4.0, row_resp.rect.center().y),
-                            egui::Align2::RIGHT_CENTER,
-                            val_str,
-                            egui::FontId::proportional(11.5),
-                            t.text,
-                        );
-
-                        // Scrub interaction on row - inside HUD DnD is false!
-                        let scrub = handle_effect_drag(ctx, &row_resp, hud.layer_id, hud.effect_idx, &layer.effects.items, p, false);
-                        if let Some(action) = scrub.action {
-                            actions.push(action);
-                        }
-                    }
                 });
-        });
+                ui.add_space(4.0);
+                ui.separator();
+                ui.add_space(4.0);
+
+                // Parameter Rows with interactive scrubby sliders
+                for p in params {
+                    let cur_val = (p.getter)(effect);
+                    let row_resp = ui.allocate_response(vec2(ui.available_width(), 22.0), Sense::click_and_drag());
+                    let is_active = row_resp.hovered() || row_resp.dragged();
+
+                    if is_active {
+                        ui.painter().rect_filled(row_resp.rect, t.radius_sm, t.hover.gamma_multiply(0.35));
+                        ctx.set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+                    }
+
+                    // Parameter label
+                    ui.painter().text(
+                        pos2(row_resp.rect.left() + 4.0, row_resp.rect.center().y),
+                        egui::Align2::LEFT_CENTER,
+                        tl!(p.label),
+                        egui::FontId::proportional(11.5),
+                        if is_active { t.text } else { t.text_dim },
+                    );
+
+                    // Formatted value badge
+                    let val_str = p.format(cur_val);
+                    ui.painter().text(
+                        pos2(row_resp.rect.right() - 4.0, row_resp.rect.center().y),
+                        egui::Align2::RIGHT_CENTER,
+                        val_str,
+                        egui::FontId::proportional(11.5),
+                        t.text,
+                    );
+
+                    // Scrub interaction on row - inside HUD DnD is false!
+                    let scrub = handle_effect_drag(ctx, &row_resp, hud.layer_id, hud.effect_idx, &layer.effects.items, p, false);
+                    if let Some(action) = scrub.action {
+                        actions.push(action);
+                    }
+                }
+            });
+    });
 
     // Close HUD on outside click (if not currently scrubbing)
-    if !is_scrubbing && ctx.input(|i| i.pointer.primary_clicked()) {
-        if let Some(pos) = ctx.input(|i| i.pointer.interact_pos()) {
-            if !area_resp.response.rect.contains(pos) {
-                close_hud = true;
-            }
-        }
+    if !is_scrubbing
+        && ctx.input(|i| i.pointer.primary_clicked())
+        && let Some(pos) = ctx.input(|i| i.pointer.interact_pos())
+        && !area_resp.response.rect.contains(pos)
+    {
+        close_hud = true;
     }
 
     if close_hud && !is_scrubbing {
@@ -1452,10 +1357,9 @@ mod tests {
     #[test]
     fn hud_anchor_positioning_within_screen() {
         let ctx = egui::Context::default();
-        ctx.run_ui(egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(pos2(0.0, 0.0), vec2(1920.0, 1080.0))),
-            ..Default::default()
-        }, |_| {}).textures_delta.clear();
+        ctx.run_ui(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(pos2(0.0, 0.0), vec2(1920.0, 1080.0))), ..Default::default() }, |_| {})
+            .textures_delta
+            .clear();
 
         // Panel on the right dock (x=1600..1920)
         let row_rect = egui::Rect::from_min_size(pos2(1650.0, 300.0), vec2(270.0, 22.0));
@@ -1545,7 +1449,9 @@ mod tests {
             // State in context must now be Idle
             let state = ui.ctx().data(|d| d.get_temp::<ScrubGestureState>(scrub_state_id())).unwrap();
             assert!(matches!(state, ScrubGestureState::Idle));
-        }).textures_delta.clear();
+        })
+        .textures_delta
+        .clear();
     }
 
     #[test]
@@ -1610,7 +1516,9 @@ mod tests {
             // State in context must now be Idle
             let state_end = ui.ctx().data(|d| d.get_temp::<ScrubGestureState>(scrub_state_id())).unwrap();
             assert!(matches!(state_end, ScrubGestureState::Idle));
-        }).textures_delta.clear();
+        })
+        .textures_delta
+        .clear();
     }
 
     #[test]
@@ -1650,4 +1558,3 @@ mod tests {
         }
     }
 }
-

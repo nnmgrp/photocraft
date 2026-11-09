@@ -138,7 +138,7 @@ pub fn draw_line_preview(
 pub fn stroke_edges(a: egui::Pos2, b: egui::Pos2, radius: f32) -> Vec<Vec<egui::Pos2>> {
     let d = b - a;
     let len = d.length();
-    if !(radius.is_finite() && radius >= 1.5) || !(len.is_finite() && len >= 0.5) {
+    if !(radius.is_finite() && radius >= 1.5 && len.is_finite() && len >= 0.5) {
         return vec![vec![a, b]];
     }
     let n = egui::vec2(-d.y, d.x) / len * radius;

@@ -34,9 +34,12 @@ use photocraft_algo::{FilterParams, ScreentoneSpec};
 use photocraft_compose::Buffer;
 use photocraft_doc::{DocId, LayerId, Rect};
 use photocraft_raster::Surface;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use crate::{canvas::{ToolEvent, ViewXform}, PhotocraftApp};
+use crate::{
+    PhotocraftApp,
+    canvas::{ToolEvent, ViewXform},
+};
 
 /// Screen pixels a handle answers the pointer within (a 10 px grab target, midway between the
 /// 8-12 px hand targets Photoshop-class gizmos use).
@@ -95,11 +98,7 @@ pub(crate) fn showing(app: &PhotocraftApp) -> bool {
         return true;
     }
     crate::screentone_panel::showing(app)
-        && app
-            .session
-            .active()
-            .and_then(|st| st.active_layer.and_then(|id| st.doc.layer(id)))
-            .is_some_and(photocraft_doc::Layer::is_screentone)
+        && app.session.active().and_then(|st| st.active_layer.and_then(|id| st.doc.layer(id))).is_some_and(photocraft_doc::Layer::is_screentone)
 }
 
 /// The reference bounds the sheet renders over, exactly as the engine computes them
@@ -121,10 +120,7 @@ fn anchor_doc(spec: &ScreentoneSpec, bounds: Rect) -> [f64; 2] {
     // Exactly the engine's center — the algo takes half of the max-1 sizes in f32
     // (`cx = b.x0 as f32 + bw * 0.5`), so an odd width's half pixel keeps the handle on the
     // true lattice center.
-    let center = [
-        f64::from(bounds.x0) + f64::from(bounds.width().max(1)) * 0.5,
-        f64::from(bounds.y0) + f64::from(bounds.height().max(1)) * 0.5,
-    ];
+    let center = [f64::from(bounds.x0) + f64::from(bounds.width().max(1)) * 0.5, f64::from(bounds.y0) + f64::from(bounds.height().max(1)) * 0.5];
     let (ox, oy) = (f64::from(spec.origin_x), f64::from(spec.origin_y));
     [center[0] + ox * cos - oy * sin, center[1] + ox * sin + oy * cos]
 }
@@ -153,9 +149,7 @@ fn arm_dir(spec: &ScreentoneSpec, kind: Handle) -> [f64; 2] {
 /// spacing along each axis (the spacings are document px, so the arms scale with the view).
 fn handles(spec: &ScreentoneSpec, bounds: Rect, xf: &ViewXform) -> [egui::Pos2; 3] {
     let a = anchor_doc(spec, bounds);
-    let at = |dx: [f64; 2], spacing: f64| {
-        xf.to_screen((a[0] + dx[0] * spacing) as f32, (a[1] + dx[1] * spacing) as f32)
-    };
+    let at = |dx: [f64; 2], spacing: f64| xf.to_screen((a[0] + dx[0] * spacing) as f32, (a[1] + dx[1] * spacing) as f32);
     let x = arm_dir(spec, Handle::ArmX);
     let y = arm_dir(spec, Handle::ArmY);
     [xf.to_screen(a[0] as f32, a[1] as f32), at(x, spec.spacing_x as f64), at(y, spec.spacing_y as f64)]
@@ -413,19 +407,15 @@ pub(crate) fn refresh_preview(app: &mut PhotocraftApp, ctx: &egui::Context, xf: 
     let spec = app.ui.screentone_ui.spec.clone();
     // The engine restyles in the layer's own surface format; the sheet the panel made (and a
     // fresh creation) would render in the document's, so the preview prefers the layer's.
-    let fmt = target
-        .and_then(|id| st.doc.layer(id))
-        .and_then(|l| l.surface())
-        .map(|s| s.format())
-        .unwrap_or_else(|| st.doc.pixel_format());
+    let fmt = target.and_then(|id| st.doc.layer(id)).and_then(|l| l.surface()).map(|s| s.format()).unwrap_or_else(|| st.doc.pixel_format());
     let key = format!(
-        "{}|{}|{:?}|{}|{}|{}|{}|{}",
+        "{}|{}|{:?}|{:?}|{:?}|{:?}|{}|{}",
         st.doc.id.0,
         st.revision,
         target,
-        format!("{spec:?}"),
-        format!("{b:?}"),
-        format!("{region:?}"),
+        spec,
+        b,
+        region,
         app.session.active_index().map_or(u64::MAX, |i| i as u64),
         display_key,
     );
@@ -441,11 +431,10 @@ pub(crate) fn refresh_preview(app: &mut PhotocraftApp, ctx: &egui::Context, xf: 
             cache.key = key;
             cache.rect = region;
         }
-        None => app.screentone_gizmo.preview = Some(PreviewCache {
-            key,
-            rect: region,
-            texture: ctx.load_texture("screentone-preview", image, crate::canvas::canvas_texture_options(1)),
-        }),
+        None => {
+            app.screentone_gizmo.preview =
+                Some(PreviewCache { key, rect: region, texture: ctx.load_texture("screentone-preview", image, crate::canvas::canvas_texture_options(1)) })
+        }
     }
 }
 
@@ -632,8 +621,7 @@ mod tests {
     /// Drives a full press-move-release at document coordinates through the canvas's own
     /// event pipeline.
     fn drag(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2], shift: bool) {
-        let mut mods = egui::Modifiers::default();
-        mods.shift = shift;
+        let mods = egui::Modifiers { shift, ..Default::default() };
         crate::canvas::tool_event(app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, mods);
         crate::canvas::tool_event(app, ToolEvent::Move { x: to[0], y: to[1], pressure: 1.0 }, mods);
         crate::canvas::tool_event(app, ToolEvent::Up { x: to[0], y: to[1] }, mods);
@@ -656,15 +644,7 @@ mod tests {
     }
 
     fn layer_surface(app: &PhotocraftApp, id: u64) -> Vec<f32> {
-        app.session
-            .active()
-            .unwrap()
-            .doc
-            .layer(LayerId(id))
-            .unwrap()
-            .surface()
-            .unwrap()
-            .read_region(Rect::new(0, 0, 96, 72))
+        app.session.active().unwrap().doc.layer(LayerId(id)).unwrap().surface().unwrap().read_region(Rect::new(0, 0, 96, 72))
     }
 
     #[test]

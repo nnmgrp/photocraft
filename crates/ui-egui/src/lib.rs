@@ -26,8 +26,8 @@ mod alt_grab;
 pub mod alt_pick;
 pub mod analysis_ui;
 pub mod anchor_tools;
-mod ants_raster;
 mod ants;
+mod ants_raster;
 pub mod artboard_tool;
 pub mod artboard_ui;
 pub(crate) mod background_redraw;
@@ -55,7 +55,8 @@ mod camera_raw_scope_ui;
 pub mod camera_raw_ui;
 pub mod canvas;
 pub mod canvas_autoscroll;
-pub mod canvas_capsule;
+pub mod comic_canvas_capsule;
+pub use comic_canvas_capsule as canvas_capsule;
 mod canvas_popup;
 pub mod canvas_tool_menu;
 pub mod cas_transform;
@@ -113,6 +114,7 @@ mod filter_preview_worker;
 pub mod flick_pan;
 pub mod snow_fx_scrub;
 pub use snow_fx_scrub as fx_scrub;
+pub mod comic_pages_panel;
 mod font_preview;
 pub mod frame_tool;
 pub mod gallery_ui;
@@ -138,8 +140,8 @@ pub mod layer_pick_ui;
 pub mod layer_picker;
 pub mod layer_props_ui;
 mod layer_reveal;
-mod layer_search;
 pub mod layer_row_ui;
+mod layer_search;
 pub mod layer_style;
 mod layer_transfer;
 pub mod layer_tree_ui;
@@ -175,8 +177,9 @@ mod opacity_keys;
 pub mod open_prompt;
 pub mod outline;
 mod page_keys;
+pub use comic_pages_panel as pages_panel;
+pub mod comic_screentone_gizmo;
 pub mod paint_mouse;
-pub mod pages_panel;
 pub mod palette;
 mod panel_docking;
 pub mod panels;
@@ -206,8 +209,9 @@ pub mod rotate_view;
 pub mod rulers;
 pub mod screen_picker;
 pub mod screen_sample;
-pub mod screentone_gizmo;
-pub mod screentone_panel;
+pub use comic_screentone_gizmo as screentone_gizmo;
+pub mod comic_screentone_panel;
+pub use comic_screentone_panel as screentone_panel;
 
 pub mod scrollbars;
 mod scrub_wrap;
@@ -224,12 +228,15 @@ pub mod slice_ui;
 pub mod smart_filter_dialog;
 pub mod smart_ui;
 pub mod snap_ui;
+pub mod snow_typesetter_ui;
 pub(crate) mod solid_fill_ui;
 pub mod spring_tools;
 pub mod stack_dialog;
 pub mod state;
-pub mod snow_typesetter_ui;
 pub use snow_typesetter_ui as typesetter_ui;
+pub mod snow_breaks_ui;
+pub mod snow_clean;
+pub mod snow_typer_style;
 pub mod stroke_constraint;
 pub mod stroke_trace;
 pub mod stroke_trail;
@@ -1350,6 +1357,35 @@ impl PhotocraftApp {
         self
     }
 
+    /// Rebuilds the Typesetter's cached bubble-contour proposals after a line or layer change.
+    ///
+    /// The UI only flags the request during rendering; the generator and the bubble-bound
+    /// ray tracing run here, once per event, never on every egui frame.
+    pub(crate) fn refresh_typesetter_contour(&mut self) {
+        let layer = self.session.active().and_then(|state| state.active_layer);
+        self.typesetter.note_contour_layer(layer);
+        if !self.typesetter.take_bubble_contour_request() {
+            return;
+        }
+        let Some(state) = self.session.active() else {
+            self.typesetter.set_contour_variants(Vec::new());
+            return;
+        };
+        let Some(line) = self.typesetter.state.active_line() else {
+            self.typesetter.set_contour_variants(Vec::new());
+            return;
+        };
+        let text = line.text.clone();
+        let preset = self.typesetter.state.active_preset().cloned().unwrap_or_default();
+        let selection = state.doc.selection.as_ref().map(|surface| surface.content_bounds()).filter(|bounds| !bounds.is_empty());
+        let bubble = selection.or_else(|| {
+            let anchor = self.hover_doc.map(|[x, y]| (x as f32, y as f32)).unwrap_or((state.doc.size.width as f32 * 0.5, state.doc.size.height as f32 * 0.5));
+            self.typesetter.state.detect_speech_bubble_bounds(state.doc.as_ref(), anchor)
+        });
+        let variants = photocraft_engine::typesetter::contour_variants(&text, &preset, bubble, state.doc.resolution_dpi, 12);
+        self.typesetter.set_contour_variants(variants);
+    }
+
     /// Обработка действий тайпсеттера: создание текстового слоя на активном холсте.
     pub(crate) fn handle_typesetter_action(&mut self, action: typesetter_ui::TypesetterAction) {
         let Some(st) = self.session.active() else {
@@ -1361,24 +1397,25 @@ impl PhotocraftApp {
         // 1. Приоритет: границы выделенной области (Magic Wand / Лассо) для Box Text с нативным центрированием
         let selection_box: Option<[f32; 4]> = st.doc.selection.as_ref().and_then(|sel| {
             let bounds = sel.content_bounds();
-            if !bounds.is_empty() {
-                Some([
-                    bounds.x0 as f32,
-                    bounds.y0 as f32,
-                    bounds.width() as f32,
-                    bounds.height() as f32,
-                ])
-            } else {
-                None
-            }
+            if !bounds.is_empty() { Some([bounds.x0 as f32, bounds.y0 as f32, bounds.width() as f32, bounds.height() as f32]) } else { None }
         });
 
-        // Готовим финальный текст (применяем ALL_CAPS если задано в стиле TypeR)
-        let mut final_text = if action.preset.all_caps {
-            action.text.to_uppercase()
+        // Подготовка авто-клина: если выделен баббл и включена опция auto_clean,
+        // вычисляем цвет заливки (белый/черный по средней яркости арта) до вызова мутабельных команд.
+        let auto_clean_params = if selection_box.is_some() && self.typesetter.state.options.auto_clean {
+            st.doc.selection.as_ref().map(|sel| {
+                let artwork_surface = st.active_layer.and_then(|id| st.doc.layer(id)).and_then(|l| l.surface());
+                let fill_rgb = crate::snow_clean::clean_fill_color(artwork_surface, sel);
+                let hex_fill = format!("#{:02x}{:02x}{:02x}", fill_rgb[0], fill_rgb[1], fill_rgb[2]);
+                let clean_layer_id = st.doc.layers.iter().find(|l| l.name == crate::snow_clean::CLEAN_LAYER).map(|l| l.id);
+                (clean_layer_id, hex_fill)
+            })
         } else {
-            action.text
+            None
         };
+
+        // Готовим финальный текст (применяем ALL_CAPS если задано в стиле TypeR)
+        let mut final_text = if action.preset.all_caps { action.text.to_uppercase() } else { action.text };
 
         // Автоматический перенос строк (word wrap) и устранение «висячих» предлогов (солвер Кнута—Пласса)
         if let Some([_bx, _by, bw, bh]) = selection_box {
@@ -1438,12 +1475,13 @@ impl PhotocraftApp {
 
             if action.preset.bold {
                 // Ищем в гарнитуре настоящее начертание Bold / SemiBold / Black
-                let native_bold = faces.iter().find(|f| {
-                    (f.italic == action.preset.italic)
-                        && (f.weight >= 600.0 || f.style.to_lowercase().contains("bold") || f.style.to_lowercase().contains("black"))
-                }).or_else(|| {
-                    faces.iter().find(|f| f.weight >= 600.0 || f.style.to_lowercase().contains("bold"))
-                });
+                let native_bold = faces
+                    .iter()
+                    .find(|f| {
+                        (f.italic == action.preset.italic)
+                            && (f.weight >= 600.0 || f.style.to_lowercase().contains("bold") || f.style.to_lowercase().contains("black"))
+                    })
+                    .or_else(|| faces.iter().find(|f| f.weight >= 600.0 || f.style.to_lowercase().contains("bold")));
 
                 if let Some(f) = native_bold {
                     style_name = f.style.clone();
@@ -1465,10 +1503,7 @@ impl PhotocraftApp {
 
         let hex_text_color = format!(
             "#{:02x}{:02x}{:02x}{:02x}",
-            action.preset.text_color[0],
-            action.preset.text_color[1],
-            action.preset.text_color[2],
-            action.preset.text_color[3],
+            action.preset.text_color[0], action.preset.text_color[1], action.preset.text_color[2], action.preset.text_color[3],
         );
         let is_optical = action.preset.measurement_system.is_optical();
         let kerning_mode = if is_optical { "optical" } else { "metrics" };
@@ -1489,11 +1524,8 @@ impl PhotocraftApp {
         };
 
         // Точка клика (или центр документа, если курсор вне холста) для Point Text.
-        let (click_x, click_y) = if let Some([hx, hy]) = self.hover_doc {
-            (hx as f32, hy as f32)
-        } else {
-            (st.doc.size.width as f32 * 0.5, st.doc.size.height as f32 * 0.5)
-        };
+        let (click_x, click_y) =
+            if let Some([hx, hy]) = self.hover_doc { (hx as f32, hy as f32) } else { (st.doc.size.width as f32 * 0.5, st.doc.size.height as f32 * 0.5) };
 
         // Для Point Text y — базовая линия первой строки. Поднимаем её на половину
         // высоты всего блока и опускаем на половину высоты заглавной буквы, чтобы
@@ -1510,7 +1542,6 @@ impl PhotocraftApp {
         } else {
             None
         };
-
 
         let mut type_params = serde_json::json!({
             "text": final_text,
@@ -1556,28 +1587,33 @@ impl PhotocraftApp {
             type_params["postscriptName"] = serde_json::Value::String(action.preset.font_postscript.clone());
         }
 
+        // Авто-клин: если был баббл с активным выделением, очищаем подложку на слое TypeR Clean
+        if let Some((clean_layer_id, hex_fill)) = auto_clean_params {
+            if let Some(clean_id) = clean_layer_id {
+                let _ = self.run("layer.select", serde_json::json!({"layer": clean_id.0, "mode": "replace"}));
+            } else {
+                let _ = self.run("layer.new.layer", serde_json::json!({"name": crate::snow_clean::CLEAN_LAYER}));
+            }
+            let _ = self.run("edit.fill", serde_json::json!({"color": hex_fill}));
+        }
+
         let res = self.run("type.create", type_params);
 
         if let Ok(v) = res {
-            if let Some(layer_id) = v.get("layer").and_then(serde_json::Value::as_u64) {
-                if action.preset.stroke_width > 0.0 {
-                    let hex_color = format!(
-                        "#{:02x}{:02x}{:02x}",
-                        action.preset.stroke_color[0],
-                        action.preset.stroke_color[1],
-                        action.preset.stroke_color[2]
-                    );
-                    let _ = self.run(
-                        "layer.layerStyle.stroke",
-                        serde_json::json!({
-                            "layer": layer_id,
-                            "size": action.preset.stroke_width,
-                            "position": "outside",
-                            "color": hex_color,
-                            "opacity": (action.preset.stroke_color[3] as f32 / 2.55).round() as u32
-                        }),
-                    );
-                }
+            if let Some(layer_id) = v.get("layer").and_then(serde_json::Value::as_u64)
+                && action.preset.stroke_width > 0.0
+            {
+                let hex_color = format!("#{:02x}{:02x}{:02x}", action.preset.stroke_color[0], action.preset.stroke_color[1], action.preset.stroke_color[2]);
+                let _ = self.run(
+                    "layer.layerStyle.stroke",
+                    serde_json::json!({
+                        "layer": layer_id,
+                        "size": action.preset.stroke_width,
+                        "position": "outside",
+                        "color": hex_color,
+                        "opacity": (action.preset.stroke_color[3] as f32 / 2.55).round() as u32
+                    }),
+                );
             }
             // Снимаем активное выделение (Deselect / Ctrl+D), чтобы сразу можно было выделить следующий баббл
             let _ = self.run("select.deselect", serde_json::json!({}));
@@ -1589,14 +1625,18 @@ impl PhotocraftApp {
         let active_doc_idx = self.session.active_index();
         let total_docs = self.session.documents().len();
         let ctx = ui.ctx().clone();
+        // A foreground save blocks the app; showing no quick-save button anywhere also removes
+        // the way to start a second save.
+        let save_in_progress = jobs_ui::foreground_save(self).is_some();
 
         let mut items = Vec::with_capacity(total_docs);
         for idx in 0..total_docs {
-            let (title, path, is_dirty, dimensions, doc_id, doc_rev) = {
+            let (title, path, is_dirty, dimensions, doc_id, doc_rev, can_quick_save) = {
                 let doc_state = match self.session.documents().get(idx) {
                     Some(s) => s,
                     None => continue,
                 };
+                let can_quick_save = !save_in_progress && pages_panel::can_quick_save_page(&doc_state.doc, doc_state.path.as_deref(), doc_state.is_dirty());
                 (
                     doc_state.doc.name.clone(),
                     doc_state.path.as_deref().map(std::path::PathBuf::from),
@@ -1604,16 +1644,13 @@ impl PhotocraftApp {
                     Some((doc_state.doc.size.width, doc_state.doc.size.height)),
                     doc_state.doc.id,
                     doc_state.revision,
+                    can_quick_save,
                 )
             };
 
             // Get or create thumbnail texture (cached by document revision)
             let thumbnail_texture = if let Some((cached_rev, handle)) = self.pages_thumbnails.get(&doc_id) {
-                if *cached_rev == doc_rev {
-                    Some(handle.id())
-                } else {
-                    None
-                }
+                if *cached_rev == doc_rev { Some(handle.id()) } else { None }
             } else {
                 None
             };
@@ -1625,11 +1662,7 @@ impl PhotocraftApp {
                         let buf = photocraft_compose::thumbnail_buffer(&doc_state.doc, 256);
                         let (display, _) = canvas::canvas_display(self, &doc_state.doc, None);
                         let img = canvas::display_image(display.as_deref(), &buf);
-                        let handle = ctx.load_texture(
-                            format!("pages-thumb-{}", doc_id.0),
-                            img,
-                            egui::TextureOptions::LINEAR,
-                        );
+                        let handle = ctx.load_texture(format!("pages-thumb-{}", doc_id.0), img, egui::TextureOptions::LINEAR);
                         let tex_id = handle.id();
                         self.pages_thumbnails.insert(doc_id, (doc_rev, handle));
                         Some(tex_id)
@@ -1642,6 +1675,7 @@ impl PhotocraftApp {
             let is_active = Some(idx) == active_doc_idx;
             let mut info = pages_panel::PageItemInfo::new(idx, title, path, is_active);
             info.is_dirty = is_dirty;
+            info.can_quick_save = can_quick_save;
             info.dimensions = dimensions;
             info.thumbnail_texture = thumbnail_texture;
 
@@ -1653,51 +1687,98 @@ impl PhotocraftApp {
         }
 
         let chapter_folder_name = self.ui.chapter_folder_name.clone();
-        let is_left_dock_split = self.ui.docking_left.as_ref().map_or(false, |l| {
-            l.root.as_ref().map_or(false, |r| panel_docking::count_dock_panes(r) > 1)
-        });
-        let view_info = pages_panel::PagesViewInfo {
-            items,
-            active_doc_index: active_doc_idx,
-            chapter_folder_name,
-            is_left_dock_split,
-        };
+        let is_left_dock_split = self.ui.docking_left.as_ref().is_some_and(|l| l.root.as_ref().is_some_and(|r| panel_docking::count_dock_panes(r) > 1));
+        let view_info = pages_panel::PagesViewInfo { items, active_doc_index: active_doc_idx, chapter_folder_name, is_left_dock_split };
 
         self.pages.render_embedded(ui, &view_info)
+    }
+
+    /// Активировать страницу так же, как клик по её карточке: выбрать документ и, если включена
+    /// автопривязка TypeR, перевести панель на страницу этого документа.
+    fn activate_page(&mut self, idx: usize) -> bool {
+        if !self.session.set_active(idx) {
+            return false;
+        }
+        if self.pages.auto_sync_typer
+            && let Some(doc_state) = self.session.documents().get(idx)
+        {
+            let path = doc_state.path.as_deref().map(std::path::PathBuf::from);
+            let title = &doc_state.doc.name;
+            let target_page = path
+                .as_deref()
+                .and_then(|p| p.file_name())
+                .and_then(|n| n.to_str())
+                .and_then(pages_panel::parse_page_number_from_name)
+                .or_else(|| pages_panel::parse_page_number_from_name(title))
+                .unwrap_or(idx.saturating_add(1));
+
+            if self.typesetter.state.current_page != target_page {
+                self.typesetter.state.current_page = target_page;
+                if let Some(pos) = self.typesetter.state.lines.iter().position(|l| l.page == target_page) {
+                    self.typesetter.state.current_line_idx = pos;
+                }
+            }
+        }
+        true
     }
 
     /// Обработка пользовательских действий в панели страниц (выбор, закрытие, сортировка, открытие главы).
     pub(crate) fn handle_pages_action(&mut self, ctx: &egui::Context, action: pages_panel::PagesPanelAction) {
         match action {
             pages_panel::PagesPanelAction::SelectPage(idx) => {
-                if self.session.active_index() != Some(idx) {
-                    self.session.set_active(idx);
-                }
-                if self.pages.auto_sync_typer {
-                    if let Some(doc_state) = self.session.documents().get(idx) {
-                        let path = doc_state.path.as_deref().map(std::path::PathBuf::from);
-                        let title = &doc_state.doc.name;
-                        let target_page = path
-                            .as_deref()
-                            .and_then(|p| p.file_name())
-                            .and_then(|n| n.to_str())
-                            .and_then(pages_panel::parse_page_number_from_name)
-                            .or_else(|| pages_panel::parse_page_number_from_name(title))
-                            .unwrap_or(idx.saturating_add(1));
-
-                        if self.typesetter.state.current_page != target_page {
-                            self.typesetter.state.current_page = target_page;
-                            if let Some(pos) = self.typesetter.state.lines.iter().position(|l| l.page == target_page) {
-                                self.typesetter.state.current_line_idx = pos;
-                            }
-                        }
-                    }
-                }
+                self.activate_page(idx);
             }
             pages_panel::PagesPanelAction::ClosePage(idx) => {
                 let _ = crate::menus::invoke(self, ctx, "file.close", serde_json::json!({"document": idx}));
             }
-            pages_panel::PagesPanelAction::OpenChapterFolder => {
+            pages_panel::PagesPanelAction::SavePage(idx) => {
+                if jobs_ui::foreground_save(self).is_some() {
+                    notices::post(self, "Сохранение уже выполняется", Vec::new(), false, None);
+                    return;
+                }
+                let Some(doc_state) = self.session.documents().get(idx) else {
+                    notices::post(self, "Не удалось сохранить страницу", vec![format!("Страница больше не существует (индекс {idx}).")], true, None);
+                    return;
+                };
+                if !pages_panel::can_quick_save_page(&doc_state.doc, doc_state.path.as_deref(), doc_state.is_dirty()) {
+                    notices::post(
+                        self,
+                        "Не удалось сохранить страницу",
+                        vec!["Эту страницу нельзя сохранить на месте. Используйте „Сохранить как“.".to_string()],
+                        true,
+                        None,
+                    );
+                    return;
+                }
+                if !self.activate_page(idx) {
+                    notices::post(self, "Не удалось сохранить страницу", vec![format!("Страница больше не существует (индекс {idx}).")], true, None);
+                    return;
+                }
+                if self.session.active_index() != Some(idx) {
+                    notices::post(self, "Не удалось сохранить страницу", vec![format!("Не удалось активировать страницу (индекс {idx}).")], true, None);
+                    return;
+                }
+                let Some(doc_state) = self.session.documents().get(idx) else {
+                    notices::post(self, "Не удалось сохранить страницу", vec![format!("Страница больше не существует (индекс {idx}).")], true, None);
+                    return;
+                };
+                if !pages_panel::can_quick_save_page(&doc_state.doc, doc_state.path.as_deref(), doc_state.is_dirty()) {
+                    notices::post(
+                        self,
+                        "Не удалось сохранить страницу",
+                        vec!["Эту страницу нельзя сохранить на месте. Используйте „Сохранить как“.".to_string()],
+                        true,
+                        None,
+                    );
+                    return;
+                }
+                if let Err(error) = crate::menus::invoke(self, ctx, "file.save", serde_json::json!({})) {
+                    notices::post(self, "Не удалось сохранить страницу", vec![error], true, None);
+                }
+            }
+            pages_panel::PagesPanelAction::OpenChapterFolder =>
+            {
+                #[cfg(not(target_arch = "wasm32"))]
                 if let Some(folder) = rfd::FileDialog::new().pick_folder() {
                     let folder_name = folder.file_name().and_then(|n| n.to_str()).unwrap_or("Chapter").to_string();
                     self.ui.chapter_folder_name = Some(folder_name);
@@ -1706,12 +1787,12 @@ impl PhotocraftApp {
                         let mut image_paths: Vec<std::path::PathBuf> = Vec::new();
                         for entry in entries.flatten() {
                             let p = entry.path();
-                            if p.is_file() {
-                                if let Some(ext) = p.extension().and_then(|e| e.to_str()) {
-                                    let ext_lower = ext.to_lowercase();
-                                    if matches!(ext_lower.as_str(), "png" | "jpg" | "jpeg" | "webp" | "psd" | "tif" | "tiff") {
-                                        image_paths.push(p);
-                                    }
+                            if p.is_file()
+                                && let Some(ext) = p.extension().and_then(|e| e.to_str())
+                            {
+                                let ext_lower = ext.to_lowercase();
+                                if matches!(ext_lower.as_str(), "png" | "jpg" | "jpeg" | "webp" | "psd" | "tif" | "tiff") {
+                                    image_paths.push(p);
                                 }
                             }
                         }
@@ -1724,10 +1805,8 @@ impl PhotocraftApp {
                 }
             }
             pages_panel::PagesPanelAction::AddPages => {
-                if let Some(files) = rfd::FileDialog::new()
-                    .add_filter("Images", &["png", "jpg", "jpeg", "webp", "psd", "tif", "tiff"])
-                    .pick_files()
-                {
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Some(files) = rfd::FileDialog::new().add_filter("Images", &["png", "jpg", "jpeg", "webp", "psd", "tif", "tiff"]).pick_files() {
                     let mut file_paths = files;
                     pages_panel::natural_sort_paths(&mut file_paths);
                     let path_strs: Vec<String> = file_paths.iter().filter_map(|p| p.to_str().map(|s| s.to_string())).collect();
@@ -1761,19 +1840,15 @@ impl PhotocraftApp {
             pages_panel::PagesPanelAction::SortPagesNaturally => {
                 let count = self.session.documents().len();
                 if count > 1 {
-                    let mut sorted_ids: Vec<(photocraft_doc::DocId, String)> = self
-                        .session
-                        .documents()
-                        .iter()
-                        .map(|d| (d.doc.id, d.doc.name.clone()))
-                        .collect();
+                    let mut sorted_ids: Vec<(photocraft_doc::DocId, String)> =
+                        self.session.documents().iter().map(|d| (d.doc.id, d.doc.name.clone())).collect();
                     sorted_ids.sort_by(|a, b| pages_panel::natural_cmp_str(&a.1, &b.1));
 
                     for (target_idx, (id, _)) in sorted_ids.into_iter().enumerate() {
-                        if let Some(current_idx) = self.session.documents().iter().position(|d| d.doc.id == id) {
-                            if current_idx != target_idx {
-                                self.session.move_document(current_idx, target_idx);
-                            }
+                        if let Some(current_idx) = self.session.documents().iter().position(|d| d.doc.id == id)
+                            && current_idx != target_idx
+                        {
+                            self.session.move_document(current_idx, target_idx);
                         }
                     }
                 }
@@ -1803,7 +1878,8 @@ impl PhotocraftApp {
             self.session.authorize = gate;
         }
         let work_before = self.session.active().map(|st| (st.doc.id, st.doc.work_path.clone()));
-        let undone = matches!(id, "edit.undo" | "edit.stepBackward").then(|| self.session.active().and_then(|st| st.history.undo_label().map(str::to_string))).flatten();
+        let undone =
+            matches!(id, "edit.undo" | "edit.stepBackward").then(|| self.session.active().and_then(|st| st.history.undo_label().map(str::to_string))).flatten();
         let result = self.run_command(id, params);
         if gate.is_some() {
             self.session.authorize = None;
@@ -3046,6 +3122,7 @@ impl PhotocraftApp {
         }
         let typesetter_action = if self.ui.panels.typesetter {
             let act = self.typesetter.show(ui);
+            self.refresh_typesetter_contour();
             self.ui.panels.typesetter = self.typesetter.is_open;
             act
         } else {
@@ -4703,8 +4780,12 @@ mod channel_tint_tests {
 }
 
 #[cfg(test)]
+mod balloon_tool_tests;
+#[cfg(test)]
 mod browse_field_tests;
 #[cfg(test)]
 mod options_hit_area_tests;
 #[cfg(test)]
 mod select_and_mask_button_tests;
+#[cfg(test)]
+mod snow_paste_tests;

@@ -611,6 +611,16 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
             return;
         }
     }
+    if app.ui.tool == Tool::VectorCurve
+        && let Some(vc) = app.ui.vector_curve.as_mut()
+        && !vc.points.is_empty()
+    {
+        let mods = ctx.input(|i| i.modifiers);
+        if !mods.command && !mods.ctrl && !mods.shift && ctx.input_mut(|i| i.consume_key(mods, Key::Backspace) || i.consume_key(mods, Key::Delete)) {
+            vc.delete_active_node();
+            return;
+        }
+    }
     // A selected guide: ⌫/Delete removes it (`guide_select`), never Edit › Clear's pixels.
     if crate::guide_select::keys(app, ctx) {
         return;
@@ -688,6 +698,20 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
         }
         if ctx.input_mut(|i| i.consume_key(mods, Key::Enter)) {
             crate::lasso_ui::commit(app);
+            return;
+        }
+    }
+    if app.ui.tool == Tool::VectorCurve
+        && let Some(vc) = app.ui.vector_curve.as_ref()
+        && !vc.points.is_empty()
+        && !egui::Popup::is_any_open(ctx)
+    {
+        if pressed(Key::Enter) {
+            crate::vector_ui::vector_curve_commit(app);
+            return;
+        }
+        if pressed(Key::Escape) {
+            crate::vector_ui::vector_curve_escape(app);
             return;
         }
     }

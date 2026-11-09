@@ -48,7 +48,8 @@ pub enum Group {
 
 impl Group {
     /// Photoshop Essentials order, top to bottom.
-    pub const ALL: [Group; 8] = [Group::Color, Group::Properties, Group::Character, Group::Brushes, Group::Navigator, Group::History, Group::Layers, Group::Timelapse];
+    pub const ALL: [Group; 8] =
+        [Group::Color, Group::Properties, Group::Character, Group::Brushes, Group::Navigator, Group::History, Group::Layers, Group::Timelapse];
 
     pub fn key(self) -> &'static str {
         match self {
@@ -118,9 +119,9 @@ impl Group {
     pub fn tabs(self, pro: bool) -> &'static [&'static str] {
         match self {
             // Photoshop Essentials: Color | Swatches | Gradients | Patterns, plus the
-            // GenTonik screentone panel the integration adds.
-            Group::Color if pro => &["Color", "Swatches", "Gradients", "Patterns", "GenTonik"],
-            Group::Color => &["Swatches", "Color", "Gradients", "Patterns", "GenTonik"],
+            // comic screentone panel the integration adds.
+            Group::Color if pro => &["Color", "Swatches", "Gradients", "Patterns", "Screentones"],
+            Group::Color => &["Swatches", "Color", "Gradients", "Patterns", "Screentones"],
             Group::Properties => &["Properties", "Adjustments"],
             Group::Character => &["Character", "Paragraph"],
             Group::Brushes => &["Brushes"],
@@ -137,7 +138,10 @@ impl Group {
     /// areas shared the wheel, and where the outer content overflowed by one physical pixel (at
     /// 125 % scaling for some window heights) the footer and list moved a pixel as you scrolled (#6238).
     pub fn scrolls_itself(self, tab: usize) -> bool {
-        matches!((self, tab), (Group::Layers, 0..=2) | (Group::History, 0) | (Group::History, 1) | (Group::Navigator, 0) | (Group::Brushes, _) | (Group::Timelapse, _))
+        matches!(
+            (self, tab),
+            (Group::Layers, 0..=2) | (Group::History, 0) | (Group::History, 1) | (Group::Navigator, 0) | (Group::Brushes, _) | (Group::Timelapse, _)
+        )
     }
 
     pub(crate) fn tab_mut(self, tabs: &mut DockTabs) -> &mut usize {

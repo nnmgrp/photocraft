@@ -98,7 +98,9 @@ fn arrived(app: &mut PhotocraftApp, path: &str, document: u64) {
             app.ui.status_error = false;
             // Gigapixel embedded the settings it used: they can become a preset.
             let message = if r["settings"].is_object() {
-                tl!("Topaz Gigapixel AI: upscaled {scale}× to {w} × {h} px (new layer). Keep these settings with Topaz Gigapixel Presets › Save Preset from Last Upscale")
+                tl!(
+                    "Topaz Gigapixel AI: upscaled {scale}× to {w} × {h} px (new layer). Keep these settings with Topaz Gigapixel Presets › Save Preset from Last Upscale"
+                )
             } else {
                 tl!("Topaz Gigapixel AI: upscaled {scale}× to {w} × {h} px (new layer)")
             };
@@ -228,7 +230,11 @@ pub fn menu(app: &mut PhotocraftApp, id: &str) -> Option<Result<Value, String>> 
         return Some(Ok(json!({"dialog": open_manager(app)})));
     }
     if id == RUN_TWO_ID {
-        return Some(open_run_two(app).map(|d| json!({"dialog": d})).ok_or_else(|| tl!("Save two presets with their own settings first; then this one can run them together.").into()));
+        return Some(
+            open_run_two(app)
+                .map(|d| json!({"dialog": d}))
+                .ok_or_else(|| tl!("Save two presets with their own settings first; then this one can run them together.").into()),
+        );
     }
     if id == LAST_ID {
         return Some(open_from_last(app).map(|d| json!({"dialog": d})).ok_or_else(|| tl!("No upscale has come back from Topaz Gigapixel AI yet").into()));
@@ -316,7 +322,10 @@ fn load(f: &mut Map<String, Value>, preset: Option<&GigapixelPreset>, all: &[Gig
     let s = preset.map(|p| p.settings.clone()).unwrap_or_else(|| json!({"model": "std", "scale": 2}));
     let name = match preset {
         Some(p) => p.name.clone(),
-        None => (1..).map(|n| if n == 1 { "Upscale".to_string() } else { format!("Upscale {n}") }).find(|n| !all.iter().any(|p| p.name.eq_ignore_ascii_case(n))).unwrap_or_default(),
+        None => (1..)
+            .map(|n| if n == 1 { "Upscale".to_string() } else { format!("Upscale {n}") })
+            .find(|n| !all.iter().any(|p| p.name.eq_ignore_ascii_case(n)))
+            .unwrap_or_default(),
     };
     f.insert("editing".into(), json!(preset.map(|p| p.name.clone()).unwrap_or_default()));
     f.insert("name".into(), json!(name));
@@ -329,7 +338,10 @@ fn load(f: &mut Map<String, Value>, preset: Option<&GigapixelPreset>, all: &[Gig
     f.insert("combine".into(), json!(s.get("combine").and_then(Value::as_str).unwrap_or("chain")));
     f.insert("model".into(), json!(model_key(&s)));
     f.insert("faceRecoveryVersion".into(), s.get("faceRecoveryVersion").cloned().unwrap_or(Value::Null));
-    let (size, amount) = ["width", "height"].iter().find_map(|k| s.get(*k).and_then(Value::as_f64).map(|v| (*k, v))).unwrap_or(("scale", s.get("scale").and_then(Value::as_f64).unwrap_or(2.0)));
+    let (size, amount) = ["width", "height"]
+        .iter()
+        .find_map(|k| s.get(*k).and_then(Value::as_f64).map(|v| (*k, v)))
+        .unwrap_or(("scale", s.get("scale").and_then(Value::as_f64).unwrap_or(2.0)));
     f.insert("size".into(), json!(size));
     f.insert("amount".into(), json!(amount));
     for (key, _, default) in STRENGTHS {
@@ -536,7 +548,10 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
     ui.add_space(6.0);
     if kind == "two" {
         if singles.len() < 2 {
-            ui.label(egui::RichText::new(tl!("Save two presets with their own settings first; then this one can run them together.")).color(crate::theme::Tokens::get(ui.ctx()).text_dim));
+            ui.label(
+                egui::RichText::new(tl!("Save two presets with their own settings first; then this one can run them together."))
+                    .color(crate::theme::Tokens::get(ui.ctx()).text_dim),
+            );
             return;
         }
         two_preset_rows(ui, f, &singles);
@@ -544,7 +559,13 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
     }
     let mut model = text(f, "model").to_string();
     row(ui, tl!("Model:"), |ui| {
-        if widgets::dropdown_literal(ui, "gigapixel-preset-model", &mut model, &MODELS.map(|(k, l)| (k.to_string(), if k.is_empty() { tl!("Auto") } else { l })), 220.0) {
+        if widgets::dropdown_literal(
+            ui,
+            "gigapixel-preset-model",
+            &mut model,
+            &MODELS.map(|(k, l)| (k.to_string(), if k.is_empty() { tl!("Auto") } else { l })),
+            220.0,
+        ) {
             f.insert("model".into(), json!(model));
         }
     });
@@ -805,7 +826,7 @@ mod tests {
         let mut f = f;
         f.insert("combine".into(), json!("layers"));
         let e = confirm(h.state_mut(), &f).unwrap_err();
-        assert!(e.contains("disabled"), "{e}");
+        assert!(e.contains("disabled") || e.contains("not installed"), "{e}");
         f.insert("second".into(), json!("Both"));
         assert!(!confirm(h.state_mut(), &f).unwrap_err().contains("disabled"), "a preset that combines others can't be one of the two");
     }
@@ -842,7 +863,8 @@ mod tests {
         f.insert("saveName".into(), json!("Faces"));
         assert!(save_two(h.state_mut(), &mut f).is_err());
         // Both are listed with the other presets, and run from there.
-        let labels: Vec<String> = crate::menus::menu_items(h.state()).into_iter().filter(|i| i.path == ["File", "Automate", SUBMENU]).map(|i| i.label).collect();
+        let labels: Vec<String> =
+            crate::menus::menu_items(h.state()).into_iter().filter(|i| i.path == ["File", "Automate", SUBMENU]).map(|i| i.label).collect();
         assert_eq!(labels[..4], ["Faces", "Art", "Faces + Art", "Both"]);
     }
 

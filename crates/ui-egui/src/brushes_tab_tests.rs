@@ -448,14 +448,21 @@ fn rows_out_of_view_are_not_built_but_stay_listed() {
     );
     PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
     h.run_steps(6);
-    let built = |h: &Harness<'_, PhotocraftApp>| h.query_all_by_role(Role::Button).filter(|n| n.accesskit_node().label().is_some_and(|l| l.starts_with("Brush "))).count();
+    let built = |h: &Harness<'_, PhotocraftApp>| {
+        h.query_all_by_role(Role::Button).filter(|n| n.accesskit_node().label().is_some_and(|l| l.starts_with("Brush "))).count()
+    };
     let shown = built(&h);
     assert!(shown > 0 && shown < 100, "{shown} of 300 tiles built");
     // Click the first, scroll to the end, Shift-click the last: all 300 are selected.
     h.get_by_role_and_label(Role::Button, "Brush 000").click();
     h.run_steps(2);
     for _ in 0..40 {
-        h.event(egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: vec2(0.0, -400.0), phase: egui::TouchPhase::Move, modifiers: egui::Modifiers::NONE });
+        h.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: vec2(0.0, -400.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+        });
         h.run_steps(1);
     }
     h.run_steps(2);

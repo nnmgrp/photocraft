@@ -1170,3 +1170,116 @@ fn triangles_and_polygons_take_a_corner_radius_kept_through_edits_and_scaling() 
     s.execute("shape.edit", json!({"layer": id, "transform": [0.5, 0, 0, 0.5, 0, 0]})).unwrap();
     assert!(matches!(live(&s), Some(LiveShape::Polygon { corner_radius, .. }) if (corner_radius - 5.0).abs() < 1e-9));
 }
+
+#[test]
+fn test_vector_curve_create_update_and_insert() {
+    let mut s = session(400, 400, 8);
+    let pts = json!([
+        {"x": 50.0, "y": 200.0, "pressure": 0.2, "corner": false},
+        {"x": 150.0, "y": 100.0, "pressure": 1.0, "corner": false},
+        {"x": 250.0, "y": 200.0, "pressure": 0.3, "corner": false}
+    ]);
+    let r = s
+        .execute(
+            "shape.vectorCurve.create",
+            json!({
+                "points": pts,
+                "width": 10.0,
+                "minRatio": 0.05,
+                "tapered": true,
+                "closed": false,
+                "tension": 0.65,
+                "name": "My SAI Curve"
+            }),
+        )
+        .unwrap();
+
+    let layer_id = r["id"].as_u64().unwrap();
+    assert_eq!(r["name"], "My SAI Curve");
+    assert_eq!(r["baseWidth"], 10.0);
+    assert_eq!(r["nodes"].as_array().unwrap().len(), 3);
+
+    let info = s.execute("shape.info", json!({"layer": layer_id})).unwrap();
+    assert!(info.get("liveVectorStroke").is_some());
+    assert_eq!(info["liveVectorStroke"]["id"], layer_id);
+
+    let ins = s
+        .execute(
+            "shape.vectorCurve.insertNode",
+            json!({
+                "layer": layer_id,
+                "x": 100.0,
+                "y": 140.0,
+                "maxDist": 30.0
+            }),
+        )
+        .unwrap();
+    assert_eq!(ins["nodes"].as_array().unwrap().len(), 4);
+
+    let upd = s
+        .execute(
+            "shape.vectorCurve.updateNode",
+            json!({
+                "layer": layer_id,
+                "index": 1,
+                "pressure": 1.8,
+                "toggleCorner": true
+            }),
+        )
+        .unwrap();
+    let pressure = upd["nodes"][1]["pressure"].as_f64().unwrap();
+    assert!((pressure - 1.8).abs() < 1e-6);
+    assert_eq!(upd["nodes"][1]["corner"], true);
+}
+
+#[test]
+fn test_linework_layer_appends_multiple_strokes_to_single_layer() {
+    let mut s = session(400, 400, 8);
+    let r1 = s
+        .execute(
+            "shape.vectorCurve.create",
+            json!({
+                "points": [
+                    {"x": 40.0, "y": 100.0, "pressure": 0.1, "corner": false},
+                    {"x": 140.0, "y": 80.0, "pressure": 1.0, "corner": false},
+                    {"x": 240.0, "y": 100.0, "pressure": 0.1, "corner": false}
+                ],
+                "width": 8.0,
+                "tapered": true,
+                "appendToActive": true
+            }),
+        )
+        .unwrap();
+    let layer_id = r1["id"].as_u64().unwrap();
+
+    // Second stroke with appendToActive=true must append to the SAME Linework layer
+    let r2 = s
+        .execute(
+            "shape.vectorCurve.create",
+            json!({
+                "points": [
+                    {"x": 40.0, "y": 240.0, "pressure": 1.0, "corner": false},
+                    {"x": 240.0, "y": 240.0, "pressure": 1.0, "corner": false}
+                ],
+                "width": 12.0,
+                "tapered": false,
+                "appendToActive": true
+            }),
+        )
+        .unwrap();
+    assert_eq!(r2["id"].as_u64().unwrap(), layer_id, "Second stroke must remain on the same Linework layer");
+    assert_eq!(r2["strokeCount"], 2);
+
+    // Update stroke 0's baseWidth via Weight tool command
+    let upd = s
+        .execute(
+            "shape.vectorCurve.updateNode",
+            json!({
+                "layer": layer_id,
+                "strokeIndex": 0,
+                "baseWidth": 18.0
+            }),
+        )
+        .unwrap();
+    assert_eq!(upd["baseWidth"], 18.0);
+}

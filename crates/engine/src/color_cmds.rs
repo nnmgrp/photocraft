@@ -767,6 +767,7 @@ pub fn convert_document(doc: &mut Document, dst: &Profile, intent: Intent, bpc: 
     let to_mode = space_mode(dst.color_space).ok_or_else(|| EngineError::Other(format!("cannot convert to a {:?} profile", dst.color_space)))?;
     // A tone's parameters hold colours in the old space (and none can hold a CMYK or Lab ink
     // model), so bake the rendered sheet before its pixels are converted.
+    crate::screentone_cmds::ensure_doc_screentones_baked(doc);
     crate::image_cmds::bake_procedural_layers(&mut doc.layers);
     if to_mode != ColorMode::Grayscale {
         ink_duotone(doc);

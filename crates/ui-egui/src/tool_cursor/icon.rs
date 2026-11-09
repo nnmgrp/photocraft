@@ -59,7 +59,8 @@ pub(crate) fn image(parts: &[Part], scale: f32) -> Option<CustomCursorImage> {
     if !scale.is_finite() || scale <= 0.0 || parts.is_empty() {
         return None;
     }
-    let key: Key = (parts.iter().map(|p| (p.name, [p.at.x.to_bits(), p.at.y.to_bits(), p.size.to_bits()], [p.dark, p.filled, p.mirrored])).collect(), scale.to_bits());
+    let key: Key =
+        (parts.iter().map(|p| (p.name, [p.at.x.to_bits(), p.at.y.to_bits(), p.size.to_bits()], [p.dark, p.filled, p.mirrored])).collect(), scale.to_bits());
     let mut map = cache().lock().unwrap_or_else(PoisonError::into_inner);
     if let Some(found) = map.get(&key) {
         return found.clone();
@@ -83,7 +84,8 @@ fn coverage(part: &Part, side: usize) -> Option<Vec<f32>> {
     let side_u32 = u32::try_from(side).ok()?;
     let mut pixmap = resvg::tiny_skia::Pixmap::new(side_u32, side_u32)?;
     let k = side as f32 / tree.size().width().max(1.0);
-    let at = if part.mirrored { resvg::tiny_skia::Transform::from_row(-k, 0.0, 0.0, k, side as f32, 0.0) } else { resvg::tiny_skia::Transform::from_scale(k, k) };
+    let at =
+        if part.mirrored { resvg::tiny_skia::Transform::from_row(-k, 0.0, 0.0, k, side as f32, 0.0) } else { resvg::tiny_skia::Transform::from_scale(k, k) };
     resvg::render(&tree, at, &mut pixmap.as_mut());
     Some(pixmap.data().as_chunks::<4>().0.iter().map(|p| f32::from(p[3]) / 255.0).collect())
 }
@@ -200,7 +202,9 @@ mod tests {
 
     #[test]
     fn the_duplicate_arrow_is_not_the_move_arrow() {
-        let moving = image(&[arrow(20.0, true, Vec2::ZERO), Part { name: "move", at: vec2(11.0, 13.0), size: 10.0, dark: true, filled: false, mirrored: false }], 1.0).unwrap();
+        let moving =
+            image(&[arrow(20.0, true, Vec2::ZERO), Part { name: "move", at: vec2(11.0, 13.0), size: 10.0, dark: true, filled: false, mirrored: false }], 1.0)
+                .unwrap();
         let dup = image(&[arrow(18.0, false, vec2(5.0, 5.0)), arrow(20.0, true, Vec2::ZERO)], 1.0).unwrap();
         assert_ne!(moving.rgba, dup.rgba);
         // The arrow is dark: its middle has dark, opaque pixels.

@@ -724,24 +724,18 @@ fn rasterize_content(s: &mut Session, id: LayerId, only: Option<&str>, key: &str
             // is a separate document object and stays attached, exactly as it does for Smart
             // Objects and fill content.
             s.coalesce_request = Some(key.to_string());
-            let doc_bounds = s.active().map(|st| st.doc.bounds()).unwrap_or(Rect::EMPTY);
             let r = s.edit("Rasterize Screentone", |doc, _| {
+                if !doc.layer(id).is_some_and(photocraft_doc::Layer::is_screentone) {
+                    return Err(EngineError::Other(format!("layer {} is not a screentone layer", id.0)));
+                }
+                crate::screentone_cmds::ensure_screentone_layer_baked_by_id(doc, id);
                 let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
                 let LayerContent::Screentone(st) = &mut l.content else {
                     return Err(EngineError::Other(format!("layer {} is not a screentone layer", id.0)));
                 };
                 let format = st.surface.format();
-                let mut surface = std::mem::replace(&mut st.surface, photocraft_raster::Surface::new(format));
-                let prev_tiles = surface.tile_count();
-                if prev_tiles == 0 {
-                    let bounds = doc_bounds;
-                    let t0 = std::time::Instant::now();
-                    log::info!("[SCREENTONE:CMD] Rasterize/Freeze layer {}: unbaked surface, baking on CPU over bounds={:?}...", id.0, bounds);
-                    let _ = photocraft_algo::screentone::render_screentone_to_surface(&mut surface, bounds, &st.spec, st.origin);
-                    log::info!("[SCREENTONE:CMD] Rasterize/Freeze layer {}: bake completed in {:?}, tiles={}", id.0, t0.elapsed(), surface.tile_count());
-                } else {
-                    log::info!("[SCREENTONE:CMD] Rasterize/Freeze layer {}: using existing baked surface (tiles={})", id.0, prev_tiles);
-                }
+                let surface = std::mem::replace(&mut st.surface, photocraft_raster::Surface::new(format));
+                log::info!("[SCREENTONE:CMD] Rasterize/Freeze layer {}: rasterized with {} tiles", id.0, surface.tile_count());
                 l.content = LayerContent::Raster(surface);
                 Ok(())
             });

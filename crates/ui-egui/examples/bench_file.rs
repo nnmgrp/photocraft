@@ -138,7 +138,11 @@ fn main() {
                 std::hint::black_box(s.translated(3 * i as i32 + 1, 2, cb));
                 tr.push(ms(t));
             }
-            println!("  ({} tiles, {} distinct)", s.tile_count(), s.tiles().map(|(_, t)| std::sync::Arc::as_ptr(t)).collect::<std::collections::HashSet<_>>().len());
+            println!(
+                "  ({} tiles, {} distinct)",
+                s.tile_count(),
+                s.tiles().map(|(_, t)| std::sync::Arc::as_ptr(t)).collect::<std::collections::HashSet<_>>().len()
+            );
         }
         println!("move drag, {label} ({}×{})", was.width(), was.height());
         row("  of which: clone the document", clone);

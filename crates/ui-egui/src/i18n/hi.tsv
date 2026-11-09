@@ -538,3 +538,58 @@ cameraRaw	Yellow	पीला
 	Missing delete command	हटाने का कमांड नहीं मिला
 	Invalid delete command	हटाने का कमांड अमान्य है
 	Layer deleted, but confirmation preference could not be saved: {error}	लेयर हटा दी गई, लेकिन पुष्टि की प्राथमिकता सहेजी नहीं जा सकी: {error}
+
+# Font Settings v2: preview sample, geometry labels and accessibility tooltips.
+	Font Settings	फ़ॉन्ट सेटिंग्स
+	Style name	स्टाइल का नाम
+	No folder	कोई फ़ोल्डर नहीं
+	+ New folder...	+ नया फ़ोल्डर...
+	Folder name	फ़ोल्डर का नाम
+	New folder name	नए फ़ोल्डर का नाम
+	Typography and Font	टाइपोग्राफ़ी और फ़ॉन्ट
+	Favorite font	पसंदीदा फ़ॉन्ट
+	PostScript	PostScript
+	Formatting	फ़ॉर्मेटिंग
+	Faux bold	नकली बोल्ड
+	Faux italic	नकली इटैलिक
+	Superscript	सुपरस्क्रिप्ट
+	Subscript	सबस्क्रिप्ट
+	Hanging Punctuation	लटकते विराम चिह्न
+	Align Left	बाएँ संरेखित
+	Align Center	केंद्र संरेखित
+	Align Right	दाएँ संरेखित
+	Typography Size (Line Spacing Sync)	टाइपोग्राफ़ी आकार (लाइन स्पेसिंग सिंक)
+	System type	सिस्टम
+	Use standard font metrics and the baseline	मीट्रिक सिस्टम: मानक फ़ॉन्ट मीट्रिक्स और बेसलाइन
+	Use visual kerning and bubble centering	ऑप्टिकल सिस्टम: दृश्य कर्निंग और बबल सेंटरिंग
+	Size (pt)	आकार (pt)
+	Leading is linked to size	लीडिंग आकार से जुड़ी है
+	Leading is not linked to size	लीडिंग आकार से नहीं जुड़ी है
+	H-Scale (%)	H-स्केल (%)
+	Text Outline	टेक्स्ट रूपरेखा
+	Thickness (px)	मोटाई (px)
+	Preview sample	पूर्वावलोकन
+	Preview text	पूर्वावलोकन टेक्स्ट
+	Edit preview text	पूर्वावलोकन टेक्स्ट संपादित करें
+	Leave empty for the automatic sample	स्वचालित नमूने के लिए खाली छोड़ें
+	Preview unavailable	पूर्वावलोकन उपलब्ध नहीं
+	Duplicate this style	इस स्टाइल की प्रतिलिपि बनाएँ
+	Delete this style	यह स्टाइल हटाएँ
+	Folder	फ़ोल्डर
+	Font	फ़ॉन्ट
+	Style	स्टाइल
+	All Caps	सभी बड़े अक्षर
+	Small Caps	छोटे बड़े अक्षर
+	Underline	रेखांकित
+	Strikethrough	स्ट्राइकथ्रू
+	Alignment	संरेखण
+	Anti-alias	एंटी-एलियास
+	Crisp	स्पष्ट
+	Sharp	तीखा
+	Strong	गाढ़ा
+	None	कोई नहीं
+	Metrics	मेट्रिक्स
+	Optical	ऑप्टिकल
+	Leading	लीडिंग
+	Tracking	ट्रैकिंग
+	Duplicate	प्रतिलिपि

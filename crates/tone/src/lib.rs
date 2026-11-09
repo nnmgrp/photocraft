@@ -5,10 +5,11 @@
 //! `photocraft-doc` depend on the filter crate. The renderer re-exports these types, so existing
 //! callers can keep using `photocraft_algo::ScreentoneSpec`.
 #![forbid(unsafe_code)]
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use serde::{Deserialize, Serialize};
 
-/// 12 pattern types supported by the GenTonik screentone engine.
+/// 12 pattern types supported by the comic screentone engine.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum PatternType {

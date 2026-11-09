@@ -128,12 +128,13 @@ fn pick(s: &mut Session, p: &Value) -> Result<Value> {
     let y = p.get("y").and_then(Value::as_f64).ok_or_else(|| EngineError::BadParams { cmd: "layer.pickAt".into(), msg: "missing `y`".into() })?.floor() as i32;
     let min = match p.get("minOpacity") {
         None | Some(Value::Null) => 0.0,
-        Some(v) => v
-            .as_f64()
-            .filter(|v| (0.0..=100.0).contains(v))
-            .ok_or_else(|| EngineError::BadParams { cmd: "layer.pickAt".into(), msg: format!("`minOpacity` is a percentage 0..100, got {v}") })?
-            as f32
-            / 100.0,
+        Some(v) => {
+            v.as_f64()
+                .filter(|v| (0.0..=100.0).contains(v))
+                .ok_or_else(|| EngineError::BadParams { cmd: "layer.pickAt".into(), msg: format!("`minOpacity` is a percentage 0..100, got {v}") })?
+                as f32
+                / 100.0
+        }
     };
     let doc = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
     // The right-click list includes type layers between glyphs, like Auto-Select.

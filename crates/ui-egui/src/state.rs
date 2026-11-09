@@ -203,13 +203,17 @@ pub enum Tool {
     Polygon,
     Line,
     CustomShape,
+    /// Comic speech / thought balloon tool (shape.balloon.*): drag a tail from a balloon body or
+    /// drag out a procedural cloud / spiky balloon.
+    Balloon,
+    VectorCurve,
     Slice,
     SliceSelect,
     Frame,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 68] = [
+    pub const ALL: [Tool; 70] = [
         Tool::Move,
         Tool::Artboard,
         Tool::RectMarquee,
@@ -275,6 +279,8 @@ impl Tool {
         Tool::Polygon,
         Tool::Line,
         Tool::CustomShape,
+        Tool::Balloon,
+        Tool::VectorCurve,
         Tool::Slice,
         Tool::SliceSelect,
         Tool::Frame,
@@ -350,6 +356,8 @@ impl Tool {
             Tool::Polygon => "Polygon Tool",
             Tool::Line => "Line Tool",
             Tool::CustomShape => "Custom Shape Tool",
+            Tool::Balloon => "Balloon Tool",
+            Tool::VectorCurve => "Vector Curve Tool",
         }
     }
     pub fn is_type(self) -> bool {
@@ -408,14 +416,14 @@ impl Tool {
             Tool::Remove | Tool::SpotHealing | Tool::Healing | Tool::Patch | Tool::ContentAwareMove | Tool::RedEye => 'J',
             Tool::CloneStamp | Tool::PatternStamp => 'S',
             Tool::HistoryBrush => 'Y',
-            Tool::Blur | Tool::Sharpen | Tool::Smudge => '\0',
+            Tool::Blur | Tool::Sharpen | Tool::Smudge | Tool::VectorCurve => '\0',
             // In the Marquee flyout, but M cycles only the Rectangular and Elliptical Marquee.
             Tool::SingleRowMarquee | Tool::SingleColumnMarquee => '\0',
             Tool::Dodge | Tool::Burn | Tool::Sponge => 'O',
             Tool::QuickSelection | Tool::ObjectSelection => 'W',
             Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen | Tool::AddAnchorPoint | Tool::DeleteAnchorPoint | Tool::ConvertPoint => 'P',
             Tool::PathSelection | Tool::DirectSelection => 'A',
-            Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Line | Tool::CustomShape => 'U',
+            Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Line | Tool::CustomShape | Tool::Balloon => 'U',
         }
     }
     /// Glyph drawn in the toolbar (vector icons come later).
@@ -802,6 +810,41 @@ pub struct ToolOptions {
     pub corner_radius: f32,
     pub polygon_sides: u32,
     pub line_weight: f32,
+    /// Balloon tool mode: tail (drag a tail from the balloon to the speaker), cloud (drag out
+    /// a thought cloud) or spiky (drag out a shout / flash balloon).
+    #[serde(default = "default_balloon_mode")]
+    pub balloon_mode: String,
+    /// Balloon tool tail preset: wedge | arc | double | thought (shape.balloon.tail).
+    #[serde(default = "default_balloon_preset")]
+    pub balloon_preset: String,
+    #[serde(default = "default_balloon_mouth")]
+    pub balloon_mouth: f32,
+    #[serde(default = "default_balloon_bumps")]
+    pub balloon_bumps: u32,
+    #[serde(default = "default_balloon_amplitude")]
+    pub balloon_amplitude: f32,
+    #[serde(default = "default_balloon_jitter")]
+    pub balloon_jitter: f32,
+    #[serde(default = "default_balloon_spikes")]
+    pub balloon_spikes: u32,
+    #[serde(default = "default_balloon_length")]
+    pub balloon_length: f32,
+    #[serde(default)]
+    pub balloon_smooth: bool,
+    #[serde(default)]
+    pub balloon_inward: bool,
+    #[serde(default = "default_balloon_seed")]
+    pub balloon_seed: u32,
+    #[serde(default = "default_vector_curve_width")]
+    pub vector_curve_width: f32,
+    #[serde(default = "default_vector_curve_tapered")]
+    pub vector_curve_tapered: bool,
+    #[serde(default = "default_vector_curve_closed")]
+    pub vector_curve_closed: bool,
+    #[serde(default = "default_vector_curve_min_ratio")]
+    pub vector_curve_min_ratio: f32,
+    #[serde(default = "default_vector_curve_tension")]
+    pub vector_curve_tension: f32,
     /// Freeform Pen › Curve Fit: how far (px) the fitted path may stray from the pointer trace.
     #[serde(default = "default_curve_fit")]
     pub curve_fit: f32,
@@ -949,6 +992,62 @@ fn yes() -> bool {
 
 fn default_crop_resolution_unit() -> String {
     crate::crop_size::PX_PER_IN.into()
+}
+
+fn default_balloon_mode() -> String {
+    "tail".into()
+}
+
+fn default_balloon_preset() -> String {
+    "wedge".into()
+}
+
+fn default_balloon_mouth() -> f32 {
+    20.0
+}
+
+fn default_balloon_bumps() -> u32 {
+    9
+}
+
+fn default_balloon_amplitude() -> f32 {
+    0.18
+}
+
+fn default_balloon_jitter() -> f32 {
+    0.35
+}
+
+fn default_balloon_spikes() -> u32 {
+    12
+}
+
+fn default_balloon_length() -> f32 {
+    0.45
+}
+
+fn default_balloon_seed() -> u32 {
+    1
+}
+
+fn default_vector_curve_width() -> f32 {
+    6.0
+}
+
+fn default_vector_curve_tapered() -> bool {
+    true
+}
+
+fn default_vector_curve_closed() -> bool {
+    false
+}
+
+fn default_vector_curve_min_ratio() -> f32 {
+    0.05
+}
+
+fn default_vector_curve_tension() -> f32 {
+    0.65
 }
 
 fn default_move_target() -> String {
@@ -1122,6 +1221,22 @@ impl Default for ToolOptions {
             finger_painting: false,
             enhance_edge: false,
             vector_mode: "path".into(),
+            balloon_mode: default_balloon_mode(),
+            balloon_preset: default_balloon_preset(),
+            balloon_mouth: default_balloon_mouth(),
+            balloon_bumps: default_balloon_bumps(),
+            balloon_amplitude: default_balloon_amplitude(),
+            balloon_jitter: default_balloon_jitter(),
+            balloon_spikes: default_balloon_spikes(),
+            balloon_length: default_balloon_length(),
+            balloon_smooth: false,
+            balloon_inward: false,
+            balloon_seed: default_balloon_seed(),
+            vector_curve_width: default_vector_curve_width(),
+            vector_curve_tapered: default_vector_curve_tapered(),
+            vector_curve_closed: default_vector_curve_closed(),
+            vector_curve_min_ratio: default_vector_curve_min_ratio(),
+            vector_curve_tension: default_vector_curve_tension(),
             shape_fill: true,
             stroke_width: 0.0,
             shape_stroke: Default::default(),
@@ -1534,6 +1649,9 @@ pub struct UiState {
     /// Pen path under construction.
     #[serde(default)]
     pub pen: Option<crate::vector_ui::PenPath>,
+    /// Active PaintTool SAI vector curve state under construction.
+    #[serde(default)]
+    pub vector_curve: Option<crate::vector_ui::VectorCurveState>,
     /// The document the pen path is drawn on; switching away commits it to that Work Path.
     #[serde(default)]
     pub pen_doc: Option<photocraft_doc::DocId>,
@@ -1575,7 +1693,7 @@ pub struct UiState {
     /// Preset panels (Gradients, Patterns, Styles, Shapes, Tool Presets, Clone Source).
     #[serde(default)]
     pub presets_ui: crate::preset_panels::PresetUi,
-    /// The Screentones panel (GenTonik screentone generator, see `screentone_panel`).
+    /// The Screentones panel (comic screentone generator, see `comic_screentone_panel`).
     #[serde(default)]
     pub screentone_ui: crate::screentone_panel::ScreentoneUi,
     /// The Canvas Capsule (CraftBar, see `canvas_capsule`).
@@ -1802,6 +1920,7 @@ impl Default for UiState {
             crop_rect: None,
             crop_angle: 0.0,
             perspective_crop: None,
+            vector_curve: None,
             next_id: 1,
             status: String::new(),
             status_error: false,
@@ -1897,7 +2016,7 @@ mod tests {
         assert!(!Tool::RedEye.is_brushlike());
         assert_eq!(Tool::from_name("patternStamp"), Some(Tool::PatternStamp));
         assert_eq!(Tool::from_name("Pattern Stamp Tool"), Some(Tool::PatternStamp));
-        assert_eq!(Tool::ALL.len(), 68);
+        assert_eq!(Tool::ALL.len(), 70);
         assert_eq!(Tool::from_name("Vertical Type Mask Tool"), Some(Tool::VerticalTypeMask));
         assert_eq!(Tool::from_name("addAnchorPoint"), Some(Tool::AddAnchorPoint));
         assert_eq!(Tool::from_name("Delete Anchor Point Tool"), Some(Tool::DeleteAnchorPoint));

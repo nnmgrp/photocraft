@@ -1669,73 +1669,69 @@ fn dropdown_with<T: PartialEq + Clone>(
     // Open as the frame began: the click choosing a row closes egui's list before the rows see it.
     let listed = blend && egui::Popup::is_id_open(ui.ctx(), press.popup_id());
     let mut list = |ui: &mut Ui| {
-            if breaks.is_some() {
-                let sp = ui.spacing_mut();
-                sp.item_spacing.y = 0.0;
-                sp.interact_size.y = row_h;
-                sp.button_padding.y = 1.0;
+        if breaks.is_some() {
+            let sp = ui.spacing_mut();
+            sp.item_spacing.y = 0.0;
+            sp.interact_size.y = row_h;
+            sp.button_padding.y = 1.0;
+        }
+        fit_widest_option(ui, texts.iter().map(|l| l.as_str()));
+        // A typed letter jumps to the next option starting with it, ↩ closes the list (#1481).
+        let labels: Vec<&str> = texts.iter().map(|l| l.as_str()).collect();
+        let shown = options.iter().position(|(v, _)| v == current);
+        if let Some((v, _)) = type_ahead::keys(ui, ui.make_persistent_id(id), shown, &labels).and_then(|i| options.get(i)) {
+            *current = v.clone();
+            chosen.push(v.clone());
+            reveal = true;
+            keyed = true;
+        }
+        // Over the open list the wheel steps the value too, instead of scrolling the list.
+        over_list = wheel && ui.rect_contains_pointer(ui.clip_rect());
+        if over_list {
+            let stepped = wheel_steps(ui, wheel_id, true, current, options);
+            wheeled = !stepped.is_empty();
+            reveal |= wheeled;
+            chosen.extend(stepped);
+        }
+        // The row nearest the pointer, by its distance to each row.
+        let pointer = ui.ctx().pointer_hover_pos().filter(|_| ui.rect_contains_pointer(ui.clip_rect()));
+        let mut nearest: Option<(f32, &T)> = None;
+        for (i, ((v, _), text)) in options.iter().zip(texts.iter()).enumerate() {
+            if breaks.as_ref().is_some_and(|b| b.contains(&i)) {
+                ui.add(egui::Separator::default().spacing(BLEND_BREAK_H));
             }
-            fit_widest_option(ui, texts.iter().map(|l| l.as_str()));
-            // A typed letter jumps to the next option starting with it, ↩ closes the list (#1481).
-            let labels: Vec<&str> = texts.iter().map(|l| l.as_str()).collect();
-            let shown = options.iter().position(|(v, _)| v == current);
-            if let Some((v, _)) = type_ahead::keys(ui, ui.make_persistent_id(id), shown, &labels).and_then(|i| options.get(i)) {
+            // Blend menus: every row exactly `row_h` tall, selected or not.
+            let item = if breaks.is_some() {
+                let w = ui.available_width();
+                ui.add_sized([w, row_h], egui::Button::selectable(v == current, text.as_str()))
+            } else {
+                ui.selectable_label(v == current, text.as_str())
+            };
+            if reveal && v == current {
+                item.scroll_to_me(None);
+            }
+            if item.hovered() {
+                hovered = Some(v.clone());
+            }
+            if let Some(p) = pointer {
+                let d = (item.rect.top() - p.y).max(p.y - item.rect.bottom()).max(0.0);
+                if nearest.is_none_or(|(n, _)| d < n) {
+                    nearest = Some((d, v));
+                }
+            }
+            if press.chosen(ui, &item) {
                 *current = v.clone();
                 chosen.push(v.clone());
-                reveal = true;
-                keyed = true;
             }
-            // Over the open list the wheel steps the value too, instead of scrolling the list.
-            over_list = wheel && ui.rect_contains_pointer(ui.clip_rect());
-            if over_list {
-                let stepped = wheel_steps(ui, wheel_id, true, current, options);
-                wheeled = !stepped.is_empty();
-                reveal |= wheeled;
-                chosen.extend(stepped);
-            }
-            // The row nearest the pointer, by its distance to each row.
-            let pointer = ui.ctx().pointer_hover_pos().filter(|_| ui.rect_contains_pointer(ui.clip_rect()));
-            let mut nearest: Option<(f32, &T)> = None;
-            for (i, ((v, _), text)) in options.iter().zip(texts.iter()).enumerate() {
-                if breaks.as_ref().is_some_and(|b| b.contains(&i)) {
-                    ui.add(egui::Separator::default().spacing(BLEND_BREAK_H));
-                }
-                // Blend menus: every row exactly `row_h` tall, selected or not.
-                let item = if breaks.is_some() {
-                    let w = ui.available_width();
-                    ui.add_sized([w, row_h], egui::Button::selectable(v == current, text.as_str()))
-                } else {
-                    ui.selectable_label(v == current, text.as_str())
-                };
-                if reveal && v == current {
-                    item.scroll_to_me(None);
-                }
-                if item.hovered() {
-                    hovered = Some(v.clone());
-                }
-                if let Some(p) = pointer {
-                    let d = (item.rect.top() - p.y).max(p.y - item.rect.bottom()).max(0.0);
-                    if nearest.is_none_or(|(n, _)| d < n) {
-                        nearest = Some((d, v));
-                    }
-                }
-                if press.chosen(ui, &item) {
-                    *current = v.clone();
-                    chosen.push(v.clone());
-                }
-            }
-            // Between two rows (item spacing) the pointer hovers neither; it is still over the list,
-            // so keep previewing the nearest row instead of flashing the current value back (#2553).
-            if hovered.is_none() {
-                hovered = nearest.map(|(_, v)| v.clone());
-            }
+        }
+        // Between two rows (item spacing) the pointer hovers neither; it is still over the list,
+        // so keep previewing the nearest row instead of flashing the current value back (#2553).
+        if hovered.is_none() {
+            hovered = nearest.map(|(_, v)| v.clone());
+        }
     };
     let combo = egui::ComboBox::from_id_salt(id).selected_text(label).width(width).height(height).icon(chevron_icon).close_behavior(close);
-    let response = if blend {
-        combo.popup_style(egui::style::StyleModifier::new(invisible_popup)).show_ui(ui, |_| {})
-    } else {
-        combo.show_ui(ui, &mut list)
-    };
+    let response = if blend { combo.popup_style(egui::style::StyleModifier::new(invisible_popup)).show_ui(ui, |_| {}) } else { combo.show_ui(ui, &mut list) };
     // Before `press.after`, as egui's list is: a press-drag gesture ends after its release was seen.
     if blend && (listed || egui::Popup::is_id_open(ui.ctx(), press.popup_id())) {
         let rows = breaks.as_ref().map_or(0.0, |b| options.len() as f32 * row_h + b.len() as f32 * BLEND_BREAK_H + 12.0);

@@ -332,7 +332,21 @@ pub(super) fn plan(s: &Session, p: &Value) -> Result<Plan> {
     {
         return Err(bad(CMD, format!("Generative AI is on, but {e}")));
     }
-    Ok(Plan { id, strokes, from_selection, window, close_loops, all_layers, new_layer, generative, model, high, nano, creative, settings: diffusion_settings(p) })
+    Ok(Plan {
+        id,
+        strokes,
+        from_selection,
+        window,
+        close_loops,
+        all_layers,
+        new_layer,
+        generative,
+        model,
+        high,
+        nano,
+        creative,
+        settings: diffusion_settings(p),
+    })
 }
 
 /// The hole over the plan's window: the strokes' footprints, their enclosed areas and a margin,
@@ -575,14 +589,7 @@ const CREATIVE_FADE: i32 = 48;
 /// that shows only the hole (over `win`), so painting the mask shows more of the picture. With
 /// `creative` the mask shows every area drawn, fading out over [`CREATIVE_FADE`] px inside its
 /// edges (not at the canvas's edges), and the hole whole. Returns the damage and the new layer.
-pub(super) fn generated_layer(
-    doc: &mut Document,
-    id: Option<LayerId>,
-    pieces: &[Region],
-    hole: &[bool],
-    win: Rect,
-    creative: bool,
-) -> Result<(Rect, LayerId)> {
+pub(super) fn generated_layer(doc: &mut Document, id: Option<LayerId>, pieces: &[Region], hole: &[bool], win: Rect, creative: bool) -> Result<(Rect, LayerId)> {
     let base = doc.pixel_format();
     let fmt = PixelFormat::new(base.mode, base.sample, true);
     let n = fmt.channels();

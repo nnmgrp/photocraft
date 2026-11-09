@@ -46,7 +46,13 @@ pub struct FillToolOptions {
 
 impl Default for FillToolOptions {
     fn default() -> Self {
-        Self { sub_tool: SubTool::Click, click: FillSettings::default(), enclose: FillSettings::default(), unfilled: FillSettings::default(), undo_widens_gap: false }
+        Self {
+            sub_tool: SubTool::Click,
+            click: FillSettings::default(),
+            enclose: FillSettings::default(),
+            unfilled: FillSettings::default(),
+            undo_widens_gap: false,
+        }
     }
 }
 
@@ -184,7 +190,8 @@ impl Default for FillSettings {
 /// The `paint.fill` params for the options, without the click, lasso or stroke.
 pub fn params(app: &PhotocraftApp) -> Value {
     let o = app.ui.tool_options.fill_tool.current();
-    let exclude: Vec<&str> = [(o.exclude_layer, "layer"), (o.exclude_text, "text"), (o.exclude_locked, "locked")].into_iter().filter(|(on, _)| *on).map(|(_, k)| k).collect();
+    let exclude: Vec<&str> =
+        [(o.exclude_layer, "layer"), (o.exclude_text, "text"), (o.exclude_locked, "locked")].into_iter().filter(|(on, _)| *on).map(|(_, k)| k).collect();
     json!({
         "reference": o.reference,
         "exclude": exclude,
@@ -513,7 +520,13 @@ pub fn close_gap_buttons(ui: &mut Ui, gap: &mut f32, id: &str) {
         r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, level == Some(i), format!("{id} close gap {}", i + 1)));
         let side = 6.0 + i as f32 * 1.6;
         let b = egui::Rect::from_center_size(rect.center(), egui::vec2(side, side));
-        let fill = if lit { t.accent } else if r.hovered() { t.hover } else { t.field };
+        let fill = if lit {
+            t.accent
+        } else if r.hovered() {
+            t.hover
+        } else {
+            t.field
+        };
         ui.painter().rect_filled(b, 1.5, fill);
         ui.painter().rect_stroke(b, 1.5, egui::Stroke::new(1.0, if lit { t.accent } else { t.text_faint }), egui::StrokeKind::Inside);
         if r.on_hover_text(label).clicked() {
@@ -582,8 +595,9 @@ fn more_menu(tool: &mut FillToolOptions, ui: &mut Ui) {
             widgets::checkbox(ui, &mut o.exclude_text, tl!("Text layers"));
             widgets::checkbox(ui, &mut o.exclude_locked, tl!("Locked layers"));
             ui.separator();
-            widgets::checkbox(ui, &mut o.layer_blocks, tl!("Editing layer blocks the fill"))
-                .on_hover_text(tl!("Paint on the layer being filled stops the fill at any tolerance, and the fill goes in behind it: draw over a gap to close it"));
+            widgets::checkbox(ui, &mut o.layer_blocks, tl!("Editing layer blocks the fill")).on_hover_text(tl!(
+                "Paint on the layer being filled stops the fill at any tolerance, and the fill goes in behind it: draw over a gap to close it"
+            ));
         });
         ui.separator();
         widgets::checkbox(ui, &mut o.image_border, tl!("Image Border")).on_hover_text(tl!("The canvas edge closes gaps as a line does"));

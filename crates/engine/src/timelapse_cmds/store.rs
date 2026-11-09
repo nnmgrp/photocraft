@@ -413,7 +413,8 @@ pub fn delete_recording(rec: &Recording) -> Result<Vec<String>> {
     if frames.is_dir() {
         let _ = std::fs::remove_dir(&frames);
     }
-    let kept: Vec<String> = std::fs::read_dir(&rec.dir).map(|r| r.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect()).unwrap_or_default();
+    let kept: Vec<String> =
+        std::fs::read_dir(&rec.dir).map(|r| r.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect()).unwrap_or_default();
     if kept.is_empty() {
         std::fs::remove_dir(&rec.dir).map_err(|e| io_err(&rec.dir, e))?;
     }

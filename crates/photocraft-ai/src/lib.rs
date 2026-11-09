@@ -1,4 +1,7 @@
-﻿pub mod firefly_bar;
+#![forbid(unsafe_code)]
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+
+pub mod firefly_bar;
 pub use firefly_bar::FireflyContextBar;
 
 use serde::{Deserialize, Serialize};
@@ -46,30 +49,15 @@ pub struct GeminiClient {
 
 impl GeminiClient {
     pub fn new(api_key: impl Into<String>) -> Self {
-        Self {
-            api_key: api_key.into(),
-            model: "gemini-2.5-flash".to_string(),
-            http: reqwest::Client::new(),
-        }
+        Self { api_key: api_key.into(), model: "gemini-2.5-flash".to_string(), http: reqwest::Client::new() }
     }
 
     pub async fn ask(&self, prompt: &str) -> Result<String, String> {
-        let url = format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
-            self.model, self.api_key
-        );
+        let url = format!("https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}", self.model, self.api_key);
 
-        let body = GenerateRequest {
-            contents: vec![Content {
-                parts: vec![ContentPart { text: prompt.to_string() }],
-            }],
-        };
+        let body = GenerateRequest { contents: vec![Content { parts: vec![ContentPart { text: prompt.to_string() }] }] };
 
-        let response = self.http.post(&url)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| format!("HTTP request failed: {e}"))?;
+        let response = self.http.post(&url).json(&body).send().await.map_err(|e| format!("HTTP request failed: {e}"))?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -77,11 +65,10 @@ impl GeminiClient {
             return Err(format!("API Error {status}: {err_text}"));
         }
 
-        let parsed: GenerateResponse = response.json()
-            .await
-            .map_err(|e| format!("JSON parse error: {e}"))?;
+        let parsed: GenerateResponse = response.json().await.map_err(|e| format!("JSON parse error: {e}"))?;
 
-        let reply = parsed.candidates
+        let reply = parsed
+            .candidates
             .and_then(|mut c| c.pop())
             .and_then(|c| c.content)
             .and_then(|cnt| cnt.parts.and_then(|mut p| p.pop()))
@@ -91,5 +78,3 @@ impl GeminiClient {
         Ok(reply)
     }
 }
-
-

@@ -1898,6 +1898,7 @@ pub fn vector_curve_move(app: &mut PhotocraftApp, x: f64, y: f64) {
                     "strokeIndex": ld.stroke_idx,
                     "index": ld.node_idx,
                     "pos": [x, y],
+                    "coalesce": format!("sai-curve-drag-{}-{}", ld.layer_id, ld.stroke_idx),
                 })),
                 LayerDragKind::AdjustNodePressure => {
                     let delta = ((ld.origin[1] - y) + (x - ld.origin[0]) * 0.5) / 120.0;
@@ -1907,6 +1908,7 @@ pub fn vector_curve_move(app: &mut PhotocraftApp, x: f64, y: f64) {
                         "strokeIndex": ld.stroke_idx,
                         "index": ld.node_idx,
                         "pressure": p,
+                        "coalesce": format!("sai-curve-drag-{}-{}", ld.layer_id, ld.stroke_idx),
                     }))
                 }
                 LayerDragKind::ScaleStrokeWidth => {
@@ -1916,6 +1918,7 @@ pub fn vector_curve_move(app: &mut PhotocraftApp, x: f64, y: f64) {
                         "layer": ld.layer_id,
                         "strokeIndex": ld.stroke_idx,
                         "baseWidth": bw,
+                        "coalesce": format!("sai-curve-drag-{}-{}", ld.layer_id, ld.stroke_idx),
                     }))
                 }
             }
@@ -2781,6 +2784,8 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
                 });
             }
             photocraft_doc::vector::LiveShape::Line { .. } => {}
+            // A balloon group is edited with its on-screen gizmo, not with a bounding box.
+            photocraft_doc::vector::LiveShape::BalloonGroup { .. } => {}
         }
         ui.vertical(|ui| match live {
             photocraft_doc::vector::LiveShape::Rect { radii, .. } => {

@@ -15,32 +15,55 @@ const MAX_SPEED: f32 = 2400.0;
 const GAIN: f32 = 12.0;
 /// A long frame moves at most this many seconds' worth, so a stall doesn't jump the view.
 const MAX_DT: f32 = 0.05;
+/// Pre-trigger margin inside the canvas edge (in egui points) where the auto-scroll begins when
+/// `edge_step_with_margin` is used with it (the Ruler tool measures right up to the edge).
+pub const TRIGGER_MARGIN: f32 = 16.0;
 
 /// How far, in screen points, to scroll this frame for a drag whose pointer is at `pointer` over a
-/// canvas of `rect`. Zero while the pointer is inside the canvas. Each axis points toward the
-/// pointer and speeds up the further past the edge it is.
-pub fn edge_step(pointer: Pos2, rect: Rect, dt: f32) -> Vec2 {
+/// canvas of `rect` with an inner pre-trigger border of `margin` points (`0.0` triggers only past
+/// the outer edge; [`TRIGGER_MARGIN`] triggers 16.0 points before the edge). Zero while the pointer
+/// is inside the canvas. Each axis points toward the pointer and speeds up the further past the
+/// edge it is.
+pub fn edge_step_with_margin(pointer: Pos2, rect: Rect, dt: f32, margin: f32) -> Vec2 {
     if !pointer.x.is_finite() || !pointer.y.is_finite() || !dt.is_finite() || dt <= 0.0 || rect.width() <= 0.0 || rect.height() <= 0.0 {
         return Vec2::ZERO;
     }
-    let past = |p: f32, lo: f32, hi: f32| {
-        if p < lo {
-            p - lo
-        } else if p > hi {
-            p - hi
+    let mx = margin.clamp(0.0, (rect.width() * 0.25).max(0.0));
+    let my = margin.clamp(0.0, (rect.height() * 0.25).max(0.0));
+    let past = |p: f32, lo: f32, hi: f32, m: f32| {
+        let lo_zone = lo + m;
+        let hi_zone = hi - m;
+        if p < lo_zone {
+            p - lo_zone
+        } else if p > hi_zone {
+            p - hi_zone
         } else {
             0.0
         }
     };
     let dt = dt.min(MAX_DT);
     let axis = |d: f32| if d == 0.0 { 0.0 } else { d.signum() * (MIN_SPEED + GAIN * d.abs()).min(MAX_SPEED) * dt };
-    vec2(axis(past(pointer.x, rect.left(), rect.right())), axis(past(pointer.y, rect.top(), rect.bottom())))
+    vec2(axis(past(pointer.x, rect.left(), rect.right(), mx)), axis(past(pointer.y, rect.top(), rect.bottom(), my)))
+}
+
+/// How far, in screen points, to scroll this frame for a drag whose pointer is at `pointer` over a
+/// canvas of `rect`. Zero while the pointer is inside the canvas. Each axis points toward the
+/// pointer and speeds up the further past the edge it is.
+pub fn edge_step(pointer: Pos2, rect: Rect, dt: f32) -> Vec2 {
+    edge_step_with_margin(pointer, rect, dt, 0.0)
 }
 
 /// Move the camera by `step` in screen points, never past the image's on-screen bounds in the
 /// direction of travel. A view the user already panned past a limit (Overscroll on) is not pulled
 /// back: it just doesn't scroll further out. True when the view moved.
 pub fn scroll(view: &mut View, step: Vec2, xf: ViewXform) -> bool {
+    scroll_with_options(view, step, xf, false)
+}
+
+/// [`scroll`] with explicit control over whether panning into the pasteboard is allowed even when
+/// the image already fits inside the viewport (`allow_pasteboard` — used for `Tool::Ruler` and
+/// when Overscroll is enabled).
+pub fn scroll_with_options(view: &mut View, step: Vec2, xf: ViewXform, allow_pasteboard: bool) -> bool {
     if !step.is_finite() || step == Vec2::ZERO || !xf.zoom.is_finite() || xf.zoom <= 0.0 {
         return false;
     }
@@ -51,10 +74,15 @@ pub fn scroll(view: &mut View, step: Vec2, xf: ViewXform) -> bool {
     // Compare screen axes before unrotating: a document axis that fits before rotation may
     // be clipped afterwards, and a vertical screen drag must remain vertical at any angle.
     // Up to a strip of pasteboard past the edge, so the drag shows it reached the end (the view
-    // clamp allows as much, `scrollbars::EDGE_MARGIN`).
+    // clamp allows as much, `scrollbars::EDGE_MARGIN`). When `allow_pasteboard` is active (the
+    // Ruler tool or Overscroll), the view may pan up to a viewport span into the pasteboard, so
+    // a ruler measurement can reach the bleed and the pasteboard without getting stuck.
     let m = crate::scrollbars::EDGE_MARGIN;
     let axis = |step: f32, lo: f32, hi: f32, v0: f32, v1: f32| {
-        if hi - lo <= v1 - v0 {
+        if allow_pasteboard {
+            let span = (v1 - v0) * 0.75 + m;
+            if step > 0.0 { step.min((hi + span - v1).max(0.0)) } else { step.max((lo - span - v0).min(0.0)) }
+        } else if hi - lo <= v1 - v0 {
             0.0
         } else if step > 0.0 {
             step.min((hi + m - v1).max(0.0))
@@ -115,6 +143,20 @@ mod tests {
     }
 
     #[test]
+    fn the_pre_trigger_margin_scrolls_near_the_canvas_edge_for_the_ruler() {
+        let dt = 1.0 / 60.0;
+        let r = rect(); // 100..500 in x, 50..350 in y
+        // 8 points inside the right edge (x = 492 > 500 - 16): triggers a rightward scroll.
+        let near_right = edge_step_with_margin(pos2(492.0, 200.0), r, dt, TRIGGER_MARGIN);
+        assert!(near_right.x > 0.0 && near_right.y == 0.0, "{near_right:?}");
+        // 8 points inside the top-left corner: triggers an up-left scroll.
+        let near_top_left = edge_step_with_margin(pos2(108.0, 58.0), r, dt, TRIGGER_MARGIN);
+        assert!(near_top_left.x < 0.0 && near_top_left.y < 0.0, "{near_top_left:?}");
+        // Deep inside the canvas: zero.
+        assert_eq!(edge_step_with_margin(pos2(300.0, 200.0), r, dt, TRIGGER_MARGIN), Vec2::ZERO);
+    }
+
+    #[test]
     fn further_out_is_faster_up_to_a_cap() {
         let dt = 1.0 / 60.0;
         let near = edge_step(pos2(505.0, 200.0), rect(), dt).x;
@@ -138,6 +180,15 @@ mod tests {
 
     fn view(zoom: f32, center: [f32; 2]) -> View {
         View { zoom, center, doc_size: [2000, 1000], ..Default::default() }
+    }
+
+    #[test]
+    fn the_ruler_pasteboard_mode_scrolls_even_when_the_image_fits_the_viewport() {
+        let mut v = view(0.1, [1000.0, 500.0]);
+        let xf = ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0)), zoom: 0.1, center: v.center, flip: false, rotation: 0.0, aspect: 1.0 };
+        assert!(!super::scroll(&mut v, vec2(20.0, 15.0), xf), "the standard scroll stops when the image fits");
+        assert!(super::scroll_with_options(&mut v, vec2(20.0, 15.0), xf, true), "the ruler pasteboard scroll pans freely");
+        assert!(v.center[0] > 1000.0 && v.center[1] > 500.0);
     }
 
     #[test]

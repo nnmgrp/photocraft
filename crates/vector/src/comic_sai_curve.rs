@@ -29,26 +29,76 @@ pub type P = (f64, f64);
 /// Default PaintTool SAI curve stiffness (`0.65` gives the signature tight, non-overshooting SAI feel).
 pub const SAI_DEFAULT_TENSION: f64 = 0.65;
 
+/// Tension of the `Bezier` curve type (a classical C1 cubic spline).
+pub const SAI_BEZIER_TENSION: f64 = 1.0;
+
+/// Upper bound on the samples one curve may produce. A stroke with many nodes and a small step
+/// size would otherwise allocate without bound (the OOM the SAI curve tool used to cause).
+pub const MAX_TOTAL_SAMPLES: usize = 200_000;
+
+/// How the stroke's spline is computed (`Curve Type` in the Linework panel).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum SaiCurveType {
+    /// SAI Catmull-Rom with damped tangents ([`SAI_DEFAULT_TENSION`]).
+    #[default]
+    Normal,
+    /// A classical cubic composite Bézier spline (`Besier` in PaintTool SAI).
+    Bezier,
+}
+
+impl SaiCurveType {
+    /// The tension this curve type uses, given the stroke's own tension.
+    pub fn tension(self, stroke_tension: f64) -> f64 {
+        match self {
+            Self::Normal => stroke_tension.clamp(0.1, 1.0),
+            Self::Bezier => SAI_BEZIER_TENSION,
+        }
+    }
+}
+
 /// One click-placed node of a PaintTool SAI vector stroke.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SaiPoint {
     pub p: P,
     /// Simulated pen pressure, `0.0..=2.0` (`1.0` is 100% base width; `0.0` tapers to `min_ratio`).
     pub pressure: f32,
+    /// Simulated ink density / opacity of the node, `0.0..=2.0` (`1.0` is fully opaque).
+    #[serde(default = "default_point_density")]
+    pub density: f32,
     /// Sharp corner instead of a smoothed Catmull-Rom node (Alt-click toggles this in the UI).
     pub corner: bool,
+}
+
+fn default_point_density() -> f32 {
+    1.0
 }
 
 impl SaiPoint {
     #[inline]
     pub fn new(p: P) -> Self {
-        Self { p, pressure: 1.0, corner: false }
+        Self { p, pressure: 1.0, density: 1.0, corner: false }
     }
 
     #[inline]
     pub fn with_pressure(p: P, pressure: f32, corner: bool) -> Self {
-        Self { p, pressure: pressure.clamp(0.0, 2.0), corner }
+        Self { p, pressure: pressure.clamp(0.0, 2.0), density: 1.0, corner }
     }
+
+    /// A node with independent pressure (width) and density (opacity) dynamics.
+    #[inline]
+    pub fn with_dynamics(p: P, pressure: f32, density: f32, corner: bool) -> Self {
+        Self { p, pressure: pressure.clamp(0.0, 2.0), density: density.clamp(0.0, 2.0), corner }
+    }
+}
+
+/// The alpha a sample is drawn with: the stroke's base density, falling to the minimum density
+/// as the node's own density drops.
+pub fn alpha_at(base_density: f32, min_density_ratio: f32, density: f32) -> f32 {
+    let base = if base_density.is_finite() { base_density.clamp(0.0, 2.0) } else { 1.0 };
+    let min_ratio = if min_density_ratio.is_finite() { min_density_ratio.clamp(0.0, 1.0) } else { 0.0 };
+    let density = if density.is_finite() { density.clamp(0.0, 2.0) } else { 1.0 };
+    let floor = min_ratio * base;
+    (floor + (base - floor) * density.clamp(0.0, 1.0)).clamp(0.0, 1.0)
 }
 
 /// Result of projecting a cursor position onto a `LiveVectorStroke` spline (for `Ctrl + Click` insertion).
@@ -73,22 +123,51 @@ pub struct LiveVectorStroke {
     pub nodes: Vec<SaiPoint>,
     pub base_width: f64,
     pub min_ratio: f64,
+    /// Base density / opacity of the stroke (`0.0..=2.0`, default 1.0).
+    #[serde(default = "default_stroke_density")]
+    pub base_density: f32,
+    /// Density floor reached as the node's own density drops (`0.0..=1.0`, default 0.0).
+    #[serde(default)]
+    pub min_density_ratio: f32,
+    /// How the spline is computed (`Normal` or `Bezier`).
+    #[serde(default)]
+    pub curve_type: SaiCurveType,
     pub tapered: bool,
     pub closed: bool,
     pub tension: f64,
 }
 
+fn default_stroke_density() -> f32 {
+    1.0
+}
+
 impl LiveVectorStroke {
     pub fn new(nodes: Vec<SaiPoint>, base_width: f64, tapered: bool) -> Self {
-        Self { nodes, base_width: base_width.clamp(0.1, 100_000.0), min_ratio: 0.05, tapered, closed: false, tension: SAI_DEFAULT_TENSION }
+        Self {
+            nodes,
+            base_width: base_width.clamp(0.1, 100_000.0),
+            min_ratio: 0.05,
+            base_density: 1.0,
+            min_density_ratio: 0.0,
+            curve_type: SaiCurveType::Normal,
+            tapered,
+            closed: false,
+            tension: SAI_DEFAULT_TENSION,
+        }
+    }
+
+    /// The tension this stroke's spline uses, given its curve type.
+    pub fn effective_tension(&self) -> f64 {
+        self.curve_type.tension(self.tension)
     }
 
     /// Rebuilds the vector `Path` from the current live parameters.
     pub fn rebuild_path(&self) -> Path {
+        let tension = self.effective_tension();
         if self.tapered {
-            tapered_curve_path(&self.nodes, self.base_width, self.min_ratio, self.closed, self.tension)
+            tapered_curve_path(&self.nodes, self.base_width, self.min_ratio, self.closed, tension)
         } else {
-            sai_stroke_with_tension(&self.nodes, self.closed, self.tension)
+            sai_stroke_with_tension(&self.nodes, self.closed, tension)
         }
     }
 
@@ -96,18 +175,20 @@ impl LiveVectorStroke {
     /// uniform `base_width`), so multiple strokes with different widths/tapering can coexist on
     /// a single multi-stroke `LiveLinework` layer.
     pub fn rebuild_outline_path(&self) -> Path {
+        let tension = self.effective_tension();
         if self.tapered {
-            tapered_curve_path(&self.nodes, self.base_width, self.min_ratio, self.closed, self.tension)
+            tapered_curve_path(&self.nodes, self.base_width, self.min_ratio, self.closed, tension)
         } else {
             let uniform_nodes: Vec<SaiPoint> = self.nodes.iter().map(|pt| SaiPoint::with_pressure(pt.p, 1.0, pt.corner)).collect();
-            tapered_curve_path(&uniform_nodes, self.base_width, 1.0, self.closed, self.tension)
+            tapered_curve_path(&uniform_nodes, self.base_width, 1.0, self.closed, tension)
         }
     }
 
     /// Inserts a new smooth node on the closest curve segment within `max_dist_px` (used by `Ctrl + Click`).
     /// Returns the index of the newly inserted node if within hit distance.
     pub fn insert_node_at_pos(&mut self, pos: P, max_dist_px: f64) -> Option<usize> {
-        insert_node_on_curve(&mut self.nodes, pos, self.closed, self.tension, max_dist_px)
+        let tension = self.effective_tension();
+        insert_node_on_curve(&mut self.nodes, pos, self.closed, tension, max_dist_px)
     }
 }
 
@@ -561,7 +642,7 @@ pub fn sample_sai_curve(points: &[SaiPoint], base_width: f64, min_ratio: f64, cl
     let step_px = max_step_px.clamp(0.5, 16.0);
     let mut samples = Vec::with_capacity(seg_count * 16 + 1);
 
-    for seg in 0..seg_count {
+    'segments: for seg in 0..seg_count {
         let next_idx = (seg + 1) % n;
         let k0 = knots[seg];
         let k1 = knots[next_idx];
@@ -590,6 +671,11 @@ pub fn sample_sai_curve(points: &[SaiPoint], base_width: f64, min_ratio: f64, cl
             let is_corner = (s == 0 && points[seg].corner) || (s == subdivisions && points[next_idx].corner);
 
             samples.push(CurveSample { p: pos, tangent, normal, pressure, half_width, is_corner, segment_index: seg, t });
+            if samples.len() >= MAX_TOTAL_SAMPLES {
+                // A stroke with very many nodes and a tiny step size would otherwise allocate
+                // without bound; the curve is cut off here instead of exhausting the memory.
+                break 'segments;
+            }
         }
     }
 

@@ -4,6 +4,8 @@
 use photocraft_doc::{Knot, LiveShape, Path, Subpath};
 use photocraft_geom::Point;
 
+use crate::balloon::LiveBalloonGroupGeom;
+
 /// Handle length of a quarter-circle cubic, `4/3·(√2 − 1)`.
 pub const KAPPA: f64 = 0.552_284_749_830_793_4;
 
@@ -224,6 +226,7 @@ pub fn live_path(s: &LiveShape) -> Path {
             round_corners(polygon(*x, *y, *w, *h, *sides, *star_ratio), *corner_radius)
         }
         LiveShape::Line { from, to, weight } => line((from[0], from[1]), (to[0], to[1]), *weight),
+        LiveShape::BalloonGroup { group } => group.rebuild_group_path(),
     }
 }
 

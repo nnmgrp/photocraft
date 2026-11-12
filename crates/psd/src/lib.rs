@@ -75,6 +75,7 @@ pub mod tagged;
 #[allow(clippy::expect_used)]
 pub mod testgen;
 pub mod tiff;
+pub mod tpl;
 pub mod tree;
 
 pub use blend::BlendMode;

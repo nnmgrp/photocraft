@@ -31,6 +31,7 @@ mod ants_raster;
 pub mod artboard_tool;
 pub mod artboard_ui;
 pub(crate) mod background_redraw;
+pub mod balloon_gizmo;
 pub mod bidi_text;
 pub(crate) mod bitmap_dialog;
 mod blend_keys;
@@ -212,6 +213,8 @@ pub mod screen_sample;
 pub use comic_screentone_gizmo as screentone_gizmo;
 pub mod comic_screentone_panel;
 pub use comic_screentone_panel as screentone_panel;
+pub mod comic_sai_panel;
+pub use comic_sai_panel as sai_panel;
 
 pub mod scrollbars;
 mod scrub_wrap;
@@ -723,6 +726,18 @@ type InfoSampleKey = (i32, i32, u64, u32);
 
 pub struct PhotocraftApp {
     pub typesetter: typesetter_ui::TypesetterUi,
+    /// TypeR's paste-on-click toggle was armed on the previous frame: arming it with an
+    /// existing selection must not paste right away.
+    pub(crate) typesetter_paste_on_click_was_enabled: bool,
+    /// Fingerprint of the selection the last paste-on-click acted on; a new selection
+    /// (a different fingerprint) is what triggers the paste.
+    pub(crate) typesetter_paste_fingerprint: Option<u64>,
+    /// Hash of the text layer the TextShapeR proposals were built for.
+    pub(crate) typesetter_text_shape_source: Option<u64>,
+    /// The on-screen gizmo of the parametric manga balloons (`balloon_gizmo`).
+    pub balloon_gizmo: balloon_gizmo::BalloonGizmoState,
+    /// The Linework dock panel (`comic_sai_panel`).
+    pub sai_panel: comic_sai_panel::LineworkPanelState,
     pub pages: pages_panel::PagesPanelState,
     pub pages_thumbnails: HashMap<photocraft_doc::DocId, (u64, egui::TextureHandle)>,
     pub session: Session,
@@ -1075,6 +1090,11 @@ impl PhotocraftApp {
     pub fn new(session: Session, services: Services) -> Self {
         let mut app = Self {
             typesetter: typesetter_ui::TypesetterUi::new(),
+            typesetter_paste_on_click_was_enabled: false,
+            typesetter_paste_fingerprint: None,
+            typesetter_text_shape_source: None,
+            balloon_gizmo: balloon_gizmo::BalloonGizmoState::default(),
+            sai_panel: comic_sai_panel::LineworkPanelState::default(),
             pages: pages_panel::PagesPanelState::new(),
             pages_thumbnails: HashMap::new(),
             session,
@@ -1386,8 +1406,396 @@ impl PhotocraftApp {
         self.typesetter.set_contour_variants(variants);
     }
 
+    /// TypeR's deferred requests: the panel asks, the app performs (one place per frame).
+    pub(crate) fn typesetter_requests(&mut self) {
+        if self.typesetter.take_text_shape_request() {
+            self.refresh_typesetter_text_shape(true);
+        }
+        self.refresh_text_shape_previews_from_page();
+        if let Some((layer, text)) = self.typesetter.take_text_shape_apply_request() {
+            self.apply_typesetter_text_shape(layer, text);
+        }
+        if self.typesetter.take_align_request() {
+            self.align_typesetter_layer();
+        }
+        if let Some(preset) = self.typesetter.take_apply_style_request() {
+            if let Some(st) = self.session.active() {
+                self.typesetter_paste_fingerprint = st.doc.selection.as_ref().map(crate::snow_clean::selection_fingerprint);
+            }
+            self.apply_typesetter_style_to_active_layer(&preset);
+        }
+        if self.typesetter.take_multi_bubble_capture_request() {
+            self.capture_typesetter_bubble();
+        }
+        if self.typesetter.take_multi_bubble_fill_request() {
+            self.fill_typesetter_bubbles();
+        }
+        self.maybe_typesetter_paste_on_click();
+    }
+
+    /// TextShapeR: proposes line breaks for the selected text layer's own text.
+    /// Keeps the three TextShapeR preview cards tied to the text layer selected on the page.
+    pub(crate) fn refresh_text_shape_previews_from_page(&mut self) {
+        let source = self.session.active().and_then(|st| {
+            let is_text = |id: photocraft_doc::LayerId| matches!(st.doc.layer(id).map(|layer| &layer.content), Some(photocraft_doc::LayerContent::Text(_)));
+            let id = st.active_layer.filter(|&id| is_text(id)).or_else(|| st.selected_layers().into_iter().rev().find(|&id| is_text(id)))?;
+            let layer = st.doc.layer(id)?;
+            let photocraft_doc::LayerContent::Text(text) = &layer.content else { return None };
+            let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+            for byte in id.0.to_le_bytes().iter().chain(text.text.as_bytes()) {
+                hash ^= u64::from(*byte);
+                hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+            }
+            if let Some(sel) = st.doc.selection.as_ref() {
+                let b = sel.content_bounds();
+                for byte in b.x0.to_le_bytes().iter().chain(b.y0.to_le_bytes().iter()).chain(b.x1.to_le_bytes().iter()).chain(b.y1.to_le_bytes().iter()) {
+                    hash ^= u64::from(*byte);
+                    hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+                }
+            }
+            Some(hash)
+        });
+        if source == self.typesetter_text_shape_source {
+            return;
+        }
+        self.typesetter_text_shape_source = source;
+        if source.is_some() {
+            self.refresh_typesetter_text_shape(false);
+        } else {
+            self.typesetter.clear_text_shape_candidates();
+        }
+    }
+
+    /// Builds the TextShapeR proposals for the selected text layer.
+    ///
+    /// `open_window` opens the proposal window; the inline variant feeds the cards
+    /// shown inside the TypeR panel.
+    pub(crate) fn refresh_typesetter_text_shape(&mut self, open_window: bool) {
+        let Some(st) = self.session.active() else { return };
+        let is_text = |id: photocraft_doc::LayerId| matches!(st.doc.layer(id).map(|layer| &layer.content), Some(photocraft_doc::LayerContent::Text(_)));
+        let target = st.active_layer.filter(|&id| is_text(id)).or_else(|| st.selected_layers().into_iter().rev().find(|&id| is_text(id)));
+        let Some(id) = target else {
+            self.typesetter.clear_text_shape_candidates();
+            return;
+        };
+        let Some(layer) = st.doc.layer(id) else { return };
+        let photocraft_doc::LayerContent::Text(text) = &layer.content else {
+            self.typesetter.clear_text_shape_candidates();
+            return;
+        };
+        let source = text.text.clone();
+        let mut preset = photocraft_engine::typesetter::TextStylePreset::default();
+        if let Some(run) = text.char_runs().first() {
+            preset.font_family = run.style.font_family.clone();
+            preset.font_postscript = run.style.postscript_name.clone().unwrap_or_default();
+            preset.font_size = run.style.size_pt;
+            preset.leading = run.style.leading_pt.unwrap_or(run.style.size_pt * 1.2);
+            preset.tracking = run.style.tracking as i32;
+            preset.horizontal_scale = run.style.horizontal_scale;
+        }
+        let selection = st.doc.selection.clone();
+        let detected_bubble =
+            if selection.is_none() {
+                let anchor = [text.transform.m[4] as i32, text.transform.m[5] as i32];
+                let from_box = match text.shape {
+                    photocraft_doc::text::TextShape::Box { width, height, .. } if width > 20.0 && height > 20.0 => {
+                        Some(photocraft_geom::Rect::from_xywh(anchor[0], anchor[1], width.round() as u32, height.round() as u32))
+                    }
+                    _ => None,
+                };
+                from_box
+                    .or_else(|| {
+                        st.doc.layers.iter().rev().filter(|l| l.visible && l.id != id).find_map(|l| {
+                            l.surface().and_then(|surf| photocraft_engine::typesetter::detect_speech_bubble_bounds(surf, anchor[0], anchor[1], 240))
+                        })
+                    })
+                    .or_else(|| {
+                        let line_count = text.text.lines().count().max(1) as f32;
+                        let max_line_chars = text.text.lines().map(|l| l.chars().count()).max().unwrap_or(10).max(4) as f32;
+                        let font_size = preset.font_size.max(10.0);
+                        let est_w = (max_line_chars.min(14.0) * font_size * 0.55).clamp(80.0, 180.0);
+                        let est_h = (line_count * font_size * 1.25).clamp(40.0, 800.0);
+                        Some(photocraft_geom::Rect::from_xywh(anchor[0], anchor[1], est_w.round() as u32, est_h.round() as u32))
+                    })
+            } else {
+                None
+            };
+        let candidates = photocraft_engine::typesetter::text_shape_candidates_with_bubble(
+            &source,
+            &preset,
+            selection.as_ref(),
+            detected_bubble,
+            st.doc.bounds(),
+            st.doc.resolution_dpi,
+            self.typesetter.state.options.line_spacing_sync,
+            self.typesetter.state.options.minimum_fit_scale_percent,
+        );
+        match candidates {
+            Ok(candidates) => {
+                if open_window {
+                    self.typesetter.set_text_shape_candidates(candidates, id.0, preset);
+                } else {
+                    self.typesetter.set_text_shape_candidates_inline(candidates, id.0, preset);
+                }
+            }
+            Err(error) => {
+                self.typesetter.clear_text_shape_candidates();
+                self.ui.status = format!("TextShapeR: {error}");
+                self.ui.status_error = true;
+            }
+        }
+    }
+
+    /// Applies one TextShapeR candidate to its text layer.
+    pub(crate) fn apply_typesetter_text_shape(&mut self, layer: u64, text: String) {
+        let (new_point, new_hash) = if let Some(st) = self.session.active() {
+            let layer_ref = st.doc.layer(photocraft_doc::LayerId(layer));
+            let text_layer = layer_ref.and_then(|l| match &l.content {
+                photocraft_doc::LayerContent::Text(t) => Some(t),
+                _ => None,
+            });
+            if let Some(t) = text_layer {
+                let font_size = t.char_runs().first().map(|r| r.style.size_pt).unwrap_or(24.0);
+                let leading = t.char_runs().first().and_then(|r| r.style.leading_pt).unwrap_or(font_size * 1.2);
+                let old_lines = t.text.lines().count().max(1) as f64;
+                let new_lines = text.lines().count().max(1) as f64;
+                let cur_pt = [t.transform.m[4], t.transform.m[5]];
+                let pt = if let Some(sel) = &st.doc.selection {
+                    let b = sel.content_bounds();
+                    if !b.is_empty() {
+                        let cx = b.x0 as f64 + b.width() as f64 * 0.5;
+                        let cy = b.y0 as f64 + b.height() as f64 * 0.5;
+                        let baseline_y = cy - (new_lines - 1.0) * (leading as f64) * 0.5 + (font_size as f64) * 0.225;
+                        Some([cx, baseline_y])
+                    } else {
+                        let new_y = cur_pt[1] - (new_lines - old_lines) * (leading as f64) * 0.5;
+                        Some([cur_pt[0], new_y])
+                    }
+                } else {
+                    let new_y = cur_pt[1] - (new_lines - old_lines) * (leading as f64) * 0.5;
+                    Some([cur_pt[0], new_y])
+                };
+                let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+                for byte in layer.to_le_bytes().iter().chain(text.as_bytes()) {
+                    hash ^= u64::from(*byte);
+                    hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+                }
+                (pt, Some(hash))
+            } else {
+                (None, None)
+            }
+        } else {
+            (None, None)
+        };
+
+        let mut edit_params = serde_json::json!({"layer": layer, "text": text});
+        if let Some(pt) = new_point {
+            edit_params["point"] = serde_json::json!(pt);
+        }
+        if let Err(error) = self.run("type.edit", edit_params) {
+            self.ui.status = error;
+            self.ui.status_error = true;
+            return;
+        }
+        let _ = self.run("type.setStyle", serde_json::json!({"layer": layer, "align": "center"}));
+        if let Some(h) = new_hash {
+            self.typesetter_text_shape_source = Some(h);
+        }
+        // Keep candidates visible so the user can freely click and compare them.
+        self.typesetter.auto_save();
+    }
+
+    /// Paste the current script line once a new selection appears (TypeR's paste-on-click); the
+    /// selection fingerprint stops it from pasting again on every frame.
+    pub(crate) fn maybe_typesetter_paste_on_click(&mut self) {
+        if self.typesetter.is_blocking_canvas_insertion() {
+            return;
+        }
+        if !self.typesetter.state.options.paste_on_click {
+            self.typesetter_paste_on_click_was_enabled = false;
+            self.typesetter_paste_fingerprint = None;
+            return;
+        }
+        let Some(st) = self.session.active() else {
+            self.typesetter_paste_fingerprint = None;
+            return;
+        };
+        let fingerprint = st.doc.selection.as_ref().map(crate::snow_clean::selection_fingerprint);
+        if !self.typesetter_paste_on_click_was_enabled {
+            // Arming the toggle with an existing selection must not paste immediately.
+            self.typesetter_paste_on_click_was_enabled = true;
+            self.typesetter_paste_fingerprint = fingerprint;
+            return;
+        }
+        let Some(fingerprint) = fingerprint else {
+            self.typesetter_paste_fingerprint = None;
+            return;
+        };
+        if self.typesetter_paste_fingerprint == Some(fingerprint) {
+            return;
+        }
+        self.typesetter_paste_fingerprint = Some(fingerprint);
+        let Some(text) = self.typesetter.state.active_line().map(|line| line.text.clone()) else { return };
+        let Some(preset) = self.typesetter.state.preset_for_line(self.typesetter.state.current_line_idx).cloned() else {
+            return;
+        };
+        if self.typesetter.state.options.auto_clean
+            && let Err(error) = self.typesetter_clean_selection()
+        {
+            self.ui.status = error;
+            self.ui.status_error = true;
+        }
+        self.handle_typesetter_action(typesetter_ui::TypesetterAction { text, preset });
+        self.typesetter.state.advance_line();
+        self.typesetter.auto_save();
+    }
+
+    /// Fills the selected balloon with a clean white or black on the `TypeR Clean` layer.
+    pub(crate) fn typesetter_clean_selection(&mut self) -> Result<(), String> {
+        let Some(st) = self.session.active() else { return Ok(()) };
+        let Some(selection) = st.doc.selection.clone() else { return Ok(()) };
+        let layer = st.active_layer.and_then(|id| st.doc.layer(id)).and_then(|layer| match &layer.content {
+            photocraft_doc::LayerContent::Raster(surface) if crate::snow_clean::is_sampleable(surface) => Some(surface.clone()),
+            _ => None,
+        });
+        let color = crate::snow_clean::clean_fill_color(layer.as_ref(), &selection);
+        let hex = format!("#{:02X}{:02X}{:02X}", color[0], color[1], color[2]);
+        let existing = st.doc.layers.iter().find(|layer| layer.name == crate::snow_clean::CLEAN_LAYER).map(|layer| layer.id.0);
+        let id = match existing {
+            Some(id) => id,
+            None => {
+                let created = self.run("layer.new.layer", serde_json::json!({"name": crate::snow_clean::CLEAN_LAYER}))?;
+                created.get("layer").and_then(serde_json::Value::as_u64).ok_or("the clean layer was not created")?
+            }
+        };
+        self.run("layer.select", serde_json::json!({"layer": id}))?;
+        self.run("edit.fill", serde_json::json!({"color": hex}))?;
+        Ok(())
+    }
+
+    /// Multi-bubble fill: one selection captured per sub-tool click.
+    pub(crate) fn capture_typesetter_bubble(&mut self) {
+        let Some(selection) = self.session.active().and_then(|st| st.doc.selection.clone()) else {
+            self.ui.status = tl!("Capture a selection first").into();
+            self.ui.status_error = true;
+            return;
+        };
+        self.typesetter.push_multi_bubble_capture(selection);
+        let count = self.typesetter.multi_bubble_count();
+        self.ui.status = format!("{}: {count}", tl!("Bubble captured"));
+        self.ui.status_error = false;
+    }
+
+    /// Multi-bubble fill: pastes the queue into the captured balloons in order.
+    pub(crate) fn fill_typesetter_bubbles(&mut self) {
+        let captures = self.typesetter.drain_multi_bubble_captures();
+        if captures.is_empty() {
+            return;
+        }
+        let mut filled = 0usize;
+        for selection in captures {
+            let Some(text) = self.typesetter.state.active_line().map(|line| line.text.clone()) else { break };
+            let Some(preset) = self.typesetter.state.preset_for_line(self.typesetter.state.current_line_idx).cloned() else {
+                break;
+            };
+            if let Some(st) = self.session.active_mut() {
+                std::sync::Arc::make_mut(&mut st.doc).selection = Some(selection);
+            } else {
+                break;
+            }
+            if self.typesetter.state.options.auto_clean {
+                let _ = self.typesetter_clean_selection();
+            }
+            self.handle_typesetter_action(typesetter_ui::TypesetterAction { text, preset });
+            self.typesetter.state.advance_line();
+            filled = filled.saturating_add(1);
+        }
+        self.ui.status = format!("{}: {filled}", tl!("Filled bubbles"));
+        self.ui.status_error = false;
+        self.typesetter.auto_save();
+    }
+
+    /// Applies a TypeR style preset to the text layer already selected on the page, without
+    /// inserting text: character and paragraph properties go through `type.setStyle`.
+    pub(crate) fn apply_typesetter_style_to_active_layer(&mut self, preset: &photocraft_engine::typesetter::TextStylePreset) {
+        let target = self.session.active().and_then(|st| {
+            let is_text = |id: photocraft_doc::LayerId| matches!(st.doc.layer(id).map(|layer| &layer.content), Some(photocraft_doc::LayerContent::Text(_)));
+            st.active_layer.filter(|&id| is_text(id)).or_else(|| st.selected_layers().into_iter().rev().find(|&id| is_text(id)))
+        });
+        let Some(target_layer_id) = target else {
+            self.ui.status = "Выберите текстовый слой на странице".into();
+            self.ui.status_error = true;
+            return;
+        };
+        let hex = format!("#{:02x}{:02x}{:02x}{:02x}", preset.text_color[0], preset.text_color[1], preset.text_color[2], preset.text_color[3]);
+        let leading = if preset.leading > 0.0 { serde_json::json!(preset.leading) } else { serde_json::json!("auto") };
+        let params = serde_json::json!({
+            "layer": target_layer_id.0,
+            "font": preset.font_family,
+            "postscriptName": preset.font_postscript,
+            "size": preset.font_size,
+            "leading": leading,
+            "tracking": preset.tracking,
+            "horizontalScale": preset.horizontal_scale,
+            "italic": preset.italic,
+            "fauxBold": preset.bold,
+            "color": hex,
+            "align": preset.effective_align(),
+            "firstLineIndent": preset.first_line_indent,
+            "startIndent": preset.start_indent,
+            "endIndent": preset.end_indent,
+            "spaceAfter": preset.space_after,
+            "hyphenate": preset.hyphenate,
+            "direction": preset.direction
+        });
+        match self.run("type.setStyle", params) {
+            Ok(_) => {
+                if preset.stroke_width > 0.0 {
+                    let hex_color = format!("#{:02x}{:02x}{:02x}", preset.stroke_color[0], preset.stroke_color[1], preset.stroke_color[2]);
+                    let _ = self.run(
+                        "layer.layerStyle.stroke",
+                        serde_json::json!({
+                            "layer": target_layer_id.0,
+                            "size": preset.stroke_width,
+                            "position": "outside",
+                            "color": hex_color,
+                            "opacity": (preset.stroke_color[3] as f32 / 2.55).round() as u32
+                        }),
+                    );
+                }
+                self.ui.status = format!("Стиль «{}» применён к слою", preset.name);
+                self.ui.status_error = false;
+                self.typesetter_text_shape_source = None;
+                self.refresh_typesetter_text_shape(false);
+            }
+            Err(error) => {
+                self.ui.status = format!("Стиль не применён: {error}");
+                self.ui.status_error = true;
+            }
+        }
+    }
+
+    /// Centers the active TypeR text layer in the selection.
+    pub(crate) fn align_typesetter_layer(&mut self) {
+        let horizontal = self.run("layer.align.horizontalCenters", serde_json::json!({}));
+        let vertical = self.run("layer.align.verticalCenters", serde_json::json!({}));
+        match (horizontal, vertical) {
+            (Ok(_), Ok(_)) => {
+                self.ui.status = tl!("Layer centered in the selection").into();
+                self.ui.status_error = false;
+            }
+            (Err(error), _) | (_, Err(error)) => {
+                self.ui.status = format!("{}: {error}", tl!("Align failed"));
+                self.ui.status_error = true;
+            }
+        }
+    }
+
     /// Обработка действий тайпсеттера: создание текстового слоя на активном холсте.
     pub(crate) fn handle_typesetter_action(&mut self, action: typesetter_ui::TypesetterAction) {
+        if self.typesetter.is_blocking_canvas_insertion() {
+            return;
+        }
         let Some(st) = self.session.active() else {
             self.ui.status = "Откройте или создайте документ для вставки текста".into();
             self.ui.status_error = true;
@@ -1414,20 +1822,55 @@ impl PhotocraftApp {
             None
         };
 
-        // Готовим финальный текст (применяем ALL_CAPS если задано в стиле TypeR)
-        let mut final_text = if action.preset.all_caps { action.text.to_uppercase() } else { action.text };
+        // Готовим финальный текст (применяем ALL_CAPS если задано в стиле TypeR), снимаем
+        // markdown-маркеры сценария и запоминаем выделенные слова для faux-начертаний.
+        let source_text = if action.preset.all_caps { action.text.to_uppercase() } else { action.text };
+        let (stripped, styled_segments) = strip_typer_markdown(&source_text);
+        let mut final_text = stripped;
 
-        // Автоматический перенос строк (word wrap) и устранение «висячих» предлогов (солвер Кнута—Пласса)
+        // Пунктуационные реплики ("?!", "!!!", "…") масштабируются в TypeR, обычные — нет.
+        let mut font_size = action.preset.font_size;
+        let mut leading = if action.preset.leading > 0.0 { action.preset.leading } else { font_size * 1.2 };
+        if action.preset.punctuation_only_scale > 1.0 && is_punctuation_only(&final_text) {
+            font_size *= action.preset.punctuation_only_scale;
+            leading *= action.preset.punctuation_only_scale;
+        }
+
+        // Автоматический перенос строк (word wrap) и устранение «висячих» предлогов (солвер Кнута—Пласса).
+        // В контуре (эллипс, лассо, овальный баллон) кегль уменьшается, пока блок не впишется в
+        // вписанный прямоугольник контура, а не только в его bounding box.
         if let Some([_bx, _by, bw, bh]) = selection_box {
             final_text = photocraft_engine::knuth_plass::knuth_plass_bubble_wrap_ext(
                 &final_text,
                 bw,
                 bh,
-                action.preset.font_size,
+                font_size,
                 st.doc.resolution_dpi,
                 action.preset.horizontal_scale,
                 action.preset.hanging_punctuation,
             );
+            let h_scale = if action.preset.horizontal_scale > 1.5 { action.preset.horizontal_scale / 100.0 } else { 1.0 };
+            for _ in 0..6 {
+                let lines = final_text.split('\n').count().max(1) as f32;
+                let widest =
+                    final_text.split('\n').map(|line| photocraft_engine::knuth_plass::measure_token_width(line, font_size, h_scale)).fold(0.0f32, f32::max);
+                let block_height = lines * leading;
+                let factor = ((bw * 0.72) / widest.max(1.0)).min((bh * 0.72) / block_height.max(1.0)).min(1.0);
+                if factor > 0.97 {
+                    break;
+                }
+                font_size = (font_size * factor).max(6.0);
+                leading = (leading * factor).max(font_size * 1.05);
+                final_text = photocraft_engine::knuth_plass::knuth_plass_bubble_wrap_ext(
+                    &final_text,
+                    bw,
+                    bh,
+                    font_size,
+                    st.doc.resolution_dpi,
+                    action.preset.horizontal_scale,
+                    action.preset.hanging_punctuation,
+                );
+            }
         } else {
             final_text = photocraft_engine::knuth_plass::bind_orphan_prepositions(&final_text);
         }
@@ -1533,8 +1976,8 @@ impl PhotocraftApp {
         let point_baseline = if selection_box.is_none() {
             let dpi = st.doc.resolution_dpi;
             let px_per_pt = if dpi.is_finite() && dpi > 0.0 { dpi / 72.0 } else { 1.0 };
-            let leading_px = action.preset.leading * px_per_pt;
-            let font_size_px = action.preset.font_size * px_per_pt;
+            let leading_px = leading * px_per_pt;
+            let font_size_px = font_size * px_per_pt;
             let line_count = final_text.lines().count().max(1);
             let text_block_height_px = (line_count - 1) as f32 * leading_px;
             let cap_height_px = font_size_px * 0.7;
@@ -1543,28 +1986,37 @@ impl PhotocraftApp {
             None
         };
 
+        // Текст, который реально уйдёт в слой: по нему считаются диапазоны markdown-сегментов.
+        let runs_text = final_text.clone();
+
         let mut type_params = serde_json::json!({
             "text": final_text,
-            "size": action.preset.font_size,
+            "size": font_size,
             "font": resolved_family,
             "fontStyle": style_name,
             "weight": weight,
             "italic": action.preset.italic,
             "fauxBold": faux_bold,
             "fauxItalic": faux_italic,
-            "align": action.preset.align.as_str(),
+            "align": action.preset.effective_align(),
             "caps": caps_mode,
             "baseline": baseline_mode,
             "underline": action.preset.underline,
             "strikethrough": action.preset.strikethrough,
             "tracking": action.preset.tracking,
-            "leading": action.preset.leading,
+            "leading": leading,
             "horizontalScale": action.preset.horizontal_scale,
             "color": hex_text_color,
             "kerning": kerning_mode,
             "autoKern": auto_kern_val,
             "hangingRoman": action.preset.hanging_punctuation,
-            "antialias": action.preset.anti_alias
+            "antialias": action.preset.anti_alias,
+            "firstLineIndent": action.preset.first_line_indent,
+            "startIndent": action.preset.start_indent,
+            "endIndent": action.preset.end_indent,
+            "spaceAfter": action.preset.space_after,
+            "hyphenate": action.preset.hyphenate,
+            "direction": action.preset.direction
         });
 
         if let Some([bx, by, bw, bh]) = selection_box {
@@ -1573,7 +2025,7 @@ impl PhotocraftApp {
             type_params["verticalAlign"] = serde_json::json!("center");
             // Photoshop's positive baseline shift moves glyphs up, while the slider's
             // positive value is documented as shifting them down inside the bubble.
-            let optical = action.preset.font_size * self.typesetter.state.options.optical_baseline_factor;
+            let optical = font_size * self.typesetter.state.options.optical_baseline_factor;
             if optical != 0.0 {
                 type_params["baselineShift"] = serde_json::json!(-optical);
             }
@@ -1600,20 +2052,50 @@ impl PhotocraftApp {
         let res = self.run("type.create", type_params);
 
         if let Ok(v) = res {
-            if let Some(layer_id) = v.get("layer").and_then(serde_json::Value::as_u64)
-                && action.preset.stroke_width > 0.0
-            {
-                let hex_color = format!("#{:02x}{:02x}{:02x}", action.preset.stroke_color[0], action.preset.stroke_color[1], action.preset.stroke_color[2]);
-                let _ = self.run(
-                    "layer.layerStyle.stroke",
-                    serde_json::json!({
-                        "layer": layer_id,
-                        "size": action.preset.stroke_width,
-                        "position": "outside",
-                        "color": hex_color,
-                        "opacity": (action.preset.stroke_color[3] as f32 / 2.55).round() as u32
-                    }),
-                );
+            if let Some(layer_id) = v.get("layer").and_then(serde_json::Value::as_u64) {
+                // Markdown из сценария: **слово** → faux bold, *слово* → faux italic.
+                if !styled_segments.is_empty() {
+                    let chars: Vec<char> = runs_text.chars().collect();
+                    let mut runs = Vec::new();
+                    let mut at = 0usize;
+                    for (content, bold, italic) in &styled_segments {
+                        let needle: Vec<char> = content.chars().collect();
+                        let mut found = None;
+                        let mut index = at;
+                        while index + needle.len() <= chars.len() {
+                            if chars.get(index..index + needle.len()).is_some_and(|slice| slice == needle.as_slice()) {
+                                found = Some(index);
+                                break;
+                            }
+                            index += 1;
+                        }
+                        if let Some(start) = found {
+                            runs.push(serde_json::json!({
+                                "start": start,
+                                "end": start + needle.len(),
+                                "fauxBold": bold,
+                                "fauxItalic": italic
+                            }));
+                            at = start + needle.len();
+                        }
+                    }
+                    if !runs.is_empty() {
+                        let _ = self.run("type.edit", serde_json::json!({"layer": layer_id, "runs": runs}));
+                    }
+                }
+                if action.preset.stroke_width > 0.0 {
+                    let hex_color = format!("#{:02x}{:02x}{:02x}", action.preset.stroke_color[0], action.preset.stroke_color[1], action.preset.stroke_color[2]);
+                    let _ = self.run(
+                        "layer.layerStyle.stroke",
+                        serde_json::json!({
+                            "layer": layer_id,
+                            "size": action.preset.stroke_width,
+                            "position": "outside",
+                            "color": hex_color,
+                            "opacity": (action.preset.stroke_color[3] as f32 / 2.55).round() as u32
+                        }),
+                    );
+                }
             }
             // Снимаем активное выделение (Deselect / Ctrl+D), чтобы сразу можно было выделить следующий баббл
             let _ = self.run("select.deselect", serde_json::json!({}));
@@ -3153,6 +3635,7 @@ impl PhotocraftApp {
         if let Some(action) = typesetter_action {
             self.handle_typesetter_action(action);
         }
+        self.typesetter_requests();
         analysis_ui::windows(self, &ctx);
         timeline_ui::windows(self, &ctx);
         workspace_ui::windows(self, &ctx);
@@ -4756,6 +5239,53 @@ mod clipboard_tests {
         app.run("layer.layerMask.delete", json!({})).unwrap();
         assert_eq!(pair(&app), (GREEN, BLUE), "deleting the targeted mask goes back to the pixels");
     }
+}
+
+/// TypeR's script markdown: `**word**` is faux bold, `*word*` faux italic. Returns the plain text
+/// (markers removed) and the styled segments in reading order, for `type.edit` runs.
+fn strip_typer_markdown(text: &str) -> (String, Vec<(String, bool, bool)>) {
+    let chars: Vec<char> = text.chars().collect();
+    let mut plain = String::new();
+    let mut segment = String::new();
+    let mut segments = Vec::new();
+    let (mut bold, mut italic) = (false, false);
+    let flush = |segment: &mut String, bold: bool, italic: bool, segments: &mut Vec<(String, bool, bool)>| {
+        if !segment.is_empty() && (bold || italic) {
+            segments.push((std::mem::take(segment), bold, italic));
+        } else {
+            segment.clear();
+        }
+    };
+    let mut index = 0usize;
+    while index < chars.len() {
+        if chars[index] == '*' {
+            if chars.get(index + 1) == Some(&'*') {
+                flush(&mut segment, bold, italic, &mut segments);
+                bold = !bold;
+                index += 2;
+                continue;
+            }
+            flush(&mut segment, bold, italic, &mut segments);
+            italic = !italic;
+            index += 1;
+            continue;
+        }
+        plain.push(chars[index]);
+        if bold || italic {
+            segment.push(chars[index]);
+        } else if !segment.is_empty() {
+            flush(&mut segment, bold, italic, &mut segments);
+        }
+        index += 1;
+    }
+    flush(&mut segment, bold, italic, &mut segments);
+    (plain, segments)
+}
+
+/// A line that is only punctuation (`?!`, `!!!`, `…`) is enlarged by TypeR.
+fn is_punctuation_only(text: &str) -> bool {
+    let trimmed = text.trim();
+    !trimmed.is_empty() && trimmed.chars().all(|c| c.is_ascii_punctuation() || matches!(c, '…' | '—' | '–' | '«' | '»' | '“' | '”' | '‘' | '’' | '！' | '？'))
 }
 
 #[cfg(test)]

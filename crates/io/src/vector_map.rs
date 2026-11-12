@@ -436,6 +436,9 @@ pub fn vogk_bytes(s: &LiveShape, dpi: f32) -> Option<Vec<u8>> {
                 .with("keyOriginLineArrConc", Value::Integer(0))
         }
         LiveShape::Polygon { .. } => return None,
+        // Photoshop has no origination type for a parametric balloon group; the balloon is
+        // exported as its plain outline.
+        LiveShape::BalloonGroup { .. } => return None,
     };
     let o = o.with("keyOriginIndex", Value::Integer(0));
     let d = Descriptor::new("null").with("keyDescriptorList", Value::List(vec![Value::Descriptor(o)]));

@@ -318,6 +318,11 @@ pub enum LiveShape {
         to: [f64; 2],
         weight: f64,
     },
+    /// Parametric manga balloons on one layer (Speech Balloon tool). The geometry is rebuilt from
+    /// the group; `photocraft_vector::balloon` owns the math.
+    BalloonGroup {
+        group: LiveBalloonGroup,
+    },
 }
 
 /// A shape layer: a filled and/or stroked path.
@@ -352,6 +357,233 @@ impl ShapeLayer {
     pub fn has_soft_mask(&self) -> bool {
         (self.density.is_finite() && self.density < 1.0) || (self.feather.is_finite() && self.feather > 0.0)
     }
+}
+
+// --- Parametric manga balloons (pure data; the math lives in `photocraft-vector::balloon`) ---
+
+/// Tail presets of a manga balloon (manga speech-balloon vocabulary).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TailPreset {
+    /// Straight tapered wedge.
+    #[default]
+    Wedge,
+    /// Bowed tail with a sideways bend (a cubic Bézier control point).
+    Arc,
+    /// S-shaped tail (a double bend).
+    SCurve,
+    /// Zigzag lightning tail (a shout, a phone, a loudspeaker).
+    Lightning,
+    /// Forked double tail (a chorus remark).
+    Double,
+    /// A chain of shrinking, detached bubbles (a character's thought).
+    Thought,
+}
+
+impl TailPreset {
+    /// Stable id used by the UI and the command payloads.
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::Wedge => "wedge",
+            Self::Arc => "arc",
+            Self::SCurve => "sCurve",
+            Self::Lightning => "lightning",
+            Self::Double => "double",
+            Self::Thought => "thought",
+        }
+    }
+
+    /// Parses an id as [`TailPreset::id`] writes it (`sCurve` also accepts `scurve`).
+    pub fn from_id(id: &str) -> Option<Self> {
+        match id {
+            "wedge" => Some(Self::Wedge),
+            "arc" => Some(Self::Arc),
+            "sCurve" | "scurve" => Some(Self::SCurve),
+            "lightning" => Some(Self::Lightning),
+            "double" => Some(Self::Double),
+            "thought" => Some(Self::Thought),
+            _ => None,
+        }
+    }
+}
+
+/// A manual offset of one spike or cloud-lobe vertex, in document px.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VertexOverride {
+    pub index: u32,
+    pub offset: [f64; 2],
+}
+
+/// The parametric body of a balloon.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "bodyKind", rename_all = "camelCase")]
+pub enum LiveBalloonBody {
+    /// An oval or superelliptical (squircle) balloon.
+    Ellipse {
+        /// `[x, y, w, h]` in document px.
+        rect: [f64; 4],
+        /// 0 = plain ellipse, 1 = full squircle.
+        #[serde(default)]
+        squircle: f64,
+    },
+    /// A rectangular balloon (a caption box, narration).
+    Rect {
+        rect: [f64; 4],
+        /// Corner radius in px.
+        #[serde(default)]
+        corner_radius: f64,
+    },
+    /// A thought cloud with asymmetric lobes and cusped joints.
+    Cloud {
+        rect: [f64; 4],
+        /// Number of lobes: 4..=64 (default 10).
+        bumps: u32,
+        /// Lobe height: 0.04..=0.60 (default 0.18).
+        amplitude: f64,
+        /// How deep the joints bite in: 0.0..=0.5 (default 0.22).
+        cusp_bite: f64,
+        /// Asymmetry of the lobes: 0.0..=1.0 (default 0.35).
+        jitter: f64,
+        seed: u32,
+    },
+    /// A shout / explosion balloon (concave arcs and sub-harmonics).
+    Spiky {
+        rect: [f64; 4],
+        /// Number of spikes: 5..=128 (default 18).
+        spikes: u32,
+        /// Main ray length: 0.05..=1.5 (default 0.38).
+        length: f64,
+        /// Alternation of long and short spikes: 0.0..=1.0 (default 0.45).
+        sub_harmonic: f64,
+        /// Concavity of the arcs: 0.0..=1.0 (default 0.65).
+        concavity: f64,
+        /// Random spread: 0.0..=1.0 (default 0.30).
+        jitter: f64,
+        smooth: bool,
+        seed: u32,
+    },
+    /// A sea-urchin flash (ウニフラ): radial needles tapering towards the centre over a white mask.
+    Uniflash {
+        rect: [f64; 4],
+        /// Number of needles: 32..=400 (default 160).
+        needles: u32,
+        /// Inner field for the text: 0.30..=0.90 (default 0.62).
+        inner_ratio: f64,
+        /// Grouping of the needles into bundles: 0.0..=1.0 (default 0.40).
+        bundle_group: f64,
+        /// Spread of the needle lengths: 0.0..=1.0 (default 0.50).
+        length_jitter: f64,
+        /// Spread of the needle angles: 0.0..=1.0 (default 0.25).
+        angle_jitter: f64,
+        /// Base thickness of a needle outside: px (default 2.2).
+        needle_width: f64,
+        seed: u32,
+    },
+}
+
+impl LiveBalloonBody {
+    /// The body's bounding rectangle `[x, y, w, h]` in document px.
+    pub fn rect(&self) -> [f64; 4] {
+        match self {
+            Self::Ellipse { rect, .. } | Self::Rect { rect, .. } | Self::Cloud { rect, .. } | Self::Spiky { rect, .. } | Self::Uniflash { rect, .. } => *rect,
+        }
+    }
+
+    /// Moves the body to a new bounding rectangle.
+    pub fn set_rect(&mut self, new_rect: [f64; 4]) {
+        match self {
+            Self::Ellipse { rect, .. } | Self::Rect { rect, .. } | Self::Cloud { rect, .. } | Self::Spiky { rect, .. } | Self::Uniflash { rect, .. } => {
+                *rect = new_rect
+            }
+        }
+    }
+}
+
+/// A parametric tail of a balloon.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveBalloonTail {
+    pub id: u32,
+    pub preset: TailPreset,
+    /// Where the mouth sits on the body's perimeter: `t` in `[0.0, 1.0)` (0.0 = 12 o'clock,
+    /// clockwise).
+    pub perimeter_t: f64,
+    /// Width of the mouth on the body's contour: px (default 28.0).
+    pub mouth_width: f64,
+    /// The tip of the tail `[x, y]` in document px.
+    pub tip: [f64; 2],
+    /// Sideways bend, perpendicular to the chord: -1.0..=1.0.
+    pub bend: f64,
+    /// Number of bubbles for the `Thought` preset: 1..=8 (default 3).
+    pub bubbles: u32,
+    /// Radius of the leading bubble for the `Thought` preset (default 10.0).
+    pub bubble_radius: f64,
+}
+
+/// One parametric balloon.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveBalloon {
+    pub id: u32,
+    pub body: LiveBalloonBody,
+    #[serde(default)]
+    pub tails: Vec<LiveBalloonTail>,
+    #[serde(default = "default_one")]
+    pub next_tail_id: u32,
+    #[serde(default)]
+    pub vertex_overrides: Vec<VertexOverride>,
+    #[serde(default)]
+    pub hand_drawn_noise: f64,
+    #[serde(default = "default_stroke_width")]
+    pub stroke_width: f64,
+    #[serde(default = "default_true")]
+    pub auto_merge_overlapping: bool,
+}
+
+fn default_one() -> u32 {
+    1
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_stroke_width() -> f64 {
+    3.0
+}
+
+impl Default for LiveBalloon {
+    fn default() -> Self {
+        Self {
+            id: 1,
+            body: LiveBalloonBody::Ellipse { rect: [100.0, 100.0, 240.0, 160.0], squircle: 0.25 },
+            tails: vec![LiveBalloonTail {
+                id: 1,
+                preset: TailPreset::Arc,
+                perimeter_t: 0.58,
+                mouth_width: 28.0,
+                tip: [130.0, 320.0],
+                bend: 0.22,
+                bubbles: 3,
+                bubble_radius: 10.0,
+            }],
+            next_tail_id: 2,
+            vertex_overrides: Vec::new(),
+            hand_drawn_noise: 0.0,
+            stroke_width: 3.0,
+            auto_merge_overlapping: true,
+        }
+    }
+}
+
+/// The balloons of one layer.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveBalloonGroup {
+    pub items: Vec<LiveBalloon>,
+    #[serde(default = "default_one")]
+    pub next_balloon_id: u32,
 }
 
 #[cfg(test)]
@@ -395,5 +627,40 @@ mod tests {
         assert_eq!(back.1, s);
         let v: Path = serde_json::from_str(r#"{"subpaths":[{"closed":true,"knots":[]}]}"#).unwrap();
         assert_eq!(v.subpaths[0].op, PathOp::Combine);
+    }
+
+    #[test]
+    fn a_balloon_group_survives_a_serde_roundtrip() {
+        let group = LiveBalloonGroup { items: vec![LiveBalloon::default()], next_balloon_id: 2 };
+        let live = LiveShape::BalloonGroup { group: group.clone() };
+        let json = serde_json::to_string(&live).unwrap();
+        assert!(json.contains("balloonGroup"), "{json}");
+        let back: LiveShape = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, live);
+        let LiveShape::BalloonGroup { group: back_group } = back else { panic!("a balloon group") };
+        assert_eq!(back_group.items.len(), 1);
+        assert_eq!(back_group.items[0].tails.len(), 1);
+        assert_eq!(back_group.items[0].tails[0].preset, TailPreset::Arc);
+    }
+
+    #[test]
+    fn a_balloon_saved_before_the_optional_fields_loads_with_defaults() {
+        let old = r#"{"bodyKind":"ellipse","rect":[0.0,0.0,100.0,80.0]}"#;
+        let body: LiveBalloonBody = serde_json::from_str(old).unwrap();
+        assert_eq!(body, LiveBalloonBody::Ellipse { rect: [0.0, 0.0, 100.0, 80.0], squircle: 0.0 });
+        let old = r#"{"id":1,"body":{"bodyKind":"ellipse","rect":[0.0,0.0,100.0,80.0]}}"#;
+        let balloon: LiveBalloon = serde_json::from_str(old).unwrap();
+        assert!(balloon.tails.is_empty());
+        assert_eq!(balloon.next_tail_id, 1);
+        assert_eq!(balloon.stroke_width, 3.0);
+        assert!(balloon.auto_merge_overlapping);
+    }
+
+    #[test]
+    fn tail_preset_ids_round_trip() {
+        for preset in [TailPreset::Wedge, TailPreset::Arc, TailPreset::SCurve, TailPreset::Lightning, TailPreset::Double, TailPreset::Thought] {
+            assert_eq!(TailPreset::from_id(preset.id()), Some(preset));
+        }
+        assert_eq!(TailPreset::from_id("nope"), None);
     }
 }

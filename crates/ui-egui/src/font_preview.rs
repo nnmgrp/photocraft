@@ -6,6 +6,7 @@ use std::sync::PoisonError;
 use egui::{ColorImage, Rect, TextureHandle, TextureOptions, pos2, vec2};
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_doc::TextLayer;
+use photocraft_doc::text::{ParagraphRun, ParagraphStyle, TextAlign, TextShape};
 use photocraft_engine::prefs::FontPreview;
 use photocraft_geom::Affine;
 
@@ -202,23 +203,63 @@ struct LabelSample {
     size: [f32; 2],
 }
 
-type LabelKey = (String, String, u32, u64, u32);
+type LabelKey = (String, String, u32, u64, u32, bool, bool);
 
 #[derive(Clone, Default)]
 struct LabelCache(VecDeque<(LabelKey, Option<LabelSample>)>);
 
 const LABEL_CACHE_ID: &str = "font-name-labels";
 
-fn label_key(ctx: &egui::Context, family: &str, text: &str, size: f32) -> LabelKey {
-    (family.to_owned(), text.to_owned(), scale_key(render_scale(ctx)), photocraft_text::fonts::shared_generation(), size as u32)
+fn label_key(ctx: &egui::Context, family: &str, text: &str, size: f32, bold: bool, italic: bool) -> LabelKey {
+    (family.to_owned(), text.to_owned(), scale_key(render_scale(ctx)), photocraft_text::fonts::shared_generation(), size as u32, bold, italic)
 }
 
-fn render_label(engine: &mut photocraft_text::TextEngine, family: &str, text: &str, scale: f32, size: f32) -> Option<(ColorImage, [f32; 2])> {
+pub(crate) fn render_label(
+    engine: &mut photocraft_text::TextEngine,
+    family: &str,
+    text: &str,
+    scale: f32,
+    size: f32,
+    bold: bool,
+    italic: bool,
+) -> Option<(ColorImage, [f32; 2])> {
     if text.trim().is_empty() || !engine.fonts.has_family(family) {
         return None;
     }
-    let layer = TextLayer { text: text.into(), font_family: family.into(), size_pt: size * scale, ..Default::default() };
-    let layout = engine.layout(&layer, 72.0);
+    let mut layer = TextLayer {
+        text: text.into(),
+        font_family: family.into(),
+        size_pt: size * scale,
+        runs: if bold || italic {
+            vec![photocraft_doc::text::TextRun {
+                len: text.len(),
+                style: photocraft_doc::text::CharStyle {
+                    font_family: family.into(),
+                    size_pt: size * scale,
+                    weight: if bold { 700 } else { 400 },
+                    italic,
+                    faux_bold: bold,
+                    faux_italic: italic,
+                    ..Default::default()
+                },
+            }]
+        } else {
+            Vec::new()
+        },
+        ..Default::default()
+    };
+    let mut layout = engine.layout(&layer, 72.0);
+    // Point text is always left-aligned. For a multi-line sample, measure the widest line
+    // once, then re-lay it as centred box text so each line is centred like TypeR's cards.
+    if text.contains('\n')
+        && let Some(measured) = layout.bounds()
+    {
+        let width = (measured[2] - measured[0]).abs().max(1.0);
+        let lines = text.lines().count().max(1) as f32;
+        layer.shape = TextShape::Box { x: 0.0, y: 0.0, width: width + 1.0, height: (size * scale * lines * 2.0).max(1.0) };
+        layer.paragraphs = vec![ParagraphRun { len: text.len(), style: ParagraphStyle { align: TextAlign::Center, ..Default::default() } }];
+        layout = engine.layout(&layer, 72.0);
+    }
     let bounds = layout.bounds()?;
     let width = ((bounds[2] - bounds[0]).abs().ceil() as usize).saturating_add(2);
     let height = ((bounds[3] - bounds[1]).abs().ceil() as usize).saturating_add(2);
@@ -237,9 +278,9 @@ fn render_label(engine: &mut photocraft_text::TextEngine, family: &str, text: &s
     Some((image, [width as f32 / scale, height as f32 / scale]))
 }
 
-fn label_sample(ctx: &egui::Context, family: &str, text: &str, size: f32) -> Option<LabelSample> {
+fn label_sample(ctx: &egui::Context, family: &str, text: &str, size: f32, bold: bool, italic: bool) -> Option<LabelSample> {
     let id = egui::Id::new(LABEL_CACHE_ID);
-    let key = label_key(ctx, family, text, size);
+    let key = label_key(ctx, family, text, size, bold, italic);
     let cached: Option<Option<LabelSample>> = ctx.data_mut(|d| {
         let cache = d.get_temp_mut_or_default::<LabelCache>(id);
         let index = cache.0.iter().position(|(k, _)| k == &key)?;
@@ -253,10 +294,12 @@ fn label_sample(ctx: &egui::Context, family: &str, text: &str, size: f32) -> Opt
     }
     let scale = render_scale(ctx);
     let point_size = size;
-    let sample =
-        render_label(&mut photocraft_text::shared().lock().unwrap_or_else(PoisonError::into_inner), family, text, scale, size).map(|(image, logical)| {
-            LabelSample { texture: ctx.load_texture(format!("font-name-{family}-{text}-{point_size}-{scale}"), image, TextureOptions::LINEAR), size: logical }
-        });
+    let sample = render_label(&mut photocraft_text::shared().lock().unwrap_or_else(PoisonError::into_inner), family, text, scale, size, bold, italic).map(
+        |(image, logical)| LabelSample {
+            texture: ctx.load_texture(format!("font-name-{family}-{text}-{point_size}-{scale}-{bold}-{italic}"), image, TextureOptions::LINEAR),
+            size: logical,
+        },
+    );
     ctx.data_mut(|d| {
         let cache = d.get_temp_mut_or_default::<LabelCache>(id);
         if cache.0.len() >= CACHE_LIMIT {
@@ -269,18 +312,54 @@ fn label_sample(ctx: &egui::Context, family: &str, text: &str, size: f32) -> Opt
 
 /// The on-screen size a style name needs in its own face, or `None` when the family is missing
 /// (the caller then keeps the plain label).
-pub(crate) fn name_size(ctx: &egui::Context, family: &str, text: &str, size: f32) -> Option<[f32; 2]> {
-    label_sample(ctx, family, text, size).map(|s| s.size)
+pub(crate) fn name_size(ctx: &egui::Context, family: &str, text: &str, size: f32, bold: bool, italic: bool) -> Option<[f32; 2]> {
+    label_sample(ctx, family, text, size, bold, italic).map(|s| s.size)
 }
 
 /// Paint a style name in its own face inside `rect`, left-aligned and vertically centred.
-pub(crate) fn paint_name(ui: &egui::Ui, family: &str, text: &str, size: f32, rect: Rect, color: egui::Color32) {
-    let Some(sample) = label_sample(ui.ctx(), family, text, size) else {
+#[allow(clippy::too_many_arguments)] // the label's face, size, box and colour are one group
+pub(crate) fn paint_name(ui: &egui::Ui, family: &str, text: &str, size: f32, rect: Rect, color: egui::Color32, bold: bool, italic: bool) {
+    let Some(sample) = label_sample(ui.ctx(), family, text, size, bold, italic) else {
+        let mut job = egui::text::LayoutJob::default();
+        job.append(text, 0.0, egui::TextFormat { font_id: egui::FontId::proportional(size), color, italics: italic, ..Default::default() });
+        job.wrap.max_width = rect.width();
+        let galley = ui.painter().layout_job(job);
+        let target = Rect::from_min_size(pos2(snap(ui.ctx(), rect.left()), snap(ui.ctx(), rect.center().y - galley.size().y / 2.0)), galley.size());
+        ui.painter().galley(target.min, galley, color);
         return;
     };
     let [w, h] = sample.size;
     let target = Rect::from_min_size(pos2(snap(ui.ctx(), rect.left()), snap(ui.ctx(), rect.center().y - h / 2.0)), vec2(w, h));
     ui.painter().image(sample.texture.id(), target, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), color);
+}
+
+/// Paint a multi-line sample centred in `rect`, scaled down to fit, optionally with a
+/// faux outline so the tiny TextShapeR cards read like the real styled type.
+pub(crate) fn paint_centered(ui: &egui::Ui, family: &str, text: &str, size: f32, rect: Rect, color: egui::Color32) {
+    let fallback = |ui: &egui::Ui| {
+        let mut job = egui::text::LayoutJob::default();
+        job.append(text, 0.0, egui::TextFormat { font_id: egui::FontId::proportional(11.0), color, ..Default::default() });
+        job.wrap.max_width = rect.width().max(10.0);
+        job.wrap.break_anywhere = false;
+        let galley = ui.painter().layout_job(job);
+        let pos = egui::pos2((rect.center().x - galley.size().x * 0.5).round(), (rect.center().y - galley.size().y * 0.5).round());
+        ui.painter().galley(pos, galley, color);
+    };
+
+    let Some(sample) = label_sample(ui.ctx(), family, text, size, false, false) else {
+        fallback(ui);
+        return;
+    };
+    let [w, h] = sample.size;
+    if w <= 0.0 || h <= 0.0 || rect.width() <= 1.0 || rect.height() <= 1.0 {
+        fallback(ui);
+        return;
+    }
+    let scale = (rect.width() / w).min(rect.height() / h).min(1.0);
+    let target = Rect::from_center_size(rect.center(), vec2(w * scale, h * scale));
+    let painter = ui.painter().with_clip_rect(rect);
+    let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+    painter.image(sample.texture.id(), target, uv, color);
 }
 
 #[cfg(test)]
@@ -298,14 +377,47 @@ mod tests {
     }
 
     #[test]
+    fn multiline_labels_center_each_line() {
+        let mut engine = photocraft_text::TextEngine::new();
+        let (image, _) = render_label(&mut engine, "Inter", "WWWWWWWW\nx", 1.0, 20.0, false, false).expect("bundled sans");
+        let width = image.size[0];
+        let mut rows = Vec::new();
+        for y in 0..image.size[1] {
+            let mut xs = Vec::new();
+            for x in 0..width {
+                if image.pixels[y * width + x].a() > 8 {
+                    xs.push(x);
+                }
+            }
+            if let (Some(&first), Some(&last)) = (xs.first(), xs.last()) {
+                rows.push((y, first, last));
+            }
+        }
+        let Some(&(last_y, _, _)) = rows.last() else { panic!("the sample has ink") };
+        let last_row = rows.iter().rev().find(|(y, _, _)| *y + 2 >= last_y).expect("last ink row");
+        let narrow_center = (last_row.1 + last_row.2) as f32 / 2.0;
+        assert!((narrow_center - width as f32 / 2.0).abs() <= 2.0, "the short line must be centred: width {width}, centre {narrow_center}");
+    }
+
+    #[test]
     fn style_names_render_in_their_own_face() {
         let mut engine = photocraft_text::TextEngine::new();
-        let (sans, sans_size) = render_label(&mut engine, "Inter", "Стиль", 1.0, 13.0).expect("bundled sans");
-        let (mono, mono_size) = render_label(&mut engine, "JetBrains Mono", "Стиль", 1.0, 13.0).expect("bundled mono");
+        let (sans, sans_size) = render_label(&mut engine, "Inter", "Стиль", 1.0, 13.0, false, false).expect("bundled sans");
+        let (mono, mono_size) = render_label(&mut engine, "JetBrains Mono", "Стиль", 1.0, 13.0, false, false).expect("bundled mono");
         assert_ne!(sans.pixels, mono.pixels, "the name uses the style's own outlines");
         assert_ne!(sans_size, mono_size, "different faces have different widths");
-        assert!(render_label(&mut engine, "Missing font", "Стиль", 1.0, 13.0).is_none());
-        assert!(render_label(&mut engine, "Inter", "", 1.0, 13.0).is_none());
+        assert!(render_label(&mut engine, "Missing font", "Стиль", 1.0, 13.0, false, false).is_none());
+        assert!(render_label(&mut engine, "Inter", "", 1.0, 13.0, false, false).is_none());
+    }
+
+    #[test]
+    fn style_names_support_bold_and_italic() {
+        let mut engine = photocraft_text::TextEngine::new();
+        let (plain, _) = render_label(&mut engine, "Inter", "Стиль", 1.0, 13.0, false, false).expect("bundled sans");
+        let (bold, _) = render_label(&mut engine, "Inter", "Стиль", 1.0, 13.0, true, false).expect("bundled sans bold");
+        let (italic, _) = render_label(&mut engine, "Inter", "Стиль", 1.0, 13.0, false, true).expect("bundled sans italic");
+        assert_ne!(plain.pixels, bold.pixels, "bold uses bold outlines");
+        assert_ne!(plain.pixels, italic.pixels, "italic uses italic outlines");
     }
 
     /// The label is rasterised at the screen's own pixels-per-point, so the texture maps 1:1 onto
@@ -314,7 +426,7 @@ mod tests {
     fn labels_stay_pixel_for_pixel_at_fractional_scales() {
         let mut engine = photocraft_text::TextEngine::new();
         for scale in [1.0f32, 1.25, 1.5, 2.0] {
-            let (image, size) = render_label(&mut engine, "Inter", "Автор", scale, 13.0).expect("bundled sans");
+            let (image, size) = render_label(&mut engine, "Inter", "Автор", scale, 13.0, false, false).expect("bundled sans");
             let physical_w = (size[0] * scale).round() as i64;
             let physical_h = (size[1] * scale).round() as i64;
             assert!((physical_w - image.size[0] as i64).abs() <= 1, "scale {scale}: {} vs {}", image.size[0], physical_w);

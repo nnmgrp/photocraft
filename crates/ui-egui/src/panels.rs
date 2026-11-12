@@ -2269,6 +2269,22 @@ fn dock_body_inner(app: &mut PhotocraftApp, ui: &mut egui::Ui, group: crate::doc
         (Group::History, _) => crate::comps_ui::panel(app, ui),
         (Group::Layers, 0) => layers(app, ui),
         (Group::Layers, 1) => channels(app, ui),
+        (Group::Layers, 2) => crate::vector_ui::paths_panel(app, ui),
+        (Group::Layers, 3) => {
+            // The panel's state is moved out for the call, so the action can use the app.
+            let mut state = std::mem::take(&mut app.sai_panel);
+            let action = crate::comic_sai_panel::render_linework_dock_panel(ui, &mut state);
+            app.sai_panel = state;
+            match action {
+                Some(crate::comic_sai_panel::LineworkAction::NewLayer) => {
+                    let _ = app.run("layer.newLinework", json!({ "width": app.sai_panel.base_width }));
+                }
+                Some(crate::comic_sai_panel::LineworkAction::ConvertBalloon) => {
+                    let _ = app.run("shape.balloon.convertToLinework", json!({}));
+                }
+                None => {}
+            }
+        }
         (Group::Layers, _) => crate::vector_ui::paths_panel(app, ui),
         (Group::Timelapse, _) => crate::timelapse_ui::panel(app, ui),
     }
@@ -3411,6 +3427,12 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 }
             }
         });
+        // PaintTool SAI's layers footer: a spline button that adds a Linework vector layer,
+        // ready for the Vector Curve tool.
+        let linework = icons::button(ui, "spline", 26.0, false, tl!("Create a Linework vector layer"));
+        if linework.clicked() {
+            actions.push(("layer.newLinework".into(), json!({})));
+        }
         // Photoshop's footer starts with Link Layers (enabled with two or more layers selected).
         let can_link = app.session.is_enabled("layer.linkLayers");
         if ui.add_enabled_ui(can_link, |ui| icons::button(ui, "link-2", 26.0, false, tl!("Link layers"))).inner.clicked() {

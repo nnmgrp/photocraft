@@ -162,3 +162,129 @@ fn presets_are_listed_for_the_ui() {
     let ids: Vec<&str> = presets["presets"].as_array().unwrap().iter().filter_map(|p| p["id"].as_str()).collect();
     assert_eq!(ids, ["wedge", "arc", "double", "thought"]);
 }
+
+/// A parametric balloon payload, the way the gizmo sends it.
+fn live_balloon(body: serde_json::Value) -> serde_json::Value {
+    json!({
+        "id": 1,
+        "body": body,
+        "tails": [],
+        "nextTailId": 1,
+        "vertexOverrides": [],
+        "handDrawnNoise": 0.0,
+        "strokeWidth": 3.0,
+        "autoMergeOverlapping": true
+    })
+}
+
+/// The balloon group of a layer, or a panic when the layer is not one.
+fn balloon_group(s: &Session, id: u64) -> LiveBalloonGroup {
+    match shape(s, id).live {
+        Some(LiveShape::BalloonGroup { group }) => group,
+        _ => panic!("the layer is not a balloon group"),
+    }
+}
+
+#[test]
+fn a_live_balloon_becomes_a_parametric_layer_and_undoes_in_one_step() {
+    let mut s = session(300, 300);
+    let created = s
+        .execute("shape.balloon.create", json!({"balloon": live_balloon(json!({"bodyKind": "ellipse", "rect": [20.0, 20.0, 200.0, 140.0], "squircle": 0.2}))}))
+        .unwrap();
+    let id = created["layer"].as_u64().unwrap();
+    let sh = shape(&s, id);
+    assert!(matches!(sh.live, Some(LiveShape::BalloonGroup { .. })), "the layer keeps the parametric balloon");
+    assert!(!sh.path.subpaths.is_empty(), "the balloon has a drawable outline");
+
+    // Replacing the balloon is one undoable step.
+    let history = s.active().unwrap().history.past_len();
+    s.execute(
+        "shape.balloon.update",
+        json!({"layer": id, "balloon": live_balloon(json!({"bodyKind": "rect", "rect": [40.0, 40.0, 120.0, 90.0], "cornerRadius": 8.0}))}),
+    )
+    .unwrap();
+    assert_eq!(s.active().unwrap().history.past_len(), history + 1, "one undoable step");
+    assert_eq!(balloon_group(&s, id).items[0].body.rect(), [40.0, 40.0, 120.0, 90.0]);
+}
+
+#[test]
+fn a_live_balloon_tail_is_added_removed_and_converted_to_linework() {
+    let mut s = session(300, 300);
+    let id = s
+        .execute("shape.balloon.create", json!({"balloon": live_balloon(json!({"bodyKind": "ellipse", "rect": [40.0, 40.0, 160.0, 120.0], "squircle": 0.0}))}))
+        .unwrap()["layer"]
+        .as_u64()
+        .unwrap();
+
+    let added = s.execute("shape.balloon.tail.add", json!({"layer": id, "balloonId": 1, "tip": [120.0, 240.0], "preset": "arc"})).unwrap();
+    let tail_id = added["tailId"].as_u64().expect("the tail has an id");
+    assert_eq!(balloon_group(&s, id).items[0].tails.len(), 1);
+
+    s.execute("shape.balloon.tail.remove", json!({"layer": id, "balloonId": 1, "tailId": tail_id})).unwrap();
+    assert!(balloon_group(&s, id).items[0].tails.is_empty(), "the tail is gone");
+
+    let converted = s.execute("shape.balloon.convertToLinework", json!({"layer": id})).unwrap();
+    assert!(converted["convertedStrokes"].as_u64().unwrap() > 0, "the balloon became linework");
+    let sh = shape(&s, id);
+    assert!(sh.live.is_none(), "the balloon is clean linework now");
+    assert!(!sh.path.subpaths.is_empty());
+}
+
+#[test]
+fn hostile_live_balloon_params_are_errors_without_editing_the_document() {
+    let mut s = session(300, 300);
+    let id = ellipse_layer(&mut s);
+    let before = doc(&s).clone();
+    let history = s.active().unwrap().history.past_len();
+
+    // A balloon that cannot be drawn is refused.
+    let cases = [
+        json!({"balloon": live_balloon(json!({"bodyKind": "ellipse", "rect": [0.0, 0.0, 0.0, 10.0], "squircle": 0.0}))}),
+        json!({"balloon": live_balloon(json!({"bodyKind": "ellipse", "rect": [0.0, 0.0, 1e300, 10.0], "squircle": 0.0}))}),
+        json!({"balloon": live_balloon(json!({"bodyKind": "nope", "rect": [0.0, 0.0, 10.0, 10.0]}))}),
+        json!({"balloon": {"id": 1, "body": {"bodyKind": "ellipse", "rect": [0.0, 0.0, 10.0, 10.0]}, "strokeWidth": 0.0}}),
+    ];
+    for params in cases {
+        assert!(s.execute("shape.balloon.create", params.clone()).is_err(), "{params}");
+        assert_eq!(doc(&s), &before, "no edit for {params}");
+    }
+
+    // A plain shape layer is not a balloon group: the group commands refuse it.
+    let cases = [
+        json!({"layer": id, "balloon": live_balloon(json!({"bodyKind": "ellipse", "rect": [0.0, 0.0, 10.0, 10.0], "squircle": 0.0}))}),
+        json!({"layer": id, "balloonId": 1, "tip": [10.0, 10.0]}),
+        json!({"layer": id, "balloonId": 1, "tailId": 1}),
+        json!({"layer": id}),
+        json!({"layer": 9999, "balloonId": 1, "tip": [10.0, 10.0]}),
+    ];
+    for params in cases {
+        assert!(s.execute("shape.balloon.update", params.clone()).is_err(), "{params}");
+        assert!(s.execute("shape.balloon.tail.add", params.clone()).is_err(), "{params}");
+        assert!(s.execute("shape.balloon.tail.remove", params.clone()).is_err(), "{params}");
+        assert!(s.execute("shape.balloon.convertToLinework", params.clone()).is_err(), "{params}");
+        assert_eq!(doc(&s), &before, "no edit for {params}");
+    }
+
+    // A tail with a broken tip or an unknown preset is refused too.
+    let live_id = s
+        .execute("shape.balloon.create", json!({"balloon": live_balloon(json!({"bodyKind": "ellipse", "rect": [40.0, 40.0, 120.0, 90.0], "squircle": 0.0}))}))
+        .unwrap()["layer"]
+        .as_u64()
+        .unwrap();
+    let with_balloon = doc(&s).clone();
+    let cases = [
+        json!({"layer": live_id, "balloonId": 1, "tip": [10.0]}),
+        json!({"layer": live_id, "balloonId": 1, "tip": [1e300, 0.0]}),
+        json!({"layer": live_id, "balloonId": 1, "tip": [10.0, 10.0], "preset": "nope"}),
+        json!({"layer": live_id, "balloonId": 1, "tip": [10.0, 10.0], "mouthWidth": 0.0}),
+        json!({"layer": live_id, "balloonId": 7, "tip": [10.0, 10.0]}),
+        json!({"layer": live_id, "balloonId": 1}),
+    ];
+    for params in cases {
+        assert!(s.execute("shape.balloon.tail.add", params.clone()).is_err(), "{params}");
+        assert_eq!(doc(&s), &with_balloon, "no edit for {params}");
+    }
+    assert!(s.execute("shape.balloon.tail.remove", json!({"layer": live_id, "balloonId": 1})).is_err(), "a tail id is required");
+
+    assert_eq!(s.active().unwrap().history.past_len(), history + 1, "only the balloon creation is a step");
+}

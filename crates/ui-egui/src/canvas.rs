@@ -4963,16 +4963,28 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     if let Some(b) = layer_edges_rect(app, idx) {
         painter.set(layer_edges, egui::Shape::rect_stroke(xf.doc_rect(b), 0, Stroke::new(1.0, LAYER_EDGES), egui::StrokeKind::Outside));
     }
-    // A tool drag held past the canvas edge scrolls the view toward the pointer (#4183); the
-    // drag's next move then extends into what scrolled in.
+    // A tool drag held near or past the canvas edge scrolls the view toward the pointer (#4183);
+    // for Tool::Ruler (stored in `app.ui.analysis.drag`), pre-trigger 16pt inside the edge, allow
+    // pasteboard panning, and immediately recompute the world coordinates so the ruler end
+    // tracks the camera shift on every repaint frame even while the cursor is stationary.
+    let ruler_dragging = tool == Tool::Ruler && app.ui.analysis.drag.is_some();
+    let is_tool_dragging = app.drag.is_some() || ruler_dragging;
     if primary
-        && app.drag.is_some()
+        && is_tool_dragging
         && tool != Tool::Hand
         && !middle
         && let Some(p) = ui.input(|i| i.pointer.primary_down().then(|| i.pointer.latest_pos()).flatten())
     {
-        let step = crate::canvas_autoscroll::edge_step(p, rect, ui.input(|i| i.stable_dt));
-        if crate::canvas_autoscroll::scroll(&mut view, step, xf) {
+        let margin = if ruler_dragging { crate::canvas_autoscroll::TRIGGER_MARGIN } else { 0.0 };
+        let step = crate::canvas_autoscroll::edge_step_with_margin(p, rect, ui.input(|i| i.stable_dt), margin);
+        let allow_pasteboard = ruler_dragging || app.session.prefs().tools.overscroll;
+        if crate::canvas_autoscroll::scroll_with_options(&mut view, step, xf, allow_pasteboard) {
+            if ruler_dragging {
+                let scrolled_xf = ViewXform { center: view.center, ..xf };
+                let d = scrolled_xf.to_doc(p);
+                let mods = ui.input(|i| i.modifiers);
+                tool_event(app, ToolEvent::Move { x: d[0], y: d[1], pressure: app.stylus.pressure() }, mods);
+            }
             ctx.request_repaint();
         }
     }
@@ -5683,6 +5695,17 @@ fn draw_tool_state(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform,
     crate::crop_straighten::draw(app, painter, |p| xf.to_screen(p[0] as f32, p[1] as f32), hover);
     crate::blur_pins::draw(app, painter, xf);
     crate::screentone_gizmo::draw(app, painter, xf);
+    // The gizmo of the parametric balloons: the tail manipulators and the vertex handles.
+    if let Some(st) = app.session.active()
+        && let Some(lid) = st.active_layer
+        && let Some(layer) = st.doc.layer(lid)
+        && let photocraft_doc::LayerContent::Shape(sh) = &layer.content
+        && let Some(photocraft_doc::LiveShape::BalloonGroup { group }) = &sh.live
+    {
+        for b in &group.items {
+            crate::balloon_gizmo::draw_balloon_gizmo(painter, xf, b, &app.balloon_gizmo);
+        }
+    }
     if let Some(c) = app.ui.crop_rect {
         let deg = crate::crop_ui::angle(app);
         let shield = crate::crop_shield::current(app, painter.ctx());
@@ -6203,6 +6226,10 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
         return;
     }
     if crate::screentone_gizmo::pointer(app, ev, crate::workspace_ui::sticky_mods(app, mods)) {
+        return;
+    }
+    // The gizmo of the parametric balloons takes the presses on its handles.
+    if crate::balloon_gizmo::pointer(app, ev, crate::workspace_ui::sticky_mods(app, mods)) {
         return;
     }
     // An Alt+right-drag armed for this press (`paint_mouse`): taken before anything else can

@@ -26,7 +26,7 @@ use photocraft_geom::{Affine, Point, Rect};
 use photocraft_vector as vector;
 use serde_json::{Value, json};
 use std::sync::Arc;
-use vector::sai_curve::{LiveLinework, LiveVectorStroke, SAI_DEFAULT_TENSION, SaiPoint};
+use vector::sai_curve::{LiveLinework, LiveVectorStroke, SAI_DEFAULT_TENSION, SaiCurveType, SaiPoint};
 
 use crate::commands::{CommandSpec, blend_from_str};
 use crate::{EngineError, Result, Session};
@@ -457,6 +457,7 @@ fn live_kind(l: &LiveShape) -> &'static str {
         LiveShape::Polygon { star_ratio, .. } if *star_ratio < 1.0 => "star",
         LiveShape::Polygon { .. } => "polygon",
         LiveShape::Line { .. } => "line",
+        LiveShape::BalloonGroup { .. } => "balloon",
     }
 }
 
@@ -552,6 +553,23 @@ pub fn transform_shape(sh: &mut ShapeLayer, a: &Affine) {
                     let new_length = (dx * m0).hypot(dy * m3);
                     let width_scale = if old_length > 0.0 && new_length > 0.0 { m0 * m3 * old_length / new_length } else { m0.min(m3) };
                     LiveShape::Line { from: pt(from), to: pt(to), weight: weight * width_scale }
+                }
+                LiveShape::BalloonGroup { group } => {
+                    // A balloon stays parametric: its body, its tails and its stroke scale with it.
+                    let mut group = group;
+                    for b in &mut group.items {
+                        let rect = b.body.rect();
+                        b.body.set_rect(r(rect));
+                        for t in &mut b.tails {
+                            t.tip = pt(t.tip);
+                            t.mouth_width *= m0.min(m3);
+                        }
+                        for v in &mut b.vertex_overrides {
+                            v.offset = pt(v.offset);
+                        }
+                        b.stroke_width *= m0.min(m3);
+                    }
+                    LiveShape::BalloonGroup { group }
                 }
             })
         }
@@ -846,7 +864,17 @@ pub fn build_vector_curve_layer(p: &Value) -> std::result::Result<VectorCurveCom
     let closed = p.get("closed").and_then(Value::as_bool).unwrap_or(false);
     let tension = p.get("tension").and_then(Value::as_f64).unwrap_or(SAI_DEFAULT_TENSION).clamp(0.0, 1.0);
 
-    let live_stroke = LiveVectorStroke { nodes: points, base_width: width, min_ratio, tapered, closed, tension };
+    let live_stroke = LiveVectorStroke {
+        nodes: points,
+        base_width: width,
+        min_ratio,
+        base_density: 1.0,
+        min_density_ratio: 0.0,
+        curve_type: SaiCurveType::Normal,
+        tapered,
+        closed,
+        tension,
+    };
 
     let path = live_stroke.rebuild_path();
     if path.is_empty() {
@@ -927,6 +955,31 @@ pub fn live_stroke_to_json(id: u64, name: &str, live: &LiveVectorStroke) -> Valu
         "tension": live.tension,
         "nodes": nodes,
     })
+}
+
+/// `layer.newLinework`: an empty SAI Linework layer, ready for the Vector Curve tool.
+fn layer_new_linework(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "layer.newLinework";
+    let fg = s.tools.foreground;
+    let fgc = Color::rgba(fg[0], fg[1], fg[2], fg[3]);
+    let fill = match p.get("fill") {
+        Some(v) => parse_fill(v).map_err(|e| bad(CMD, e))?,
+        None => Some(Fill::Solid(fgc)),
+    };
+    let name = p.get("name").and_then(Value::as_str).unwrap_or("Linework").to_string();
+    let mut sh = ShapeLayer { fill, ..Default::default() };
+    let id = s.edit("New Linework Layer", |doc, active| {
+        refresh_shape(doc, &mut sh);
+        let name = doc.next_layer_name(&name);
+        let mut layer = Layer::new(name, LayerContent::Shape(sh));
+        // The layer starts empty, but it already carries the Linework container, so the Vector
+        // Curve tool appends its first stroke to it.
+        set_live_linework(&mut layer, &LiveLinework::new(Vec::new()));
+        let id = doc.insert_new(*active, layer);
+        *active = Some(id);
+        Ok(id)
+    })?;
+    Ok(json!({ "layer": id.0 }))
 }
 
 fn vector_curve_create(s: &mut Session, p: &Value) -> Result<Value> {
@@ -2372,6 +2425,14 @@ pub fn specs() -> Vec<CommandSpec> {
             r##"{"layer":id?,"x":x,"y":y,"maxDist":px=20} → {id,name,command,nodes,insertedIndex,baseWidth,minRatio,tapered,closed,tension}"##,
             has_layer,
             vector_curve_insert_node
+        ),
+        spec!(
+            "layer.newLinework",
+            "New Linework Layer",
+            [],
+            r##"{"name":str?,"width":px=3,"fill":{fill}?} → {layer,name}. An empty SAI Linework layer, ready for the Vector Curve tool."##,
+            has_doc,
+            layer_new_linework
         ),
         spec!("select.convertToShape", "Convert to Shape", [], r##"{"tolerance":0.5..10 px=2} → shape.info"##, has_selection, selection_to_shape),
         CommandSpec {

@@ -179,6 +179,8 @@ fn target(layer: u64, live: &LiveShape) -> Option<Target> {
             Some(Target { layer, geom: Geom::Polygon { rect, sides, star_ratio, vertices }, radii: [corner_radius.max(0.0); 4] })
         }
         LiveShape::Ellipse { .. } | LiveShape::Line { .. } => None,
+        // A balloon group has no corner radius; its body carries its own shape parameters.
+        LiveShape::BalloonGroup { .. } => None,
     }
 }
 

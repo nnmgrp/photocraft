@@ -127,7 +127,7 @@ impl Group {
             Group::Brushes => &["Brushes"],
             Group::Navigator => &["Navigator", "Histogram", "Info"],
             Group::History => &["History", "Actions", "Layer Comps"],
-            Group::Layers => &["Layers", "Channels", "Paths"],
+            Group::Layers => &["Layers", "Channels", "Paths", "Linework"],
             Group::Timelapse => &["Timelapse"],
         }
     }

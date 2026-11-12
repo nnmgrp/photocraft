@@ -5,14 +5,16 @@
 //! [`ShapeLayer`](photocraft_doc::ShapeLayer) path, so Free Transform, history, PSD export and the
 //! rest of the shape tooling keep working unchanged.
 
-use photocraft_doc::{Color, Fill, Layer, LayerContent, LayerId, ShapeLayer};
+use photocraft_doc::vector::{LiveBalloon, LiveBalloonBody, LiveBalloonGroup, LiveBalloonTail, TailPreset};
+use photocraft_doc::{Color, Fill, Layer, LayerContent, LayerId, LiveShape, ShapeLayer, ShapeStroke};
 use photocraft_geom::Point;
 use photocraft_vector as vector;
-use photocraft_vector::balloon::{self, BalloonTail, CloudParams, SaiPoint, SpikeParams, TailPreset};
+use photocraft_vector::balloon::{self, BalloonTail, CloudParams, LegacyTailPreset, LiveBalloonGeom, LiveBalloonGroupGeom, SaiPoint, SpikeParams};
+use photocraft_vector::sai_curve::LiveLinework;
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
-use crate::vector_cmds::{bad, has_doc, layer_id, nums, parse_fill, pt, refresh_shape, shape_info, with_shape};
+use crate::vector_cmds::{bad, has_doc, layer_id, nums, parse_fill, pt, refresh_shape, set_live_linework, shape_info, with_shape};
 use crate::{EngineError, Result, Session};
 
 macro_rules! spec {
@@ -113,6 +115,260 @@ fn has_shape(s: &Session) -> std::result::Result<(), String> {
     if matches!(layer.content, photocraft_doc::LayerContent::Shape(_)) { Ok(()) } else { Err("the active layer is not a shape layer".to_string()) }
 }
 
+/// Rejects a balloon whose numbers are not finite or are out of range, so the geometry can never
+/// produce NaN coordinates or an unbounded shape.
+fn validate_balloon(b: &LiveBalloon) -> std::result::Result<(), String> {
+    let rect = b.body.rect();
+    if rect.iter().any(|v| !v.is_finite() || v.abs() > 1.0e7) {
+        return Err("the balloon's rectangle must be finite and within 10000000 px".into());
+    }
+    if rect[2].abs() < 1.0 || rect[3].abs() < 1.0 {
+        return Err("the balloon must have a non-zero width and height".into());
+    }
+    if !b.stroke_width.is_finite() || !(0.1..=1.0e4).contains(&b.stroke_width) {
+        return Err("the balloon's stroke width must be between 0.1 and 10000 px".into());
+    }
+    if !b.hand_drawn_noise.is_finite() {
+        return Err("the balloon's noise must be finite".into());
+    }
+    let finite = |v: f64| v.is_finite();
+    match &b.body {
+        LiveBalloonBody::Ellipse { squircle, .. } => {
+            if !finite(*squircle) {
+                return Err("the balloon's squircle must be finite".into());
+            }
+        }
+        LiveBalloonBody::Rect { corner_radius, .. } => {
+            if !finite(*corner_radius) {
+                return Err("the balloon's corner radius must be finite".into());
+            }
+        }
+        LiveBalloonBody::Cloud { bumps, amplitude, cusp_bite, jitter, .. } => {
+            if !finite(*amplitude) || !finite(*cusp_bite) || !finite(*jitter) {
+                return Err("the cloud's parameters must be finite".into());
+            }
+            if *bumps > 64 {
+                return Err("the cloud may have at most 64 lobes".into());
+            }
+        }
+        LiveBalloonBody::Spiky { spikes, length, sub_harmonic, concavity, jitter, .. } => {
+            if !finite(*length) || !finite(*sub_harmonic) || !finite(*concavity) || !finite(*jitter) {
+                return Err("the spike's parameters must be finite".into());
+            }
+            if *spikes > 128 {
+                return Err("the balloon may have at most 128 spikes".into());
+            }
+        }
+        LiveBalloonBody::Uniflash { needles, inner_ratio, bundle_group, length_jitter, angle_jitter, needle_width, .. } => {
+            if !finite(*inner_ratio) || !finite(*bundle_group) || !finite(*length_jitter) || !finite(*angle_jitter) || !finite(*needle_width) {
+                return Err("the uniflash's parameters must be finite".into());
+            }
+            if *needles > 400 {
+                return Err("the uniflash may have at most 400 needles".into());
+            }
+        }
+    }
+    if b.tails.len() > 64 {
+        return Err("a balloon may have at most 64 tails".into());
+    }
+    for t in &b.tails {
+        if !t.tip.iter().all(|v| v.is_finite() && v.abs() <= 1.0e7) {
+            return Err("a tail's tip must be finite and within 10000000 px".into());
+        }
+        if !t.perimeter_t.is_finite() {
+            return Err("a tail's perimeter parameter must be finite".into());
+        }
+        if !t.mouth_width.is_finite() || !(0.1..=1.0e4).contains(&t.mouth_width) {
+            return Err("a tail's mouth width must be between 0.1 and 10000 px".into());
+        }
+        if !t.bend.is_finite() {
+            return Err("a tail's bend must be finite".into());
+        }
+        if !t.bubble_radius.is_finite() || !(0.1..=1.0e4).contains(&t.bubble_radius) {
+            return Err("a tail's bubble radius must be between 0.1 and 10000 px".into());
+        }
+    }
+    for v in &b.vertex_overrides {
+        if !v.offset.iter().all(|x| x.is_finite() && x.abs() <= 1.0e7) {
+            return Err("a vertex offset must be finite and within 10000000 px".into());
+        }
+    }
+    Ok(())
+}
+
+/// Parses the `balloon` payload of a command.
+fn parse_balloon(cmd: &str, p: &Value) -> Result<LiveBalloon> {
+    let raw = p.get("balloon").cloned().ok_or_else(|| bad(cmd, "missing `balloon`"))?;
+    let b: LiveBalloon = serde_json::from_value(raw).map_err(|e| bad(cmd, format!("`balloon` is not a valid balloon: {e}")))?;
+    validate_balloon(&b).map_err(|e| bad(cmd, e))?;
+    Ok(b)
+}
+
+/// `shape.balloon.create` with a `balloon` payload: a parametric manga balloon as a new shape layer.
+fn balloon_create_live(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "shape.balloon.create";
+    let b = parse_balloon(CMD, p)?;
+    let mut group = LiveBalloonGroup { items: vec![b], next_balloon_id: 1 };
+    group.next_balloon_id = group.items.iter().map(|it| it.id).max().unwrap_or(0).saturating_add(1);
+    let path = group.rebuild_group_path();
+    if path.is_empty() {
+        return Err(bad(CMD, "the balloon produces no drawable path"));
+    }
+    vector::flatten::validate_shape(&path, None).map_err(|e| bad(CMD, e))?;
+
+    let fg = s.tools.foreground;
+    let fgc = Color::rgba(fg[0], fg[1], fg[2], fg[3]);
+    let fill = match p.get("fill") {
+        Some(v) => parse_fill(v).map_err(|e| bad(CMD, e))?,
+        None => Some(Fill::Solid(Color::WHITE)),
+    };
+    let width = group.items.first().map(|it| it.stroke_width).unwrap_or(3.0) as f32;
+    let base = ShapeStroke { width, paint: Fill::Solid(Color::BLACK), ..Default::default() };
+    let stroke = match p.get("stroke") {
+        Some(v) => crate::vector_cmds::parse_stroke(v, Some(base), fgc).map_err(|e| bad(CMD, e))?,
+        None => Some(base),
+    };
+
+    let name = p.get("name").and_then(Value::as_str).map(str::to_string);
+    let mut sh = ShapeLayer { path, fill, stroke, live: Some(LiveShape::BalloonGroup { group }), ..Default::default() };
+    let id = s.edit("New Balloon", |doc, active| {
+        refresh_shape(doc, &mut sh);
+        let name = name.unwrap_or_else(|| doc.next_layer_name("Speech Balloon"));
+        let id = doc.insert_new(*active, Layer::new(name, LayerContent::Shape(sh)));
+        *active = Some(id);
+        Ok(id)
+    })?;
+    shape_info(s, id)
+}
+
+/// `shape.balloon.update`: replaces one balloon of the layer's group and rebuilds the outline.
+fn balloon_update(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "shape.balloon.update";
+    let id = layer_id(s, p)?;
+    let updated = parse_balloon(CMD, p)?;
+    with_shape(s, id, "Update Balloon", |sh, _l| {
+        let Some(LiveShape::BalloonGroup { ref mut group }) = sh.live else {
+            return Err(bad(CMD, "the layer is not a balloon group"));
+        };
+        match group.items.iter_mut().find(|it| it.id == updated.id) {
+            Some(slot) => *slot = updated,
+            None => group.items.push(updated),
+        }
+        let path = group.rebuild_group_path();
+        vector::flatten::validate_shape(&path, sh.stroke.as_ref()).map_err(|e| bad(CMD, e))?;
+        sh.path = path;
+        Ok(json!({ "ok": true }))
+    })
+}
+
+/// `shape.balloon.tail.add`: adds a tail to a balloon of the layer's group.
+fn balloon_tail_add(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "shape.balloon.tail.add";
+    let id = layer_id(s, p)?;
+    let balloon_id = p.get("balloonId").and_then(Value::as_u64).ok_or_else(|| bad(CMD, "missing `balloonId`"))? as u32;
+    let tip = p
+        .get("tip")
+        .and_then(Value::as_array)
+        .and_then(|a| Some([a.first()?.as_f64()?, a.get(1)?.as_f64()?]))
+        .ok_or_else(|| bad(CMD, "`tip` must be a finite [x, y] point"))?;
+    if !tip.iter().all(|v| v.is_finite() && v.abs() <= 1.0e7) {
+        return Err(bad(CMD, "`tip` is out of range"));
+    }
+    let preset = match p.get("preset") {
+        Some(v) => {
+            let id = v.as_str().ok_or_else(|| bad(CMD, "`preset` must be a string"))?;
+            TailPreset::from_id(id).ok_or_else(|| bad(CMD, format!("unknown tail preset `{id}` (wedge|arc|sCurve|lightning|double|thought)")))?
+        }
+        None => TailPreset::Arc,
+    };
+    let mouth_width = p.get("mouthWidth").and_then(Value::as_f64).unwrap_or(28.0);
+    if !mouth_width.is_finite() || !(0.1..=1.0e4).contains(&mouth_width) {
+        return Err(bad(CMD, "`mouthWidth` must be between 0.1 and 10000 px"));
+    }
+    let bend = p.get("bend").and_then(Value::as_f64).unwrap_or(0.18);
+    if !bend.is_finite() {
+        return Err(bad(CMD, "`bend` must be finite"));
+    }
+    let bubbles = p.get("bubbles").and_then(Value::as_u64).unwrap_or(3).clamp(1, 8) as u32;
+    let bubble_radius = p.get("bubbleRadius").and_then(Value::as_f64).unwrap_or(10.0);
+    if !bubble_radius.is_finite() || !(0.1..=1.0e4).contains(&bubble_radius) {
+        return Err(bad(CMD, "`bubbleRadius` must be between 0.1 and 10000 px"));
+    }
+
+    with_shape(s, id, "Add Balloon Tail", |sh, _l| {
+        let Some(LiveShape::BalloonGroup { ref mut group }) = sh.live else {
+            return Err(bad(CMD, "the layer is not a balloon group"));
+        };
+        let b = group.items.iter_mut().find(|it| it.id == balloon_id).ok_or_else(|| bad(CMD, "the layer has no such balloon"))?;
+        if b.tails.len() >= 64 {
+            return Err(bad(CMD, "a balloon may have at most 64 tails"));
+        }
+        let tail_id = b.next_tail_id;
+        b.next_tail_id = b.next_tail_id.saturating_add(1);
+        let perimeter_t = b.closest_perimeter_t(tip);
+        b.tails.push(LiveBalloonTail { id: tail_id, preset, perimeter_t, mouth_width, tip, bend, bubbles, bubble_radius });
+        let path = group.rebuild_group_path();
+        vector::flatten::validate_shape(&path, sh.stroke.as_ref()).map_err(|e| bad(CMD, e))?;
+        sh.path = path;
+        Ok(json!({ "tailId": tail_id }))
+    })
+}
+
+/// `shape.balloon.tail.remove`: removes a tail of a balloon of the layer's group.
+fn balloon_tail_remove(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "shape.balloon.tail.remove";
+    let id = layer_id(s, p)?;
+    let balloon_id = p.get("balloonId").and_then(Value::as_u64).unwrap_or(1) as u32;
+    let tail_id = p.get("tailId").and_then(Value::as_u64).ok_or_else(|| bad(CMD, "missing `tailId`"))? as u32;
+
+    with_shape(s, id, "Remove Balloon Tail", |sh, _l| {
+        let Some(LiveShape::BalloonGroup { ref mut group }) = sh.live else {
+            return Err(bad(CMD, "the layer is not a balloon group"));
+        };
+        if let Some(b) = group.items.iter_mut().find(|it| it.id == balloon_id) {
+            b.tails.retain(|t| t.id != tail_id);
+        }
+        let path = group.rebuild_group_path();
+        vector::flatten::validate_shape(&path, sh.stroke.as_ref()).map_err(|e| bad(CMD, e))?;
+        sh.path = path;
+        Ok(json!({ "ok": true }))
+    })
+}
+
+/// `shape.balloon.convertToLinework`: redraws the balloon as SAI Linework strokes on the layer.
+fn balloon_to_linework(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "shape.balloon.convertToLinework";
+    let id = layer_id(s, p)?;
+    let fg = s.tools.foreground;
+    let fgc = Color::rgba(fg[0], fg[1], fg[2], fg[3]);
+
+    with_shape(s, id, "Convert Balloon to Linework", |sh, layer| {
+        let Some(LiveShape::BalloonGroup { ref group }) = sh.live else {
+            return Err(bad(CMD, "the layer is not a balloon group"));
+        };
+        let mut strokes = Vec::new();
+        for b in &group.items {
+            strokes.extend(balloon::balloon_to_linework_strokes(b));
+        }
+        if strokes.is_empty() {
+            return Err(bad(CMD, "the balloon produces no linework"));
+        }
+        let lw = LiveLinework::new(strokes);
+        let path = lw.rebuild_path();
+        if path.is_empty() {
+            return Err(bad(CMD, "the balloon produces no drawable path"));
+        }
+        vector::flatten::validate_shape(&path, None).map_err(|e| bad(CMD, e))?;
+        sh.path = path;
+        sh.fill = Some(Fill::Solid(fgc));
+        sh.stroke = None;
+        // The balloon is now clean linework, so the live balloon no longer describes it.
+        sh.live = None;
+        set_live_linework(layer, &lw);
+        Ok(json!({ "convertedStrokes": lw.strokes.len() }))
+    })
+}
+
 /// `shape.balloon.tail`: union a tail with the balloon body.
 fn balloon_tail(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "shape.balloon.tail";
@@ -121,7 +377,7 @@ fn balloon_tail(s: &mut Session, p: &Value) -> Result<Value> {
         None => "wedge",
         Some(v) => v.as_str().ok_or_else(|| bad(CMD, "`preset` must be a string (wedge|arc|double|thought)"))?,
     };
-    let preset = TailPreset::from_id(preset_id).ok_or_else(|| bad(CMD, format!("unknown tail preset `{preset_id}` (wedge|arc|double|thought)")))?;
+    let preset = LegacyTailPreset::from_id(preset_id).ok_or_else(|| bad(CMD, format!("unknown tail preset `{preset_id}` (wedge|arc|double|thought)")))?;
     let tip = point(CMD, p, "tip")?;
     if !finite_point(tip.x, tip.y) {
         return Err(bad(CMD, "`tip` is out of range"));
@@ -176,8 +432,12 @@ fn balloon_tail(s: &mut Session, p: &Value) -> Result<Value> {
     shape_info(s, id)
 }
 
-/// `shape.balloon.create`: a procedural thought cloud or shout balloon as a new shape layer.
+/// `shape.balloon.create`: a procedural thought cloud or shout balloon as a new shape layer, or
+/// (with a `balloon` payload) a parametric manga balloon.
 fn balloon_create(s: &mut Session, p: &Value) -> Result<Value> {
+    if p.get("balloon").is_some() {
+        return balloon_create_live(s, p);
+    }
     const CMD: &str = "shape.balloon.create";
     let kind = p.get("kind").and_then(Value::as_str).unwrap_or("cloud");
     let rect = nums::<4>(p, "rect").ok_or_else(|| bad(CMD, "`rect` must be [x, y, w, h]"))?;
@@ -247,7 +507,7 @@ fn sai_point(v: &Value) -> Option<SaiPoint> {
     if !finite_point(x, y) || !pressure.is_finite() {
         return None;
     }
-    Some(SaiPoint { p: (x, y), pressure: pressure.clamp(0.0, 1.0) as f32, corner })
+    Some(SaiPoint { p: (x, y), pressure: pressure.clamp(0.0, 1.0) as f32, density: 1.0, corner })
 }
 
 /// `shape.balloon.stroke`: Catmull-Rom smoothed click linework, tapered by point pressure.
@@ -313,9 +573,41 @@ pub fn specs() -> Vec<CommandSpec> {
             "shape.balloon.create",
             "New Balloon",
             [],
-            r##"{{"kind":"cloud|spiky"="cloud","rect":[x,y,w,h] (required),"bumps":3..64=9,"amplitude":0..1=0.18,"jitter":0..1=0.35,"spikes":3..128=12,"length":0..2=0.45,"inward":bool=false,"smooth":bool=false,"seed":int=1,{fill}=foreground,{stroke}=none,"name":str?}} -> shape.info. cloud = scalloped thought balloon; spiky = shout/flash balloon."##,
+            r##"{{"kind":"cloud|spiky"="cloud","rect":[x,y,w,h] (required),"bumps":3..64=9,"amplitude":0..1=0.18,"jitter":0..1=0.35,"spikes":3..128=12,"length":0..2=0.45,"inward":bool=false,"smooth":bool=false,"seed":int=1,{fill}=foreground,{stroke}=none,"name":str?}} -> shape.info. cloud = scalloped thought balloon; spiky = shout/flash balloon. With "balloon" instead: {balloon:{id,body,tails,...}} = a parametric manga balloon (ellipse|rect|cloud|spiky|uniflash body, wedge|arc|sCurve|lightning|double|thought tails)."##,
             has_doc,
             balloon_create
+        ),
+        spec!(
+            "shape.balloon.update",
+            "Update Balloon",
+            [],
+            r##"{{"layer":id (required),"balloon":{id,body,tails,...} (required),"coalesce":str?}} -> {ok:true}. Replaces the balloon with the given id in the layer's group (or adds it) and rebuilds the outline. A drag sends the same "coalesce" key every frame, so the whole gesture is one history step."##,
+            has_doc,
+            balloon_update
+        ),
+        spec!(
+            "shape.balloon.tail.add",
+            "Add Balloon Tail",
+            [],
+            r##"{{"layer":id (required),"balloonId":int=1,"tip":[x,y] (required),"preset":"wedge|arc|sCurve|lightning|double|thought"="arc","mouthWidth":px=28,"bend":-1..1=0.18,"bubbles":1..8=3,"bubbleRadius":px=10}} -> {tailId}. The mouth sits on the body's perimeter nearest the tip."##,
+            has_doc,
+            balloon_tail_add
+        ),
+        spec!(
+            "shape.balloon.tail.remove",
+            "Remove Balloon Tail",
+            [],
+            r##"{{"layer":id (required),"balloonId":int=1,"tailId":int (required)}} -> {ok:true}"##,
+            has_doc,
+            balloon_tail_remove
+        ),
+        spec!(
+            "shape.balloon.convertToLinework",
+            "Convert Balloon to Linework",
+            [],
+            r##"{{"layer":id (required)}} -> {convertedStrokes}. The balloon is redrawn as SAI Linework strokes on the same layer."##,
+            has_doc,
+            balloon_to_linework
         ),
         spec!(
             "shape.balloon.stroke",
@@ -334,10 +626,10 @@ pub fn specs() -> Vec<CommandSpec> {
             enabled: |_: &Session| Ok(()),
             run: |_, _| {
                 let names = [
-                    (TailPreset::Wedge, "Wedge", "straight tapered wedge"),
-                    (TailPreset::Arc, "Arc", "bow-sided tail"),
-                    (TailPreset::Double, "Double", "two tails, one mouth"),
-                    (TailPreset::Thought, "Thought", "shrinking bubbles"),
+                    (LegacyTailPreset::Wedge, "Wedge", "straight tapered wedge"),
+                    (LegacyTailPreset::Arc, "Arc", "bow-sided tail"),
+                    (LegacyTailPreset::Double, "Double", "two tails, one mouth"),
+                    (LegacyTailPreset::Thought, "Thought", "shrinking bubbles"),
                 ];
                 Ok(
                     json!({"presets": names.iter().map(|(p, label, about)| json!({"id": p.id(), "label": label, "mouth": p.mouth(), "about": about})).collect::<Vec<_>>()}),

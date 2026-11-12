@@ -143,6 +143,27 @@ fn test_vector_curve_click_start_node_closes_loop_and_restores_pressures() {
 }
 
 #[test]
+fn test_vector_curve_snap_close_tight_radius_and_disable_toggle() {
+    // 1. Even with snap_close=true, clicks 3 px away (> SNAP_CLOSE_RADIUS_PX = 1.5 px) do NOT auto-close.
+    let mut state = VectorCurveState::default();
+    state.on_primary_down(100.0, 200.0, false, false, false, false, false, 1.0);
+    state.on_primary_down(200.0, 100.0, false, false, false, false, false, 1.0);
+    state.on_primary_down(300.0, 200.0, false, false, false, false, false, 1.0);
+    let commit = state.on_primary_down(103.0, 200.0, false, false, false, false, false, 1.0);
+    assert!(!commit, "3 px away from start node must not trigger snap-close");
+    assert!(!state.closed_loop);
+
+    // 2. With snap_close=false, even clicking directly on the start node does NOT auto-close.
+    let mut disabled = VectorCurveState { snap_close: false, ..VectorCurveState::default() };
+    disabled.on_primary_down(100.0, 200.0, false, false, false, false, false, 1.0);
+    disabled.on_primary_down(200.0, 100.0, false, false, false, false, false, 1.0);
+    disabled.on_primary_down(300.0, 200.0, false, false, false, false, false, 1.0);
+    let commit = disabled.on_primary_down(100.0, 200.0, false, false, false, false, false, 1.0);
+    assert!(!commit, "snap_close=false must never auto-close when clicking start node");
+    assert!(!disabled.closed_loop);
+}
+
+#[test]
 fn test_vector_curve_escape_finishes_at_cursor_without_discarding() {
     let mut state = VectorCurveState::default();
     state.on_primary_down(100.0, 100.0, false, false, false, false, false, 1.0);

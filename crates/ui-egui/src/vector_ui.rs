@@ -91,6 +91,13 @@ pub struct VectorCurveState {
     /// Document layer ID that was active when the uncommitted stroke began (used to discard orphan points after undo/delete).
     #[serde(skip)]
     pub target_layer_id: Option<u64>,
+    /// Whether clicking/finishing very close (`SNAP_CLOSE_RADIUS_PX`) to the start node snaps the curve closed.
+    #[serde(default = "default_snap_close")]
+    pub snap_close: bool,
+}
+
+fn default_snap_close() -> bool {
+    true
 }
 
 impl Default for VectorCurveState {
@@ -110,11 +117,13 @@ impl Default for VectorCurveState {
             layer_drag: None,
             hover_pos: None,
             target_layer_id: None,
+            snap_close: true,
         }
     }
 }
 
 pub const NODE_HIT_RADIUS_PX: f64 = 9.5;
+pub const SNAP_CLOSE_RADIUS_PX: f64 = 1.5;
 pub const SEGMENT_INSERT_RADIUS_PX: f64 = 12.0;
 
 impl VectorCurveState {
@@ -158,10 +167,11 @@ impl VectorCurveState {
             return false;
         }
         let hit_radius = NODE_HIT_RADIUS_PX / zoom.max(0.05);
+        let snap_close_radius = SNAP_CLOSE_RADIUS_PX / zoom.max(0.05);
         if self.mode == VectorCurveMode::Draw
             && let Some(h) = self.hover_pos
         {
-            if self.points.len() >= 3 && (self.points[0][0] - h[0]).hypot(self.points[0][1] - h[1]) <= hit_radius {
+            if self.snap_close && self.points.len() >= 3 && (self.points[0][0] - h[0]).hypot(self.points[0][1] - h[1]) <= snap_close_radius {
                 self.closed_loop = true;
                 self.restore_closed_loop_pressures();
                 return true;
@@ -189,6 +199,7 @@ impl VectorCurveState {
         zoom: f64,
     ) -> bool {
         let hit_radius = NODE_HIT_RADIUS_PX / zoom.max(0.05);
+        let snap_close_radius = SNAP_CLOSE_RADIUS_PX / zoom.max(0.05);
         let seg_radius = SEGMENT_INSERT_RADIUS_PX / zoom.max(0.05);
 
         if double_clicked && self.points.len() >= 2 {
@@ -211,13 +222,13 @@ impl VectorCurveState {
             }
         }
 
-        // PaintTool SAI Closed Loop: clicking the starting node (idx == 0) in Draw mode when >= 3 nodes
-        // closes the curve seamlessly into a ring and immediately finishes the stroke.
-        if self.mode == VectorCurveMode::Draw
+        // Optional tight snap-close (`SNAP_CLOSE_RADIUS_PX = 1.5 px`): only closes when clicking virtually on top of node 0.
+        if self.snap_close
+            && self.mode == VectorCurveMode::Draw
             && !ctrl_held
             && !alt_held
             && self.points.len() >= 3
-            && (self.points[0][0] - x).hypot(self.points[0][1] - y) <= hit_radius
+            && (self.points[0][0] - x).hypot(self.points[0][1] - y) <= snap_close_radius
         {
             self.closed_loop = true;
             self.restore_closed_loop_pressures();
@@ -1901,9 +1912,13 @@ pub fn vector_curve_down(app: &mut PhotocraftApp, x: f64, y: f64, ctrl: bool, al
     }
 
     let active_layer_id = app.session.active().and_then(|st| st.active_layer).map(|id| id.0);
+    let panel_snap_close = app.sai_panel.snap_close;
     let commit_now = {
         let vc = app.ui.vector_curve.get_or_insert_with(VectorCurveState::default);
         let was_empty = vc.points.is_empty();
+        if was_empty {
+            vc.snap_close = panel_snap_close;
+        }
         let done = vc.on_primary_down(x, y, ctrl, alt, shift, double_clicked, closed, zoom);
         if was_empty && !vc.points.is_empty() {
             vc.target_layer_id = active_layer_id;
@@ -2047,6 +2062,7 @@ pub fn vector_curve_commit(app: &mut PhotocraftApp) {
     let saved_mode = vc.mode;
     let saved_tension = vc.tension;
     let saved_auto_taper = vc.auto_taper_ends;
+    let saved_snap_close = vc.snap_close;
     let saved_hover = vc.hover_pos;
 
     let sai = app.sai_panel.clone();
@@ -2091,6 +2107,7 @@ pub fn vector_curve_commit(app: &mut PhotocraftApp) {
                     mode: saved_mode,
                     tension: saved_tension,
                     auto_taper_ends: saved_auto_taper,
+                    snap_close: saved_snap_close,
                     hover_pos: saved_hover,
                     ..VectorCurveState::default()
                 });
@@ -2118,6 +2135,7 @@ pub fn draw_vector_curve_overlay(app: &PhotocraftApp, painter: &egui::Painter, x
     let hover_pos = app.ui.vector_curve.as_ref().and_then(|vc| vc.hover_pos);
     let zoom = (xf.zoom as f64).max(0.05);
     let hit_radius = NODE_HIT_RADIUS_PX / zoom;
+    let snap_close_radius = SNAP_CLOSE_RADIUS_PX / zoom;
     let seg_radius = SEGMENT_INSERT_RADIUS_PX / zoom;
 
     // 1. Render editable spline guide & nodes for committed strokes on the active Linework layer
@@ -2184,7 +2202,7 @@ pub fn draw_vector_curve_overlay(app: &PhotocraftApp, painter: &egui::Painter, x
         && vc.drag_node.is_none()
         && let Some(h) = vc.hover_pos
     {
-        if !preview_closed && vc.points.len() >= 3 && (vc.points[0][0] - h[0]).hypot(vc.points[0][1] - h[1]) <= hit_radius {
+        if vc.snap_close && !preview_closed && vc.points.len() >= 3 && (vc.points[0][0] - h[0]).hypot(vc.points[0][1] - h[1]) <= snap_close_radius {
             preview_closed = true;
             snapping_to_start = true;
         } else if !preview_closed {
@@ -2539,8 +2557,13 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             }
             lbl(ui, tl!("Tension:"));
             let tension_changed = crate::widgets::value_field(ui, &mut o.vector_curve_tension, 0.0..=1.0, "", 44.0).changed();
-            let vc = app.ui.vector_curve.get_or_insert_with(VectorCurveState::default);
+            let panel_snap_close = app.sai_panel.snap_close;
+            let vc = app.ui.vector_curve.get_or_insert_with(|| VectorCurveState {
+                snap_close: panel_snap_close,
+                ..VectorCurveState::default()
+            });
             let auto_taper_changed = ui.checkbox(&mut vc.auto_taper_ends, tl!("Auto Taper")).changed();
+            let snap_close_changed = ui.checkbox(&mut vc.snap_close, tl!("Snap Close")).changed();
             vc.tension = f64::from(o.vector_curve_tension);
             if tension_changed {
                 app.sai_panel.tension = vc.tension;
@@ -2548,6 +2571,9 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             if auto_taper_changed {
                 app.sai_panel.auto_taper_ends = vc.auto_taper_ends;
                 o.vector_curve_tapered = vc.auto_taper_ends || o.vector_curve_min_ratio < 0.999;
+            }
+            if snap_close_changed {
+                app.sai_panel.snap_close = vc.snap_close;
             }
 
             let current_snapshot = (

@@ -56,6 +56,7 @@ pub struct LineworkPanelState {
     pub pressure_target: PressureTargetMode,
     pub auto_taper_ends: bool,
     pub closed_loop: bool,
+    pub snap_close: bool,
 }
 
 impl Default for LineworkPanelState {
@@ -71,6 +72,7 @@ impl Default for LineworkPanelState {
             pressure_target: PressureTargetMode::Width,
             auto_taper_ends: true,
             closed_loop: false,
+            snap_close: true,
         }
     }
 }
@@ -174,6 +176,7 @@ pub fn sync_to_tool_options(app: &mut PhotocraftApp, state: &LineworkPanelState)
     if let Some(vc) = app.ui.vector_curve.as_mut() {
         vc.tension = state.curve_type.tension(state.tension);
         vc.auto_taper_ends = state.auto_taper_ends;
+        vc.snap_close = state.snap_close;
     }
 }
 
@@ -319,6 +322,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut Ui) {
         }
         ui.checkbox(&mut state.auto_taper_ends, "Auto Taper Ends (Авто-заострение концов)");
         ui.checkbox(&mut state.closed_loop, "Closed Loop (Замкнутый контур)");
+        ui.checkbox(&mut state.snap_close, "Snap Close (Замыкание впритык 1.5 px)");
 
         ui.add_space(10.0);
         ui.separator();

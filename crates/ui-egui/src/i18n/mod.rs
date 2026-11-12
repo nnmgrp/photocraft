@@ -1348,6 +1348,7 @@ mod tests {
             "Tension:",
             "In",
             "Taper",
+            "Snap Close",
         ];
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut literals = std::collections::BTreeSet::new();

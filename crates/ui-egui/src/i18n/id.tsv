@@ -3868,3 +3868,10 @@ curves	Smooth	Haluskan
 	Delete this style	Hapus gaya ini
 	Bubble Contour	Bentuk Balon
 	No contour variants	Tidak ada varian kontur
+# TypeR Studio and the manga balloons: the statuses of the merged panels and the Linework button.
+	Capture a selection first	Pilih area terlebih dahulu
+	Bubble captured	Balon tertangkap
+	Filled bubbles	Balon terisi
+	Layer centered in the selection	Layer dipusatkan di dalam seleksi
+	Align failed	Perataan gagal
+	Create a Linework vector layer	Buat layer vektor garis

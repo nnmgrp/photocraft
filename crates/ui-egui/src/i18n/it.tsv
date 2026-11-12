@@ -5009,3 +5009,10 @@ shape	Appearance	Aspetto
 	Delete this style	Elimina questo stile
 	Bubble Contour	Forma del fumetto
 	No contour variants	Nessuna variante del contorno
+# TypeR Studio and the manga balloons: the statuses of the merged panels and the Linework button.
+	Capture a selection first	Seleziona prima un'area
+	Bubble captured	Fumetto acquisito
+	Filled bubbles	Fumetti riempiti
+	Layer centered in the selection	Livello centrato nella selezione
+	Align failed	Allineamento non riuscito
+	Create a Linework vector layer	Crea livello vettoriale di traccie

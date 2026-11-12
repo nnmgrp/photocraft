@@ -593,3 +593,10 @@ cameraRaw	Yellow	पीला
 	Leading	लीडिंग
 	Tracking	ट्रैकिंग
 	Duplicate	प्रतिलिपि
+# TypeR Studio and the manga balloons: the statuses of the merged panels and the Linework button.
+	Capture a selection first	पहले एक क्षेत्र चुनें
+	Bubble captured	बुलबुला कैप्चर किया गया
+	Filled bubbles	बुलबुले भरे गए
+	Layer centered in the selection	लेयर चयन में केंद्रित किया गया
+	Align failed	संरेखण विफल रहा
+	Create a Linework vector layer	लाइनवर्क वेक्टर लेयर बनाएँ

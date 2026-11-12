@@ -4917,3 +4917,10 @@ shape	Appearance	Izgled
 	Delete this style	Obriši ovaj stil
 	Bubble Contour	Форма балона
 	No contour variants	Нема варијанти контуре
+# TypeR Studio and the manga balloons: the statuses of the merged panels and the Linework button.
+	Capture a selection first	Najpre izdvojite područje
+	Bubble captured	Balon je uhvaćen
+	Filled bubbles	Napunjeni baloni
+	Layer centered in the selection	Sloj je centriran u izdvojenom području
+	Align failed	Poravnanje nije uspelo
+	Create a Linework vector layer	Napravi vektorski sloj linija

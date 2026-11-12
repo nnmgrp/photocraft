@@ -4595,3 +4595,10 @@ cameraRaw	Dehaze	Odstranění oparu
 	Delete this style	Odstranit tento styl
 	Bubble Contour	Tvar bubliny
 	No contour variants	Žádné varianty obrysu
+# TypeR Studio and the manga balloons: the statuses of the merged panels and the Linework button.
+	Capture a selection first	Nejprve proveďte výběr
+	Bubble captured	Bublina zachycena
+	Filled bubbles	Vyplněné bubliny
+	Layer centered in the selection	Vrstva vycentrována ve výběru
+	Align failed	Zarovnání selhalo
+	Create a Linework vector layer	Vytvořit vektorovou vrstvu s linkami

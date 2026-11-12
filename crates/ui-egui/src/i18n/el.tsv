@@ -4546,3 +4546,10 @@ curves	Smooth	Εξομάλυνση
 	Delete this style	Διαγραφή αυτού του στυλ
 	Bubble Contour	Σχήμα μπαλονιού
 	No contour variants	Δεν υπάρχουν παραλλαγές περιγράμματος
+# TypeR Studio and the manga balloons: the statuses of the merged panels and the Linework button.
+	Capture a selection first	Επιλέξτε πρώτα μια περιοχή
+	Bubble captured	Το μπαλόνι συλλήφθηκε
+	Filled bubbles	Συμπληρώθηκαν μπαλόνια
+	Layer centered in the selection	Το επίπεδο κεντρίστηκε στην επιλογή
+	Align failed	Η στοίχιση απέτυχε
+	Create a Linework vector layer	Δημιουργία διανυσματικού επιπέδου γραμμών

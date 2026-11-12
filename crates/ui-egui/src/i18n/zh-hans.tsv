@@ -3520,3 +3520,10 @@ curves	Smooth	平滑
 	Delete this style	删除此样式
 	Bubble Contour	气泡轮廓
 	No contour variants	无轮廓变体
+# TypeR Studio and the manga balloons: the statuses of the merged panels and the Linework button.
+	Capture a selection first	请先创建选区
+	Bubble captured	已捕获气泡
+	Filled bubbles	已填充气泡
+	Layer centered in the selection	图层已在选区内居中
+	Align failed	对齐失败
+	Create a Linework vector layer	创建线稿矢量图层

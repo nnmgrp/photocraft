@@ -4575,3 +4575,10 @@ cameraData	Lens	Lens
 	Delete this style	Bu stili sil
 	Bubble Contour	Balon Şekli
 	No contour variants	Kontur varyasyonu yok
+# TypeR Studio and the manga balloons: the statuses of the merged panels and the Linework button.
+	Capture a selection first	Önce bir alan seçin
+	Bubble captured	Balon yakalandı
+	Filled bubbles	Balonlar dolduruldu
+	Layer centered in the selection	Katman seçim içinde ortalandı
+	Align failed	Hizalama başarısız oldu
+	Create a Linework vector layer	Çizgi sanatı vektör katmanı oluştur

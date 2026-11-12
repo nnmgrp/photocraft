@@ -4560,3 +4560,10 @@ curves	Smooth	Згладити
 	Delete this style	Видалити цей стиль
 	Bubble Contour	Форма бабла
 	No contour variants	Немає варіантів контуру
+# TypeR Studio and the manga balloons: the statuses of the merged panels and the Linework button.
+	Capture a selection first	Спершу виділіть область
+	Bubble captured	Бабл захоплено
+	Filled bubbles	Заповнено баблів
+	Layer centered in the selection	Шар вирівняно по центру виділення
+	Align failed	Не вдалося вирівняти
+	Create a Linework vector layer	Створити векторний шар штрихів

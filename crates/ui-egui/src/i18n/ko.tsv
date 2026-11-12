@@ -4114,3 +4114,10 @@ curves	Smooth	매끄럽게
 	Delete this style	이 스타일 삭제
 	Bubble Contour	말풍선 윤곽
 	No contour variants	윤곽 변형 없음
+# TypeR Studio and the manga balloons: the statuses of the merged panels and the Linework button.
+	Capture a selection first	먼저 영역을 선택하세요
+	Bubble captured	말풍선을 캡처했습니다
+	Filled bubbles	말풍선을 채웠습니다
+	Layer centered in the selection	선택 영역에서 레이어를 가운데 맞춤
+	Align failed	정렬하지 못했습니다
+	Create a Linework vector layer	선화 벡터 레이어 만들기

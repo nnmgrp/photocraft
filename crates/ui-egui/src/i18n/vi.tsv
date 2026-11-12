@@ -4347,3 +4347,10 @@ curves	Smooth	Làm mượt
 	Delete this style	Xóa kiểu này
 	Bubble Contour	Hình dạng bong bóng
 	No contour variants	Không có biến thể đường viền
+# TypeR Studio and the manga balloons: the statuses of the merged panels and the Linework button.
+	Capture a selection first	Hãy chọn vùng trước
+	Bubble captured	Đã chụp bong bóng
+	Filled bubbles	Đã điền bong bóng
+	Layer centered in the selection	Đã căn giữa lớp trong vùng chọn
+	Align failed	Căn chỉnh thất bại
+	Create a Linework vector layer	Tạo lớp vector đường nét

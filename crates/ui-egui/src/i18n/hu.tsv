@@ -4761,3 +4761,10 @@ cameraRaw	Yellow	Sárga
 	Delete this style	Stílus törlése
 	Bubble Contour	Buborékforma
 	No contour variants	Nincsenek kontúrváltozatok
+# TypeR Studio and the manga balloons: the statuses of the merged panels and the Linework button.
+	Capture a selection first	Először válasszon ki egy területet
+	Bubble captured	Buborék rögzítve
+	Filled bubbles	Buborékok kitöltve
+	Layer centered in the selection	Réteg középre igazítva a kijelölésben
+	Align failed	Igazítás nem sikerült
+	Create a Linework vector layer	Körvonal vektorréteg létrehozása

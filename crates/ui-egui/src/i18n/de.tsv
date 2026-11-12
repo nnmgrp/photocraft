@@ -3868,3 +3868,10 @@ curves	Smooth	Glätten
 	Delete this style	Diesen Stil löschen
 	Bubble Contour	Blasenform
 	No contour variants	Keine Konturvarianten
+# TypeR Studio and the manga balloons: the statuses of the merged panels and the Linework button.
+	Capture a selection first	Wählen Sie zuerst einen Bereich aus
+	Bubble captured	Blase erfasst
+	Filled bubbles	Blasen ausgefüllt
+	Layer centered in the selection	Ebene in der Auswahl zentriert
+	Align failed	Ausrichten fehlgeschlagen
+	Create a Linework vector layer	Vektorebene mit Konturen erstellen

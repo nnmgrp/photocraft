@@ -4542,3 +4542,10 @@ curves	Smooth	スムーズ
 	Delete this style	このスタイルを削除
 	Bubble Contour	吹き出しの輪郭
 	No contour variants	輪郭バリエーションなし
+# TypeR Studio and the manga balloons: the statuses of the merged panels and the Linework button.
+	Capture a selection first	まず領域を選択してください
+	Bubble captured	吹き出しを取得しました
+	Filled bubbles	吹き出しを塗りつぶしました
+	Layer centered in the selection	選択範囲内でレイヤーを中央揃え
+	Align failed	整列に失敗しました
+	Create a Linework vector layer	線画ベクトルレイヤーを作成

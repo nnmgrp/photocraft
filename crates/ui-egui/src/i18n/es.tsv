@@ -4854,3 +4854,10 @@ navigator	Zoom	Zoom
 	Delete this style	Eliminar este estilo
 	Bubble Contour	Forma de bocadillo
 	No contour variants	Sin variantes de contorno
+# TypeR Studio and the manga balloons: the statuses of the merged panels and the Linework button.
+	Capture a selection first	Primero selecciona una región
+	Bubble captured	Bocadillo capturado
+	Filled bubbles	Bocadillos rellenados
+	Layer centered in the selection	Capa centrada en la selección
+	Align failed	Error al alinear
+	Create a Linework vector layer	Crear una capa vectorial de trazos

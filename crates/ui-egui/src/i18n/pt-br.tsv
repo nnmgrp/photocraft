@@ -4784,3 +4784,10 @@ layerLabel	No Color	Sem cor
 	Delete this style	Excluir este estilo
 	Bubble Contour	Forma do balão
 	No contour variants	Sem variantes de contorno
+# TypeR Studio and the manga balloons: the statuses of the merged panels and the Linework button.
+	Capture a selection first	Primeiro selecione uma região
+	Bubble captured	Balão capturado
+	Filled bubbles	Balões preenchidos
+	Layer centered in the selection	Camada centralizada na seleção
+	Align failed	Falha ao alinhar
+	Create a Linework vector layer	Criar uma camada vetorial de traçados

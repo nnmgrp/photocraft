@@ -4889,3 +4889,10 @@ shape	Appearance	Apparence
 	Delete this style	Supprimer ce style
 	Bubble Contour	Forme de bulle
 	No contour variants	Aucune variante de contour
+# TypeR Studio and the manga balloons: the statuses of the merged panels and the Linework button.
+	Capture a selection first	Sélectionnez d'abord une zone
+	Bubble captured	Bulle capturée
+	Filled bubbles	Bulles remplies
+	Layer centered in the selection	Calque centré dans la sélection
+	Align failed	Échec de l'alignement
+	Create a Linework vector layer	Créer un calque vectoriel de contours

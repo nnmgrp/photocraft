@@ -4605,3 +4605,10 @@ curves	Smooth	Vloeiend maken
 	Delete this style	Deze stijl verwijderen
 	Bubble Contour	Ballonvorm
 	No contour variants	Geen contourvarianten
+# TypeR Studio and the manga balloons: the statuses of the merged panels and the Linework button.
+	Capture a selection first	Selecteer eerst een gebied
+	Bubble captured	Ballon vastgelegd
+	Filled bubbles	Ballonnen gevuld
+	Layer centered in the selection	Laag gecentreerd in de selectie
+	Align failed	Uitlijnen mislukt
+	Create a Linework vector layer	Vectormaag voor lijnwerk maken

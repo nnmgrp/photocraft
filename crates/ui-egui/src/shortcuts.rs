@@ -611,42 +611,8 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
             return;
         }
     }
-    if app.ui.tool == Tool::VectorCurve
-        && let Some(vc) = app.ui.vector_curve.as_ref()
-        && !vc.points.is_empty()
-    {
-        let wants_kb = ctx.egui_wants_keyboard_input();
-        let focused_id = ctx.memory(|m| m.focused());
-        let mods = ctx.input(|i| i.modifiers);
-        let is_undo_key = (mods.ctrl || mods.command) && !mods.shift && !mods.alt && ctx.input(|i| i.key_pressed(Key::Z));
-        let is_del_key = !mods.ctrl && !mods.command && !mods.shift && ctx.input(|i| i.key_pressed(Key::Backspace) || i.key_pressed(Key::Delete));
-        if is_undo_key || is_del_key {
-            log::info!(
-                "[Telemetry:Keys:Trace] tool=VectorCurve, is_undo_key={is_undo_key}, is_del_key={is_del_key}, \
-                 wants_kb={wants_kb}, focused_id={focused_id:?}, mode={:?}, points_len={}, active_node={:?}",
-                vc.mode, vc.points.len(), vc.selected_node
-            );
-        }
-    }
-    if app.ui.tool == Tool::VectorCurve
-        && let Some(vc) = app.ui.vector_curve.as_mut()
-        && !vc.points.is_empty()
-    {
-        let mods = ctx.input(|i| i.modifiers);
-        if !mods.command && !mods.ctrl && !mods.shift && ctx.input_mut(|i| i.consume_key(mods, Key::Backspace) || i.consume_key(mods, Key::Delete)) {
-            let points_before = vc.points.len();
-            let active_before = vc.selected_node;
-            log::info!(
-                "[Telemetry:Keys:DeleteNode] mode={:?}, points_before={points_before}, active_node_before={:?}",
-                vc.mode, active_before
-            );
-            let res = vc.delete_active_node();
-            log::info!(
-                "[Telemetry:Keys:DeleteNodeResult] points_after={}, active_node_after={:?}, deleted_anything={}, return_val={res}",
-                vc.points.len(), vc.selected_node, points_before != vc.points.len()
-            );
-            return;
-        }
+    if vector_curve_keys(app, ctx, focus) {
+        return;
     }
     if app.ui.tool == Tool::Balloon {
         let mods = ctx.input(|i| i.modifiers);
@@ -865,6 +831,78 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     // Page Up / Page Down (⌘ sideways, ⇧ a small step), Home and End scroll the canvas (#8057).
     crate::page_keys::handle(app, ctx);
+}
+
+pub(crate) fn vector_curve_keys(app: &mut PhotocraftApp, ctx: &egui::Context, focus: crate::shortcut_dispatch::Focus) -> bool {
+    if app.ui.tool != Tool::VectorCurve {
+        return false;
+    }
+    let Some((vc_mode, points_len, active_node)) = app
+        .ui
+        .vector_curve
+        .as_ref()
+        .filter(|vc| !vc.points.is_empty())
+        .map(|vc| (vc.mode, vc.points.len(), vc.selected_node))
+    else {
+        return false;
+    };
+
+    let wants_kb = ctx.egui_wants_keyboard_input();
+    let focused_id = ctx.memory(|m| m.focused());
+    let mods = ctx.input(|i| i.modifiers);
+    let is_undo_key = (mods.ctrl || mods.command) && !mods.shift && !mods.alt && ctx.input(|i| i.key_pressed(Key::Z));
+    let is_del_key = !mods.ctrl && !mods.command && !mods.shift && !mods.alt && ctx.input(|i| i.key_pressed(Key::Backspace) || i.key_pressed(Key::Delete));
+    if is_undo_key || is_del_key {
+        log::info!(
+            "[Telemetry:Keys:Trace] tool=VectorCurve, is_undo_key={is_undo_key}, is_del_key={is_del_key}, \
+             wants_kb={wants_kb}, focused_id={focused_id:?}, mode={vc_mode:?}, points_len={points_len}, active_node={active_node:?}"
+        );
+    }
+
+    let command_undo = effective_shortcut(app, "edit.undo", default_shortcut("edit.undo").as_deref())
+        .and_then(|shortcut| parse(&shortcut))
+        .is_some_and(|shortcut| consume(ctx, &shortcut));
+
+    let Some(vc) = app.ui.vector_curve.as_mut() else {
+        return false;
+    };
+    if command_undo {
+        let points_before = vc.points.len();
+        let popped = vc.pop_last_point();
+        log::info!(
+            "[Telemetry:Keys:UndoPoint] mode={:?}, points_before={points_before}, points_after={}, popped={popped}",
+            vc.mode, vc.points.len()
+        );
+        return true;
+    }
+
+    if focus != crate::shortcut_dispatch::Focus::DeletingWidget
+        && !mods.command
+        && !mods.ctrl
+        && !mods.shift
+        && !mods.alt
+        && ctx.input_mut(|i| i.consume_key(mods, Key::Backspace) || i.consume_key(mods, Key::Delete))
+    {
+        let points_before = vc.points.len();
+        let active_before = vc.selected_node;
+        log::info!(
+            "[Telemetry:Keys:DeleteNode] mode={:?}, points_before={points_before}, active_node_before={:?}",
+            vc.mode, active_before
+        );
+        let res = if vc.mode == crate::vector_ui::VectorCurveMode::Draw || vc.selected_node.is_none() {
+            vc.clear();
+            true
+        } else {
+            vc.delete_active_node()
+        };
+        log::info!(
+            "[Telemetry:Keys:DeleteNodeResult] points_after={}, active_node_after={:?}, deleted_anything={}, return_val={res}",
+            vc.points.len(), vc.selected_node, points_before != vc.points.len()
+        );
+        return true;
+    }
+
+    false
 }
 
 /// The active document's view is rotated (Rotate View).
@@ -1352,5 +1390,83 @@ mod tests {
                 panic!("shortcut {s} bound to both {prev} and {id}");
             }
         }
+    }
+
+    #[test]
+    fn vector_curve_undo_pops_last_point_while_delete_clears_curve() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 200, "height": 200, "depth": 8})).unwrap();
+        let layer_res = app.run("layer.newLinework", json!({})).unwrap();
+        let layer_id = layer_res["layer"].as_u64().unwrap();
+        app.ui.tool = Tool::VectorCurve;
+        app.ui.vector_curve = Some(crate::vector_ui::VectorCurveState {
+            points: vec![[10.0, 10.0, 1.0, 0.0], [30.0, 20.0, 1.0, 0.0], [50.0, 10.0, 1.0, 0.0]],
+            mode: crate::vector_ui::VectorCurveMode::Draw,
+            target_layer_id: Some(layer_id),
+            ..Default::default()
+        });
+
+        let ctrl_z = || {
+            let ctrl = Modifiers::CTRL | Modifiers::COMMAND;
+            egui::RawInput {
+                events: vec![
+                    egui::Event::ModifiersChanged(ctrl),
+                    egui::Event::Key {
+                        key: Key::Z,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: ctrl,
+                    },
+                ],
+                ..Default::default()
+            }
+        };
+        let del_key = |key: Key| egui::RawInput {
+            events: vec![
+                egui::Event::ModifiersChanged(Modifiers::NONE),
+                egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Modifiers::NONE,
+                },
+            ],
+            ..Default::default()
+        };
+
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(ctrl_z(), |_| {
+            super::handle(&mut app, &ctx);
+        });
+        out.textures_delta.clear();
+        assert_eq!(app.ui.vector_curve.as_ref().unwrap().points.len(), 2, "Ctrl+Z pops last point only");
+        assert!(app.session.active().unwrap().doc.layer(photocraft_doc::LayerId(layer_id)).is_some());
+
+        // Backspace in Draw mode clears the whole uncommitted curve.
+        let mut out = ctx.run_ui(del_key(Key::Backspace), |_| {
+            super::handle(&mut app, &ctx);
+        });
+        out.textures_delta.clear();
+        assert!(app.ui.vector_curve.as_ref().unwrap().points.is_empty());
+
+        // Delete in Edit mode removes only the selected node.
+        app.ui.vector_curve = Some(crate::vector_ui::VectorCurveState {
+            points: vec![[10.0, 10.0, 1.0, 0.0], [30.0, 20.0, 1.0, 0.0], [50.0, 10.0, 1.0, 0.0]],
+            mode: crate::vector_ui::VectorCurveMode::Edit,
+            selected_node: Some(1),
+            target_layer_id: Some(layer_id),
+            ..Default::default()
+        });
+        let mut out = ctx.run_ui(del_key(Key::Delete), |_| {
+            super::handle(&mut app, &ctx);
+        });
+        out.textures_delta.clear();
+        assert_eq!(app.ui.vector_curve.as_ref().unwrap().points.len(), 2);
+
+        // Undoing / deleting the target Linework layer reconciles and clears uncommitted points.
+        app.run("edit.undo", json!({})).unwrap();
+        assert!(app.ui.vector_curve.as_ref().unwrap().points.is_empty());
     }
 }

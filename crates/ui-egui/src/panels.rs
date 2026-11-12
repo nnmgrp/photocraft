@@ -3422,7 +3422,7 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             app.ui.tool = crate::state::Tool::VectorCurve;
             app.ui.dock_tabs.layers = crate::comic_sai_panel::LINEWORK_LAYERS_TAB;
             crate::dock::reveal(app, crate::dock::Group::Layers);
-            if app.ui.docking.is_some() {
+            if app.ui.docking.is_some() || crate::panel_docking::panel_in_side_dock(app, "linework") {
                 let _ = crate::panel_docking::command(app, "window.panel.activate", &json!({"panel": "linework"}));
             }
         }

@@ -13,7 +13,9 @@ use crate::PhotocraftApp;
 use crate::canvas::ViewXform;
 use crate::state::{Tool, ToolOptions};
 use crate::theme::Tokens;
-use photocraft_vector::sai_curve::{SAI_DEFAULT_TENSION, SaiPoint, closest_point_on_curve, insert_node_on_curve, sample_sai_curve, tapered_rings_ex, width_at};
+use photocraft_vector::sai_curve::{
+    SAI_DEFAULT_TENSION, SaiPoint, alpha_at, closest_point_on_curve, insert_node_on_curve, sample_sai_curve, tapered_rings_ex, width_at,
+};
 
 /// Sub-mode of `Tool::VectorCurve`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -86,6 +88,9 @@ pub struct VectorCurveState {
     /// Live cursor position in document coordinates for rubber-band spline preview.
     #[serde(skip)]
     pub hover_pos: Option<[f64; 2]>,
+    /// Document layer ID that was active when the uncommitted stroke began (used to discard orphan points after undo/delete).
+    #[serde(skip)]
+    pub target_layer_id: Option<u64>,
 }
 
 impl Default for VectorCurveState {
@@ -104,6 +109,7 @@ impl Default for VectorCurveState {
             drag_moved: false,
             layer_drag: None,
             hover_pos: None,
+            target_layer_id: None,
         }
     }
 }
@@ -317,6 +323,32 @@ impl VectorCurveState {
         self.layer_drag = None;
     }
 
+    pub fn clear(&mut self) {
+        self.points.clear();
+        self.closed_loop = false;
+        self.selected_node = None;
+        self.drag_node = None;
+        self.drag_kind = None;
+        self.drag_moved = false;
+        self.layer_drag = None;
+        self.target_layer_id = None;
+    }
+
+    pub fn pop_last_point(&mut self) -> bool {
+        if self.points.is_empty() {
+            return false;
+        }
+        self.points.pop();
+        if self.points.is_empty() {
+            self.clear();
+            return true;
+        }
+        if self.selected_node.is_some_and(|idx| idx >= self.points.len()) {
+            self.selected_node = Some(self.points.len() - 1);
+        }
+        true
+    }
+
     pub fn delete_active_node(&mut self) -> bool {
         if self.points.is_empty() {
             return false;
@@ -325,6 +357,9 @@ impl VectorCurveState {
         if target < self.points.len() {
             self.points.remove(target);
             self.selected_node = if self.points.is_empty() { None } else { Some(target.min(self.points.len() - 1)) };
+            if self.points.is_empty() {
+                self.clear();
+            }
             return true;
         }
         false
@@ -1865,12 +1900,37 @@ pub fn vector_curve_down(app: &mut PhotocraftApp, x: f64, y: f64, ctrl: bool, al
         }
     }
 
+    let active_layer_id = app.session.active().and_then(|st| st.active_layer).map(|id| id.0);
     let commit_now = {
         let vc = app.ui.vector_curve.get_or_insert_with(VectorCurveState::default);
-        vc.on_primary_down(x, y, ctrl, alt, shift, double_clicked, closed, zoom)
+        let was_empty = vc.points.is_empty();
+        let done = vc.on_primary_down(x, y, ctrl, alt, shift, double_clicked, closed, zoom);
+        if was_empty && !vc.points.is_empty() {
+            vc.target_layer_id = active_layer_id;
+        }
+        done
     };
     if commit_now {
         vector_curve_commit(app);
+    }
+}
+
+/// Clears uncommitted `VectorCurveState` points if the layer they started on was deleted,
+/// hidden, or deselected (for example via `edit.undo` or `layer.delete`).
+pub fn reconcile_vector_curve_layer(app: &mut PhotocraftApp) {
+    let Some(vc) = app.ui.vector_curve.as_mut() else { return };
+    if vc.points.is_empty() {
+        vc.target_layer_id = None;
+        return;
+    }
+    let Some(target_id) = vc.target_layer_id else { return };
+    let still_valid = app.session.active().is_some_and(|st| {
+        st.active_layer.is_some_and(|id| id.0 == target_id)
+            && st.doc.layer(photocraft_doc::LayerId(target_id)).is_some_and(|l| l.visible)
+    });
+    if !still_valid {
+        log::info!("[Telemetry:Keys:Reconcile] clearing orphan uncommitted stroke for target_layer_id={target_id}");
+        vc.clear();
     }
 }
 
@@ -1989,21 +2049,38 @@ pub fn vector_curve_commit(app: &mut PhotocraftApp) {
     let saved_auto_taper = vc.auto_taper_ends;
     let saved_hover = vc.hover_pos;
 
+    let sai = app.sai_panel.clone();
+    let effective_min_ratio = if sai.pressure_target == crate::comic_sai_panel::PressureTargetMode::Density {
+        1.0
+    } else {
+        f64::from(o.vector_curve_min_ratio)
+    };
+    let effective_tension = sai.curve_type.tension(vc.tension);
+    let curve_type_str = match sai.curve_type {
+        photocraft_vector::sai_curve::SaiCurveType::Normal => "normal",
+        photocraft_vector::sai_curve::SaiCurveType::Bezier => "bezier",
+    };
     log::info!(
         "[Telemetry:SAI:Commit] points_count={}, effective_width={}, effective_min_ratio={}, \
          effective_tension={}, effective_tapered={} | source_comparison: sai_panel.base_width={}, tool_options.width={}",
         vc.points.len(),
         o.vector_curve_width,
-        o.vector_curve_min_ratio,
-        o.vector_curve_tension,
+        effective_min_ratio,
+        effective_tension,
         o.vector_curve_tapered,
-        app.sai_panel.base_width,
+        sai.base_width,
         o.vector_curve_width,
     );
 
-    match vc.to_command_params(f64::from(o.vector_curve_width), f64::from(o.vector_curve_min_ratio), o.vector_curve_tapered, o.vector_curve_closed) {
+    match vc.to_command_params(f64::from(o.vector_curve_width), effective_min_ratio, o.vector_curve_tapered, o.vector_curve_closed) {
         Ok(mut params) => {
             params["appendToActive"] = json!(true);
+            params["curveType"] = json!(curve_type_str);
+            params["baseDensity"] = json!(sai.base_density);
+            params["minDensityRatio"] = json!(sai.min_density_ratio);
+            if sai.pressure_target == crate::comic_sai_panel::PressureTargetMode::Density {
+                params["pressureTarget"] = json!("density");
+            }
             if let Err(e) = app.run("shape.vectorCurve.create", params) {
                 app.ui.status = e;
                 app.ui.status_error = true;
@@ -2051,7 +2128,7 @@ pub fn draw_vector_curve_overlay(app: &PhotocraftApp, painter: &egui::Painter, x
         && let Some((_, lw)) = active_linework(app)
     {
         for stroke in &lw.strokes {
-            let samples = sample_sai_curve(&stroke.nodes, stroke.base_width, stroke.min_ratio, stroke.closed, stroke.tension, 2.5);
+            let samples = sample_sai_curve(&stroke.nodes, stroke.base_width, stroke.min_ratio, stroke.closed, stroke.effective_tension(), 2.5);
             if samples.len() >= 2 {
                 let mut line_pts: Vec<Pos2> = samples.iter().map(|s| to_scr([s.p.0, s.p.1])).collect();
                 if stroke.closed
@@ -2089,6 +2166,14 @@ pub fn draw_vector_curve_overlay(app: &PhotocraftApp, painter: &egui::Painter, x
     if vc.points.is_empty() {
         return;
     }
+    if let Some(target_id) = vc.target_layer_id
+        && !app.session.active().is_some_and(|st| {
+            st.active_layer.is_some_and(|id| id.0 == target_id)
+                && st.doc.layer(photocraft_doc::LayerId(target_id)).is_some_and(|l| l.visible)
+        })
+    {
+        return;
+    }
 
     // 2. Build live spline points including real-time rubber-band preview to mouse cursor `hover_pos`
     let mut preview_pts: Vec<SaiPoint> = vc.points.iter().map(|p| SaiPoint::with_pressure((p[0], p[1]), p[2] as f32, p[3] > 0.5)).collect();
@@ -2119,11 +2204,19 @@ pub fn draw_vector_curve_overlay(app: &PhotocraftApp, painter: &egui::Painter, x
 
     if preview_pts.len() >= 2 {
         let base_w = f64::from(o.vector_curve_width);
-        let min_r = if o.vector_curve_tapered { f64::from(o.vector_curve_min_ratio) } else { 1.0 };
+        let is_density = app.sai_panel.pressure_target == crate::comic_sai_panel::PressureTargetMode::Density;
+        let min_r = if is_density {
+            1.0
+        } else if o.vector_curve_tapered {
+            f64::from(o.vector_curve_min_ratio)
+        } else {
+            1.0
+        };
         let fg = app.session.tools.foreground;
         let stroke_col = rgb32(fg).gamma_multiply(0.85);
+        let eff_tension = app.sai_panel.curve_type.tension(vc.tension);
 
-        let (left, right, samples) = tapered_rings_ex(&preview_pts, base_w, min_r, preview_closed, vc.tension, 2.0);
+        let (left, right, samples) = tapered_rings_ex(&preview_pts, base_w, min_r, preview_closed, eff_tension, 2.0);
 
         // Render true stroke ribbon quads along the curve (NO convex hull fill across the bow!)
         let count = left.len().min(right.len());
@@ -2131,13 +2224,19 @@ pub fn draw_vector_curve_overlay(app: &PhotocraftApp, painter: &egui::Painter, x
             let segs = if preview_closed { count } else { count - 1 };
             for i in 0..segs {
                 let next = (i + 1) % count;
+                let density_alpha = if is_density {
+                    let p_avg = samples.get(i).zip(samples.get(next)).map_or(1.0, |(a, b)| (a.pressure + b.pressure) * 0.5);
+                    alpha_at(app.sai_panel.base_density, app.sai_panel.min_density_ratio, p_avg)
+                } else {
+                    app.sai_panel.base_density.clamp(0.0, 1.0)
+                };
                 let quad = vec![
                     to_scr([left[i].0, left[i].1]),
                     to_scr([left[next].0, left[next].1]),
                     to_scr([right[next].0, right[next].1]),
                     to_scr([right[i].0, right[i].1]),
                 ];
-                painter.add(egui::Shape::convex_polygon(quad, stroke_col, Stroke::NONE));
+                painter.add(egui::Shape::convex_polygon(quad, stroke_col.gamma_multiply(density_alpha), Stroke::NONE));
             }
         }
 
@@ -2429,13 +2528,27 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             }
             crate::widgets::vline(ui, 22.0);
             lbl(ui, tl!("Width:"));
-            crate::widgets::value_field(ui, &mut o.vector_curve_width, 0.5..=200.0, "px", 54.0);
-            ui.checkbox(&mut o.vector_curve_tapered, tl!("Taper"));
+            if crate::widgets::value_field(ui, &mut o.vector_curve_width, 0.5..=500.0, "px", 54.0).changed() {
+                app.sai_panel.base_width = o.vector_curve_width;
+            }
+            if ui.checkbox(&mut o.vector_curve_tapered, tl!("Taper")).changed() {
+                app.sai_panel.auto_taper_ends = o.vector_curve_tapered;
+                if let Some(vc) = app.ui.vector_curve.as_mut() {
+                    vc.auto_taper_ends = o.vector_curve_tapered;
+                }
+            }
             lbl(ui, tl!("Tension:"));
-            crate::widgets::value_field(ui, &mut o.vector_curve_tension, 0.0..=1.0, "", 44.0);
+            let tension_changed = crate::widgets::value_field(ui, &mut o.vector_curve_tension, 0.0..=1.0, "", 44.0).changed();
             let vc = app.ui.vector_curve.get_or_insert_with(VectorCurveState::default);
-            ui.checkbox(&mut vc.auto_taper_ends, tl!("Auto Taper"));
-            vc.tension = o.vector_curve_tension as f64;
+            let auto_taper_changed = ui.checkbox(&mut vc.auto_taper_ends, tl!("Auto Taper")).changed();
+            vc.tension = f64::from(o.vector_curve_tension);
+            if tension_changed {
+                app.sai_panel.tension = vc.tension;
+            }
+            if auto_taper_changed {
+                app.sai_panel.auto_taper_ends = vc.auto_taper_ends;
+                o.vector_curve_tapered = vc.auto_taper_ends || o.vector_curve_min_ratio < 0.999;
+            }
 
             let current_snapshot = (
                 o.vector_curve_width.to_bits(),

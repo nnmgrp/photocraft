@@ -998,3 +998,39 @@ fn test_multi_sided_docking_edge_drops_and_transitions() {
     assert!(!test_app.typesetter.is_open);
     assert!(!test_app.ui.docking.as_ref().unwrap().contains(&"typesetter".to_string()));
 }
+
+#[test]
+fn panel_singularity_across_left_and_right_docks() {
+    let mut h = harness(app(), vec2(1280.0, 800.0));
+    h.run_steps(1);
+
+    let ctx = h.ctx.clone();
+    let toolbar_w = crate::panels::toolbar_width(crate::theme::Tokens::get(&ctx).pro, h.state().ui.panels.toolbar_double);
+    let dropped_pages = handle_dock_drop(h.state_mut(), &ctx, "pages".to_string(), Pos2::new(60.0, 300.0), toolbar_w);
+    let dropped_lw = handle_dock_drop(h.state_mut(), &ctx, "linework".to_string(), Pos2::new(60.0, 300.0), toolbar_w);
+    assert!(dropped_pages && dropped_lw);
+
+    let app = h.state_mut();
+    // Ensure the right dock is initialized so singularity is verified with both docks active.
+    app.run("window.panel.activate", json!({"panel": "properties"})).unwrap();
+    assert!(app.ui.docking_left.as_ref().unwrap().contains(&"pages".to_string()));
+    assert!(app.ui.docking_left.as_ref().unwrap().contains(&"linework".to_string()));
+    assert!(!app.ui.docking.as_ref().is_some_and(|l| l.contains(&"pages".to_string())));
+    assert!(!app.ui.docking.as_ref().is_some_and(|l| l.contains(&"linework".to_string())));
+
+    // Activating linework keeps it single-instance in docking_left instead of duplicating into right dock.
+    app.run("window.panel.activate", json!({"panel": "linework"})).unwrap();
+    assert!(app.ui.docking_left.as_ref().unwrap().contains(&"linework".to_string()));
+    assert!(!app.ui.docking.as_ref().is_some_and(|l| l.contains(&"linework".to_string())));
+    assert!(crate::comic_sai_panel::showing(app));
+
+    // Toggling pages when it is behind linework activates pages in docking_left without cloning to right dock.
+    app.run("window.toggle.pages", json!({})).unwrap();
+    assert!(app.ui.docking_left.as_ref().unwrap().contains(&"pages".to_string()));
+    assert!(!app.ui.docking.as_ref().is_some_and(|l| l.contains(&"pages".to_string())));
+
+    // Toggling pages again while active closes it from docking_left without recreating in right dock.
+    app.run("window.toggle.pages", json!({})).unwrap();
+    assert!(!app.ui.docking_left.as_ref().unwrap().contains(&"pages".to_string()));
+    assert!(!app.ui.docking.as_ref().is_some_and(|l| l.contains(&"pages".to_string())));
+}

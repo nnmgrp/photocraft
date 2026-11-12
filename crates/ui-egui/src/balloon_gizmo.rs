@@ -339,6 +339,7 @@ pub fn draw_balloon_gizmo(painter: &egui::Painter, xf: &ViewXform, balloon: &Liv
 
 /// Starts a gizmo drag. `Alt` + click on a tail tip removes the tail.
 pub fn on_pointer_down(app: &mut PhotocraftApp, layer_id: u64, balloon: &LiveBalloon, hit: GizmoHit, pos_doc: [f64; 2], alt_held: bool) {
+    app.balloon_gizmo.active_balloon_id = Some(balloon.id);
     log::info!(
         "[Telemetry:Balloon:GizmoDown] hit={hit:?}, layer_id={layer_id}, pos_doc={pos_doc:?}, \
          body_rect={:?}, tails_count={}",
@@ -385,30 +386,6 @@ pub fn on_drag_move(app: &mut PhotocraftApp, drag: &BalloonGizmoDrag, cur_doc: [
     let mut updated = drag.initial_balloon.clone();
     let dx = cur_doc[0] - drag.start_pos_doc[0];
     let dy = cur_doc[1] - drag.start_pos_doc[1];
-
-    if (dx * dx + dy * dy) > 0.01
-        && let GizmoHit::TailTip { tail_id, .. } = drag.hit
-        && let Some(t) = updated.tails.iter().find(|t| t.id == tail_id)
-    {
-        let r = updated.body.rect();
-        let cx = r[0] + r[2] * 0.5;
-        let cy = r[1] + r[3] * 0.5;
-        let rx = (r[2] * 0.5).abs().max(1.0);
-        let ry = (r[3] * 0.5).abs().max(1.0);
-        let tip_x = t.tip[0] + dx;
-        let tip_y = t.tip[1] + dy;
-        let norm_dx = (tip_x - cx) / rx;
-        let norm_dy = (tip_y - cy) / ry;
-        let ellipse_dist = (norm_dx * norm_dx + norm_dy * norm_dy).sqrt();
-        let is_tip_inside_body = ellipse_dist < 1.0;
-        let (mouth_center, _) = updated.point_and_normal_on_body(t.perimeter_t);
-        log::info!(
-            "[Telemetry:Balloon:GizmoDrag] hit=TailTip(tail={tail_id}), cur_doc=({:.1}, {:.1}), \
-             center=({cx:.1}, {cy:.1}), radii=({rx:.1}, {ry:.1}), tip=({tip_x:.1}, {tip_y:.1}), mouth=({:.1}, {:.1}) | \
-             ellipse_dist={ellipse_dist:.3}, is_tip_inside_body={is_tip_inside_body}",
-            cur_doc[0], cur_doc[1], mouth_center[0], mouth_center[1]
-        );
-    }
 
     match drag.hit {
         GizmoHit::TailTip { tail_id, .. } => {
@@ -521,6 +498,34 @@ pub fn on_drag_move(app: &mut PhotocraftApp, drag: &BalloonGizmoDrag, cur_doc: [
             }
         }
         GizmoHit::PerimeterSpawnTail { .. } => {}
+    }
+
+    if (dx * dx + dy * dy) > 0.01
+        && let Some(tail_id) = match drag.hit {
+            GizmoHit::TailTip { tail_id, .. }
+            | GizmoHit::TailBend { tail_id, .. }
+            | GizmoHit::TailMouthCenter { tail_id, .. }
+            | GizmoHit::TailMouthWidth { tail_id, .. } => Some(tail_id),
+            _ => None,
+        }
+        && let Some(t) = updated.tails.iter().find(|t| t.id == tail_id)
+    {
+        let r = updated.body.rect();
+        let cx = r[0] + r[2] * 0.5;
+        let cy = r[1] + r[3] * 0.5;
+        let rx = (r[2] * 0.5).abs().max(1.0);
+        let ry = (r[3] * 0.5).abs().max(1.0);
+        let norm_dx = (t.tip[0] - cx) / rx;
+        let norm_dy = (t.tip[1] - cy) / ry;
+        let ellipse_dist = (norm_dx * norm_dx + norm_dy * norm_dy).sqrt();
+        let is_tip_inside_body = ellipse_dist < 1.0;
+        let (mouth_center, _) = updated.point_and_normal_on_body(t.perimeter_t);
+        log::info!(
+            "[Telemetry:Balloon:GizmoDrag] hit={:?}, cur_doc=({:.1}, {:.1}), \
+             center=({cx:.1}, {cy:.1}), radii=({rx:.1}, {ry:.1}), tip=({:.1}, {:.1}), mouth=({:.1}, {:.1}) | \
+             ellipse_dist={ellipse_dist:.3}, is_tip_inside_body={is_tip_inside_body}",
+            drag.hit, cur_doc[0], cur_doc[1], t.tip[0], t.tip[1], mouth_center[0], mouth_center[1]
+        );
     }
 
     let coalesce_key = format!("balloon-gizmo-drag-{}-{}", drag.layer_id, drag.gesture_id);

@@ -118,8 +118,8 @@ pub fn handles(id: &str) -> bool {
 pub const BALLOON_COLOR_TAB: usize = 5;
 
 pub fn showing(app: &PhotocraftApp) -> bool {
-    if let Some(layout) = &app.ui.docking {
-        crate::panel_docking::panel_active(layout, "balloon")
+    if app.ui.docking.is_some() || crate::panel_docking::panel_in_side_dock(app, "balloon") {
+        crate::panel_docking::panel_active_anywhere(app, "balloon")
     } else {
         app.ui.panels.color && app.ui.dock_tabs.color == BALLOON_COLOR_TAB && !app.ui.dock.is_collapsed(crate::dock::Group::Color)
     }
@@ -142,7 +142,7 @@ pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<
         return None;
     }
     log::info!("[Telemetry:Dock] comic_balloon_panel::menu: id={id}, docking_present={}", app.ui.docking.is_some());
-    if app.ui.docking.is_some() {
+    if app.ui.docking.is_some() || crate::panel_docking::panel_in_side_dock(app, "balloon") {
         let want = params.get("show").and_then(Value::as_bool);
         let show = want.unwrap_or(!showing(app));
         log::info!("[Telemetry:Dock] comic_balloon_panel delegating to panel_docking: show={show}");
@@ -158,10 +158,202 @@ pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<
     Some(Ok(json!({ "showing": show })))
 }
 
+struct ActiveBalloonTarget {
+    doc_idx: usize,
+    layer_id: u64,
+    balloon: LiveBalloon,
+    fill: Option<photocraft_doc::Fill>,
+    stroke_width: Option<f32>,
+}
+
+/// Returns the currently active balloon target when the active layer is a `BalloonGroup`.
+fn active_balloon_target(app: &PhotocraftApp) -> Option<ActiveBalloonTarget> {
+    let doc_idx = app.session.active_index()?;
+    let active = app.session.active()?;
+    let lid = active.active_layer?;
+    let layer = active.doc.layer(lid)?;
+    let photocraft_doc::LayerContent::Shape(sh) = &layer.content else { return None };
+    let Some(photocraft_doc::LiveShape::BalloonGroup { group }) = &sh.live else { return None };
+    let balloon = app
+        .balloon_gizmo
+        .active_balloon_id
+        .and_then(|bid| group.items.iter().find(|b| b.id == bid))
+        .or_else(|| group.items.first())?;
+    Some(ActiveBalloonTarget {
+        doc_idx,
+        layer_id: lid.0,
+        balloon: balloon.clone(),
+        fill: sh.fill.clone(),
+        stroke_width: sh.stroke.as_ref().map(|s| s.width),
+    })
+}
+
+fn body_from_state(st: &BalloonPanelUi, rect: [f64; 4]) -> LiveBalloonBody {
+    match st.body_choice {
+        BalloonBodyKindChoice::Ellipse => LiveBalloonBody::Ellipse { rect, squircle: st.squircle },
+        BalloonBodyKindChoice::Rect => LiveBalloonBody::Rect { rect, corner_radius: st.corner_radius },
+        BalloonBodyKindChoice::Cloud => LiveBalloonBody::Cloud {
+            rect,
+            bumps: st.cloud_bumps.max(4),
+            amplitude: st.cloud_amplitude,
+            cusp_bite: st.cloud_cusp_bite,
+            jitter: st.cloud_jitter,
+            seed: st.cloud_seed,
+        },
+        BalloonBodyKindChoice::Spiky => LiveBalloonBody::Spiky {
+            rect,
+            spikes: st.spiky_spikes.max(5),
+            length: st.spiky_length,
+            sub_harmonic: st.spiky_sub_harmonic,
+            concavity: st.spiky_concavity,
+            jitter: st.spiky_jitter,
+            smooth: st.spiky_smooth,
+            seed: st.spiky_seed,
+        },
+        BalloonBodyKindChoice::Uniflash => LiveBalloonBody::Uniflash {
+            rect,
+            needles: st.uniflash_needles.max(32),
+            inner_ratio: st.uniflash_inner_ratio,
+            bundle_group: st.uniflash_bundle,
+            length_jitter: 0.5,
+            angle_jitter: 0.25,
+            needle_width: st.uniflash_needle_width,
+            seed: st.uniflash_seed,
+        },
+    }
+}
+
+fn balloon_fill_value(app: &PhotocraftApp, mode: BalloonFillMode) -> Value {
+    match mode {
+        BalloonFillMode::White => json!("#ffffff"),
+        BalloonFillMode::Transparent => json!(null),
+        BalloonFillMode::Background => {
+            let bg = app.session.tools.background;
+            json!(format!("#{:02x}{:02x}{:02x}", (bg[0] * 255.0) as u8, (bg[1] * 255.0) as u8, (bg[2] * 255.0) as u8))
+        }
+    }
+}
+
+fn hydrate_state_from_balloon(state: &mut BalloonPanelUi, balloon: &LiveBalloon, fill: Option<&photocraft_doc::Fill>, stroke_width: Option<f32>) {
+    match &balloon.body {
+        LiveBalloonBody::Ellipse { squircle, .. } => {
+            state.body_choice = BalloonBodyKindChoice::Ellipse;
+            state.squircle = *squircle;
+        }
+        LiveBalloonBody::Rect { corner_radius, .. } => {
+            state.body_choice = BalloonBodyKindChoice::Rect;
+            state.corner_radius = *corner_radius;
+        }
+        LiveBalloonBody::Cloud { bumps, amplitude, cusp_bite, jitter, seed, .. } => {
+            state.body_choice = BalloonBodyKindChoice::Cloud;
+            state.cloud_bumps = *bumps;
+            state.cloud_amplitude = *amplitude;
+            state.cloud_cusp_bite = *cusp_bite;
+            state.cloud_jitter = *jitter;
+            state.cloud_seed = *seed;
+        }
+        LiveBalloonBody::Spiky { spikes, length, sub_harmonic, concavity, jitter, smooth, seed, .. } => {
+            state.body_choice = BalloonBodyKindChoice::Spiky;
+            state.spiky_spikes = *spikes;
+            state.spiky_length = *length;
+            state.spiky_sub_harmonic = *sub_harmonic;
+            state.spiky_concavity = *concavity;
+            state.spiky_jitter = *jitter;
+            state.spiky_smooth = *smooth;
+            state.spiky_seed = *seed;
+        }
+        LiveBalloonBody::Uniflash { needles, inner_ratio, bundle_group, needle_width, seed, .. } => {
+            state.body_choice = BalloonBodyKindChoice::Uniflash;
+            state.uniflash_needles = *needles;
+            state.uniflash_inner_ratio = *inner_ratio;
+            state.uniflash_bundle = *bundle_group;
+            state.uniflash_needle_width = *needle_width;
+            state.uniflash_seed = *seed;
+        }
+    }
+    if let Some(t) = balloon.tails.first() {
+        state.tail_preset = t.preset;
+        state.tail_mouth_width = t.mouth_width;
+        state.tail_bend = t.bend;
+        state.tail_bubbles = t.bubbles;
+        state.tail_bubble_radius = t.bubble_radius;
+    }
+    state.stroke_width = stroke_width.map(f64::from).unwrap_or(balloon.stroke_width).clamp(0.5, 20.0);
+    state.fill_mode = match fill {
+        None => BalloonFillMode::Transparent,
+        Some(photocraft_doc::Fill::Solid(c)) if c.c[0] > 0.98 && c.c[1] > 0.98 && c.c[2] > 0.98 => BalloonFillMode::White,
+        Some(_) => BalloonFillMode::Background,
+    };
+}
+
+/// Pushes panel edits from `state` onto the active live balloon layer (returns `true` if applied).
+pub(crate) fn apply_panel_to_active_layer(app: &mut PhotocraftApp, state: &BalloonPanelUi, prev: &BalloonPanelUi) -> bool {
+    let Some(ActiveBalloonTarget { layer_id, mut balloon, .. }) = active_balloon_target(app) else {
+        return false;
+    };
+    let tail_changed = state.tail_preset != prev.tail_preset
+        || (state.tail_mouth_width - prev.tail_mouth_width).abs() > 1e-4
+        || (state.tail_bend - prev.tail_bend).abs() > 1e-4
+        || state.tail_bubbles != prev.tail_bubbles
+        || (state.tail_bubble_radius - prev.tail_bubble_radius).abs() > 1e-4;
+    let fill_changed = state.fill_mode != prev.fill_mode;
+    let stroke_changed = (state.stroke_width - prev.stroke_width).abs() > 1e-4;
+
+    balloon.body = body_from_state(state, balloon.body.rect());
+    balloon.stroke_width = state.stroke_width;
+    if tail_changed && let Some(t) = balloon.tails.first_mut() {
+        t.preset = state.tail_preset;
+        t.mouth_width = state.tail_mouth_width;
+        t.bend = state.tail_bend;
+        t.bubbles = state.tail_bubbles;
+        t.bubble_radius = state.tail_bubble_radius;
+    }
+
+    let mut applied = false;
+    if app
+        .run(
+            "shape.balloon.update",
+            json!({
+                "layer": layer_id,
+                "balloon": balloon,
+                "coalesce": "balloon-panel-edit",
+            }),
+        )
+        .is_ok()
+    {
+        applied = true;
+    }
+
+    if fill_changed || stroke_changed {
+        let mut edit = json!({ "layer": layer_id });
+        if fill_changed {
+            edit["fill"] = balloon_fill_value(app, state.fill_mode);
+        }
+        if stroke_changed {
+            edit["stroke"] = json!({ "width": state.stroke_width });
+        }
+        if app.run("shape.edit", edit).is_ok() {
+            applied = true;
+        }
+    }
+    applied
+}
+
 /// Render the Manga Balloons dock panel.
 pub fn panel(app: &mut PhotocraftApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let mut state = std::mem::take(&mut app.ui.balloon_ui);
+    if let Some(ActiveBalloonTarget { doc_idx, layer_id, balloon, fill, stroke_width }) = active_balloon_target(app) {
+        let target_id = egui::Id::new("balloon_panel_hydrated_target");
+        let cur_key = (doc_idx, layer_id, balloon.id);
+        let prev_key = ui.ctx().data_mut(|d| d.get_temp::<(usize, u64, u32)>(target_id));
+        if prev_key != Some(cur_key) {
+            ui.ctx().data_mut(|d| d.insert_temp(target_id, cur_key));
+            hydrate_state_from_balloon(&mut state, &balloon, fill.as_ref(), stroke_width);
+        }
+    } else {
+        ui.ctx().data_mut(|d| d.remove::<(usize, u64, u32)>(egui::Id::new("balloon_panel_hydrated_target")));
+    }
     let initial_state = state.clone();
 
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
@@ -354,7 +546,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut Ui) {
                 app.ui.tool = Tool::VectorCurve;
                 app.ui.dock_tabs.layers = 3;
                 crate::dock::reveal(app, crate::dock::Group::Layers);
-                if app.ui.docking.is_some() {
+                if app.ui.docking.is_some() || crate::panel_docking::panel_in_side_dock(app, "linework") {
                     let _ = crate::panel_docking::command(app, "window.panel.activate", &json!({"panel": "linework"}));
                 }
             }
@@ -366,16 +558,13 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut Ui) {
     });
 
     if state != initial_state {
-        let (active_layer_id, is_balloon_layer) = app.session.active().map(|a| {
-            let lid = a.active_layer;
-            let is_b = lid.and_then(|id| a.doc.layer(id)).is_some_and(|l| {
-                matches!(&l.content, photocraft_doc::LayerContent::Shape(sh) if matches!(&sh.live, Some(photocraft_doc::LiveShape::BalloonGroup { .. })))
-            });
-            (lid.map(|id| id.0), is_b)
-        }).unwrap_or((None, false));
+        let applied_to_active = apply_panel_to_active_layer(app, &state, &initial_state);
+        let active_layer_id = app.session.active().and_then(|a| a.active_layer.map(|id| id.0));
+        let is_balloon_layer = active_balloon_target(app).is_some();
 
         log::info!(
-            "[Telemetry:Balloon:PanelMutate] body={:?}, tail={:?}, stroke={}, mouth_w={} | has_doc={}, active_layer_id={:?}, active_layer_is_balloon={is_balloon_layer}",
+            "[Telemetry:Balloon:PanelMutate] body={:?}, tail={:?}, stroke={}, mouth_w={} | has_doc={}, active_layer_id={:?}, \
+             active_layer_is_balloon={is_balloon_layer}, applied_to_active={applied_to_active}",
             state.body_choice,
             state.tail_preset,
             state.stroke_width,
@@ -405,7 +594,7 @@ fn create_balloon_on_canvas(app: &mut PhotocraftApp, st: &BalloonPanelUi) {
         None => {
             let w = 240.0f64.min(doc_size.width as f64 * 0.8).max(MIN_BALLOON_SIZE);
             let h = 160.0f64.min(doc_size.height as f64 * 0.8).max(MIN_BALLOON_SIZE);
-            let x = (doc_size.height as f64 - w) * 0.5;
+            let x = (doc_size.width as f64 - w) * 0.5;
             let y = (doc_size.height as f64 - h) * 0.5;
             (x, y, w, h)
         }
@@ -416,38 +605,7 @@ fn create_balloon_on_canvas(app: &mut PhotocraftApp, st: &BalloonPanelUi) {
         "[Telemetry:Balloon:Create] body_choice={:?}, tail_preset={:?}, rect={rect:?}, stroke_width={}",
         st.body_choice, st.tail_preset, st.stroke_width
     );
-    let body = match st.body_choice {
-        BalloonBodyKindChoice::Ellipse => LiveBalloonBody::Ellipse { rect, squircle: st.squircle },
-        BalloonBodyKindChoice::Rect => LiveBalloonBody::Rect { rect, corner_radius: st.corner_radius },
-        BalloonBodyKindChoice::Cloud => LiveBalloonBody::Cloud {
-            rect,
-            bumps: st.cloud_bumps.max(4),
-            amplitude: st.cloud_amplitude,
-            cusp_bite: st.cloud_cusp_bite,
-            jitter: st.cloud_jitter,
-            seed: st.cloud_seed,
-        },
-        BalloonBodyKindChoice::Spiky => LiveBalloonBody::Spiky {
-            rect,
-            spikes: st.spiky_spikes.max(5),
-            length: st.spiky_length,
-            sub_harmonic: st.spiky_sub_harmonic,
-            concavity: st.spiky_concavity,
-            jitter: st.spiky_jitter,
-            smooth: st.spiky_smooth,
-            seed: st.spiky_seed,
-        },
-        BalloonBodyKindChoice::Uniflash => LiveBalloonBody::Uniflash {
-            rect,
-            needles: st.uniflash_needles.max(32),
-            inner_ratio: st.uniflash_inner_ratio,
-            bundle_group: st.uniflash_bundle,
-            length_jitter: 0.5,
-            angle_jitter: 0.25,
-            needle_width: st.uniflash_needle_width,
-            seed: st.uniflash_seed,
-        },
-    };
+    let body = body_from_state(st, rect);
 
     let tail = LiveBalloonTail {
         id: 1,
@@ -471,14 +629,7 @@ fn create_balloon_on_canvas(app: &mut PhotocraftApp, st: &BalloonPanelUi) {
         auto_merge_overlapping: true,
     };
 
-    let fill_val = match st.fill_mode {
-        BalloonFillMode::White => json!("#ffffff"),
-        BalloonFillMode::Transparent => json!(null),
-        BalloonFillMode::Background => {
-            let bg = app.session.tools.background;
-            json!(format!("#{:02x}{:02x}{:02x}", (bg[0]*255.0) as u8, (bg[1]*255.0) as u8, (bg[2]*255.0) as u8))
-        }
-    };
+    let fill_val = balloon_fill_value(app, st.fill_mode);
 
     let _ = app.run("shape.balloon.create", json!({
         "balloon": balloon,
@@ -549,5 +700,42 @@ mod tests {
         assert_eq!(app.ui.tool, Tool::Balloon);
         let active = app.session.active().unwrap();
         assert!(active.active_layer.is_some());
+    }
+
+    #[test]
+    fn balloon_panel_write_through_updates_live_layer() {
+        let (mut app, _ctx) = test_app();
+        let prev = BalloonPanelUi::default();
+        create_balloon_on_canvas(&mut app, &prev);
+
+        let mut next = prev.clone();
+        next.body_choice = BalloonBodyKindChoice::Spiky;
+        next.spiky_spikes = 14;
+        next.tail_preset = TailPreset::Lightning;
+        next.tail_mouth_width = 40.0;
+        next.stroke_width = 5.5;
+        next.fill_mode = BalloonFillMode::Transparent;
+
+        assert!(apply_panel_to_active_layer(&mut app, &next, &prev));
+
+        let active = app.session.active().unwrap();
+        let lid = active.active_layer.unwrap();
+        let layer = active.doc.layer(lid).unwrap();
+        let photocraft_doc::LayerContent::Shape(sh) = &layer.content else { panic!("expected shape layer") };
+        assert!(sh.fill.is_none());
+        assert_eq!(sh.stroke.as_ref().map(|s| s.width), Some(5.5));
+        let Some(photocraft_doc::LiveShape::BalloonGroup { group }) = &sh.live else { panic!("expected balloon group") };
+        let b = &group.items[0];
+        assert!(matches!(b.body, LiveBalloonBody::Spiky { spikes: 14, .. }));
+        assert_eq!(b.tails[0].preset, TailPreset::Lightning);
+        assert!((b.tails[0].mouth_width - 40.0).abs() < 1e-4);
+
+        let mut hydrated = BalloonPanelUi::default();
+        hydrate_state_from_balloon(&mut hydrated, b, sh.fill.as_ref(), sh.stroke.as_ref().map(|s| s.width));
+        assert_eq!(hydrated.body_choice, BalloonBodyKindChoice::Spiky);
+        assert_eq!(hydrated.spiky_spikes, 14);
+        assert_eq!(hydrated.tail_preset, TailPreset::Lightning);
+        assert_eq!(hydrated.fill_mode, BalloonFillMode::Transparent);
+        assert!((hydrated.stroke_width - 5.5).abs() < 1e-4);
     }
 }

@@ -1031,13 +1031,37 @@ fn build_uniflash_paths(balloon: &LiveBalloon) -> Option<(Path, Path)> {
 /// bubbles (if any).
 fn build_single_tail_path(balloon: &LiveBalloon, t: &LiveBalloonTail) -> (Option<Path>, Option<Path>) {
     let (mouth_center, normal) = balloon.point_and_normal_on_body(t.perimeter_t);
-    let chord = [t.tip[0] - mouth_center[0], t.tip[1] - mouth_center[1]];
+    let tangent = [-normal[1], normal[0]];
+    let r = balloon.body.rect();
+    let min_half = (r[2].abs().min(r[3].abs()) * 0.5).max(4.0);
+    let half_w = t.mouth_width.clamp(4.0, min_half * 1.6) * 0.5;
+
+    // Keep the effective tip strictly in front of the mouth along `normal` so drags
+    // inside the balloon body cannot invert `chord_perp` against `tangent` (figure-8 cross).
+    let min_outward = (min_half * 0.12).max(4.0);
+    let rel_mouth = [t.tip[0] - mouth_center[0], t.tip[1] - mouth_center[1]];
+    let outward_proj = rel_mouth[0] * normal[0] + rel_mouth[1] * normal[1];
+    let tang_proj = rel_mouth[0] * tangent[0] + rel_mouth[1] * tangent[1];
+    let eff_tip = if outward_proj < min_outward {
+        [
+            mouth_center[0] + normal[0] * min_outward + tangent[0] * tang_proj,
+            mouth_center[1] + normal[1] * min_outward + tangent[1] * tang_proj,
+        ]
+    } else {
+        t.tip
+    };
+
+    let chord = [eff_tip[0] - mouth_center[0], eff_tip[1] - mouth_center[1]];
     let chord_len = (chord[0] * chord[0] + chord[1] * chord[1]).sqrt().max(1.0);
     let chord_dir = [chord[0] / chord_len, chord[1] / chord_len];
-    let chord_perp = [-chord_dir[1], chord_dir[0]];
+    let mut chord_perp = [-chord_dir[1], chord_dir[0]];
+    if chord_perp[0] * tangent[0] + chord_perp[1] * tangent[1] < 0.0 {
+        chord_perp = [-chord_perp[0], -chord_perp[1]];
+    }
 
-    let bend_px = t.bend.clamp(-1.0, 1.0) * (chord_len * 0.42);
-    let ctrl = [(mouth_center[0] + t.tip[0]) * 0.5 + chord_perp[0] * bend_px, (mouth_center[1] + t.tip[1]) * 0.5 + chord_perp[1] * bend_px];
+    let bend_scale = (outward_proj.max(min_outward) / (half_w * 0.6).max(1.0)).clamp(0.15, 1.0);
+    let bend_px = t.bend.clamp(-1.0, 1.0) * (chord_len * 0.42) * bend_scale;
+    let ctrl = [(mouth_center[0] + eff_tip[0]) * 0.5 + chord_perp[0] * bend_px, (mouth_center[1] + eff_tip[1]) * 0.5 + chord_perp[1] * bend_px];
 
     if t.preset == TailPreset::Thought {
         let count = t.bubbles.clamp(1, 8);
@@ -1045,24 +1069,20 @@ fn build_single_tail_path(balloon: &LiveBalloon, t: &LiveBalloonTail) -> (Option
         for i in 0..count {
             let s = if count == 1 { 1.0 } else { 0.22 + 0.78 * ((i as f64) / ((count - 1) as f64)) };
             let omt = 1.0 - s;
-            let bx = omt * omt * mouth_center[0] + 2.0 * omt * s * ctrl[0] + s * s * t.tip[0];
-            let by = omt * omt * mouth_center[1] + 2.0 * omt * s * ctrl[1] + s * s * t.tip[1];
+            let bx = omt * omt * mouth_center[0] + 2.0 * omt * s * ctrl[0] + s * s * eff_tip[0];
+            let by = omt * omt * mouth_center[1] + 2.0 * omt * s * ctrl[1] + s * s * eff_tip[1];
             let rad = (t.bubble_radius * (1.0 - 0.65 * ((i as f64) / (count.max(1) as f64)))).max(2.0);
             subpaths.extend(build_superellipse_path(bx, by, rad, rad, 0.0).subpaths);
         }
         return (None, Some(Path::new(subpaths)));
     }
 
-    let r = balloon.body.rect();
-    let min_half = (r[2].abs().min(r[3].abs()) * 0.5).max(4.0);
     let inset = (min_half * 0.28).min(32.0);
     let anchor = [mouth_center[0] - normal[0] * inset, mouth_center[1] - normal[1] * inset];
-    let tangent = [-normal[1], normal[0]];
-    let half_w = t.mouth_width.clamp(4.0, min_half * 1.6) * 0.5;
 
     let p_left = Point::new(anchor[0] - tangent[0] * half_w, anchor[1] - tangent[1] * half_w);
     let p_right = Point::new(anchor[0] + tangent[0] * half_w, anchor[1] + tangent[1] * half_w);
-    let p_tip = Point::new(t.tip[0], t.tip[1]);
+    let p_tip = Point::new(eff_tip[0], eff_tip[1]);
 
     let subpath = match t.preset {
         TailPreset::Wedge => Subpath {
@@ -1124,7 +1144,7 @@ fn build_single_tail_path(balloon: &LiveBalloon, t: &LiveBalloonTail) -> (Option
                 (p_left.x, p_left.y),
                 (k1[0] - chord_perp[0] * half_w * 0.35, k1[1] - chord_perp[1] * half_w * 0.35),
                 (k2[0] - chord_perp[0] * half_w * 0.20, k2[1] - chord_perp[1] * half_w * 0.20),
-                (t.tip[0], t.tip[1]),
+                (eff_tip[0], eff_tip[1]),
                 (k2[0] + chord_perp[0] * half_w * 0.20, k2[1] + chord_perp[1] * half_w * 0.20),
                 (k1[0] + chord_perp[0] * half_w * 0.35, k1[1] + chord_perp[1] * half_w * 0.35),
                 (p_right.x, p_right.y),
@@ -1133,8 +1153,8 @@ fn build_single_tail_path(balloon: &LiveBalloon, t: &LiveBalloonTail) -> (Option
         }
         TailPreset::Double => {
             let spread = (half_w * 0.65).max(6.0);
-            let tip1 = (t.tip[0] - chord_perp[0] * spread, t.tip[1] - chord_perp[1] * spread);
-            let tip2 = (t.tip[0] + chord_perp[0] * spread, t.tip[1] + chord_perp[1] * spread);
+            let tip1 = (eff_tip[0] - chord_perp[0] * spread, eff_tip[1] - chord_perp[1] * spread);
+            let tip2 = (eff_tip[0] + chord_perp[0] * spread, eff_tip[1] + chord_perp[1] * spread);
             let notch = (mouth_center[0] + chord[0] * 0.62, mouth_center[1] + chord[1] * 0.62);
             Subpath::polygon(&[(p_left.x, p_left.y), tip1, notch, tip2, (p_right.x, p_right.y)])
         }
@@ -1212,6 +1232,30 @@ impl LiveBalloonGeom for LiveBalloon {
                 let nx = if sx < sy { cos.signum() } else { 0.0 };
                 let ny = if sy <= sx { sin.signum() } else { 0.0 };
                 ([px, py], [nx, ny])
+            }
+            LiveBalloonBody::Cloud { cusp_bite, .. } => {
+                // Anchor on the cusp contour so the tail mouth always welds inside the solid lobes.
+                let base_factor = 1.0 - cusp_bite.clamp(0.0, 0.5) * 0.35;
+                let bx = rx * base_factor;
+                let by = ry * base_factor;
+                let px = cx + bx * angle.cos();
+                let py = cy + by * angle.sin();
+                let ux = angle.cos() / bx.max(1.0);
+                let uy = angle.sin() / by.max(1.0);
+                let len = (ux * ux + uy * uy).sqrt().max(1e-9);
+                ([px, py], [ux / len, uy / len])
+            }
+            LiveBalloonBody::Spiky { concavity, .. } => {
+                // Anchor on the valley core contour so the tail never floats outside deep spike valleys.
+                let valley_factor = (1.0 - concavity.clamp(0.0, 1.0) * 0.28).clamp(0.55, 1.0);
+                let bx = rx * valley_factor;
+                let by = ry * valley_factor;
+                let px = cx + bx * angle.cos();
+                let py = cy + by * angle.sin();
+                let ux = angle.cos() / bx.max(1.0);
+                let uy = angle.sin() / by.max(1.0);
+                let len = (ux * ux + uy * uy).sqrt().max(1e-9);
+                ([px, py], [ux / len, uy / len])
             }
             _ => {
                 let px = cx + rx * angle.cos();
@@ -1664,5 +1708,51 @@ mod tests {
             assert_eq!(LegacyTailPreset::from_id(preset.id()), Some(preset));
         }
         assert_eq!(LegacyTailPreset::from_id("nope"), None);
+    }
+
+    #[test]
+    fn balloon_tail_geometry_stays_valid_when_tip_inside_body() {
+        let rect = [100.0, 100.0, 240.0, 160.0];
+        let center = [220.0, 180.0];
+        let bodies = [
+            LiveBalloonBody::Ellipse { rect, squircle: 0.2 },
+            LiveBalloonBody::Cloud { rect, bumps: 10, amplitude: 0.2, cusp_bite: 0.25, jitter: 0.2, seed: 3 },
+            LiveBalloonBody::Spiky { rect, spikes: 14, length: 0.45, sub_harmonic: 0.35, concavity: 0.7, jitter: 0.2, smooth: false, seed: 5 },
+        ];
+        for body in bodies {
+            for preset in [TailPreset::Wedge, TailPreset::Arc, TailPreset::SCurve, TailPreset::Lightning, TailPreset::Double] {
+                let balloon = LiveBalloon {
+                    id: 1,
+                    body: body.clone(),
+                    tails: vec![LiveBalloonTail {
+                        id: 1,
+                        preset,
+                        perimeter_t: 0.58,
+                        mouth_width: 32.0,
+                        tip: center,
+                        bend: 0.45,
+                        bubbles: 3,
+                        bubble_radius: 10.0,
+                    }],
+                    next_tail_id: 2,
+                    vertex_overrides: Vec::new(),
+                    hand_drawn_noise: 0.0,
+                    stroke_width: 2.5,
+                    auto_merge_overlapping: true,
+                };
+                let path = balloon.rebuild_closed_path();
+                assert!(!path.subpaths.is_empty(), "path should be non-empty for {preset:?}");
+                for sp in &path.subpaths {
+                    assert!(sp.closed);
+                    for k in &sp.knots {
+                        assert!(k.anchor.x.is_finite() && k.anchor.y.is_finite());
+                        assert!(k.in_ctrl.x.is_finite() && k.in_ctrl.y.is_finite());
+                        assert!(k.out_ctrl.x.is_finite() && k.out_ctrl.y.is_finite());
+                    }
+                }
+                let polygons = closed_contours(&path);
+                assert!(area(&polygons) > 1000.0, "positive contour area for {preset:?}");
+            }
+        }
     }
 }

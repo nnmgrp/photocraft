@@ -240,24 +240,28 @@ pub(crate) fn command(app: &mut PhotocraftApp, id: &str, params: &Value) -> Opti
     if let Some(panel) = id.strip_prefix("window.panel.").or_else(|| id.strip_prefix("window.toggle.")).and_then(normalize) {
         dump_dock_topology(app, "before_command", panel);
         log::info!("[Telemetry:Dock] resolved panel '{panel}' for command '{id}' (docking_active={})", app.ui.docking.is_some());
-        if app.ui.docking.is_none() && panel != "brushes" {
+        if app.ui.docking.is_none() && !panel_in_side_dock(app, panel) && panel != "brushes" {
             return None;
         }
         let in_right = app.ui.docking.as_ref().is_some_and(|layout| layout.contains(&panel.to_string()));
         let in_left = app.ui.docking_left.as_ref().is_some_and(|layout| layout.contains(&panel.to_string()));
         let in_bottom = app.ui.docking_bottom.as_ref().is_some_and(|layout| layout.contains(&panel.to_string()));
         let showing = in_right || in_left || in_bottom;
-        let right_active = app.ui.docking.as_ref().is_some_and(|layout| panel_active(layout, panel));
-        let left_active = app.ui.docking_left.as_ref().is_some_and(|layout| panel_active(layout, panel));
+        let right_active = app.ui.docking.as_ref().is_some_and(|layout| panel_active(layout, panel) && !collapsed_members(app, layout).contains(panel));
+        let left_active =
+            app.ui.panels.left_dock && app.ui.docking_left.as_ref().is_some_and(|layout| panel_active(layout, panel) && !collapsed_members(app, layout).contains(panel));
+        let bottom_active =
+            app.ui.panels.bottom_dock && app.ui.docking_bottom.as_ref().is_some_and(|layout| panel_active(layout, panel) && !collapsed_members(app, layout).contains(panel));
+        let is_active_anywhere = right_active || left_active || bottom_active;
         let show = match params.get("show").or_else(|| params.get("on")) {
-            None => !showing || app.ui.docking.as_ref().is_some_and(|layout| !panel_active(layout, panel) || collapsed_members(app, layout).contains(panel)),
+            None => !showing || !is_active_anywhere,
             Some(value) => match value.as_bool() {
                 Some(show) => show,
                 None => return Some(Err("show must be a boolean".into())),
             },
         };
         log::info!(
-            "[Telemetry:Dock] panel '{panel}' target show={show} | showing={showing} (in_right={in_right}, in_left={in_left}, in_bottom={in_bottom}) | active (right={right_active}, left={left_active})"
+            "[Telemetry:Dock] panel '{panel}' target show={show} | showing={showing} (in_right={in_right}, in_left={in_left}, in_bottom={in_bottom}) | active (right={right_active}, left={left_active}, bottom={bottom_active})"
         );
         let res = change(app, if show { "activate" } else { "close" }, &json!({"panel":panel}));
         dump_dock_topology(app, "after_command", panel);
@@ -276,12 +280,11 @@ pub(crate) fn command(app: &mut PhotocraftApp, id: &str, params: &Value) -> Opti
 }
 
 pub(crate) fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
-    let layout = app.ui.docking.as_ref()?;
     let panel = id.strip_prefix("window.panel.").or_else(|| id.strip_prefix("window.toggle.")).and_then(normalize)?;
-    let in_dock = layout.contains(&panel.to_string());
-    let in_left = app.ui.docking_left.as_ref().is_some_and(|layout| layout.contains(&panel.to_string()));
-    let in_bottom = app.ui.docking_bottom.as_ref().is_some_and(|layout| layout.contains(&panel.to_string()));
-    Some(in_dock || in_left || in_bottom)
+    if app.ui.docking.is_none() && !panel_in_side_dock(app, panel) {
+        return None;
+    }
+    Some(panel_showing_anywhere(app, panel))
 }
 
 // UI output and automation share this atomic dispatcher. The application owns the registry
@@ -368,13 +371,78 @@ fn change(app: &mut PhotocraftApp, operation: &str, params: &Value) -> Result<Va
     let panel = params.get("panel").and_then(Value::as_str).and_then(normalize).ok_or("panel must name a registered panel")?;
     dump_dock_topology(app, "before_change", panel);
     log::info!("[Telemetry:Dock] change: resolved panel='{panel}', op={operation}, layout_present={}", app.ui.docking.is_some());
+    let in_right = app.ui.docking.as_ref().is_some_and(|layout| layout.contains(&panel.to_string()));
+    let in_left = app.ui.docking_left.as_ref().is_some_and(|layout| layout.contains(&panel.to_string()));
+    let in_bottom = app.ui.docking_bottom.as_ref().is_some_and(|layout| layout.contains(&panel.to_string()));
+
+    // Keep side-docked panels single-instance in their existing zone instead of cloning into the right dock.
+    if operation == "activate" && (in_left || in_bottom) && !in_right {
+        let side = if in_left { DockSide::Left } else { DockSide::Bottom };
+        let members = {
+            let layout_opt = if side == DockSide::Left { &mut app.ui.docking_left } else { &mut app.ui.docking_bottom };
+            let layout = layout_opt.as_mut().ok_or_else(|| "missing side dock layout".to_string())?;
+            layout.apply(Action::Activate { panel: panel.into() }).map_err(|e| e.to_string())?;
+            group_members(layout, panel)
+        };
+        if side == DockSide::Left {
+            app.ui.panels.left_dock = true;
+        } else {
+            app.ui.panels.bottom_dock = true;
+        }
+        remove_panel_from_other_docks(app, panel, side);
+        app.ui.docking_hidden.remove(panel);
+        app.ui.docking_collapsed.retain(|id| id != panel && !members.contains(id));
+        set_panel_visible(app, panel, true);
+        sync_visibility(app);
+        if let Some((_, _, group)) = PANELS.iter().find(|p| p.0 == panel) {
+            app.ui.dock.set_collapsed(*group, false);
+            app.ui.docking_reveal = Some(panel.to_owned());
+            reveal_group(app, panel);
+        }
+        dump_dock_topology(app, "after_change", panel);
+        let active_layout = if side == DockSide::Left { &app.ui.docking_left } else { &app.ui.docking_bottom };
+        return Ok(json!({"panel": panel, "layout": active_layout}));
+    }
+
+    if operation == "close" && (in_left || in_bottom) && !in_right {
+        if let Some(layout) = app.ui.docking_left.as_mut() {
+            remove_panel_from_layout(layout, panel);
+            if layout.root.is_none() && layout.floating.is_empty() {
+                app.ui.panels.left_dock = false;
+            }
+        }
+        if let Some(layout) = app.ui.docking_bottom.as_mut() {
+            remove_panel_from_layout(layout, panel);
+            if layout.root.is_none() && layout.floating.is_empty() {
+                app.ui.panels.bottom_dock = false;
+            }
+        }
+        app.ui.docking_hidden.remove(panel);
+        set_panel_visible(app, panel, false);
+        sync_visibility(app);
+        dump_dock_topology(app, "after_change", panel);
+        return Ok(json!({"panel": panel, "layout": app.ui.docking}));
+    }
+
     if app.ui.docking.as_ref().is_some_and(|layout| !valid(layout)) {
         return Err("saved panel layout is invalid; reset the workspace first".into());
     }
+    let was_uninitialized = app.ui.docking.is_none();
     let mut layout = app.ui.docking.clone().unwrap_or_else(|| legacy(app));
-    let migrated = if app.ui.docking.is_none() { migration_hidden(app, &layout) } else { app.ui.docking_hidden.clone() };
-    let mut hidden: std::collections::BTreeMap<_, _> =
-        migrated.iter().filter(|(id, _)| normalize(id).is_some()).take(64).map(|(id, at)| (id.clone(), at.clone())).collect();
+    if was_uninitialized {
+        for (id, ..) in PANELS {
+            if panel_in_side_dock(app, id) {
+                remove_panel_from_layout(&mut layout, id);
+            }
+        }
+    }
+    let migrated = if was_uninitialized { migration_hidden(app, &layout) } else { app.ui.docking_hidden.clone() };
+    let mut hidden: std::collections::BTreeMap<_, _> = migrated
+        .iter()
+        .filter(|(id, _)| normalize(id).is_some() && !(was_uninitialized && panel_in_side_dock(app, id)))
+        .take(64)
+        .map(|(id, at)| (id.clone(), at.clone()))
+        .collect();
     let mut restored = false;
     if operation == "dock"
         && params.get("anchor").or_else(|| params.get("onto")).is_none()
@@ -430,8 +498,8 @@ fn change(app: &mut PhotocraftApp, operation: &str, params: &Value) -> Result<Va
             if let Ok(loc) = layout.location(&panel.to_string()) {
                 hidden.insert(panel.into(), loc);
             }
-            let _ = layout.apply(Action::Close { panel: panel.into() });
-            remove_panel_from_all_docks(app, panel);
+            remove_panel_from_layout(&mut layout, panel);
+            remove_panel_from_side_docks(app, panel);
             set_panel_visible(app, panel, false);
         }
         _ => {
@@ -442,8 +510,12 @@ fn change(app: &mut PhotocraftApp, operation: &str, params: &Value) -> Result<Va
             ensure(&mut layout, panel)?;
             layout.apply(Action::Activate { panel: panel.into() }).map_err(|e| e.to_string())?;
             hidden.remove(panel);
+            remove_panel_from_side_docks(app, panel);
             set_panel_visible(app, panel, true);
         }
+    }
+    if operation != "close" {
+        remove_panel_from_side_docks(app, panel);
     }
     app.ui.docking = Some(layout);
     app.ui.docking_hidden = hidden;
@@ -868,17 +940,66 @@ pub(crate) fn dock_into(layout_opt: &mut Option<craft_ui::docking::Layout<String
     }
 }
 
+pub(crate) fn panel_in_side_dock(app: &PhotocraftApp, panel: &str) -> bool {
+    let key = panel.to_string();
+    app.ui.docking_left.as_ref().is_some_and(|l| l.contains(&key)) || app.ui.docking_bottom.as_ref().is_some_and(|l| l.contains(&key))
+}
+
+pub(crate) fn panel_showing_anywhere(app: &PhotocraftApp, panel: &str) -> bool {
+    let key = panel.to_string();
+    app.ui.docking.as_ref().is_some_and(|l| l.contains(&key)) || panel_in_side_dock(app, panel)
+}
+
+pub(crate) fn panel_active_anywhere(app: &PhotocraftApp, panel: &str) -> bool {
+    let right = app.ui.docking.as_ref().is_some_and(|l| panel_active(l, panel) && !collapsed_members(app, l).contains(panel));
+    let left = app.ui.panels.left_dock
+        && app.ui.docking_left.as_ref().is_some_and(|l| panel_active(l, panel) && !collapsed_members(app, l).contains(panel));
+    let bottom = app.ui.panels.bottom_dock
+        && app.ui.docking_bottom.as_ref().is_some_and(|l| panel_active(l, panel) && !collapsed_members(app, l).contains(panel));
+    right || left || bottom
+}
+
+fn remove_panel_from_layout(layout: &mut Layout<String>, panel: &str) {
+    let _ = layout.apply(Action::Close { panel: panel.to_string() });
+    for group in &mut layout.floating {
+        group.panels.retain(|p| p != panel);
+        if group.active >= group.panels.len() && !group.panels.is_empty() {
+            group.active = group.panels.len() - 1;
+        }
+    }
+    layout.floating.retain(|g| !g.panels.is_empty());
+}
+
+fn remove_panel_from_side_docks(app: &mut PhotocraftApp, panel: &str) {
+    for layout_opt in [&mut app.ui.docking_left, &mut app.ui.docking_bottom] {
+        if let Some(layout) = layout_opt.as_mut() {
+            remove_panel_from_layout(layout, panel);
+        }
+    }
+}
+
+fn remove_panel_from_other_docks(app: &mut PhotocraftApp, panel: &str, keep: DockSide) {
+    if keep != DockSide::Right
+        && let Some(layout) = app.ui.docking.as_mut()
+    {
+        remove_panel_from_layout(layout, panel);
+    }
+    if keep != DockSide::Left
+        && let Some(layout) = app.ui.docking_left.as_mut()
+    {
+        remove_panel_from_layout(layout, panel);
+    }
+    if keep != DockSide::Bottom
+        && let Some(layout) = app.ui.docking_bottom.as_mut()
+    {
+        remove_panel_from_layout(layout, panel);
+    }
+}
+
 pub(crate) fn remove_panel_from_all_docks(app: &mut PhotocraftApp, panel: &str) {
     for layout_opt in [&mut app.ui.docking, &mut app.ui.docking_left, &mut app.ui.docking_bottom] {
         if let Some(layout) = layout_opt.as_mut() {
-            let _ = layout.apply(craft_ui::docking::Action::Close { panel: panel.to_string() });
-            for group in &mut layout.floating {
-                group.panels.retain(|p| p != panel);
-                if group.active >= group.panels.len() && !group.panels.is_empty() {
-                    group.active = group.panels.len() - 1;
-                }
-            }
-            layout.floating.retain(|g| !g.panels.is_empty());
+            remove_panel_from_layout(layout, panel);
         }
     }
     app.ui.docking_hidden.remove(panel);

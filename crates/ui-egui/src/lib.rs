@@ -2570,6 +2570,7 @@ impl PhotocraftApp {
                     self.ui.status_error = false;
                 }
                 self.sync_views();
+                crate::vector_ui::reconcile_vector_curve_layer(self);
                 let removed = self.session.take_samplers_removed();
                 if removed > 0 && !self.ui.status_error {
                     // A canvas-size change (crop, Canvas Size, Image Size, rotation) dropped Color

@@ -809,23 +809,24 @@ pub fn set_live_linework(layer: &mut Layer, linework: &LiveLinework) {
 
 /// Parses a single `SaiPoint` from JSON (`[x, y, pressure?, corner?]` or `{"x", "y", "pressure", "corner"}`).
 pub fn parse_sai_point(v: &Value) -> Option<SaiPoint> {
-    let (x, y, pressure, corner) = if let Some(a) = v.as_array() {
+    let (x, y, pressure, density, corner) = if let Some(a) = v.as_array() {
         let x = a.first().and_then(Value::as_f64)?;
         let y = a.get(1).and_then(Value::as_f64)?;
         let pressure = a.get(2).and_then(Value::as_f64).unwrap_or(1.0);
         let corner = a.get(3).and_then(Value::as_bool).or_else(|| a.get(2).and_then(Value::as_bool)).unwrap_or(false);
-        (x, y, pressure, corner)
+        (x, y, pressure, 1.0, corner)
     } else {
         let x = v.get("x").and_then(Value::as_f64)?;
         let y = v.get("y").and_then(Value::as_f64)?;
         let pressure = v.get("pressure").and_then(Value::as_f64).unwrap_or(1.0);
+        let density = v.get("density").and_then(Value::as_f64).unwrap_or(1.0);
         let corner = v.get("corner").and_then(Value::as_bool).unwrap_or(false);
-        (x, y, pressure, corner)
+        (x, y, pressure, density, corner)
     };
-    if !x.is_finite() || !y.is_finite() || !pressure.is_finite() {
+    if !x.is_finite() || !y.is_finite() || !pressure.is_finite() || !density.is_finite() {
         return None;
     }
-    Some(SaiPoint::with_pressure((x, y), pressure as f32, corner))
+    Some(SaiPoint::with_dynamics((x, y), pressure as f32, density as f32, corner))
 }
 
 /// Validates and parses an array of `SaiPoint` nodes from command JSON parameters.
@@ -852,7 +853,7 @@ pub struct VectorCurveCommandOutput {
 /// Core command handler for `shape.vectorCurve.create`.
 pub fn build_vector_curve_layer(p: &Value) -> std::result::Result<VectorCurveCommandOutput, String> {
     const CMD: &str = "shape.vectorCurve.create";
-    let points = parse_sai_points(p, CMD)?;
+    let mut points = parse_sai_points(p, CMD)?;
 
     let width = p.get("width").and_then(Value::as_f64).unwrap_or(6.0);
     if !(0.01..=1.0e5).contains(&width) || !width.is_finite() {
@@ -860,6 +861,18 @@ pub fn build_vector_curve_layer(p: &Value) -> std::result::Result<VectorCurveCom
     }
 
     let min_ratio = p.get("minRatio").and_then(Value::as_f64).unwrap_or(0.05).clamp(0.0, 1.0);
+    let base_density = p.get("baseDensity").and_then(Value::as_f64).unwrap_or(1.0).clamp(0.0, 2.0) as f32;
+    let min_density_ratio = p.get("minDensityRatio").and_then(Value::as_f64).unwrap_or(0.0).clamp(0.0, 1.0) as f32;
+    let curve_type = match p.get("curveType").and_then(Value::as_str) {
+        Some("bezier") | Some("Bezier") => SaiCurveType::Bezier,
+        _ => SaiCurveType::Normal,
+    };
+    if p.get("pressureTarget").and_then(Value::as_str) == Some("density") {
+        for pt in &mut points {
+            pt.density = pt.pressure;
+            pt.pressure = 1.0;
+        }
+    }
     let tapered = p.get("tapered").and_then(Value::as_bool).unwrap_or(true);
     let closed = p.get("closed").and_then(Value::as_bool).unwrap_or(false);
     let tension = p.get("tension").and_then(Value::as_f64).unwrap_or(SAI_DEFAULT_TENSION).clamp(0.0, 1.0);
@@ -868,9 +881,9 @@ pub fn build_vector_curve_layer(p: &Value) -> std::result::Result<VectorCurveCom
         nodes: points,
         base_width: width,
         min_ratio,
-        base_density: 1.0,
-        min_density_ratio: 0.0,
-        curve_type: SaiCurveType::Normal,
+        base_density,
+        min_density_ratio,
+        curve_type,
         tapered,
         closed,
         tension,
@@ -982,6 +995,17 @@ fn layer_new_linework(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "layer": id.0 }))
 }
 
+fn effective_stroke_fg(s: &Session, stroke: &LiveVectorStroke) -> Color {
+    let fg = s.tools.foreground;
+    let avg_density = if stroke.nodes.is_empty() {
+        1.0
+    } else {
+        stroke.nodes.iter().map(|n| n.density).sum::<f32>() / stroke.nodes.len() as f32
+    };
+    let effective_alpha = vector::sai_curve::alpha_at(stroke.base_density, stroke.min_density_ratio, avg_density);
+    Color::rgba(fg[0], fg[1], fg[2], (fg[3] * effective_alpha).clamp(0.0, 1.0))
+}
+
 fn vector_curve_create(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "shape.vectorCurve.create";
     let output = build_vector_curve_layer(p).map_err(|e| bad(CMD, e))?;
@@ -997,8 +1021,7 @@ fn vector_curve_create(s: &mut Session, p: &Value) -> Result<Value> {
         lw.strokes.push(output.live_stroke.clone());
         let combined_path = lw.rebuild_path();
         if !combined_path.is_empty() {
-            let fg = s.tools.foreground;
-            let fgc = Color::rgba(fg[0], fg[1], fg[2], fg[3]);
+            let fgc = effective_stroke_fg(s, &output.live_stroke);
             with_shape(s, active_id, "Add Linework Stroke", |sh, layer| {
                 vector::flatten::validate_shape(&combined_path, None).map_err(|e| bad(CMD, e))?;
                 if sh.fill.is_none() {
@@ -1016,8 +1039,7 @@ fn vector_curve_create(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
 
-    let fg = s.tools.foreground;
-    let fgc = Color::rgba(fg[0], fg[1], fg[2], fg[3]);
+    let fgc = effective_stroke_fg(s, &output.live_stroke);
     let (fill, stroke) = if output.live_stroke.tapered || append_to_active {
         let fill = match p.get("fill") {
             Some(v) => parse_fill(v).map_err(|e| bad(CMD, e))?,

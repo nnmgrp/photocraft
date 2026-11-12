@@ -1031,7 +1031,7 @@ fn default_balloon_seed() -> u32 {
 }
 
 fn default_vector_curve_width() -> f32 {
-    6.0
+    8.0
 }
 
 fn default_vector_curve_tapered() -> bool {
@@ -1043,7 +1043,7 @@ fn default_vector_curve_closed() -> bool {
 }
 
 fn default_vector_curve_min_ratio() -> f32 {
-    0.05
+    0.0
 }
 
 fn default_vector_curve_tension() -> f32 {

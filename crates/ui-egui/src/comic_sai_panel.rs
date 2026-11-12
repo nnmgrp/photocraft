@@ -82,8 +82,8 @@ pub fn handles(id: &str) -> bool {
 pub const LINEWORK_LAYERS_TAB: usize = 3;
 
 pub fn showing(app: &PhotocraftApp) -> bool {
-    if let Some(layout) = &app.ui.docking {
-        crate::panel_docking::panel_active(layout, "linework")
+    if app.ui.docking.is_some() || crate::panel_docking::panel_in_side_dock(app, "linework") {
+        crate::panel_docking::panel_active_anywhere(app, "linework")
     } else {
         app.ui.panels.layers && app.ui.dock_tabs.layers == LINEWORK_LAYERS_TAB && !app.ui.dock.is_collapsed(crate::dock::Group::Layers)
     }
@@ -106,7 +106,7 @@ pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<
         return None;
     }
     log::info!("[Telemetry:Dock] comic_sai_panel::menu: id={id}, docking_present={}", app.ui.docking.is_some());
-    if app.ui.docking.is_some() {
+    if app.ui.docking.is_some() || crate::panel_docking::panel_in_side_dock(app, "linework") {
         let want = params.get("show").and_then(Value::as_bool);
         let show = want.unwrap_or(!showing(app));
         log::info!("[Telemetry:Dock] comic_sai_panel delegating to panel_docking: show={show}");
@@ -164,12 +164,24 @@ pub fn draw_sai_preview(ui: &mut Ui, base_width: f32, min_ratio: f32, base_densi
     )));
 }
 
+/// Synchronize `LineworkPanelState` into `ToolOptions` and the armed `VectorCurveState` on change.
+pub fn sync_to_tool_options(app: &mut PhotocraftApp, state: &LineworkPanelState) {
+    app.ui.tool_options.vector_curve_width = state.base_width;
+    app.ui.tool_options.vector_curve_min_ratio = state.min_size_ratio;
+    app.ui.tool_options.vector_curve_tension = state.tension as f32;
+    app.ui.tool_options.vector_curve_tapered = state.auto_taper_ends || state.min_size_ratio < 0.999;
+    app.ui.tool_options.vector_curve_closed = state.closed_loop;
+    if let Some(vc) = app.ui.vector_curve.as_mut() {
+        vc.tension = state.curve_type.tension(state.tension);
+        vc.auto_taper_ends = state.auto_taper_ends;
+    }
+}
+
 /// Render the complete SAI Linework Studio panel.
 pub fn panel(app: &mut PhotocraftApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
-    let to_width = app.ui.tool_options.vector_curve_width;
-    let to_min_ratio = app.ui.tool_options.vector_curve_min_ratio;
     let mut state = std::mem::take(&mut app.sai_panel);
+    let initial_state = state.clone();
 
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         ui.add_space(4.0);
@@ -197,6 +209,8 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut Ui) {
                     let prev_r = state.min_size_ratio;
                     state.tip_profile = id;
                     state.min_size_ratio = ratio;
+                    sync_to_tool_options(app, &state);
+                    let to_min_ratio = app.ui.tool_options.vector_curve_min_ratio;
                     log::info!(
                         "[Telemetry:SAI:TaperPreset] preset='{label}', sai_panel.min_size_ratio: {prev_r} -> {ratio}, \
                          tool_options.vector_curve_min_ratio={to_min_ratio}"
@@ -213,6 +227,8 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut Ui) {
             ui.label("Базовый размер:");
             let resp = ui.add(Slider::new(&mut state.base_width, 0.7..=500.0).logarithmic(true).suffix(" px"));
             if resp.changed() {
+                sync_to_tool_options(app, &state);
+                let to_width = app.ui.tool_options.vector_curve_width;
                 log::info!(
                     "[Telemetry:SAI:BaseWidthSlider] sai_panel.base_width={}, tool_options.vector_curve_width={to_width}",
                     state.base_width
@@ -254,6 +270,8 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut Ui) {
                 if ui.add(btn).clicked() {
                     let prev_w = state.base_width;
                     state.base_width = sz;
+                    sync_to_tool_options(app, &state);
+                    let to_width = app.ui.tool_options.vector_curve_width;
                     log::info!(
                         "[Telemetry:SAI:GridClick] clicked_sz={sz}, sai_panel.base_width: {prev_w} -> {sz}, \
                          tool_options.vector_curve_width={to_width} (synced={})",
@@ -327,6 +345,10 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut Ui) {
         });
     });
 
+    if state != initial_state {
+        sync_to_tool_options(app, &state);
+    }
+
     app.sai_panel = state;
 }
 
@@ -394,5 +416,50 @@ mod tests {
         for i in 1..SAI_QUICK_SIZES.len() {
             assert!(SAI_QUICK_SIZES[i] > SAI_QUICK_SIZES[i - 1]);
         }
+    }
+
+    #[test]
+    fn sai_grid_and_tip_profile_sync_to_tool_options() {
+        let (mut app, _ctx) = test_app();
+        // ToolOptions and LineworkPanelState start aligned.
+        assert!((app.ui.tool_options.vector_curve_width - 8.0).abs() < 1e-4);
+        assert!((app.ui.tool_options.vector_curve_min_ratio - 0.0).abs() < 1e-4);
+
+        let mut panel = LineworkPanelState {
+            base_width: 350.0,
+            tip_profile: TipProfileId::SemiFlat,
+            min_size_ratio: 0.50,
+            curve_type: SaiCurveType::Bezier,
+            tension: 0.4,
+            base_density: 0.75,
+            min_density_ratio: 0.2,
+            ..LineworkPanelState::default()
+        };
+        sync_to_tool_options(&mut app, &panel);
+        assert!((app.ui.tool_options.vector_curve_width - 350.0).abs() < 1e-4);
+        assert!((app.ui.tool_options.vector_curve_min_ratio - 0.50).abs() < 1e-4);
+        assert!(app.ui.tool_options.vector_curve_tapered);
+
+        panel.base_width = 2.0;
+        panel.tip_profile = TipProfileId::Calligraphic;
+        panel.min_size_ratio = 0.05;
+        sync_to_tool_options(&mut app, &panel);
+        assert!((app.ui.tool_options.vector_curve_width - 2.0).abs() < 1e-4);
+        assert!((app.ui.tool_options.vector_curve_min_ratio - 0.05).abs() < 1e-4);
+
+        // Verify engine builder applies curve_type, base_density, and min_density_ratio.
+        let out = photocraft_engine::vector_cmds::build_vector_curve_layer(&json!({
+            "points": [{"x": 10.0, "y": 10.0, "pressure": 1.0}, {"x": 80.0, "y": 40.0, "pressure": 0.5}],
+            "width": 350.0,
+            "minRatio": 0.50,
+            "curveType": "bezier",
+            "baseDensity": 0.75,
+            "minDensityRatio": 0.20,
+        }))
+        .unwrap();
+        assert_eq!(out.live_stroke.curve_type, SaiCurveType::Bezier);
+        assert!((out.live_stroke.base_width - 350.0).abs() < 1e-4);
+        assert!((out.live_stroke.base_density - 0.75).abs() < 1e-4);
+        assert!((out.live_stroke.min_density_ratio - 0.20).abs() < 1e-4);
     }
 }

@@ -1,0 +1,88 @@
+# A Windows-only packaging build for this fork, which ships the Windows build.
+#
+# The release workflow (storytold/craft-common-actions) has no toggle for its macOS, Linux and
+# Flatpak legs: only the web, riscv64, FreeBSD, Arch and server legs can be switched off, so a
+# Release run always spends macOS runner minutes on a fork that never ships them. This workflow
+# builds and packages the Windows installer alone: the same `packaging/windows/package.ps1` the
+# release uses, on the same runner image, with the same WiX version and the same craft-fonts pin.
+#
+# It signs nothing (a test build needs no signing secrets) and uploads the MSI and the portable
+# zip as a run artifact.
+name: Windows build
+
+on:
+  workflow_dispatch:
+    inputs:
+      arch:
+        description: "Windows architecture"
+        type: choice
+        options: [x64, x86]
+        default: x64
+      version:
+        description: "Version override for a test run, e.g. 0.14.0-rc.1 (empty: Cargo.toml)"
+        type: string
+        default: ""
+      embed-fonts:
+        description: "Embed the craft-fonts font set (as the release builds do)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    timeout-minutes: 120
+    name: Windows ${{ inputs.arch || 'x64' }}
+    runs-on: windows-latest
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+      RUST_BACKTRACE: 1
+      PHOTOCRAFT_BUILD_SHA: ${{ github.sha }}
+      TARGET: ${{ inputs.arch == 'x86' && 'i686-pc-windows-msvc' || 'x86_64-pc-windows-msvc' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          targets: ${{ env.TARGET }}
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: windows-build-${{ inputs.arch || 'x64' }}
+
+      - name: Install WiX
+        uses: storytold/craft-common-actions/actions/install-wix@main
+        with:
+          wix-version: "5.0.2"
+
+      - name: Check out craft-fonts
+        if: inputs.embed-fonts
+        uses: actions/checkout@v4
+        with:
+          repository: storytold/craft-fonts
+          ref: abb83316d96aa59c1cf64784289e378fe9fa5695
+          path: craft-fonts
+
+      - name: Build and package
+        shell: pwsh
+        env:
+          # An empty value counts as unset: the text crate then embeds no fonts and warns nothing.
+          CRAFT_FONTS_DIR: ${{ inputs.embed-fonts && format('{0}/craft-fonts', github.workspace) || '' }}
+          CRAFT_FONTS_REQUIRED: ${{ inputs.embed-fonts && '1' || '' }}
+        run: |
+          if ("${{ inputs.version }}" -ne "") {
+            cargo xtask version set "${{ inputs.version }}"
+          }
+          ./packaging/windows/package.ps1 -Arch ${{ inputs.arch || 'x64' }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: photocraft-windows-${{ inputs.arch || 'x64' }}
+          path: dist/release/*
+          if-no-files-found: error

@@ -13,6 +13,7 @@ const PANELS: &[(&str, &str, Group)] = &[
     ("gradients", "Gradients", Group::Color),
     ("patterns", "Patterns", Group::Color),
     ("screentone", "Screentones", Group::Color),
+    ("balloon", "Balloons", Group::Color),
     ("properties", "Properties", Group::Properties),
     ("adjustments", "Adjustments", Group::Properties),
     ("character", "Character", Group::Character),
@@ -30,7 +31,7 @@ const PANELS: &[(&str, &str, Group)] = &[
     ("layers", "Layers", Group::Layers),
     ("channels", "Channels", Group::Layers),
     ("paths", "Paths", Group::Layers),
-    ("brushes", "Brushes", Group::Brushes),
+    ("linework", "Linework", Group::Layers),
 ];
 #[derive(Clone, Default)]
 struct LegacyDrag {
@@ -63,10 +64,28 @@ fn cancel_legacy_drag(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
 pub(crate) const TOOLS: &str = "tools";
 
 pub(crate) fn normalize(raw: &str) -> Option<&'static str> {
-    if raw.trim().eq_ignore_ascii_case(TOOLS) {
+    let trimmed = raw.trim();
+    if trimmed.eq_ignore_ascii_case(TOOLS) {
         return Some(TOOLS);
     }
-    PANELS.iter().find(|(id, label, _)| id.eq_ignore_ascii_case(raw.trim()) || label.eq_ignore_ascii_case(raw.trim())).map(|p| p.0)
+    if trimmed.eq_ignore_ascii_case("manga balloons")
+        || trimmed.eq_ignore_ascii_case("manga_balloons")
+        || trimmed.eq_ignore_ascii_case("manga-balloons")
+        || trimmed.eq_ignore_ascii_case("manga balloon")
+        || trimmed.eq_ignore_ascii_case("balloons")
+        || trimmed.eq_ignore_ascii_case("balloon")
+    {
+        return Some("balloon");
+    }
+    if trimmed.eq_ignore_ascii_case("sai linework")
+        || trimmed.eq_ignore_ascii_case("sai_linework")
+        || trimmed.eq_ignore_ascii_case("sai-linework")
+        || trimmed.eq_ignore_ascii_case("linework")
+        || trimmed.eq_ignore_ascii_case("sai")
+    {
+        return Some("linework");
+    }
+    PANELS.iter().find(|(id, label, _)| id.eq_ignore_ascii_case(trimmed) || label.eq_ignore_ascii_case(trimmed)).map(|p| p.0)
 }
 
 pub(crate) fn valid(layout: &Layout<String>) -> bool {
@@ -145,8 +164,19 @@ fn first_root(layout: &Layout<String>, except: &str) -> Option<String> {
     root.panels().into_iter().find(|p| p.as_str() != except).cloned()
 }
 
+fn group_anchor(layout: &Layout<String>, panel: &str) -> Option<String> {
+    let root = Layout { root: layout.root.clone(), floating: Vec::new() };
+    let root_panels = root.panels();
+    if let Some(&(_, _, target_group)) = PANELS.iter().find(|p| p.0 == panel)
+        && let Some((sibling_id, _, _)) = PANELS.iter().find(|p| p.0 != panel && p.2 == target_group && root_panels.iter().any(|rp| rp.as_str() == p.0))
+    {
+        return Some((*sibling_id).to_string());
+    }
+    first_root(layout, panel)
+}
+
 fn ensure(layout: &mut Layout<String>, panel: &str) -> Result<(), String> {
-    let anchor = first_root(layout, panel);
+    let anchor = group_anchor(layout, panel);
     layout.apply(Action::Open { panel: panel.into(), anchor }).map_err(|e| e.to_string())
 }
 
@@ -178,6 +208,7 @@ fn placement(params: &Value) -> Result<Placement<String>, String> {
 }
 
 pub(crate) fn command(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
+    log::info!("[Telemetry:Dock] command: id={id}, params={params:?}");
     if id == "window.panel.group" {
         return Some(group_command(app, params));
     }
@@ -191,6 +222,7 @@ pub(crate) fn command(app: &mut PhotocraftApp, id: &str, params: &Value) -> Opti
         );
     }
     if let Some(panel) = id.strip_prefix("window.panel.").or_else(|| id.strip_prefix("window.toggle.")).and_then(normalize) {
+        log::info!("[Telemetry:Dock] resolved panel '{panel}' for command '{id}' (docking_active={})", app.ui.docking.is_some());
         if app.ui.docking.is_none() && panel != "brushes" {
             return None;
         }
@@ -204,6 +236,7 @@ pub(crate) fn command(app: &mut PhotocraftApp, id: &str, params: &Value) -> Opti
                 None => return Some(Err("show must be a boolean".into())),
             },
         };
+        log::info!("[Telemetry:Dock] panel '{panel}' target show={show} (currently showing={showing})");
         return Some(change(app, if show { "activate" } else { "close" }, &json!({"panel":panel})));
     }
     let operation = match id {
@@ -304,10 +337,12 @@ fn apply_action(app: &mut PhotocraftApp, action: Action<String>) -> Result<Value
 }
 
 fn change(app: &mut PhotocraftApp, operation: &str, params: &Value) -> Result<Value, String> {
+    log::info!("[Telemetry:Dock] change: op={operation}, params={params:?}");
     if app.session.prefs().workspace_locked && operation != "activate" {
         return Err("workspace is locked".into());
     }
     let panel = params.get("panel").and_then(Value::as_str).and_then(normalize).ok_or("panel must name a registered panel")?;
+    log::info!("[Telemetry:Dock] change: resolved panel='{panel}', op={operation}, layout_present={}", app.ui.docking.is_some());
     if app.ui.docking.as_ref().is_some_and(|layout| !valid(layout)) {
         return Err("saved panel layout is invalid; reset the workspace first".into());
     }
@@ -857,6 +892,7 @@ fn is_group_still_present_in_any_dock(app: &PhotocraftApp, target_group: Group) 
 }
 
 pub(crate) fn set_panel_visible(app: &mut PhotocraftApp, panel: &str, visible: bool) {
+    log::info!("[Telemetry:Dock] set_panel_visible: panel={panel}, visible={visible}");
     if let Some(&(_, _, group)) = PANELS.iter().find(|p| p.0 == panel) {
         if visible {
             *group.shown_mut(&mut app.ui.panels) = true;
@@ -879,9 +915,9 @@ pub(crate) fn set_panel_visible(app: &mut PhotocraftApp, panel: &str, visible: b
 pub(crate) fn compact_floating_rect(panel: &str, rect: [f32; 4]) -> [f32; 4] {
     let [x, y, w, h] = rect;
     let default_h = match panel {
-        "layers" => 360.0,
+        "layers" | "linework" => 360.0,
         "typesetter" | "pages" => 420.0,
-        "color" | "swatches" | "gradients" | "patterns" | "screentone" => 280.0,
+        "color" | "swatches" | "gradients" | "patterns" | "screentone" | "balloon" => 280.0,
         "properties" | "adjustments" => 340.0,
         "character" | "paragraph" => 320.0,
         _ => 300.0,
@@ -1186,9 +1222,16 @@ fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: &str) {
         }
         return;
     }
-    let Some((_, label, group)) = PANELS.iter().find(|p| p.0 == id) else { return };
+    let Some((_, label, group)) = PANELS.iter().find(|p| p.0 == id) else {
+        log::warn!("[Telemetry:Dock] body called for unregistered panel id '{id}'");
+        return;
+    };
     let pro = crate::theme::Tokens::get(ui.ctx()).pro;
-    let Some(tab) = group.tabs(pro).iter().position(|name| name == label) else { return };
+    let Some(tab) = group.tabs(pro).iter().position(|name| name == label) else {
+        log::warn!("[Telemetry:Dock] tab label '{label}' for panel '{id}' not found in group {:?} tabs {:?}", group, group.tabs(pro));
+        return;
+    };
+    log::trace!("[Telemetry:Dock] rendering body for '{id}' as group {:?} tab {tab}", group);
     *group.tab_mut(&mut app.ui.dock_tabs) = tab;
     if group.scrolls_itself(tab) {
         crate::panels::dock_body(app, ui, *group, tab);

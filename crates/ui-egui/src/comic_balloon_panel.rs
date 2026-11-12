@@ -118,16 +118,35 @@ pub fn handles(id: &str) -> bool {
 pub const BALLOON_COLOR_TAB: usize = 5;
 
 pub fn showing(app: &PhotocraftApp) -> bool {
-    app.ui.panels.color && app.ui.dock_tabs.color == BALLOON_COLOR_TAB && !app.ui.dock.is_collapsed(crate::dock::Group::Color)
+    if let Some(layout) = &app.ui.docking {
+        crate::panel_docking::panel_active(layout, "balloon")
+    } else {
+        app.ui.panels.color && app.ui.dock_tabs.color == BALLOON_COLOR_TAB && !app.ui.dock.is_collapsed(crate::dock::Group::Color)
+    }
 }
 
 pub fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
-    if handles(id) { Some(showing(app)) } else { None }
+    if handles(id) {
+        if let Some(c) = crate::panel_docking::checked(app, id) {
+            Some(c)
+        } else {
+            Some(showing(app))
+        }
+    } else {
+        None
+    }
 }
 
 pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
     if !handles(id) {
         return None;
+    }
+    log::info!("[Telemetry:Dock] comic_balloon_panel::menu: id={id}, docking_present={}", app.ui.docking.is_some());
+    if app.ui.docking.is_some() {
+        let want = params.get("show").and_then(Value::as_bool);
+        let show = want.unwrap_or(!showing(app));
+        log::info!("[Telemetry:Dock] comic_balloon_panel delegating to panel_docking: show={show}");
+        return Some(crate::panel_docking::command(app, "window.panel.balloon", &json!({"show": show})).unwrap_or(Ok(json!({"visible": show}))));
     }
     let want = params.get("show").and_then(Value::as_bool);
     let show = want.unwrap_or(!showing(app));
@@ -334,6 +353,9 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut Ui) {
                 app.ui.tool = Tool::VectorCurve;
                 app.ui.dock_tabs.layers = 3;
                 crate::dock::reveal(app, crate::dock::Group::Layers);
+                if app.ui.docking.is_some() {
+                    let _ = crate::panel_docking::command(app, "window.panel.activate", &json!({"panel": "linework"}));
+                }
             }
         });
 

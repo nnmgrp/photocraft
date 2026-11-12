@@ -82,16 +82,35 @@ pub fn handles(id: &str) -> bool {
 pub const LINEWORK_LAYERS_TAB: usize = 3;
 
 pub fn showing(app: &PhotocraftApp) -> bool {
-    app.ui.panels.layers && app.ui.dock_tabs.layers == LINEWORK_LAYERS_TAB && !app.ui.dock.is_collapsed(crate::dock::Group::Layers)
+    if let Some(layout) = &app.ui.docking {
+        crate::panel_docking::panel_active(layout, "linework")
+    } else {
+        app.ui.panels.layers && app.ui.dock_tabs.layers == LINEWORK_LAYERS_TAB && !app.ui.dock.is_collapsed(crate::dock::Group::Layers)
+    }
 }
 
 pub fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
-    if handles(id) { Some(showing(app)) } else { None }
+    if handles(id) {
+        if let Some(c) = crate::panel_docking::checked(app, id) {
+            Some(c)
+        } else {
+            Some(showing(app))
+        }
+    } else {
+        None
+    }
 }
 
 pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
     if !handles(id) {
         return None;
+    }
+    log::info!("[Telemetry:Dock] comic_sai_panel::menu: id={id}, docking_present={}", app.ui.docking.is_some());
+    if app.ui.docking.is_some() {
+        let want = params.get("show").and_then(Value::as_bool);
+        let show = want.unwrap_or(!showing(app));
+        log::info!("[Telemetry:Dock] comic_sai_panel delegating to panel_docking: show={show}");
+        return Some(crate::panel_docking::command(app, "window.panel.linework", &json!({"show": show})).unwrap_or(Ok(json!({"visible": show}))));
     }
     let want = params.get("show").and_then(Value::as_bool);
     let show = want.unwrap_or(!showing(app));

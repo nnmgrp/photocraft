@@ -3422,6 +3422,9 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             app.ui.tool = crate::state::Tool::VectorCurve;
             app.ui.dock_tabs.layers = crate::comic_sai_panel::LINEWORK_LAYERS_TAB;
             crate::dock::reveal(app, crate::dock::Group::Layers);
+            if app.ui.docking.is_some() {
+                let _ = crate::panel_docking::command(app, "window.panel.activate", &json!({"panel": "linework"}));
+            }
         }
         // Photoshop's footer starts with Link Layers (enabled with two or more layers selected).
         let can_link = app.session.is_enabled("layer.linkLayers");

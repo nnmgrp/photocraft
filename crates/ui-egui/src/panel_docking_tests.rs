@@ -60,6 +60,68 @@ fn brushes_menu_action_uses_the_shared_docking_layout() {
 }
 
 #[test]
+fn manga_balloons_and_sai_linework_menu_actions_use_the_shared_docking_layout() {
+    let mut app = app();
+    let ctx = egui::Context::default();
+
+    // 1. Legacy mode invocation (when docking is not customized)
+    assert!(crate::menus::invoke(&mut app, &ctx, "window.panel.balloon", json!({})).is_ok());
+    assert_eq!(app.ui.dock_tabs.color, crate::comic_balloon_panel::BALLOON_COLOR_TAB);
+    assert!(crate::comic_balloon_panel::showing(&app));
+    assert_eq!(crate::menus::checked(&app, "window.panel.balloon"), Some(true));
+
+    assert!(crate::menus::invoke(&mut app, &ctx, "window.panel.linework", json!({})).is_ok());
+    assert_eq!(app.ui.dock_tabs.layers, crate::comic_sai_panel::LINEWORK_LAYERS_TAB);
+    assert!(crate::comic_sai_panel::showing(&app));
+    assert_eq!(crate::menus::checked(&app, "window.panel.linework"), Some(true));
+
+    // 2. Modern docking mode activation
+    app.run("window.panel.activate", json!({"panel":"balloon"})).unwrap();
+    let layout = app.ui.docking.as_ref().expect("balloon panel must be registered in docking");
+    assert!(layout.contains(&"balloon".to_string()), "balloon panel must be present in layout");
+    assert!(panel_active(layout, "balloon"), "balloon panel must be active in docking");
+    assert_eq!(crate::menus::checked(&app, "window.panel.balloon"), Some(true));
+
+    // Float and redock balloon
+    app.run("window.panel.float", json!({"panel":"balloon"})).unwrap();
+    assert!(app.ui.docking.as_ref().unwrap().floating.iter().any(|group| group.panels.contains(&"balloon".into())));
+    app.run("window.panel.dock", json!({"panel":"balloon"})).unwrap();
+    assert!(!app.ui.docking.as_ref().unwrap().floating.iter().any(|group| group.panels.contains(&"balloon".into())));
+
+    // 3. SAI Linework modern docking activation
+    app.run("window.panel.activate", json!({"panel":"linework"})).unwrap();
+    let layout = app.ui.docking.as_ref().expect("linework panel must be registered in docking");
+    assert!(layout.contains(&"linework".to_string()), "linework panel must be present in layout");
+    assert!(panel_active(layout, "linework"), "linework panel must be active in docking");
+    assert_eq!(crate::menus::checked(&app, "window.panel.linework"), Some(true));
+
+    // Float and redock linework
+    app.run("window.panel.float", json!({"panel":"linework"})).unwrap();
+    assert!(app.ui.docking.as_ref().unwrap().floating.iter().any(|group| group.panels.contains(&"linework".into())));
+    app.run("window.panel.dock", json!({"panel":"linework"})).unwrap();
+    assert!(!app.ui.docking.as_ref().unwrap().floating.iter().any(|group| group.panels.contains(&"linework".into())));
+
+    // 4. Menu toggling while in modern docking mode
+    crate::menus::invoke(&mut app, &ctx, "window.panel.balloon", json!({"show": false})).unwrap();
+    assert!(!panel_active(app.ui.docking.as_ref().unwrap(), "balloon"));
+    crate::menus::invoke(&mut app, &ctx, "window.panel.balloon", json!({"show": true})).unwrap();
+    assert!(panel_active(app.ui.docking.as_ref().unwrap(), "balloon"));
+
+    crate::menus::invoke(&mut app, &ctx, "window.panel.linework", json!({"show": false})).unwrap();
+    assert!(!panel_active(app.ui.docking.as_ref().unwrap(), "linework"));
+    crate::menus::invoke(&mut app, &ctx, "window.panel.linework", json!({"show": true})).unwrap();
+    assert!(panel_active(app.ui.docking.as_ref().unwrap(), "linework"));
+
+    // 5. Normalization aliases
+    assert_eq!(normalize("manga balloons"), Some("balloon"));
+    assert_eq!(normalize("manga_balloons"), Some("balloon"));
+    assert_eq!(normalize("Balloons"), Some("balloon"));
+    assert_eq!(normalize("sai linework"), Some("linework"));
+    assert_eq!(normalize("sai_linework"), Some("linework"));
+    assert_eq!(normalize("Linework"), Some("linework"));
+}
+
+#[test]
 fn invalid_panel_requests_are_atomic_and_do_not_enter_a_custom_workspace() {
     let mut app = app();
     for (id, params) in [

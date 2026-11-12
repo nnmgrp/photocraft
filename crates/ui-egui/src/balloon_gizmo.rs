@@ -465,7 +465,18 @@ pub fn on_drag_move(app: &mut PhotocraftApp, drag: &BalloonGizmoDrag, cur_doc: [
                 }
                 _ => {}
             }
-            if r[2].abs() >= 16.0 && r[3].abs() >= 16.0 {
+            let min_size = 24.0;
+            if r[2].abs() >= min_size && r[3].abs() >= min_size {
+                if r[2] < 0.0 {
+                    r[0] += r[2];
+                    r[2] = -r[2];
+                }
+                if r[3] < 0.0 {
+                    r[1] += r[3];
+                    r[3] = -r[3];
+                }
+                r[2] = r[2].max(min_size);
+                r[3] = r[3].max(min_size);
                 updated.body.set_rect(r);
             }
         }

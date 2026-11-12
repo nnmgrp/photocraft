@@ -119,9 +119,9 @@ impl Group {
     pub fn tabs(self, pro: bool) -> &'static [&'static str] {
         match self {
             // Photoshop Essentials: Color | Swatches | Gradients | Patterns, plus the
-            // comic screentone panel the integration adds.
-            Group::Color if pro => &["Color", "Swatches", "Gradients", "Patterns", "Screentones"],
-            Group::Color => &["Swatches", "Color", "Gradients", "Patterns", "Screentones"],
+            // comic screentone and balloon panels the integration adds.
+            Group::Color if pro => &["Color", "Swatches", "Gradients", "Patterns", "Screentones", "Balloons"],
+            Group::Color => &["Swatches", "Color", "Gradients", "Patterns", "Screentones", "Balloons"],
             Group::Properties => &["Properties", "Adjustments"],
             Group::Character => &["Character", "Paragraph"],
             Group::Brushes => &["Brushes"],

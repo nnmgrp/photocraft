@@ -213,6 +213,8 @@ pub mod screen_sample;
 pub use comic_screentone_gizmo as screentone_gizmo;
 pub mod comic_screentone_panel;
 pub use comic_screentone_panel as screentone_panel;
+pub mod comic_balloon_panel;
+pub use comic_balloon_panel as balloon_panel;
 pub mod comic_sai_panel;
 pub use comic_sai_panel as sai_panel;
 

@@ -2246,6 +2246,7 @@ fn dock_body_inner(app: &mut PhotocraftApp, ui: &mut egui::Ui, group: crate::doc
         (Group::Color, 2) => crate::preset_panels::gradients_panel(app, ui),
         (Group::Color, 3) => crate::preset_panels::patterns_panel(app, ui),
         (Group::Color, 4) => crate::screentone_panel::panel(app, ui),
+        (Group::Color, 5) => crate::comic_balloon_panel::panel(app, ui),
         (Group::Color, 0) if pro => {
             color_field(app, ui);
             if app.ui.color_panel.slider_mode == ColorPanelSliderMode::Rgb {
@@ -2270,21 +2271,7 @@ fn dock_body_inner(app: &mut PhotocraftApp, ui: &mut egui::Ui, group: crate::doc
         (Group::Layers, 0) => layers(app, ui),
         (Group::Layers, 1) => channels(app, ui),
         (Group::Layers, 2) => crate::vector_ui::paths_panel(app, ui),
-        (Group::Layers, 3) => {
-            // The panel's state is moved out for the call, so the action can use the app.
-            let mut state = std::mem::take(&mut app.sai_panel);
-            let action = crate::comic_sai_panel::render_linework_dock_panel(ui, &mut state);
-            app.sai_panel = state;
-            match action {
-                Some(crate::comic_sai_panel::LineworkAction::NewLayer) => {
-                    let _ = app.run("layer.newLinework", json!({ "width": app.sai_panel.base_width }));
-                }
-                Some(crate::comic_sai_panel::LineworkAction::ConvertBalloon) => {
-                    let _ = app.run("shape.balloon.convertToLinework", json!({}));
-                }
-                None => {}
-            }
-        }
+        (Group::Layers, 3) => crate::comic_sai_panel::panel(app, ui),
         (Group::Layers, _) => crate::vector_ui::paths_panel(app, ui),
         (Group::Timelapse, _) => crate::timelapse_ui::panel(app, ui),
     }
@@ -3431,7 +3418,10 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         // ready for the Vector Curve tool.
         let linework = icons::button(ui, "spline", 26.0, false, tl!("Create a Linework vector layer"));
         if linework.clicked() {
-            actions.push(("layer.newLinework".into(), json!({})));
+            actions.push(("layer.newLinework".into(), json!({ "width": app.sai_panel.base_width })));
+            app.ui.tool = crate::state::Tool::VectorCurve;
+            app.ui.dock_tabs.layers = crate::comic_sai_panel::LINEWORK_LAYERS_TAB;
+            crate::dock::reveal(app, crate::dock::Group::Layers);
         }
         // Photoshop's footer starts with Link Layers (enabled with two or more layers selected).
         let can_link = app.session.is_enabled("layer.linkLayers");

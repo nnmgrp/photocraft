@@ -775,6 +775,8 @@ pub static CATALOG: &[(&[&str], &str, Option<&str>, &str)] = &[
     (&["Window"], "Patterns", None, "window.panel.patterns"),
     (&["Window"], "Properties", None, "window.panel.properties"),
     (&["Window"], "Screentones", None, "window.panel.screentone"),
+    (&["Window"], "Manga Balloons", None, "window.panel.balloon"),
+    (&["Window"], "SAI Linework", None, "window.panel.linework"),
     (&["Window"], "Shapes", None, "window.panel.shapes"),
     (&["Window"], "Styles", None, "window.panel.styles"),
     (&["Window"], "Swatches", None, "window.panel.swatches"),

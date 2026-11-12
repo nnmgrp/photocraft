@@ -621,6 +621,26 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
             return;
         }
     }
+    if app.ui.tool == Tool::Balloon {
+        let mods = ctx.input(|i| i.modifiers);
+        if !mods.command && !mods.ctrl && !mods.shift && ctx.input_mut(|i| i.consume_key(mods, Key::Backspace) || i.consume_key(mods, Key::Delete)) {
+            if let Some(
+                crate::balloon_gizmo::GizmoHit::TailTip { balloon_id, tail_id }
+                | crate::balloon_gizmo::GizmoHit::TailBend { balloon_id, tail_id }
+                | crate::balloon_gizmo::GizmoHit::TailMouthCenter { balloon_id, tail_id }
+                | crate::balloon_gizmo::GizmoHit::TailMouthWidth { balloon_id, tail_id, .. },
+            ) = app.balloon_gizmo.hovered
+                && let Some(active) = app.session.active()
+                && let Some(layer_id) = active.active_layer
+            {
+                let _ = app.run(
+                    "shape.balloon.tail.remove",
+                    json!({ "layer": layer_id.0, "balloonId": balloon_id, "tailId": tail_id }),
+                );
+            }
+            return;
+        }
+    }
     // A selected guide: ⌫/Delete removes it (`guide_select`), never Edit › Clear's pixels.
     if crate::guide_select::keys(app, ctx) {
         return;

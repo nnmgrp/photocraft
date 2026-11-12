@@ -1696,6 +1696,9 @@ pub struct UiState {
     /// The Screentones panel (comic screentone generator, see `comic_screentone_panel`).
     #[serde(default)]
     pub screentone_ui: crate::screentone_panel::ScreentoneUi,
+    /// The Manga Balloons generator panel (see `comic_balloon_panel`).
+    #[serde(default)]
+    pub balloon_ui: crate::comic_balloon_panel::BalloonPanelUi,
     /// The Canvas Capsule (CraftBar, see `canvas_capsule`).
     #[serde(default)]
     pub canvas_capsule: crate::canvas_capsule::CanvasCapsuleState,
@@ -1869,6 +1872,7 @@ impl Default for UiState {
             layer_comp_selected: None,
             presets_ui: Default::default(),
             screentone_ui: Default::default(),
+            balloon_ui: Default::default(),
             canvas_capsule: Default::default(),
             type_panels: Default::default(),
             analysis: Default::default(),

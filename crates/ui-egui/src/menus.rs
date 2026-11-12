@@ -136,6 +136,14 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
     if let Some(r) = crate::screentone_panel::menu(app, id, &params) {
         return r;
     }
+    // Window › Manga Balloons generator panel.
+    if let Some(r) = crate::comic_balloon_panel::menu(app, id, &params) {
+        return r;
+    }
+    // Window › SAI Linework panel.
+    if let Some(r) = crate::comic_sai_panel::menu(app, id, &params) {
+        return r;
+    }
     // Window › Gradients, Patterns, Styles, Shapes, Tool Presets, Clone Source.
     if let Some(r) = crate::preset_panels::menu(app, id, &params) {
         return r;
@@ -729,7 +737,7 @@ fn open_path(app: &mut PhotocraftApp, path: &str) -> Result<Value, String> {
 }
 
 pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
-    if crate::screentone_panel::handles(id) {
+    if crate::screentone_panel::handles(id) || crate::comic_balloon_panel::handles(id) || crate::comic_sai_panel::handles(id) {
         return true;
     }
     if crate::tool_shortcuts::tool(id).is_some() {
@@ -855,6 +863,12 @@ pub(crate) fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
         return Some(c);
     }
     if let Some(c) = crate::screentone_panel::checked(app, id) {
+        return Some(c);
+    }
+    if let Some(c) = crate::comic_balloon_panel::checked(app, id) {
+        return Some(c);
+    }
+    if let Some(c) = crate::comic_sai_panel::checked(app, id) {
         return Some(c);
     }
     if let Some(c) = crate::preset_panels::checked(app, id) {
@@ -994,6 +1008,8 @@ pub fn is_live(id: &str) -> bool {
         || crate::type_panels_ui::handles(id)
         || crate::timeline_ui::handles(id)
         || crate::screentone_panel::handles(id)
+        || crate::comic_balloon_panel::handles(id)
+        || crate::comic_sai_panel::handles(id)
 }
 
 /// Commands outside the catalogue that belong right after a catalogue item: `(id, after)`.

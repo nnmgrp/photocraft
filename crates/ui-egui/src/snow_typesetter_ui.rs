@@ -956,10 +956,12 @@ impl TypesetterUi {
 
                     ui.label(RichText::new(tl!("Manga Workflow")).size(11.0).color(t.text_dim).strong());
                     if ui.button(tl!("Chapter Pages…")).clicked() {
+                        log::info!("[Telemetry:Dock:TypeR] Clicked 'Chapter Pages…', setting photocraft_toggle_pages_cmd=true");
                         ui.close();
                         ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("photocraft_toggle_pages_cmd"), true));
                     }
                     if ui.button(tl!("Split Left Dock (Pages + TypeR)…")).clicked() {
+                        log::info!("[Telemetry:Dock:TypeR] Clicked 'Split Left Dock (Pages + TypeR)…', setting photocraft_toggle_split_dock_cmd=true");
                         ui.close();
                         ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("photocraft_toggle_split_dock_cmd"), true));
                     }
@@ -1099,6 +1101,7 @@ impl TypesetterUi {
                 });
 
                 if ui.button(RichText::new("📄").size(11.0)).on_hover_text(tl!("Toggle Chapter Pages panel")).clicked() {
+                    log::info!("[Telemetry:Dock:TypeR] Clicked Pages icon button, setting photocraft_toggle_pages_cmd=true");
                     ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("photocraft_toggle_pages_cmd"), true));
                 }
             });

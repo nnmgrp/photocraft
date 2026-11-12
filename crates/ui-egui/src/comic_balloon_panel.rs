@@ -162,6 +162,7 @@ pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<
 pub fn panel(app: &mut PhotocraftApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let mut state = std::mem::take(&mut app.ui.balloon_ui);
+    let initial_state = state.clone();
 
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         ui.add_space(4.0);
@@ -364,6 +365,26 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut Ui) {
         }
     });
 
+    if state != initial_state {
+        let (active_layer_id, is_balloon_layer) = app.session.active().map(|a| {
+            let lid = a.active_layer;
+            let is_b = lid.and_then(|id| a.doc.layer(id)).is_some_and(|l| {
+                matches!(&l.content, photocraft_doc::LayerContent::Shape(sh) if matches!(&sh.live, Some(photocraft_doc::LiveShape::BalloonGroup { .. })))
+            });
+            (lid.map(|id| id.0), is_b)
+        }).unwrap_or((None, false));
+
+        log::info!(
+            "[Telemetry:Balloon:PanelMutate] body={:?}, tail={:?}, stroke={}, mouth_w={} | has_doc={}, active_layer_id={:?}, active_layer_is_balloon={is_balloon_layer}",
+            state.body_choice,
+            state.tail_preset,
+            state.stroke_width,
+            state.tail_mouth_width,
+            app.session.active().is_some(),
+            active_layer_id,
+        );
+    }
+
     app.ui.balloon_ui = state;
 }
 
@@ -384,13 +405,17 @@ fn create_balloon_on_canvas(app: &mut PhotocraftApp, st: &BalloonPanelUi) {
         None => {
             let w = 240.0f64.min(doc_size.width as f64 * 0.8).max(MIN_BALLOON_SIZE);
             let h = 160.0f64.min(doc_size.height as f64 * 0.8).max(MIN_BALLOON_SIZE);
-            let x = (doc_size.width as f64 - w) * 0.5;
+            let x = (doc_size.height as f64 - w) * 0.5;
             let y = (doc_size.height as f64 - h) * 0.5;
             (x, y, w, h)
         }
     };
 
     let rect = [bx, by, bw, bh];
+    log::info!(
+        "[Telemetry:Balloon:Create] body_choice={:?}, tail_preset={:?}, rect={rect:?}, stroke_width={}",
+        st.body_choice, st.tail_preset, st.stroke_width
+    );
     let body = match st.body_choice {
         BalloonBodyKindChoice::Ellipse => LiveBalloonBody::Ellipse { rect, squircle: st.squircle },
         BalloonBodyKindChoice::Rect => LiveBalloonBody::Rect { rect, corner_radius: st.corner_radius },

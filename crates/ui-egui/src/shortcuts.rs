@@ -612,12 +612,39 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
         }
     }
     if app.ui.tool == Tool::VectorCurve
+        && let Some(vc) = app.ui.vector_curve.as_ref()
+        && !vc.points.is_empty()
+    {
+        let wants_kb = ctx.egui_wants_keyboard_input();
+        let focused_id = ctx.memory(|m| m.focused());
+        let mods = ctx.input(|i| i.modifiers);
+        let is_undo_key = (mods.ctrl || mods.command) && !mods.shift && !mods.alt && ctx.input(|i| i.key_pressed(Key::Z));
+        let is_del_key = !mods.ctrl && !mods.command && !mods.shift && ctx.input(|i| i.key_pressed(Key::Backspace) || i.key_pressed(Key::Delete));
+        if is_undo_key || is_del_key {
+            log::info!(
+                "[Telemetry:Keys:Trace] tool=VectorCurve, is_undo_key={is_undo_key}, is_del_key={is_del_key}, \
+                 wants_kb={wants_kb}, focused_id={focused_id:?}, mode={:?}, points_len={}, active_node={:?}",
+                vc.mode, vc.points.len(), vc.selected_node
+            );
+        }
+    }
+    if app.ui.tool == Tool::VectorCurve
         && let Some(vc) = app.ui.vector_curve.as_mut()
         && !vc.points.is_empty()
     {
         let mods = ctx.input(|i| i.modifiers);
         if !mods.command && !mods.ctrl && !mods.shift && ctx.input_mut(|i| i.consume_key(mods, Key::Backspace) || i.consume_key(mods, Key::Delete)) {
-            vc.delete_active_node();
+            let points_before = vc.points.len();
+            let active_before = vc.selected_node;
+            log::info!(
+                "[Telemetry:Keys:DeleteNode] mode={:?}, points_before={points_before}, active_node_before={:?}",
+                vc.mode, active_before
+            );
+            let res = vc.delete_active_node();
+            log::info!(
+                "[Telemetry:Keys:DeleteNodeResult] points_after={}, active_node_after={:?}, deleted_anything={}, return_val={res}",
+                vc.points.len(), vc.selected_node, points_before != vc.points.len()
+            );
             return;
         }
     }

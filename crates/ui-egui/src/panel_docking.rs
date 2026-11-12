@@ -207,6 +207,22 @@ fn placement(params: &Value) -> Result<Placement<String>, String> {
     })
 }
 
+fn dump_dock_topology(app: &PhotocraftApp, stage: &str, target_panel: &str) {
+    let in_right = app.ui.docking.as_ref().is_some_and(|l| l.contains(&target_panel.to_string()));
+    let in_left = app.ui.docking_left.as_ref().is_some_and(|l| l.contains(&target_panel.to_string()));
+    let in_bottom = app.ui.docking_bottom.as_ref().is_some_and(|l| l.contains(&target_panel.to_string()));
+    let in_hidden = app.ui.docking_hidden.contains_key(target_panel);
+
+    log::info!(
+        "[Telemetry:Dock:Topology] stage='{stage}', panel='{target_panel}' | \
+         in_right={in_right}, in_left={in_left}, in_bottom={in_bottom}, in_hidden={in_hidden} | \
+         right_has_layout={}, left_has_layout={}, bottom_has_layout={}",
+        app.ui.docking.is_some(),
+        app.ui.docking_left.is_some(),
+        app.ui.docking_bottom.is_some(),
+    );
+}
+
 pub(crate) fn command(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
     log::info!("[Telemetry:Dock] command: id={id}, params={params:?}");
     if id == "window.panel.group" {
@@ -222,13 +238,17 @@ pub(crate) fn command(app: &mut PhotocraftApp, id: &str, params: &Value) -> Opti
         );
     }
     if let Some(panel) = id.strip_prefix("window.panel.").or_else(|| id.strip_prefix("window.toggle.")).and_then(normalize) {
+        dump_dock_topology(app, "before_command", panel);
         log::info!("[Telemetry:Dock] resolved panel '{panel}' for command '{id}' (docking_active={})", app.ui.docking.is_some());
         if app.ui.docking.is_none() && panel != "brushes" {
             return None;
         }
-        let showing = app.ui.docking.as_ref().is_some_and(|layout| layout.contains(&panel.to_string()))
-            || app.ui.docking_left.as_ref().is_some_and(|layout| layout.contains(&panel.to_string()))
-            || app.ui.docking_bottom.as_ref().is_some_and(|layout| layout.contains(&panel.to_string()));
+        let in_right = app.ui.docking.as_ref().is_some_and(|layout| layout.contains(&panel.to_string()));
+        let in_left = app.ui.docking_left.as_ref().is_some_and(|layout| layout.contains(&panel.to_string()));
+        let in_bottom = app.ui.docking_bottom.as_ref().is_some_and(|layout| layout.contains(&panel.to_string()));
+        let showing = in_right || in_left || in_bottom;
+        let right_active = app.ui.docking.as_ref().is_some_and(|layout| panel_active(layout, panel));
+        let left_active = app.ui.docking_left.as_ref().is_some_and(|layout| panel_active(layout, panel));
         let show = match params.get("show").or_else(|| params.get("on")) {
             None => !showing || app.ui.docking.as_ref().is_some_and(|layout| !panel_active(layout, panel) || collapsed_members(app, layout).contains(panel)),
             Some(value) => match value.as_bool() {
@@ -236,8 +256,12 @@ pub(crate) fn command(app: &mut PhotocraftApp, id: &str, params: &Value) -> Opti
                 None => return Some(Err("show must be a boolean".into())),
             },
         };
-        log::info!("[Telemetry:Dock] panel '{panel}' target show={show} (currently showing={showing})");
-        return Some(change(app, if show { "activate" } else { "close" }, &json!({"panel":panel})));
+        log::info!(
+            "[Telemetry:Dock] panel '{panel}' target show={show} | showing={showing} (in_right={in_right}, in_left={in_left}, in_bottom={in_bottom}) | active (right={right_active}, left={left_active})"
+        );
+        let res = change(app, if show { "activate" } else { "close" }, &json!({"panel":panel}));
+        dump_dock_topology(app, "after_command", panel);
+        return Some(res);
     }
     let operation = match id {
         "window.panel.move" => "move",
@@ -342,6 +366,7 @@ fn change(app: &mut PhotocraftApp, operation: &str, params: &Value) -> Result<Va
         return Err("workspace is locked".into());
     }
     let panel = params.get("panel").and_then(Value::as_str).and_then(normalize).ok_or("panel must name a registered panel")?;
+    dump_dock_topology(app, "before_change", panel);
     log::info!("[Telemetry:Dock] change: resolved panel='{panel}', op={operation}, layout_present={}", app.ui.docking.is_some());
     if app.ui.docking.as_ref().is_some_and(|layout| !valid(layout)) {
         return Err("saved panel layout is invalid; reset the workspace first".into());
@@ -431,6 +456,7 @@ fn change(app: &mut PhotocraftApp, operation: &str, params: &Value) -> Result<Va
         app.ui.docking_reveal = Some(panel.to_owned());
         reveal_group(app, panel);
     }
+    dump_dock_topology(app, "after_change", panel);
     Ok(json!({"panel": panel, "layout": app.ui.docking}))
 }
 
@@ -1209,9 +1235,11 @@ fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: &str) {
         }
         app.refresh_typesetter_contour();
         if ui.ctx().data_mut(|d| d.remove_temp(egui::Id::new("photocraft_toggle_pages_cmd"))).unwrap_or(false) {
+            log::info!("[Telemetry:Dock:TypeR] Consumed photocraft_toggle_pages_cmd, executing window.panel.pages");
             let _ = app.run("window.panel.pages", serde_json::json!({}));
         }
         if ui.ctx().data_mut(|d| d.remove_temp(egui::Id::new("photocraft_toggle_split_dock_cmd"))).unwrap_or(false) {
+            log::info!("[Telemetry:Dock:TypeR] Consumed photocraft_toggle_split_dock_cmd, invoking toggle_split_left_dock");
             toggle_split_left_dock(app);
         }
         return;
@@ -1628,9 +1656,11 @@ impl craft_ui::docking::DockContent<String> for PanelContent<'_> {
             }
             self.app.refresh_typesetter_contour();
             if ui.ctx().data_mut(|d| d.remove_temp(egui::Id::new("photocraft_toggle_pages_cmd"))).unwrap_or(false) {
+                log::info!("[Telemetry:Dock:TypeR] Consumed photocraft_toggle_pages_cmd in SideDock, executing window.panel.pages");
                 let _ = self.app.run("window.panel.pages", serde_json::json!({}));
             }
             if ui.ctx().data_mut(|d| d.remove_temp(egui::Id::new("photocraft_toggle_split_dock_cmd"))).unwrap_or(false) {
+                log::info!("[Telemetry:Dock:TypeR] Consumed photocraft_toggle_split_dock_cmd in SideDock, invoking toggle_split_left_dock");
                 toggle_split_left_dock(self.app);
             }
             return;

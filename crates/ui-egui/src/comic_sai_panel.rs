@@ -167,6 +167,8 @@ pub fn draw_sai_preview(ui: &mut Ui, base_width: f32, min_ratio: f32, base_densi
 /// Render the complete SAI Linework Studio panel.
 pub fn panel(app: &mut PhotocraftApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
+    let to_width = app.ui.tool_options.vector_curve_width;
+    let to_min_ratio = app.ui.tool_options.vector_curve_min_ratio;
     let mut state = std::mem::take(&mut app.sai_panel);
 
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
@@ -192,8 +194,13 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut Ui) {
             for (id, label, ratio) in profiles {
                 let is_sel = state.tip_profile == id;
                 if ui.selectable_label(is_sel, label).clicked() {
+                    let prev_r = state.min_size_ratio;
                     state.tip_profile = id;
                     state.min_size_ratio = ratio;
+                    log::info!(
+                        "[Telemetry:SAI:TaperPreset] preset='{label}', sai_panel.min_size_ratio: {prev_r} -> {ratio}, \
+                         tool_options.vector_curve_min_ratio={to_min_ratio}"
+                    );
                 }
             }
         });
@@ -204,7 +211,13 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut Ui) {
         // 3. Слайдеры толщины и плотности
         ui.horizontal(|ui| {
             ui.label("Базовый размер:");
-            ui.add(Slider::new(&mut state.base_width, 0.7..=500.0).logarithmic(true).suffix(" px"));
+            let resp = ui.add(Slider::new(&mut state.base_width, 0.7..=500.0).logarithmic(true).suffix(" px"));
+            if resp.changed() {
+                log::info!(
+                    "[Telemetry:SAI:BaseWidthSlider] sai_panel.base_width={}, tool_options.vector_curve_width={to_width}",
+                    state.base_width
+                );
+            }
         });
         ui.horizontal(|ui| {
             let mut pct = state.min_size_ratio * 100.0;
@@ -239,7 +252,13 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut Ui) {
                 let text = if sz < 10.0 { format!("{:.1}", sz) } else { format!("{:.0}", sz) };
                 let btn = egui::Button::new(text).min_size(vec2(33.0, 22.0)).selected(is_sel);
                 if ui.add(btn).clicked() {
+                    let prev_w = state.base_width;
                     state.base_width = sz;
+                    log::info!(
+                        "[Telemetry:SAI:GridClick] clicked_sz={sz}, sai_panel.base_width: {prev_w} -> {sz}, \
+                         tool_options.vector_curve_width={to_width} (synced={})",
+                        (sz - to_width).abs() < f32::EPSILON
+                    );
                 }
                 if (idx + 1) % 8 == 0 {
                     ui.end_row();
@@ -253,8 +272,12 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut Ui) {
         // 5. Динамика нажима и параметры сплайна
         ui.label(RichText::new("Динамика нажима пера:").strong().color(t.text));
         ui.horizontal(|ui| {
-            ui.radio_value(&mut state.pressure_target, PressureTargetMode::Width, "● Width (Толщина 0..500%)");
-            ui.radio_value(&mut state.pressure_target, PressureTargetMode::Density, "○ Density (Плотность 0..200%)");
+            if ui.radio_value(&mut state.pressure_target, PressureTargetMode::Width, "● Width (Толщина 0..500%)").changed() {
+                log::info!("[Telemetry:SAI:PressureTarget] changed to Width");
+            }
+            if ui.radio_value(&mut state.pressure_target, PressureTargetMode::Density, "○ Density (Плотность 0..200%)").changed() {
+                log::info!("[Telemetry:SAI:PressureTarget] changed to Density");
+            }
         });
 
         ui.horizontal(|ui| {

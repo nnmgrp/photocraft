@@ -1989,6 +1989,18 @@ pub fn vector_curve_commit(app: &mut PhotocraftApp) {
     let saved_auto_taper = vc.auto_taper_ends;
     let saved_hover = vc.hover_pos;
 
+    log::info!(
+        "[Telemetry:SAI:Commit] points_count={}, effective_width={}, effective_min_ratio={}, \
+         effective_tension={}, effective_tapered={} | source_comparison: sai_panel.base_width={}, tool_options.width={}",
+        vc.points.len(),
+        o.vector_curve_width,
+        o.vector_curve_min_ratio,
+        o.vector_curve_tension,
+        o.vector_curve_tapered,
+        app.sai_panel.base_width,
+        o.vector_curve_width,
+    );
+
     match vc.to_command_params(f64::from(o.vector_curve_width), f64::from(o.vector_curve_min_ratio), o.vector_curve_tapered, o.vector_curve_closed) {
         Ok(mut params) => {
             params["appendToActive"] = json!(true);
@@ -2424,6 +2436,33 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             let vc = app.ui.vector_curve.get_or_insert_with(VectorCurveState::default);
             ui.checkbox(&mut vc.auto_taper_ends, tl!("Auto Taper"));
             vc.tension = o.vector_curve_tension as f64;
+
+            let current_snapshot = (
+                o.vector_curve_width.to_bits(),
+                o.vector_curve_min_ratio.to_bits(),
+                o.vector_curve_tension.to_bits(),
+                o.vector_curve_tapered,
+                app.sai_panel.base_width.to_bits(),
+                app.sai_panel.min_size_ratio.to_bits(),
+            );
+            let state_id = egui::Id::new("telemetry_sai_sync_snapshot");
+            let prev_snapshot = ui.ctx().data_mut(|d| d.get_temp::<(u32, u32, u32, bool, u32, u32)>(state_id));
+            if prev_snapshot != Some(current_snapshot) {
+                ui.ctx().data_mut(|d| d.insert_temp(state_id, current_snapshot));
+                log::info!(
+                    "[Telemetry:SAI:StateSync] tool_options=(width={}, min_ratio={}, tension={}, tapered={}) | \
+                     sai_panel=(base_width={}, min_size_ratio={}, dynamics={:?}, curve_mode={:?})",
+                    o.vector_curve_width,
+                    o.vector_curve_min_ratio,
+                    o.vector_curve_tension,
+                    o.vector_curve_tapered,
+                    app.sai_panel.base_width,
+                    app.sai_panel.min_size_ratio,
+                    app.sai_panel.pressure_target,
+                    app.sai_panel.curve_type,
+                );
+            }
+
             crate::widgets::vline(ui, 22.0);
             lbl(ui, "Click: node · Start point: close · Enter/Esc/Dbl-Click: finish · Ctrl+Drag: bend · Alt+Drag: weight");
         }

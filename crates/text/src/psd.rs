@@ -678,6 +678,7 @@ pub(crate) fn para_style(base: Option<&E>, d: &E, k: f32) -> ParagraphStyle {
         space_after_pt: numk("SpaceAfter", k).unwrap_or(0.0),
         auto_leading: numk("AutoLeading", 1.0).unwrap_or(1.2),
         hyphenate: lookup(d, base, "AutoHyphenate").and_then(E::as_bool).unwrap_or(false),
+        hanging_roman: lookup(d, base, "HangingRoman").and_then(E::as_bool).unwrap_or(false),
         ..Default::default()
     }
 }
@@ -915,6 +916,7 @@ pub(crate) fn paragraph_properties(p: &ParagraphStyle, k: f32) -> E {
         ("SpaceBefore".into(), real(p.space_before_pt / k)),
         ("SpaceAfter".into(), real(p.space_after_pt / k)),
         ("AutoHyphenate".into(), E::Bool(p.hyphenate)),
+        ("HangingRoman".into(), E::Bool(p.hanging_roman)),
         ("AutoLeading".into(), real(p.auto_leading)),
         ("LeadingType".into(), E::Int(0)),
     ])

@@ -465,6 +465,10 @@ pub fn apply_para_props(s: &mut ParagraphStyle, p: &Value) -> bool {
         s.hyphenate = v;
         any = true;
     }
+    if let Some(v) = p.get("hangingRoman").and_then(Value::as_bool) {
+        s.hanging_roman = v;
+        any = true;
+    }
     if let Some(v) = p.get("verticalAlign").and_then(Value::as_str).and_then(VerticalAlign::from_id) {
         s.vertical_align = v;
         any = true;
@@ -896,7 +900,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "New Type Layer",
             menu: &["Layer", "New"],
             shortcut: None,
-            params: r##"{"x":px,"y":px (baseline anchor of point text),"text":str,"box":[x,y,w,h]? (paragraph text),"name":str?,"align":"left|center|right|justify…"?,"verticalAlign":"top|center|bottom|justify"="top","orientation":"horizontal|vertical"="horizontal", …character keys: "font","size":pt=12,"color",…}"##,
+            params: r##"{"x":px,"y":px (baseline anchor of point text),"text":str,"box":[x,y,w,h]? (paragraph text),"name":str?,"align":"left|center|right|justify…"?,"verticalAlign":"top|center|bottom|justify"="top","orientation":"horizontal|vertical"="horizontal","hangingRoman":bool=false,"#, …character keys: "font","size":pt=12,"color",…}"##,
             enabled: has_doc,
             journal: true,
             run: |s, p| {
@@ -1046,7 +1050,7 @@ pub fn specs() -> Vec<CommandSpec> {
             menu: &[],
             shortcut: None,
             params: Box::leak(
-                format!(r##"{{"layer":id? or "layers":[id,…]? (default selected Type layers),"range":[startChar,endChar]? (single layer; default all),"metricsAsShown":bool=false (size/leading/leadingBy include each layer's transform scale), {CHAR_PARAMS}, relative steps from each character's own value: "leadingBy":pt (auto leading starts from its laid-out value; result 0.01..=5000),"baselineShiftBy":pt (result -5000..=5000),"trackingBy":1/1000 em (result -1000..=10000), paragraph keys: "align":"left|center|right|justify|justifyCenter|justifyRight|justifyAll","verticalAlign":"top|center|bottom|justify","firstLineIndent":pt,"startIndent":pt,"endIndent":pt,"spaceBefore":pt,"spaceAfter":pt,"autoLeading":%,"direction":"auto|ltr|rtl","hyphenate":bool}}"##)
+                format!(r##"{{"layer":id? or "layers":[id,…]? (default selected Type layers),"range":[startChar,endChar]? (single layer; default all),"metricsAsShown":bool=false (size/leading/leadingBy include each layer's transform scale), {CHAR_PARAMS}, relative steps from each character's own value: "leadingBy":pt (auto leading starts from its laid-out value; result 0.01..=5000),"baselineShiftBy":pt (result -5000..=5000),"trackingBy":1/1000 em (result -1000..=10000), paragraph keys: "align":"left|center|right|justify|justifyCenter|justifyRight|justifyAll","verticalAlign":"top|center|bottom|justify","firstLineIndent":pt,"startIndent":pt,"endIndent":pt,"spaceBefore":pt,"spaceAfter":pt,"autoLeading":%,"direction":"auto|ltr|rtl","hyphenate":bool,"hangingRoman":bool}}"##)
                     .into_boxed_str(),
             ),
             enabled: has_doc,
@@ -1275,6 +1279,20 @@ mod tests {
             Err(EngineError::BadParams { cmd, .. }) if cmd == "type.setStyle"
         ));
         assert_eq!(text_layer(&s, id).runs, before.runs);
+    }
+
+    /// `type.create` and `type.setStyle` with `"hangingRoman"` store and update `ParagraphStyle::hanging_roman`.
+    #[test]
+    fn hanging_roman_is_set_and_updated_by_type_commands() {
+        let mut s = session();
+        let id = LayerId(s.execute("type.create", json!({"text": "line 1\nline 2", "hangingRoman": true})).unwrap()["layer"].as_u64().unwrap());
+        assert!(text_layer(&s, id.0).paragraph_runs().iter().all(|r| r.style.hanging_roman));
+
+        s.execute("type.setStyle", json!({"layer": id.0, "hangingRoman": false})).unwrap();
+        assert!(!text_layer(&s, id.0).paragraph_runs().iter().any(|r| r.style.hanging_roman));
+
+        s.execute("type.setStyle", json!({"layer": id.0, "hangingRoman": true})).unwrap();
+        assert!(text_layer(&s, id.0).paragraph_runs().iter().all(|r| r.style.hanging_roman));
     }
 
     /// A font that arrives after the layer was drawn (served fonts on the web) re-renders it with

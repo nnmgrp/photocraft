@@ -2065,6 +2065,41 @@ mod multi_layer_formatting {
         assert!(h.query_by_label("Hyphenate").is_none());
     }
 
+    /// Optical hanging punctuation (`hangingRoman`) toggles from the Paragraph panel and hides
+    /// the pointer while scrubbing `VA` (Tracking) or the number field itself.
+    #[test]
+    fn hanging_roman_toggle_and_tracking_scrub_hide_cursor() {
+        let (app, ids) = fixture();
+        let mut h = controls(app, true);
+        let btn = h.get_by_label("Roman Hanging Punctuation");
+        assert_eq!(btn.accesskit_node().toggled(), Some(egui::accesskit::Toggled::False));
+        btn.click();
+        h.run();
+        assert_eq!(h.get_by_label("Roman Hanging Punctuation").accesskit_node().toggled(), Some(egui::accesskit::Toggled::True));
+        for id in &ids[..2] {
+            assert!(text(h.state(), *id).paragraph_runs().iter().all(|r| r.style.hanging_roman));
+        }
+        assert!(!text(h.state(), ids[2]).paragraph_runs().iter().any(|r| r.style.hanging_roman));
+
+        // Hovering VA shows ResizeHorizontal; dragging VA or the Tracking field hides the cursor.
+        let tracking_rect = h.get_by_role_and_label(egui::accesskit::Role::SpinButton, "Tracking (1/1000 em)").rect();
+        let label_pos = egui::pos2(tracking_rect.left() - 28.0, tracking_rect.center().y);
+        h.hover_at(label_pos);
+        h.run();
+        assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::ResizeHorizontal);
+
+        for start in [label_pos, tracking_rect.center()] {
+            let end = start + vec2(24.0, 0.0);
+            h.event(egui::Event::PointerButton { pos: start, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+            h.hover_at(end);
+            h.run();
+            assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::None);
+            h.event(egui::Event::PointerButton { pos: end, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+            h.run();
+            assert_ne!(h.output().platform_output.cursor_icon, egui::CursorIcon::None);
+        }
+    }
+
     #[test]
     fn properties_edit_shown_metrics_and_paragraphs_with_a_non_type_primary() {
         let (mut app, ids) = fixture();
@@ -2353,9 +2388,10 @@ mod multi_layer_formatting {
     }
 }
 
-/// #1132: with the Move tool, double-clicking type on the canvas edits it (Photoshop CC 2019+):
-/// the Type tool takes over with the caret on the glyph under the pointer, on whichever type
-/// layer was double-clicked, even when another layer is active. Elsewhere it does nothing.
+/// #1132: with the Move tool, double-clicking type on the canvas selects all of its text
+/// (Photoshop CC 2019+): the Type tool takes over with `(0, len)` selected on whichever type
+/// layer was double-clicked, even when another layer is active, so typing or pasting replaces the
+/// whole string. Elsewhere it does nothing.
 #[test]
 fn move_tool_double_click_on_type_edits_it() {
     let mut app = new_app();
@@ -2368,11 +2404,11 @@ fn move_tool_double_click_on_type_edits_it() {
     double_click(&mut h, p);
     assert_eq!(h.state().ui.tool, crate::state::Tool::Type, "the Type tool takes over");
     assert_eq!(h.state().ui.text_edit.as_ref().map(|e| e.layer), Some(id.0));
-    assert_eq!(selection(&h), (2, 2), "the caret sits on the double-clicked glyph");
+    assert_eq!(selection(&h), (0, 6), "double-click on canvas selects all text");
     assert_eq!(h.state().session.active().unwrap().active_layer, Some(id));
     assert_eq!(h.state().session.active().unwrap().history.entries().len(), steps, "nothing moved");
     super::insert(h.state_mut(), "x");
-    assert_eq!(text(h.state(), id).text, "HOxHOHO");
+    assert_eq!(text(h.state(), id).text, "x");
     // Off the text, a double-click stays with the Move tool.
     super::commit(h.state_mut());
     h.state_mut().ui.tool = crate::state::Tool::Move;

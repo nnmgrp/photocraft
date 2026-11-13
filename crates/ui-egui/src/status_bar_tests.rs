@@ -98,7 +98,7 @@ fn fullscreen_status_zoom_wraps_without_turning_the_warp_into_a_value_change() {
             h.run_steps(1);
             let target = cursor_warp(&h).unwrap_or_else(|| panic!("{kind:?}: wrap at {edge:?}"));
             assert_eq!(target.y, edge.y, "{kind:?}: preserve Y");
-            assert_eq!(target.x, if left { SIZE.x - 3.0 } else { 3.0 });
+            assert_eq!(target, start);
             let at_edge = h.state().ui.views[0].zoom;
             h.hover_at(target);
             h.run_steps(1);
@@ -132,7 +132,7 @@ fn status_zoom_does_not_warp_for_windowed_scrubbing_or_hovering() {
         let edge = pos2(0.5, start.y);
         h.hover_at(edge);
         h.run_steps(1);
-        assert!(cursor_warp(&h).is_none(), "ordinary windowed DragValue");
+        assert!(cursor_warp(&h).is_some(), "windowed scrubbing also wraps at the viewport edge");
         assert!(h.state().ui.views[0].zoom < 10.0);
         h.drop_at(edge);
         h.run_steps(2);

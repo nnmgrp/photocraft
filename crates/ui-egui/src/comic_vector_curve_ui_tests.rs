@@ -43,16 +43,17 @@ fn test_vector_curve_double_click_commit() {
 }
 
 #[test]
-fn test_vector_curve_ctrl_click_insert_and_drag() {
+fn test_vector_curve_shift_click_insert_and_drag() {
     let mut state = VectorCurveState::default();
     state.on_primary_down(100.0, 200.0, false, false, false, false, false, 1.0);
     state.on_primary_down(300.0, 200.0, false, false, false, false, false, 1.0);
     assert_eq!(state.points.len(), 2);
 
-    // Ctrl + Click near segment middle (200, 200)
-    let commit = state.on_primary_down(200.0, 200.0, true, false, false, false, false, 1.0);
+    // TZ v5.0 (1.2.2): the temporary Edit trigger moved from Ctrl to Shift — Shift + click on a
+    // segment inserts a node and immediately drags it.
+    let commit = state.on_primary_down(200.0, 200.0, false, false, true, false, false, 1.0);
     assert!(!commit);
-    assert_eq!(state.points.len(), 3, "Ctrl+Click must insert node on segment");
+    assert_eq!(state.points.len(), 3, "Shift+Click must insert node on segment");
     assert_eq!(state.drag_kind, Some(NodeDragKind::MovePosition));
 
     // Drag the inserted node upward to (200, 150)
@@ -164,20 +165,54 @@ fn test_vector_curve_snap_close_tight_radius_and_disable_toggle() {
 }
 
 #[test]
-fn test_vector_curve_escape_finishes_at_cursor_without_discarding() {
+fn test_vector_curve_finish_never_appends_the_hover_tail() {
+    // TZ v5.0 (Нюанс №1): `finish_at_cursor` (Enter/Esc/double-click) must never append
+    // `hover_pos` as a new vertex — every anchor is placed explicitly with a click. (The old
+    // "finish extends the stroke to the cursor" behaviour was the parasitic-tail bug.)
     let mut state = VectorCurveState::default();
     state.on_primary_down(100.0, 100.0, false, false, false, false, false, 1.0);
     state.on_primary_down(200.0, 150.0, false, false, false, false, false, 1.0);
     // Move mouse to (320, 110) — pulling the rubber-band preview
     state.on_pointer_move(320.0, 110.0);
 
-    // Pressing Esc stops the extension right at the mouse position (320, 110)
+    // Finishing reports readiness but keeps exactly the two explicit nodes.
     assert!(state.finish_at_cursor(1.0));
-    assert_eq!(state.points.len(), 3);
-    assert_eq!(state.points[2][0], 320.0);
-    assert_eq!(state.points[2][1], 110.0);
-    assert_eq!(state.points[1][2], 1.0, "Interior node must expand to 1.0 pressure");
-    assert_eq!(state.points[2][2], 0.08, "Terminal cursor node tapers to 0.08");
+    assert_eq!(state.points.len(), 2, "the hover tail must not become a vertex");
+    assert_eq!(state.points[0][2], 0.08, "auto-taper keeps its start pressure");
+    assert_eq!(state.points[1][2], 0.08, "the last explicit node keeps its taper");
+
+    // A stray single first click is never ready to commit and never grows a stroke.
+    let mut one = VectorCurveState::default();
+    one.on_primary_down(100.0, 100.0, false, false, false, false, false, 1.0);
+    one.on_pointer_move(150.0, 120.0);
+    assert!(!one.finish_at_cursor(1.0));
+    assert_eq!(one.points.len(), 1);
+    one.clear();
+    assert!(one.hover_pos.is_none(), "clear must reset the hover tail");
+}
+
+#[test]
+fn test_vector_curve_commit_with_fewer_than_two_points_never_commits() {
+    // TZ v5.0: a commit (the double-click path included) with fewer than 2 nodes must not create
+    // a junk stroke on the Linework layer; the tool clears and stays armed for the next stroke.
+    let (mut app, _layer) = app_with_linework();
+    let before = app.session.active().unwrap().history.past_len();
+
+    app.ui.tool = crate::state::Tool::VectorCurve;
+    // Zero points: an armed tool with nothing drawn.
+    app.ui.vector_curve.get_or_insert_with(crate::vector_ui::VectorCurveState::default);
+    crate::vector_ui::vector_curve_commit(&mut app);
+    assert!(app.ui.vector_curve.is_some(), "the tool stays armed");
+
+    // One stray first click: cleared, no stroke, no history entry.
+    app.ui.vector_curve.as_mut().unwrap().on_primary_down(120.0, 90.0, false, false, false, false, false, 1.0);
+    assert_eq!(app.ui.vector_curve.as_ref().unwrap().points.len(), 1);
+    crate::vector_ui::vector_curve_commit(&mut app);
+    assert_eq!(app.ui.vector_curve.as_ref().unwrap().points.len(), 0, "the stray first click cleared");
+    assert!(app.ui.vector_curve.as_ref().unwrap().hover_pos.is_none(), "clear resets hover_pos");
+
+    let after = app.session.active().unwrap().history.past_len();
+    assert_eq!(after, before, "no junk stroke was committed to history");
 }
 
 /// A document with a Linework layer that holds one tapered stroke.

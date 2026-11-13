@@ -66,6 +66,8 @@ pub struct BalloonPanelUi {
     pub uniflash_inner_ratio: f64,
     pub uniflash_bundle: f64,
     pub uniflash_needle_width: f64,
+    pub uniflash_outer_sharpness: f64,
+    pub uniflash_inner_sharpness: f64,
     pub uniflash_seed: u32,
     // Tail
     pub tail_preset: TailPreset,
@@ -100,6 +102,8 @@ impl Default for BalloonPanelUi {
             uniflash_inner_ratio: 0.62,
             uniflash_bundle: 0.40,
             uniflash_needle_width: 2.2,
+            uniflash_outer_sharpness: 1.0,
+            uniflash_inner_sharpness: 1.0,
             uniflash_seed: 777,
             tail_preset: TailPreset::Arc,
             tail_mouth_width: 28.0,
@@ -127,15 +131,7 @@ pub fn showing(app: &PhotocraftApp) -> bool {
 }
 
 pub fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
-    if handles(id) {
-        if let Some(c) = crate::panel_docking::checked(app, id) {
-            Some(c)
-        } else {
-            Some(showing(app))
-        }
-    } else {
-        None
-    }
+    if handles(id) { if let Some(c) = crate::panel_docking::checked(app, id) { Some(c) } else { Some(showing(app)) } } else { None }
 }
 
 pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
@@ -175,18 +171,8 @@ fn active_balloon_target(app: &PhotocraftApp) -> Option<ActiveBalloonTarget> {
     let layer = active.doc.layer(lid)?;
     let photocraft_doc::LayerContent::Shape(sh) = &layer.content else { return None };
     let Some(photocraft_doc::LiveShape::BalloonGroup { group }) = &sh.live else { return None };
-    let balloon = app
-        .balloon_gizmo
-        .active_balloon_id
-        .and_then(|bid| group.items.iter().find(|b| b.id == bid))
-        .or_else(|| group.items.first())?;
-    Some(ActiveBalloonTarget {
-        doc_idx,
-        layer_id: lid.0,
-        balloon: balloon.clone(),
-        fill: sh.fill.clone(),
-        stroke_width: sh.stroke.as_ref().map(|s| s.width),
-    })
+    let balloon = app.balloon_gizmo.active_balloon_id.and_then(|bid| group.items.iter().find(|b| b.id == bid)).or_else(|| group.items.first())?;
+    Some(ActiveBalloonTarget { doc_idx, layer_id: lid.0, balloon: balloon.clone(), fill: sh.fill.clone(), stroke_width: sh.stroke.as_ref().map(|s| s.width) })
 }
 
 fn body_from_state(st: &BalloonPanelUi, rect: [f64; 4]) -> LiveBalloonBody {
@@ -219,6 +205,8 @@ fn body_from_state(st: &BalloonPanelUi, rect: [f64; 4]) -> LiveBalloonBody {
             length_jitter: 0.5,
             angle_jitter: 0.25,
             needle_width: st.uniflash_needle_width,
+            outer_sharpness: st.uniflash_outer_sharpness.clamp(0.0, 1.0),
+            inner_sharpness: st.uniflash_inner_sharpness.clamp(0.0, 1.0),
             seed: st.uniflash_seed,
         },
     }
@@ -263,12 +251,14 @@ pub(crate) fn hydrate_geometry_from_balloon(state: &mut BalloonPanelUi, balloon:
             state.spiky_smooth = *smooth;
             state.spiky_seed = *seed;
         }
-        LiveBalloonBody::Uniflash { needles, inner_ratio, bundle_group, needle_width, seed, .. } => {
+        LiveBalloonBody::Uniflash { needles, inner_ratio, bundle_group, needle_width, seed, outer_sharpness, inner_sharpness, .. } => {
             state.body_choice = BalloonBodyKindChoice::Uniflash;
             state.uniflash_needles = *needles;
             state.uniflash_inner_ratio = *inner_ratio;
             state.uniflash_bundle = *bundle_group;
             state.uniflash_needle_width = *needle_width;
+            state.uniflash_outer_sharpness = *outer_sharpness;
+            state.uniflash_inner_sharpness = *inner_sharpness;
             state.uniflash_seed = *seed;
         }
     }
@@ -304,12 +294,32 @@ pub(crate) fn apply_panel_to_active_layer(app: &mut PhotocraftApp, state: &Ballo
         || (state.tail_bubble_radius - prev.tail_bubble_radius).abs() > 1e-4;
     let fill_changed = state.fill_mode != prev.fill_mode;
     let stroke_changed = (state.stroke_width - prev.stroke_width).abs() > 1e-4;
+    // The Uniflash render mode (TZ v5.0, Нюанс №3): the closed needle polygons are the ink, so
+    // the layer is filled with the stroke colour and has no stroke; leaving Uniflash restores
+    // the fill/stroke from the panel state.
+    let body_became_uniflash = state.body_choice == BalloonBodyKindChoice::Uniflash && prev.body_choice != BalloonBodyKindChoice::Uniflash;
+    let body_left_uniflash = state.body_choice != BalloonBodyKindChoice::Uniflash && prev.body_choice == BalloonBodyKindChoice::Uniflash;
 
     if state.body_choice != prev.body_choice {
         balloon.vertex_overrides.clear();
     }
     balloon.body = body_from_state(state, balloon.body.rect());
     balloon.stroke_width = state.stroke_width;
+    // Coming back from `⊘ Нет` on a balloon without tails: spawn the default tail automatically.
+    if state.tail_preset != TailPreset::None && balloon.tails.is_empty() {
+        let rect = balloon.body.rect();
+        balloon.tails.push(LiveBalloonTail {
+            id: balloon.next_tail_id,
+            preset: state.tail_preset,
+            perimeter_t: 0.58,
+            mouth_width: state.tail_mouth_width,
+            tip: [rect[0] + rect[2] * 0.25, rect[1] + rect[3] + 48.0],
+            bend: state.tail_bend,
+            bubbles: state.tail_bubbles,
+            bubble_radius: state.tail_bubble_radius,
+        });
+        balloon.next_tail_id = balloon.next_tail_id.saturating_add(1);
+    }
     if tail_changed && let Some(t) = balloon.tails.first_mut() {
         t.preset = state.tail_preset;
         t.mouth_width = state.tail_mouth_width;
@@ -333,13 +343,21 @@ pub(crate) fn apply_panel_to_active_layer(app: &mut PhotocraftApp, state: &Ballo
         applied = true;
     }
 
-    if fill_changed || stroke_changed {
+    if fill_changed || stroke_changed || body_became_uniflash || body_left_uniflash {
         let mut edit = json!({ "layer": layer_id });
-        if fill_changed {
+        if body_became_uniflash {
+            edit["fill"] = json!("#000000");
+            edit["stroke"] = json!(null);
+        } else if body_left_uniflash {
             edit["fill"] = balloon_fill_value(app, state.fill_mode);
-        }
-        if stroke_changed {
             edit["stroke"] = json!({ "width": state.stroke_width });
+        } else {
+            if fill_changed {
+                edit["fill"] = balloon_fill_value(app, state.fill_mode);
+            }
+            if stroke_changed {
+                edit["stroke"] = json!({ "width": state.stroke_width });
+            }
         }
         if app.run("shape.edit", edit).is_ok() {
             applied = true;
@@ -427,6 +445,8 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut Ui) {
                 }
                 adaptive_slider(ui, "Пучки (Bundle):", &mut state.uniflash_bundle, 0.0..=1.0, "", false);
                 adaptive_slider(ui, "Ширина иглы:", &mut state.uniflash_needle_width, 1.0..=8.0, " px", false);
+                adaptive_slider(ui, "Острота снаружи:", &mut state.uniflash_outer_sharpness, 0.0..=1.0, "", false);
+                adaptive_slider(ui, "Острота внутри:", &mut state.uniflash_inner_sharpness, 0.0..=1.0, "", false);
             }
         }
 
@@ -437,6 +457,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut Ui) {
         ui.label(RichText::new("Тип хвоста:").strong().color(t.text));
         ui.horizontal_wrapped(|ui| {
             let tails = [
+                (TailPreset::None, "⊘ Нет"),
                 (TailPreset::Wedge, "▽ Wedge"),
                 (TailPreset::Arc, "⌒ Arc"),
                 (TailPreset::SCurve, "~ SCurve"),
@@ -452,8 +473,11 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut Ui) {
             }
         });
 
-        adaptive_slider(ui, "Ширина устья:", &mut state.tail_mouth_width, 6.0..=120.0, " px", false);
-        adaptive_slider(ui, "Изгиб (Bend):", &mut state.tail_bend, -1.0..=1.0, "", false);
+        // With `⊘ Нет` the tail parameters hide: the balloon is the body only.
+        if state.tail_preset != TailPreset::None {
+            adaptive_slider(ui, "Ширина устья:", &mut state.tail_mouth_width, 6.0..=120.0, " px", false);
+            adaptive_slider(ui, "Изгиб (Bend):", &mut state.tail_bend, -1.0..=1.0, "", false);
+        }
         if state.tail_preset == TailPreset::Thought {
             adaptive_slider(ui, "Пузырьки мыслей:", &mut state.tail_bubbles, 1..=8, "", false);
             adaptive_slider(ui, "Радиус пузырька:", &mut state.tail_bubble_radius, 4.0..=30.0, " px", false);
@@ -538,25 +562,34 @@ pub(crate) fn create_live_balloon_in_rect(app: &mut PhotocraftApp, st: &BalloonP
     let [bx, by, bw, bh] = rect;
     log::info!(
         "[Telemetry:Balloon:Create] body_choice={:?}, tail_preset={:?}, rect={rect:?}, stroke_width={}",
-        st.body_choice, st.tail_preset, st.stroke_width
+        st.body_choice,
+        st.tail_preset,
+        st.stroke_width
     );
     let body = body_from_state(st, rect);
 
-    let tail = LiveBalloonTail {
-        id: 1,
-        preset: st.tail_preset,
-        perimeter_t: 0.58,
-        mouth_width: st.tail_mouth_width,
-        tip: [bx + bw * 0.25, by + bh + 48.0],
-        bend: st.tail_bend,
-        bubbles: st.tail_bubbles,
-        bubble_radius: st.tail_bubble_radius,
+    // A `⊘ Нет` balloon is the body only; the Uniflash layer renders with the fill in the stroke
+    // colour and no stroke (the closed needle polygons are the ink, TZ v5.0).
+    let is_uniflash = matches!(body, LiveBalloonBody::Uniflash { .. });
+    let tails = if st.tail_preset == TailPreset::None {
+        Vec::new()
+    } else {
+        vec![LiveBalloonTail {
+            id: 1,
+            preset: st.tail_preset,
+            perimeter_t: 0.58,
+            mouth_width: st.tail_mouth_width,
+            tip: [bx + bw * 0.25, by + bh + 48.0],
+            bend: st.tail_bend,
+            bubbles: st.tail_bubbles,
+            bubble_radius: st.tail_bubble_radius,
+        }]
     };
 
     let balloon = LiveBalloon {
         id: 1,
         body,
-        tails: vec![tail],
+        tails,
         next_tail_id: 2,
         vertex_overrides: Vec::new(),
         hand_drawn_noise: 0.0,
@@ -564,14 +597,18 @@ pub(crate) fn create_live_balloon_in_rect(app: &mut PhotocraftApp, st: &BalloonP
         auto_merge_overlapping: true,
     };
 
-    let fill_val = balloon_fill_value(app, st.fill_mode);
+    let fill_val = if is_uniflash { json!("#000000") } else { balloon_fill_value(app, st.fill_mode) };
+    let stroke_val = if is_uniflash { json!(null) } else { json!({ "width": st.stroke_width, "color": "#000000" }) };
 
     let ok = app
-        .run("shape.balloon.create", json!({
-            "balloon": balloon,
-            "fill": fill_val,
-            "stroke": { "width": st.stroke_width, "color": "#000000" }
-        }))
+        .run(
+            "shape.balloon.create",
+            json!({
+                "balloon": balloon,
+                "fill": fill_val,
+                "stroke": stroke_val
+            }),
+        )
         .is_ok();
     if ok {
         app.balloon_gizmo.active_balloon_id = Some(balloon.id);
@@ -586,9 +623,7 @@ fn create_balloon_on_canvas(app: &mut PhotocraftApp, st: &BalloonPanelUi) {
     let Some(active) = app.session.active() else { return };
     let doc_size = active.doc.size;
 
-    let bounds = active.doc.selection.as_ref()
-        .map(photocraft_compose::bounds::content_bounds)
-        .filter(|r| r.width() >= 16 && r.height() >= 16);
+    let bounds = active.doc.selection.as_ref().map(photocraft_compose::bounds::content_bounds).filter(|r| r.width() >= 16 && r.height() >= 16);
 
     let (bx, by, bw, bh) = match bounds {
         Some(r) => {
@@ -613,13 +648,16 @@ fn add_tail_to_active(app: &mut PhotocraftApp, st: &BalloonPanelUi) {
     let Some(layer_id) = active.active_layer else { return };
     let balloon_id = app.balloon_gizmo.active_balloon_id.unwrap_or(1);
 
-    let _ = app.run("shape.balloon.tail.add", json!({
-        "layer": layer_id.0,
-        "balloonId": balloon_id,
-        "preset": st.tail_preset.id(),
-        "mouthWidth": st.tail_mouth_width,
-        "tip": [200.0, 300.0]
-    }));
+    let _ = app.run(
+        "shape.balloon.tail.add",
+        json!({
+            "layer": layer_id.0,
+            "balloonId": balloon_id,
+            "preset": st.tail_preset.id(),
+            "mouthWidth": st.tail_mouth_width,
+            "tip": [200.0, 300.0]
+        }),
+    );
     app.ui.tool = Tool::Balloon;
 }
 

@@ -378,6 +378,8 @@ pub enum TailPreset {
     Double,
     /// A chain of shrinking, detached bubbles (a character's thought).
     Thought,
+    /// No tail at all: the balloon is the body only (the tail controls hide).
+    None,
 }
 
 impl TailPreset {
@@ -390,6 +392,7 @@ impl TailPreset {
             Self::Lightning => "lightning",
             Self::Double => "double",
             Self::Thought => "thought",
+            Self::None => "none",
         }
     }
 
@@ -402,6 +405,7 @@ impl TailPreset {
             "lightning" => Some(Self::Lightning),
             "double" => Some(Self::Double),
             "thought" => Some(Self::Thought),
+            "none" => Some(Self::None),
             _ => None,
         }
     }
@@ -478,6 +482,13 @@ pub enum LiveBalloonBody {
         angle_jitter: f64,
         /// Base thickness of a needle outside: px (default 2.2).
         needle_width: f64,
+        /// Sharpness of the needle tips outside: 0.0 = a blunt end of the full needle width,
+        /// 1.0 = a point (default 1.0).
+        #[serde(default = "default_outer_sharpness")]
+        outer_sharpness: f64,
+        /// Sharpness of the needle ends inside, at the mask edge: 0.0..=1.0 (default 1.0).
+        #[serde(default = "default_inner_sharpness")]
+        inner_sharpness: f64,
         seed: u32,
     },
 }
@@ -543,6 +554,14 @@ pub struct LiveBalloon {
 
 fn default_one() -> u32 {
     1
+}
+
+fn default_outer_sharpness() -> f64 {
+    1.0
+}
+
+fn default_inner_sharpness() -> f64 {
+    1.0
 }
 
 fn default_true() -> bool {

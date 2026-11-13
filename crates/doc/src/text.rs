@@ -226,6 +226,8 @@ pub struct ParagraphStyle {
     pub auto_leading: f32,
     pub direction: TextDirection,
     pub hyphenate: bool,
+    #[serde(default)]
+    pub hanging_roman: bool,
     /// Applied paragraph style (id in [`crate::TextStyles`]); `None` = Basic Paragraph.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub style_sheet: Option<u32>,
@@ -244,6 +246,7 @@ impl Default for ParagraphStyle {
             auto_leading: 1.2,
             direction: TextDirection::Auto,
             hyphenate: false,
+            hanging_roman: false,
             style_sheet: None,
         }
     }
@@ -361,5 +364,8 @@ mod tests {
         assert_eq!((p.align, p.vertical_align, p.auto_leading), (TextAlign::Center, VerticalAlign::Top, 1.2));
         let p2: ParagraphStyle = serde_json::from_str(r#"{"vertical_align":"Bottom"}"#).unwrap();
         assert_eq!(p2.vertical_align, VerticalAlign::Bottom);
+        assert!(!p.hanging_roman);
+        let p3: ParagraphStyle = serde_json::from_str(r#"{"hanging_roman":true}"#).unwrap();
+        assert!(p3.hanging_roman);
     }
 }

@@ -20,12 +20,12 @@ use photocraft_vector::sai_curve::{
 /// Sub-mode of `Tool::VectorCurve`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum VectorCurveMode {
-    /// Click to append nodes, Ctrl+click on curve to insert a node, drag nodes to move, Alt+drag for weight.
+    /// Click to append nodes, Shift+click on the curve to insert a node, drag nodes to move, Alt+drag for weight.
     #[default]
     Draw,
     /// Dedicated PaintTool SAI "Weight" (Толщина) mode: dragging any node or stroke scales its thickness.
     Weight,
-    /// Edit nodes on Live Vector / Linework layers (Ctrl+click inserts node on segment).
+    /// Edit nodes on Live Vector / Linework layers (Shift+click inserts node on segment).
     Edit,
 }
 
@@ -159,29 +159,25 @@ impl VectorCurveState {
         }
     }
 
-    /// PaintTool SAI `Esc` behavior: stops the rubber-band extension right where the mouse cursor
-    /// currently is (without discarding the stroke) and returns `true` if the stroke has >= 2 nodes
-    /// and is ready to commit.
+    /// PaintTool SAI `Esc`/`Enter`/double-click finish. Never appends a vertex: every anchor the
+    /// user placed explicitly with `on_primary_down` is the whole stroke, and the cursor position
+    /// at finish time must not grow a parasitic tail. The only geometry change is a snap-close
+    /// onto `points[0]` within the `SNAP_CLOSE_RADIUS_PX` radius, which flags the loop closed and
+    /// restores the endpoint pressures. Returns `true` when the stroke has >= 2 nodes and is ready
+    /// to commit.
     pub fn finish_at_cursor(&mut self, zoom: f64) -> bool {
-        if self.points.is_empty() {
+        if self.points.len() < 2 {
             return false;
         }
-        let hit_radius = NODE_HIT_RADIUS_PX / zoom.max(0.05);
         let snap_close_radius = SNAP_CLOSE_RADIUS_PX / zoom.max(0.05);
         if self.mode == VectorCurveMode::Draw
+            && self.snap_close
+            && self.points.len() >= 3
             && let Some(h) = self.hover_pos
+            && (self.points[0][0] - h[0]).hypot(self.points[0][1] - h[1]) <= snap_close_radius
         {
-            if self.snap_close && self.points.len() >= 3 && (self.points[0][0] - h[0]).hypot(self.points[0][1] - h[1]) <= snap_close_radius {
-                self.closed_loop = true;
-                self.restore_closed_loop_pressures();
-                return true;
-            }
-            let last = self.points[self.points.len() - 1];
-            if (last[0] - h[0]).hypot(last[1] - h[1]) > hit_radius {
-                let end_pressure = if self.auto_taper_ends { 0.08 } else { 1.0 };
-                self.points.push([h[0], h[1], end_pressure, 0.0]);
-                self.apply_auto_taper_on_append();
-            }
+            self.closed_loop = true;
+            self.restore_closed_loop_pressures();
         }
         self.points.len() >= 2
     }
@@ -201,6 +197,10 @@ impl VectorCurveState {
         let hit_radius = NODE_HIT_RADIUS_PX / zoom.max(0.05);
         let snap_close_radius = SNAP_CLOSE_RADIUS_PX / zoom.max(0.05);
         let seg_radius = SEGMENT_INSERT_RADIUS_PX / zoom.max(0.05);
+
+        // Track the cursor from the very first click, so the rubber band and the thin 1 px guide
+        // never reuse a stale `hover_pos` from the previous stroke.
+        self.hover_pos = Some([x, y]);
 
         if double_clicked && self.points.len() >= 2 {
             let last = self.points[self.points.len() - 1];
@@ -223,9 +223,11 @@ impl VectorCurveState {
         }
 
         // Optional tight snap-close (`SNAP_CLOSE_RADIUS_PX = 1.5 px`): only closes when clicking virtually on top of node 0.
+        // `Shift` is the temporary Edit trigger, so like `Alt` it keeps the snap-close out of the way.
         if self.snap_close
             && self.mode == VectorCurveMode::Draw
             && !ctrl_held
+            && !shift_held
             && !alt_held
             && self.points.len() >= 3
             && (self.points[0][0] - x).hypot(self.points[0][1] - y) <= snap_close_radius
@@ -253,7 +255,7 @@ impl VectorCurveState {
             return false;
         }
 
-        if (ctrl_held || self.mode == VectorCurveMode::Edit)
+        if (shift_held || self.mode == VectorCurveMode::Edit)
             && self.points.len() >= 2
             && let Some(inserted_idx) = self.try_insert_node_on_segment(x, y, seg_radius, closed)
         {
@@ -265,12 +267,15 @@ impl VectorCurveState {
             return false;
         }
 
-        if self.mode != VectorCurveMode::Draw {
+        // With `Shift` (the temporary Edit trigger) a click on the empty canvas never draws a node.
+        if self.mode != VectorCurveMode::Draw || shift_held {
             self.selected_node = None;
             return false;
         }
 
-        let corner_val = if shift_held { 1.0 } else { 0.0 };
+        // Corners are toggled with an `Alt`-click without a drag (`on_primary_up`); `Shift` belongs
+        // to the temporary Edit mode and must not pre-set the corner flag here.
+        let corner_val = 0.0;
         let initial_pressure = if self.auto_taper_ends && !closed { 0.08 } else { 1.0 };
         self.points.push([x, y, initial_pressure, corner_val]);
         self.apply_auto_taper_on_append();
@@ -342,6 +347,7 @@ impl VectorCurveState {
         self.drag_kind = None;
         self.drag_moved = false;
         self.layer_drag = None;
+        self.hover_pos = None;
         self.target_layer_id = None;
     }
 
@@ -1828,9 +1834,9 @@ pub fn vector_curve_down(app: &mut PhotocraftApp, x: f64, y: f64, ctrl: bool, al
     let points_empty = app.ui.vector_curve.as_ref().is_none_or(|vc| vc.points.is_empty());
 
     // Direct non-modal interaction with committed strokes on the active Linework layer:
-    // Works whenever `Ctrl` or `Alt` is held in Draw mode, or in Weight / Edit modes!
+    // Works whenever `Shift` or `Alt` is held in Draw mode, or in Weight / Edit modes!
     if points_empty
-        && (ctrl || alt || cur_mode != VectorCurveMode::Draw)
+        && (shift || alt || cur_mode != VectorCurveMode::Draw)
         && let Some((active_id, lw)) = active_linework(app)
     {
         let hit_radius = NODE_HIT_RADIUS_PX / zoom.max(0.05);
@@ -1881,7 +1887,7 @@ pub fn vector_curve_down(app: &mut PhotocraftApp, x: f64, y: f64, ctrl: bool, al
             return;
         }
 
-        if (ctrl || cur_mode == VectorCurveMode::Edit)
+        if (shift || cur_mode == VectorCurveMode::Edit)
             && let Some((s_idx, _)) = lw.closest_segment((x, y), seg_radius)
             && let Ok(resp) = app.run(
                 "shape.vectorCurve.insertNode",
@@ -1937,10 +1943,10 @@ pub fn reconcile_vector_curve_layer(app: &mut PhotocraftApp) {
         return;
     }
     let Some(target_id) = vc.target_layer_id else { return };
-    let still_valid = app.session.active().is_some_and(|st| {
-        st.active_layer.is_some_and(|id| id.0 == target_id)
-            && st.doc.layer(photocraft_doc::LayerId(target_id)).is_some_and(|l| l.visible)
-    });
+    let still_valid = app
+        .session
+        .active()
+        .is_some_and(|st| st.active_layer.is_some_and(|id| id.0 == target_id) && st.doc.layer(photocraft_doc::LayerId(target_id)).is_some_and(|l| l.visible));
     if !still_valid {
         log::info!("[Telemetry:Keys:Reconcile] clearing orphan uncommitted stroke for target_layer_id={target_id}");
         vc.clear();
@@ -2004,6 +2010,13 @@ pub fn vector_curve_move(app: &mut PhotocraftApp, x: f64, y: f64) {
     }
 }
 
+/// Free pointer movement over the canvas with the button up: tracks `hover_pos` without starting
+/// a drag, so the rubber band and the Shift insert cursor follow the cursor before a press.
+pub fn vector_curve_hover(app: &mut PhotocraftApp, x: f64, y: f64) {
+    let vc = app.ui.vector_curve.get_or_insert_with(VectorCurveState::default);
+    vc.hover_pos = Some([x, y]);
+}
+
 pub fn vector_curve_up(app: &mut PhotocraftApp, alt: bool) {
     let toggle_cmd = {
         let Some(vc) = app.ui.vector_curve.as_mut() else { return };
@@ -2037,22 +2050,17 @@ pub fn vector_curve_escape(app: &mut PhotocraftApp) {
     if ready {
         vector_curve_commit(app);
     } else if let Some(vc) = app.ui.vector_curve.as_mut() {
-        vc.points.clear();
-        vc.closed_loop = false;
-        vc.selected_node = None;
-        vc.drag_node = None;
+        // Fewer than 2 nodes: never commit a junk stroke, reset the tool to its ready state.
+        vc.clear();
     }
 }
 
 pub fn vector_curve_commit(app: &mut PhotocraftApp) {
     let Some(mut vc) = app.ui.vector_curve.take() else { return };
-    if vc.points.len() == 1 {
-        let zoom = app.point_zoom() as f64;
-        let _ = vc.finish_at_cursor(zoom);
-    }
+    // Fewer than 2 nodes (a stray first click or a double-click on it): never call
+    // `finish_at_cursor` and never create a junk stroke — clear and stay armed.
     if vc.points.len() < 2 {
-        vc.points.clear();
-        vc.closed_loop = false;
+        vc.clear();
         app.ui.vector_curve = Some(vc);
         return;
     }
@@ -2061,14 +2069,10 @@ pub fn vector_curve_commit(app: &mut PhotocraftApp) {
     let saved_tension = vc.tension;
     let saved_auto_taper = vc.auto_taper_ends;
     let saved_snap_close = vc.snap_close;
-    let saved_hover = vc.hover_pos;
 
     let sai = app.sai_panel.clone();
-    let effective_min_ratio = if sai.pressure_target == crate::comic_sai_panel::PressureTargetMode::Density {
-        1.0
-    } else {
-        f64::from(o.vector_curve_min_ratio)
-    };
+    let effective_min_ratio =
+        if sai.pressure_target == crate::comic_sai_panel::PressureTargetMode::Density { 1.0 } else { f64::from(o.vector_curve_min_ratio) };
     let effective_tension = sai.curve_type.tension(vc.tension);
     let curve_type_str = match sai.curve_type {
         photocraft_vector::sai_curve::SaiCurveType::Normal => "normal",
@@ -2100,13 +2104,13 @@ pub fn vector_curve_commit(app: &mut PhotocraftApp) {
                 app.ui.status_error = true;
                 app.ui.vector_curve = Some(vc);
             } else {
-                // Keep tool armed non-modally for the next stroke immediately!
+                // Keep tool armed non-modally for the next stroke immediately; `hover_pos` resets
+                // so the next stroke never inherits the previous one's tail position.
                 app.ui.vector_curve = Some(VectorCurveState {
                     mode: saved_mode,
                     tension: saved_tension,
                     auto_taper_ends: saved_auto_taper,
                     snap_close: saved_snap_close,
-                    hover_pos: saved_hover,
                     ..VectorCurveState::default()
                 });
             }
@@ -2127,7 +2131,7 @@ pub fn draw_vector_curve_overlay(app: &PhotocraftApp, painter: &egui::Painter, x
     let accent = Tokens::get(painter.ctx()).accent;
     let o = &app.ui.tool_options;
     let mods = painter.ctx().input(|i| i.modifiers);
-    let ctrl_held = mods.ctrl || mods.command;
+    let shift_held = mods.shift;
     let alt_held = mods.alt;
     let cur_mode = app.ui.vector_curve.as_ref().map_or(VectorCurveMode::Draw, |vc| vc.mode);
     let hover_pos = app.ui.vector_curve.as_ref().and_then(|vc| vc.hover_pos);
@@ -2137,10 +2141,10 @@ pub fn draw_vector_curve_overlay(app: &PhotocraftApp, painter: &egui::Painter, x
     let seg_radius = SEGMENT_INSERT_RADIUS_PX / zoom;
 
     // 1. Render editable spline guide & nodes for committed strokes on the active Linework layer
-    // when holding Ctrl/Alt or in Weight / Edit submodes.
+    // when holding Shift/Alt or in Weight / Edit submodes.
     let drawing_new = app.ui.vector_curve.as_ref().is_some_and(|vc| !vc.points.is_empty());
     if !drawing_new
-        && (ctrl_held || alt_held || cur_mode != VectorCurveMode::Draw)
+        && (shift_held || alt_held || cur_mode != VectorCurveMode::Draw)
         && let Some((_, lw)) = active_linework(app)
     {
         for stroke in &lw.strokes {
@@ -2167,7 +2171,7 @@ pub fn draw_vector_curve_overlay(app: &PhotocraftApp, painter: &egui::Painter, x
                 painter.rect_stroke(rect, 0.0, Stroke::new(1.0, accent), egui::StrokeKind::Outside);
             }
         }
-        if (ctrl_held || cur_mode == VectorCurveMode::Edit)
+        if (shift_held || cur_mode == VectorCurveMode::Edit)
             && let Some(h) = hover_pos
             && lw.node_at((h[0], h[1]), hit_radius).is_none()
             && let Some((_, proj)) = lw.closest_segment((h[0], h[1]), seg_radius)
@@ -2184,8 +2188,7 @@ pub fn draw_vector_curve_overlay(app: &PhotocraftApp, painter: &egui::Painter, x
     }
     if let Some(target_id) = vc.target_layer_id
         && !app.session.active().is_some_and(|st| {
-            st.active_layer.is_some_and(|id| id.0 == target_id)
-                && st.doc.layer(photocraft_doc::LayerId(target_id)).is_some_and(|l| l.visible)
+            st.active_layer.is_some_and(|id| id.0 == target_id) && st.doc.layer(photocraft_doc::LayerId(target_id)).is_some_and(|l| l.visible)
         })
     {
         return;
@@ -2218,7 +2221,17 @@ pub fn draw_vector_curve_overlay(app: &PhotocraftApp, painter: &egui::Painter, x
         }
     }
 
-    if preview_pts.len() >= 2 {
+    if vc.points.len() == 1 {
+        // A single start node: no ink tail yet — only the start marker below and an optional thin
+        // 1 px guide to the cursor, never the fat tapered ribbon (the parasitic first-click tail).
+        if vc.mode == VectorCurveMode::Draw
+            && let Some(h) = vc.hover_pos
+        {
+            let a = to_scr([vc.points[0][0], vc.points[0][1]]);
+            let b = to_scr([h[0], h[1]]);
+            painter.add(egui::Shape::line(vec![a, b], Stroke::new(1.0, accent.gamma_multiply(0.6))));
+        }
+    } else if preview_pts.len() >= 2 {
         let base_w = f64::from(o.vector_curve_width);
         let is_density = app.sai_panel.pressure_target == crate::comic_sai_panel::PressureTargetMode::Density;
         let min_r = if is_density {
@@ -2266,8 +2279,8 @@ pub fn draw_vector_curve_overlay(app: &PhotocraftApp, painter: &egui::Painter, x
         }
     }
 
-    // Highlight segment projection when holding Ctrl in Draw mode or in Edit mode
-    if (ctrl_held || vc.mode == VectorCurveMode::Edit)
+    // Highlight segment projection when holding Shift in Draw mode or in Edit mode
+    if (shift_held || vc.mode == VectorCurveMode::Edit)
         && vc.points.len() >= 2
         && let Some(h) = vc.hover_pos
         && vc.node_at(h, hit_radius).is_none()
@@ -2556,10 +2569,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             lbl(ui, tl!("Tension:"));
             let tension_changed = crate::widgets::value_field(ui, &mut o.vector_curve_tension, 0.0..=1.0, "", 44.0).changed();
             let panel_snap_close = app.sai_panel.snap_close;
-            let vc = app.ui.vector_curve.get_or_insert_with(|| VectorCurveState {
-                snap_close: panel_snap_close,
-                ..VectorCurveState::default()
-            });
+            let vc = app.ui.vector_curve.get_or_insert_with(|| VectorCurveState { snap_close: panel_snap_close, ..VectorCurveState::default() });
             let auto_taper_changed = ui.checkbox(&mut vc.auto_taper_ends, tl!("Auto Taper")).changed();
             let snap_close_changed = ui.checkbox(&mut vc.snap_close, tl!("Snap Close")).changed();
             vc.tension = f64::from(o.vector_curve_tension);
@@ -2601,7 +2611,10 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             }
 
             crate::widgets::vline(ui, 22.0);
-            lbl(ui, "Click: node · Start point: close · Enter/Esc/Dbl-Click: finish · Ctrl+Drag: bend · Alt+Drag: weight");
+            lbl(
+                ui,
+                "Click: node · Start point: close · Enter/Esc/Dbl-Click: finish · Shift+Click/Drag: edit & insert node · Alt+Click: corner · Alt+Drag: weight",
+            );
         }
         Tool::CustomShape => {
             crate::widgets::vline(ui, 22.0);

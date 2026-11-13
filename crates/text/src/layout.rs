@@ -912,6 +912,13 @@ impl Layouter {
                 } else {
                     0.0
                 };
+                let (hang_left, hang_right) =
+                    if !vertical && ps.hanging_roman { hanging_roman_offsets(&ptext, &slots, &kern_px, prefix.len(), adv, line_kern) } else { (0.0, 0.0) };
+                let hang_dx = match ps.align {
+                    TextAlign::Left | TextAlign::JustifyLeft | TextAlign::JustifyAll => -hang_left,
+                    TextAlign::Right | TextAlign::JustifyRight => hang_right,
+                    TextAlign::Center | TextAlign::JustifyCenter => (hang_right - hang_left) * 0.5,
+                };
                 let dx = if is_box {
                     let base = line_origin + indent_start - kern_align;
                     let slack = avail.unwrap_or(0.0) - adv * break_scale - line_kern;
@@ -926,14 +933,14 @@ impl Layouter {
                         }
                     } else {
                         scaled_offset
-                    }
+                    } + hang_dx
                 } else {
                     let target = match ps.align {
                         TextAlign::Center | TextAlign::JustifyCenter => -(adv + line_kern) / 2.0,
                         TextAlign::Right | TextAlign::JustifyRight => -(adv + line_kern),
                         _ => indent_start,
                     };
-                    target - m.offset
+                    target - m.offset + hang_dx
                 };
                 let justify_all = is_box && last_line && ps.align == TextAlign::JustifyAll;
                 let line_index = out.lines.len();
@@ -1413,6 +1420,75 @@ fn is_closing(c: char) -> bool {
 /// Opening CJK brackets: blank space before the mark.
 fn is_opening(c: char) -> bool {
     matches!(c, '「' | '『' | '（' | '〔' | '【' | '〈' | '《' | '〘' | '〖' | '［' | '｛')
+}
+
+/// Closing punctuation eligible for optical hanging at the end of a horizontal line (`hang_right`).
+fn is_hanging_trailing(c: char) -> bool {
+    matches!(c, '.' | ',' | ':' | ';' | '!' | '?' | '—' | '–' | '-' | '»' | '”' | '’' | ')' | ']' | '}' | '"' | '\'' | '…')
+}
+
+/// Opening punctuation eligible for optical hanging before the left edge of a horizontal line (`hang_left`).
+fn is_hanging_leading(c: char) -> bool {
+    matches!(c, '«' | '“' | '‘' | '(' | '[' | '{' | '"' | '\'' | '—')
+}
+
+/// Optical punctuation compensation (`hangingRoman`) for a horizontal line:
+/// `(hang_left, hang_right)` in line-space pixels, measured from the shaped cluster advances and kerning.
+fn hanging_roman_offsets(ptext: &str, slots: &[KernSlot], kern_px: &[f32], prefix_len: usize, adv: f32, line_kern: f32) -> (f32, f32) {
+    let ch_at = |idx: usize| -> Option<char> {
+        let slot = slots.get(idx)?;
+        ptext.get(slot.start..).and_then(|s| s.chars().next())
+    };
+
+    // Trailing punctuation (`hang_right`): last non-whitespace cluster(s) of the line.
+    let mut last_idx = slots.len();
+    while last_idx > 0 && slots.get(last_idx - 1).is_some_and(|s| s.blank) {
+        last_idx -= 1;
+    }
+    let mut hang_right = 0.0f32;
+    if last_idx > 0
+        && let Some(last_ch) = ch_at(last_idx - 1)
+        && is_hanging_trailing(last_ch)
+    {
+        let mut hang_start = last_idx - 1;
+        if matches!(last_ch, '.' | '…')
+            && let Some(prev_ch) = hang_start.checked_sub(1).and_then(ch_at)
+            && matches!(prev_ch, '.' | '…')
+        {
+            hang_start -= 1;
+            if let Some(prev2_ch) = hang_start.checked_sub(1).and_then(ch_at)
+                && matches!(prev2_ch, '.' | '…')
+            {
+                hang_start -= 1;
+            }
+        }
+        // Do not hang if the whole line consists only of punctuation.
+        if hang_start > 0 {
+            let prev_kern = if hang_start > 0 { kern_px.get(hang_start - 1).copied().unwrap_or(0.0).min(0.0) } else { 0.0 };
+            let width: f32 =
+                prev_kern + (hang_start..last_idx).map(|j| slots.get(j).map_or(0.0, |s| s.advance) + kern_px.get(j).copied().unwrap_or(0.0)).sum::<f32>();
+            let max_width = (adv + line_kern).max(0.0);
+            if width.is_finite() && width > 0.0 && width < adv && width <= max_width {
+                hang_right = width;
+            }
+        }
+    }
+
+    // Leading opening punctuation (`hang_left`): first non-whitespace cluster of the line.
+    let first_idx = slots.iter().position(|s| !s.blank).unwrap_or(0);
+    let mut hang_left = 0.0f32;
+    if first_idx + 1 < last_idx
+        && slots.get(first_idx).is_some_and(|s| s.start >= prefix_len)
+        && let Some(first_ch) = ch_at(first_idx)
+        && is_hanging_leading(first_ch)
+    {
+        let w = slots[first_idx].advance;
+        if w.is_finite() && w > 0.0 && w < adv {
+            hang_left = w;
+        }
+    }
+
+    (hang_left, hang_right)
 }
 
 /// Basic Japanese punctuation squeeze (JIS X 4051 style) for one line in line space: between a

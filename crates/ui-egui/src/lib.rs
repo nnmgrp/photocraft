@@ -1748,6 +1748,7 @@ impl PhotocraftApp {
             "endIndent": preset.end_indent,
             "spaceAfter": preset.space_after,
             "hyphenate": preset.hyphenate,
+            "hangingRoman": preset.hanging_punctuation,
             "direction": preset.direction
         });
         match self.run("type.setStyle", params) {

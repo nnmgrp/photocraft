@@ -4547,6 +4547,19 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             app.defer_live_stroke = false;
             crate::magnetic_lasso_ui::flush(app);
         }
+        // VectorCurve: the rubber band and the Shift insert cursor follow the free pointer with
+        // the button up (no drag yet), so the blue projection point tracks the cursor before a
+        // press. A gesture in progress (`tool_move`) keeps feeding `hover_pos` instead.
+        if tool == Tool::VectorCurve
+            && !(buttons.started || buttons.dragged || buttons.stopped)
+            && response.hovered()
+            && app.drag.is_none()
+            && app.ui.vector_curve.as_ref().is_none_or(|vc| vc.layer_drag.is_none())
+            && let Some(p) = response.hover_pos().filter(|p| rect.contains(*p))
+        {
+            let d = xf.to_doc(p);
+            crate::vector_ui::vector_curve_hover(app, d[0], d[1]);
+        }
         // Move tool: a double-click on type edits it, as in Photoshop (#1132). Only the selected
         // Move tool, not ⌘ held over another tool; an open transform box keeps its double-click
         // (commit, below).

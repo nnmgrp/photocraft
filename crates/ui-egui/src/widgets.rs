@@ -272,7 +272,7 @@ pub fn pill_tab(ui: &mut Ui, label: &str, selected: bool) -> Response {
 /// arithmetic (`1920/2`) applies on Enter, Tab or click-away, and a unit after a number converts
 /// into the field's unit (`1in` in a px field, at the resolution [`set_field_resolution`] gave).
 pub fn value_field(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str, width: f32) -> Response {
-    value_field_in(ui, value, range, suffix, width, 0.0, FieldOpts::default()).0
+    value_field_in(ui, value, range, suffix, width, 0.0, FieldOpts { wrap_drag: true, ..Default::default() }).0
 }
 
 /// A single-line label for a row that also holds fixed-width controls: laid out no wider than
@@ -302,7 +302,7 @@ pub const VALUE_FIELD_H: f32 = 24.0;
 /// A [`value_field`] `height` points tall instead of [`VALUE_FIELD_H`], for slim bars such as
 /// the status bar (#2823).
 pub fn compact_value_field(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str, width: f32, height: f32) -> Response {
-    value_field_box(ui, value, range, suffix, vec2(width, height), 0.0, FieldOpts::default()).0
+    value_field_box(ui, value, range, suffix, vec2(width, height), 0.0, FieldOpts { wrap_drag: true, ..Default::default() }).0
 }
 
 /// A compact field whose mouse scrub wraps at the native fullscreen viewport's horizontal edges.
@@ -334,7 +334,7 @@ pub fn unit_decimals(key: &str) -> u32 {
 /// A [`value_field`] showing `decimals` decimal places instead of the one (or two, for a small
 /// range) it picks itself: the ruler units need their own precision (#2434).
 pub fn value_field_prec(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str, width: f32, decimals: u32) -> Response {
-    value_field_in(ui, value, range, suffix, width, 0.0, FieldOpts { decimals: Some(decimals), ..Default::default() }).0
+    value_field_in(ui, value, range, suffix, width, 0.0, FieldOpts { decimals: Some(decimals), wrap_drag: true, ..Default::default() }).0
 }
 
 /// A field's unit and the resolution a typed unit converts at (`1in` in a px field).
@@ -350,7 +350,7 @@ pub struct FieldUnits {
 /// A [`value_field_prec`] without a suffix, whose unit is chosen beside it (Image Size and New
 /// Document's unit menus) and converts typed units at that dialog's own resolution.
 pub fn value_field_units(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, width: f32, decimals: u32, units: FieldUnits) -> Response {
-    value_field_in(ui, value, range, "", width, 0.0, FieldOpts { decimals: Some(decimals), units: Some(units), ..Default::default() }).0
+    value_field_in(ui, value, range, "", width, 0.0, FieldOpts { decimals: Some(decimals), units: Some(units), wrap_drag: true, ..Default::default() }).0
 }
 
 /// A [`value_field_prec`] in `units` whose 100 % is a length of `extent` px (Free Transform's W
@@ -368,7 +368,7 @@ pub fn value_field_extent(
     units: FieldUnits,
     extent: f64,
 ) -> Response {
-    let opts = FieldOpts { decimals: Some(decimals), units: Some(units), extent: Some(extent), ..Default::default() };
+    let opts = FieldOpts { decimals: Some(decimals), units: Some(units), extent: Some(extent), wrap_drag: true, ..Default::default() };
     value_field_in(ui, value, range, suffix, width, 0.0, opts).0
 }
 
@@ -470,9 +470,17 @@ fn scrub_label_within(ui: &Ui, label: &Response, max_gap: f32) -> Response {
 fn label_scrub_response(ui: &Ui, resp: &Response, original_rect: Rect, max_gap: f32) -> LabelScrub {
     // Whether a field took this label's drags last frame: only then is it scrubby.
     let linked = ui.data(|d| d.get_temp::<bool>(resp.id.with("pc-scrub-linked"))).unwrap_or(false);
-    if linked && resp.enabled() && (resp.hovered() || resp.dragged()) {
+    if linked && resp.enabled() && resp.dragged() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::None);
+    } else if linked && resp.enabled() && resp.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
     }
+    let was_holding = crate::scrub_wrap::is_holding(ui, resp);
+    let delta = if was_holding || (linked && resp.enabled() && crate::scrub_wrap::active(ui)) {
+        crate::scrub_wrap::drag_wrap(ui, resp).0
+    } else {
+        ui.input(|i| i.pointer.delta())
+    };
     let acc_id = resp.id.with("pc-scrub-acc");
     let mut steps = 0.0;
     if resp.dragged() || resp.drag_stopped() {
@@ -487,8 +495,8 @@ fn label_scrub_response(ui: &Ui, resp: &Response, original_rect: Rect, max_gap: 
         };
         // The drag starts once the pointer has moved a few points: count those too.
         let dx = match (resp.drag_started(), ui.input(|i| i.pointer.press_origin()), resp.interact_pointer_pos()) {
-            (true, Some(origin), Some(pos)) => pos.x - origin.x,
-            _ => resp.drag_delta().x,
+            (true, Some(origin), Some(pos)) if was_holding || linked => pos.x - origin.x,
+            _ => delta.x,
         };
         acc += dx * rate;
         if !acc.is_finite() {
@@ -658,13 +666,17 @@ fn value_field_box(
             ui.spacing_mut().button_padding = Vec2::ZERO;
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let layout = egui::Layout::centered_and_justified(ui.layout().main_dir());
-                ui.allocate_ui_with_layout(field.size(), layout, |ui| number_edit(ui, value, range, fine, decimals, units, wrap_drag)).inner
+                ui.allocate_ui_with_layout(field.size(), layout, |ui| number_edit(ui, value, range, fine, decimals, units, wrap_drag && focused.is_none()))
+                    .inner
             })
             .inner
         }
     };
     ui.data_mut(|d| d.insert_temp(slot.id, resp.id));
     if let Some(s) = scrub {
+        if !s.dragging || !ui.input(|i| i.pointer.primary_down()) {
+            crate::scrub_wrap::release(ui, s.label);
+        }
         if s.started && ui.memory(|m| m.has_focus(resp.id)) {
             ui.memory_mut(|m| m.surrender_focus(resp.id));
         }
@@ -959,9 +971,7 @@ fn number_edit(
     // overshoot first. Photoshop restarts from the end instead: 0 % dragged further left then
     // right goes up at once.
     clamp_drag_overshoot(ui, id, &resp, &range);
-    if wrap_drag {
-        crate::scrub_wrap::update(ui, &resp, value, before, range.clone(), speed, wrapping);
-    }
+    crate::scrub_wrap::update(ui, &resp, value, before, range.clone(), speed, wrapping);
     let (lo, hi) = (*range.start(), *range.end());
     // `f32::clamp` panics on a reversed or NaN range, which `DragValue::range` accepts.
     if *value != before && lo <= hi {
@@ -1272,7 +1282,7 @@ pub fn slider_row_prec(
                     suffix,
                     74.0,
                     0.0,
-                    FieldOpts { decimals, step_from_decimals: decimals.is_some(), ..Default::default() },
+                    FieldOpts { decimals, step_from_decimals: decimals.is_some(), wrap_drag: true, ..Default::default() },
                 )
                 .0,
             );
@@ -3213,6 +3223,36 @@ mod blend_menu_tests {
         assert_eq!(super::blend_row_height(f32::NAN, 28, 5), super::BLEND_ROW_H);
     }
 }
+/// Dragging a number field or its scrub label hides the pointer during the drag and restores it
+/// on release.
+#[test]
+fn scrubbing_number_field_and_label_hides_and_restores_cursor() {
+    use egui_kittest::Harness;
+    for scrub_label in [false, true] {
+        let mut h = Harness::builder().with_size(egui::vec2(400.0, 100.0)).build_ui_state(
+            |ui, value: &mut f32| {
+                ui.horizontal(|ui| {
+                    let lbl = ui.add(egui::Label::new("VA").selectable(false));
+                    crate::widgets::scrub_label(ui, &lbl);
+                    crate::widgets::value_field(ui, value, -1000.0..=10_000.0, "", 90.0);
+                });
+            },
+            0.0f32,
+        );
+        h.run();
+        assert_ne!(h.output().platform_output.cursor_icon, egui::CursorIcon::None, "before drag: {scrub_label}");
+        let start = if scrub_label { egui::pos2(15.0, 12.0) } else { egui::pos2(100.0, 12.0) };
+        let end = start + egui::vec2(6.5, 0.0);
+        h.event(egui::Event::PointerButton { pos: start, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+        h.hover_at(end);
+        h.run_steps(1);
+        assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::None, "during drag ({scrub_label}): cursor hidden");
+        h.event(egui::Event::PointerButton { pos: end, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+        h.run_steps(1);
+        assert_ne!(h.output().platform_output.cursor_icon, egui::CursorIcon::None, "after release ({scrub_label}): cursor visible");
+    }
+}
+
 #[cfg(test)]
 #[path = "widgets/numeric_input_tests.rs"]
 mod numeric_input_tests;

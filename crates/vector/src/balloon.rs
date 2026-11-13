@@ -980,9 +980,33 @@ fn build_spiky_body(balloon: &LiveBalloon, body: SpikyBody) -> Path {
     Path::new(vec![Subpath { knots, closed: true, op: PathOp::Combine }])
 }
 
-/// A sea-urchin flash: the radial needles and the white mask under them.
-fn build_uniflash_paths(balloon: &LiveBalloon) -> Option<(Path, Path)> {
-    let LiveBalloonBody::Uniflash { rect, needles, inner_ratio, bundle_group, length_jitter, angle_jitter, seed, .. } = &balloon.body else {
+/// The geometry of one Uniflash needle: the center line from the outer tip to the inner end, the
+/// half width at each end (after the sharpness), and the unit perpendicular of the ray.
+struct UniflashNeedle {
+    outer: Point,
+    inner: Point,
+    half_outer: f64,
+    half_inner: f64,
+    perp: [f64; 2],
+}
+
+/// The needle geometry of a Uniflash body: straight rays from the outer rim to the inner mask
+/// ellipse, with bundles and jitter. Shared by the closed-polygon renderer
+/// ([`build_uniflash_paths`]) and the Linework bake ([`balloon_to_linework_strokes`]).
+fn uniflash_needles(balloon: &LiveBalloon) -> Option<Vec<UniflashNeedle>> {
+    let LiveBalloonBody::Uniflash {
+        rect,
+        needles,
+        inner_ratio,
+        bundle_group,
+        length_jitter,
+        angle_jitter,
+        needle_width,
+        outer_sharpness,
+        inner_sharpness,
+        seed,
+    } = &balloon.body
+    else {
         return None;
     };
 
@@ -993,11 +1017,13 @@ fn build_uniflash_paths(balloon: &LiveBalloon) -> Option<(Path, Path)> {
     let count = (*needles).clamp(24, 450);
     let step = std::f64::consts::TAU / (count as f64);
 
-    let mask_rx = rx * inner_ratio.clamp(0.25, 0.92);
-    let mask_ry = ry * inner_ratio.clamp(0.25, 0.92);
-    let bg_mask = build_superellipse_path(cx, cy, mask_rx, mask_ry, 0.15);
+    // The end widths of a needle follow the sharpness: 1.0 = a point, 0.0 = the full needle
+    // width, both through the mean half width `needle_width / 2`.
+    let half_w = needle_width.clamp(0.2, 64.0) * 0.5;
+    let half_outer = half_w * (1.0 - outer_sharpness.clamp(0.0, 1.0));
+    let half_inner = half_w * (1.0 - inner_sharpness.clamp(0.0, 1.0));
 
-    let mut needle_subpaths = Vec::with_capacity(count as usize);
+    let mut out = Vec::with_capacity(count as usize);
     for i in 0..count {
         let rand_a = hash_f64(*seed, i * 3) - 0.5;
         let rand_in = hash_f64(*seed, i * 3 + 1);
@@ -1015,22 +1041,113 @@ fn build_uniflash_paths(balloon: &LiveBalloon) -> Option<(Path, Path)> {
         let r_out = 1.0 - 0.14 * length_jitter * rand_out;
 
         let user_off = balloon.get_vertex_offset(i);
-        let p_outer = Point::new(cx + rx * r_out * cos, cy + ry * r_out * sin);
-        let p_inner = Point::new(cx + rx * r_in * cos + user_off[0], cy + ry * r_in * sin + user_off[1]);
+        let outer = Point::new(cx + rx * r_out * cos, cy + ry * r_out * sin);
+        let inner = Point::new(cx + rx * r_in * cos + user_off[0], cy + ry * r_in * sin + user_off[1]);
 
-        needle_subpaths.push(Subpath {
-            knots: vec![Knot::corner(p_outer.x, p_outer.y), Knot::corner(p_inner.x, p_inner.y)],
-            closed: false,
-            op: PathOp::Combine,
-        });
+        out.push(UniflashNeedle { outer, inner, half_outer, half_inner, perp: [-sin, cos] });
     }
+    Some(out)
+}
 
-    Some((bg_mask, Path::new(needle_subpaths)))
+/// A sea-urchin flash: every needle is a closed wedge polygon (4 knots) filled with the stroke
+/// colour. The white oval `bg_mask` is gone (TZ v5.0) — no parasitic oval inside the burst in
+/// edit mode; the layer's fill carries the white under the needles instead. 400 needles stay far
+/// below the 4096-knot budget (4 x 400 = 1600).
+fn build_uniflash_paths(balloon: &LiveBalloon) -> Option<Path> {
+    let needles = uniflash_needles(balloon)?;
+    let subpaths = needles
+        .into_iter()
+        .map(|n| {
+            Subpath::polygon(&[
+                (n.outer.x + n.perp[0] * n.half_outer, n.outer.y + n.perp[1] * n.half_outer),
+                (n.inner.x + n.perp[0] * n.half_inner, n.inner.y + n.perp[1] * n.half_inner),
+                (n.inner.x - n.perp[0] * n.half_inner, n.inner.y - n.perp[1] * n.half_inner),
+                (n.outer.x - n.perp[0] * n.half_outer, n.outer.y - n.perp[1] * n.half_outer),
+            ])
+        })
+        .collect();
+    Some(Path::new(subpaths))
+}
+
+/// A hollow ring (a keyhole annulus): the outer circle followed by the inner circle walked
+/// backwards, as one closed polygon that any fill rule renders as a ring.
+fn hollow_ring(cx: f64, cy: f64, r_outer: f64, r_inner: f64) -> Subpath {
+    let n = 20usize;
+    let mut pts = Vec::with_capacity(2 * n);
+    for i in 0..n {
+        let a = std::f64::consts::TAU * (i as f64) / (n as f64);
+        pts.push((cx + r_outer * a.cos(), cy + r_outer * a.sin()));
+    }
+    for i in (0..n).rev() {
+        let a = std::f64::consts::TAU * (i as f64) / (n as f64);
+        pts.push((cx + r_inner * a.cos(), cy + r_inner * a.sin()));
+    }
+    Subpath::polygon(&pts)
+}
+
+/// The Uniflash tail geometry: the two wall segments (each `[start, tip]`) and the thought
+/// bubbles as `(center, outer radius)`.
+type UniflashTailGeoms = (Vec<[[f64; 2]; 2]>, Vec<(Point, f64)>);
+
+/// The Uniflash tail geometry: the two wall centerlines (the left and the right mouth edge to the
+/// tip) of a solid tail and the (center, outer radius) of every thought bubble. The whole
+/// Uniflash layer is filled with the stroke colour (the needles are closed polygons, the white
+/// mask is gone), so a solid tail wedge would become a black blob: the walls are thin wedges of
+/// the balloon's stroke width and the bubbles are hollow rings (TZ v5.0, Нюанс №3).
+fn uniflash_tail_geoms(balloon: &LiveBalloon, t: &LiveBalloonTail) -> UniflashTailGeoms {
+    let (mouth_center, normal) = balloon.point_and_normal_on_body(t.perimeter_t);
+    let tangent = [-normal[1], normal[0]];
+    let r = balloon.body.rect();
+    let min_half = (r[2].abs().min(r[3].abs()) * 0.5).max(4.0);
+    let half_w = t.mouth_width.clamp(4.0, min_half * 1.6) * 0.5;
+
+    let min_outward = (min_half * 0.12).max(4.0);
+    let rel_mouth = [t.tip[0] - mouth_center[0], t.tip[1] - mouth_center[1]];
+    let outward_proj = rel_mouth[0] * normal[0] + rel_mouth[1] * normal[1];
+    let tang_proj = rel_mouth[0] * tangent[0] + rel_mouth[1] * tangent[1];
+    let eff_tip = if outward_proj < min_outward {
+        [mouth_center[0] + normal[0] * min_outward + tangent[0] * tang_proj, mouth_center[1] + normal[1] * min_outward + tangent[1] * tang_proj]
+    } else {
+        t.tip
+    };
+
+    let chord = [eff_tip[0] - mouth_center[0], eff_tip[1] - mouth_center[1]];
+    let chord_len = (chord[0] * chord[0] + chord[1] * chord[1]).sqrt().max(1.0);
+    let chord_dir = [chord[0] / chord_len, chord[1] / chord_len];
+    let mut chord_perp = [-chord_dir[1], chord_dir[0]];
+    if chord_perp[0] * tangent[0] + chord_perp[1] * tangent[1] < 0.0 {
+        chord_perp = [-chord_perp[0], -chord_perp[1]];
+    }
+    let bend_scale = (outward_proj.max(min_outward) / (half_w * 0.6).max(1.0)).clamp(0.15, 1.0);
+    let bend_px = t.bend.clamp(-1.0, 1.0) * (chord_len * 0.42) * bend_scale;
+    let ctrl = [(mouth_center[0] + eff_tip[0]) * 0.5 + chord_perp[0] * bend_px, (mouth_center[1] + eff_tip[1]) * 0.5 + chord_perp[1] * bend_px];
+
+    if t.preset == TailPreset::Thought {
+        let count = t.bubbles.clamp(1, 8);
+        let mut bubbles = Vec::with_capacity(count as usize);
+        for i in 0..count {
+            let s = if count == 1 { 1.0 } else { 0.22 + 0.78 * ((i as f64) / ((count - 1) as f64)) };
+            let omt = 1.0 - s;
+            let bx = omt * omt * mouth_center[0] + 2.0 * omt * s * ctrl[0] + s * s * eff_tip[0];
+            let by = omt * omt * mouth_center[1] + 2.0 * omt * s * ctrl[1] + s * s * eff_tip[1];
+            let rad = (t.bubble_radius * (1.0 - 0.65 * ((i as f64) / (count.max(1) as f64)))).max(2.0);
+            bubbles.push((Point::new(bx, by), rad));
+        }
+        (Vec::new(), bubbles)
+    } else {
+        let mouth_left = [mouth_center[0] - tangent[0] * half_w, mouth_center[1] - tangent[1] * half_w];
+        let mouth_right = [mouth_center[0] + tangent[0] * half_w, mouth_center[1] + tangent[1] * half_w];
+        (vec![[[mouth_left[0], mouth_left[1]], [eff_tip[0], eff_tip[1]]], [[mouth_right[0], mouth_right[1]], [eff_tip[0], eff_tip[1]]]], Vec::new())
+    }
 }
 
 /// One tail's geometry: the outline welded to the body (if any) and the detached thought
 /// bubbles (if any).
 fn build_single_tail_path(balloon: &LiveBalloon, t: &LiveBalloonTail) -> (Option<Path>, Option<Path>) {
+    // An explicitly disabled tail (`⊘ Нет`): no geometry at all.
+    if t.preset == TailPreset::None {
+        return (None, None);
+    }
     let (mouth_center, normal) = balloon.point_and_normal_on_body(t.perimeter_t);
     let tangent = [-normal[1], normal[0]];
     let r = balloon.body.rect();
@@ -1044,10 +1161,7 @@ fn build_single_tail_path(balloon: &LiveBalloon, t: &LiveBalloonTail) -> (Option
     let outward_proj = rel_mouth[0] * normal[0] + rel_mouth[1] * normal[1];
     let tang_proj = rel_mouth[0] * tangent[0] + rel_mouth[1] * tangent[1];
     let eff_tip = if outward_proj < min_outward {
-        [
-            mouth_center[0] + normal[0] * min_outward + tangent[0] * tang_proj,
-            mouth_center[1] + normal[1] * min_outward + tangent[1] * tang_proj,
-        ]
+        [mouth_center[0] + normal[0] * min_outward + tangent[0] * tang_proj, mouth_center[1] + normal[1] * min_outward + tangent[1] * tang_proj]
     } else {
         t.tip
     };
@@ -1063,6 +1177,32 @@ fn build_single_tail_path(balloon: &LiveBalloon, t: &LiveBalloonTail) -> (Option
     let bend_scale = (outward_proj.max(min_outward) / (half_w * 0.6).max(1.0)).clamp(0.15, 1.0);
     let bend_px = t.bend.clamp(-1.0, 1.0) * (chord_len * 0.42) * bend_scale;
     let ctrl = [(mouth_center[0] + eff_tip[0]) * 0.5 + chord_perp[0] * bend_px, (mouth_center[1] + eff_tip[1]) * 0.5 + chord_perp[1] * bend_px];
+
+    // On a Uniflash body the whole layer is filled with the stroke colour (the needles are closed
+    // polygons and the white mask is gone), so a solid tail wedge would turn into a black blob:
+    // build the tail as two thin wedge walls (the left and the right mouth edge to the tip) of
+    // the stroke width, and the thought bubbles as hollow rings (TZ v5.0, Нюанс №3).
+    if matches!(balloon.body, LiveBalloonBody::Uniflash { .. }) {
+        let (walls, bubbles) = uniflash_tail_geoms(balloon, t);
+        if !bubbles.is_empty() {
+            let subpaths =
+                bubbles.into_iter().map(|(center, rad)| hollow_ring(center.x, center.y, rad, (rad - balloon.stroke_width).max(rad * 0.35).max(1.0))).collect();
+            return (None, Some(Path::new(subpaths)));
+        }
+        let w = balloon.stroke_width.clamp(0.5, 64.0) * 0.5;
+        let subpaths = walls
+            .into_iter()
+            .map(|seg| {
+                let (a, b) = (seg[0], seg[1]);
+                let dx = b[0] - a[0];
+                let dy = b[1] - a[1];
+                let len = (dx * dx + dy * dy).sqrt().max(1e-6);
+                let (px, py) = (-dy / len * w, dx / len * w);
+                Subpath::polygon(&[(a[0] + px, a[1] + py), (b[0] + px, b[1] + py), (b[0] - px, b[1] - py), (a[0] - px, a[1] - py)])
+            })
+            .collect();
+        return (None, Some(Path::new(subpaths)));
+    }
 
     if t.preset == TailPreset::Thought {
         let count = t.bubbles.clamp(1, 8);
@@ -1161,6 +1301,8 @@ fn build_single_tail_path(balloon: &LiveBalloon, t: &LiveBalloonTail) -> (Option
         }
         // The thought bubbles are handled above.
         TailPreset::Thought => return (None, None),
+        // The disabled tail is handled at the top (the arm keeps the match exhaustive).
+        TailPreset::None => return (None, None),
     };
 
     (Some(Path::new(vec![subpath])), None)
@@ -1258,6 +1400,19 @@ impl LiveBalloonGeom for LiveBalloon {
                 let len = (ux * ux + uy * uy).sqrt().max(1e-9);
                 ([px, py], [ux / len, uy / len])
             }
+            LiveBalloonBody::Uniflash { inner_ratio, .. } => {
+                // Anchor the tail mouth on the flash's inner ellipse (TZ v5.0:
+                // rx * inner_ratio.clamp(0.25, 0.92)), so it never hangs on the needles.
+                let f = inner_ratio.clamp(0.25, 0.92);
+                let bx = rx * f;
+                let by = ry * f;
+                let px = cx + bx * angle.cos();
+                let py = cy + by * angle.sin();
+                let ux = angle.cos() / bx.max(1.0);
+                let uy = angle.sin() / by.max(1.0);
+                let len = (ux * ux + uy * uy).sqrt().max(1e-9);
+                ([px, py], [ux / len, uy / len])
+            }
             _ => {
                 let px = cx + rx * angle.cos();
                 let py = cy + ry * angle.sin();
@@ -1344,17 +1499,10 @@ impl LiveBalloonGeom for LiveBalloon {
                     seed: *seed,
                 },
             ),
-            LiveBalloonBody::Uniflash { .. } => {
-                // The white mask and the needles are returned together, so the manga background
-                // does not show through the burst.
-                match build_uniflash_paths(self) {
-                    Some((mut bg_mask, needles_path)) => {
-                        bg_mask.subpaths.extend(needles_path.subpaths);
-                        return bg_mask;
-                    }
-                    None => return Path::default(),
-                }
-            }
+            // The needles are closed wedge polygons filled with the stroke colour; the white oval
+            // mask is gone (TZ v5.0). The tails are appended below like for every other body,
+            // so active Uniflash tails reach `balloon_to_linework_strokes` too.
+            LiveBalloonBody::Uniflash { .. } => build_uniflash_paths(self).unwrap_or_default(),
         };
 
         let mut detached_subpaths = Vec::new();
@@ -1462,23 +1610,45 @@ fn polygons_bbox_overlap(a: &[P], b: &[P]) -> bool {
 /// Converts a balloon into SAI Linework strokes: every outline becomes a tapered stroke whose
 /// width follows the balloon's pressure, so the balloon can be redrawn as clean linework.
 pub fn balloon_to_linework_strokes(b: &LiveBalloon) -> Vec<LiveVectorStroke> {
-    // The sea urchin: every needle tapers from 0.95 to 0.05 towards the centre as a straight tapered ray.
-    if let LiveBalloonBody::Uniflash { needle_width, .. } = &b.body
-        && let Some((_, needles_path)) = build_uniflash_paths(b)
+    // The sea urchin: every needle becomes a 3-node stroke whose end pressures carry the
+    // sharpness (`1.0 - 0.95 * sharpness`), and the active tails become wall/ring strokes.
+    if let LiveBalloonBody::Uniflash { needle_width, outer_sharpness, inner_sharpness, .. } = &b.body
+        && let Some(needles) = uniflash_needles(b)
     {
-        return needles_path
-            .subpaths
+        let mut strokes: Vec<LiveVectorStroke> = needles
             .into_iter()
-            .filter(|sp| sp.knots.len() >= 2)
-            .map(|sp| {
-                let p_out = sp.knots[0].anchor;
-                let p_in = sp.knots[1].anchor;
-                LiveVectorStroke {
+            .map(|n| LiveVectorStroke {
+                nodes: vec![
+                    SaiPoint { p: (n.outer.x, n.outer.y), pressure: (1.0 - 0.95 * outer_sharpness.clamp(0.0, 1.0)) as f32, density: 1.0, corner: true },
+                    SaiPoint { p: ((n.outer.x + n.inner.x) * 0.5, (n.outer.y + n.inner.y) * 0.5), pressure: 1.0, density: 1.0, corner: true },
+                    SaiPoint { p: (n.inner.x, n.inner.y), pressure: (1.0 - 0.95 * inner_sharpness.clamp(0.0, 1.0)) as f32, density: 1.0, corner: true },
+                ],
+                base_width: *needle_width,
+                min_ratio: 0.0,
+                base_density: 1.0,
+                min_density_ratio: 0.0,
+                curve_type: SaiCurveType::Normal,
+                tapered: true,
+                closed: false,
+                tension: SAI_DEFAULT_TENSION,
+            })
+            .collect();
+
+        // The active tails: the wedge walls become straight strokes of the stroke width, the
+        // thought bubbles become closed ring strokes around each bubble.
+        for t in &b.tails {
+            if t.preset == TailPreset::None {
+                continue;
+            }
+            let (walls, bubbles) = uniflash_tail_geoms(b, t);
+            for seg in walls {
+                let (a, c) = (seg[0], seg[1]);
+                strokes.push(LiveVectorStroke {
                     nodes: vec![
-                        SaiPoint { p: (p_out.x, p_out.y), pressure: 0.95, density: 1.0, corner: true },
-                        SaiPoint { p: (p_in.x, p_in.y), pressure: 0.05, density: 0.85, corner: true },
+                        SaiPoint { p: (a[0], a[1]), pressure: 1.0, density: 1.0, corner: true },
+                        SaiPoint { p: (c[0], c[1]), pressure: 1.0, density: 1.0, corner: true },
                     ],
-                    base_width: *needle_width,
+                    base_width: b.stroke_width,
                     min_ratio: 0.0,
                     base_density: 1.0,
                     min_density_ratio: 0.0,
@@ -1486,9 +1656,30 @@ pub fn balloon_to_linework_strokes(b: &LiveBalloon) -> Vec<LiveVectorStroke> {
                     tapered: true,
                     closed: false,
                     tension: SAI_DEFAULT_TENSION,
-                }
-            })
-            .collect();
+                });
+            }
+            for (center, rad) in bubbles {
+                let ring_r = (rad - b.stroke_width * 0.5).max(1.0);
+                let nodes = (0..12)
+                    .map(|k| {
+                        let a = std::f64::consts::TAU * (k as f64) / 12.0;
+                        SaiPoint { p: (center.x + ring_r * a.cos(), center.y + ring_r * a.sin()), pressure: 1.0, density: 1.0, corner: false }
+                    })
+                    .collect();
+                strokes.push(LiveVectorStroke {
+                    nodes,
+                    base_width: b.stroke_width,
+                    min_ratio: 0.0,
+                    base_density: 1.0,
+                    min_density_ratio: 0.0,
+                    curve_type: SaiCurveType::Normal,
+                    tapered: true,
+                    closed: true,
+                    tension: SAI_DEFAULT_TENSION,
+                });
+            }
+        }
+        return strokes;
     }
 
     // The other balloons: the Bézier segments are sampled, so an oval does not become a rhombus.
@@ -1877,6 +2068,8 @@ mod tests {
                 length_jitter: 0.5,
                 angle_jitter: 0.25,
                 needle_width: 2.2,
+                outer_sharpness: 0.0,
+                inner_sharpness: 1.0,
                 seed: 777,
             },
             tails: Vec::new(),

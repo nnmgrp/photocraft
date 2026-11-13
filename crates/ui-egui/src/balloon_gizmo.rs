@@ -121,6 +121,10 @@ pub fn hit_test_balloon_gizmo(xf: &ViewXform, balloon: &LiveBalloon, cursor_scr:
     let bid = balloon.id;
 
     for tail in &balloon.tails {
+        if tail.preset == TailPreset::None {
+            // A disabled tail (`⊘ Нет`) has no geometry and no handles.
+            continue;
+        }
         let (m_center, m_left, m_right, _, bend_pt, _, _) = tail_handle_positions_doc(balloon, tail);
 
         let tip_scr = xf.to_screen(tail.tip[0] as f32, tail.tip[1] as f32);
@@ -179,13 +183,12 @@ pub fn hit_test_balloon_gizmo(xf: &ViewXform, balloon: &LiveBalloon, cursor_scr:
     }
 
     let cur_doc = xf.to_doc(cursor_scr);
-    if !matches!(balloon.body, LiveBalloonBody::Uniflash { .. }) {
-        let t = balloon.closest_perimeter_t(cur_doc);
-        let (on_perim, _) = balloon.point_and_normal_on_body(t);
-        let perim_scr = xf.to_screen(on_perim[0] as f32, on_perim[1] as f32);
-        if cursor_scr.distance(perim_scr) <= 7.0 {
-            return Some(GizmoHit::PerimeterSpawnTail { balloon_id: bid, t_param: (t * 10000.0).round() as u32 });
-        }
+    // Uniflash takes tails too (TZ v5.0): the mouth welds to the flash's inner ellipse.
+    let t = balloon.closest_perimeter_t(cur_doc);
+    let (on_perim, _) = balloon.point_and_normal_on_body(t);
+    let perim_scr = xf.to_screen(on_perim[0] as f32, on_perim[1] as f32);
+    if cursor_scr.distance(perim_scr) <= 7.0 {
+        return Some(GizmoHit::PerimeterSpawnTail { balloon_id: bid, t_param: (t * 10000.0).round() as u32 });
     }
 
     let cx = r[0] + r[2] * 0.5;
@@ -241,8 +244,11 @@ pub fn draw_balloon_gizmo(painter: &egui::Painter, xf: &ViewXform, balloon: &Liv
         painter.line_segment([p_scr - vec2(0.0, 4.0), p_scr + vec2(0.0, 4.0)], Stroke::new(1.5, white));
     }
 
-    // 4. The tail manipulators.
+    // 4. The tail manipulators (a disabled tail is skipped: it has no geometry).
     for tail in &balloon.tails {
+        if tail.preset == TailPreset::None {
+            continue;
+        }
         let (m_center, m_left, m_right, mid, bend_pt, _, _) = tail_handle_positions_doc(balloon, tail);
         let tip_scr = xf.to_screen(tail.tip[0] as f32, tail.tip[1] as f32);
         let mc_scr = xf.to_screen(m_center[0] as f32, m_center[1] as f32);
@@ -486,7 +492,13 @@ pub fn on_drag_move(app: &mut PhotocraftApp, drag: &BalloonGizmoDrag, cur_doc: [
             "[Telemetry:Balloon:GizmoDrag] hit={:?}, cur_doc=({:.1}, {:.1}), \
              center=({cx:.1}, {cy:.1}), radii=({rx:.1}, {ry:.1}), tip=({:.1}, {:.1}), mouth=({:.1}, {:.1}) | \
              ellipse_dist={ellipse_dist:.3}, is_tip_inside_body={is_tip_inside_body}",
-            drag.hit, cur_doc[0], cur_doc[1], t.tip[0], t.tip[1], mouth_center[0], mouth_center[1]
+            drag.hit,
+            cur_doc[0],
+            cur_doc[1],
+            t.tip[0],
+            t.tip[1],
+            mouth_center[0],
+            mouth_center[1]
         );
     }
 

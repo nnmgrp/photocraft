@@ -96,6 +96,8 @@ fn test_balloon_v3_1_all_5_bodies_and_linework_conversion() {
             length_jitter: 0.50,
             angle_jitter: 0.25,
             needle_width: 2.2,
+            outer_sharpness: 0.0,
+            inner_sharpness: 1.0,
             seed: 42,
         },
         tails: Vec::new(),
@@ -141,11 +143,14 @@ fn test_balloon_v3_1_all_5_bodies_and_linework_conversion() {
     let text_rect = thought_cloud.safe_text_rect();
     assert!(text_rect[2] > 0.0 && text_rect[3] > 0.0, "The safe text rect must have a size");
 
-    // 2. The Uniflash: 64 radial needles, converted into 64 strokes tapering 0.95 -> 0.05.
+    // 2. The Uniflash: 64 radial needles, converted into 64 strokes. The end pressures are
+    // `1.0 - 0.95 * sharpness`: the blunt outer tip (sharpness 0.0) keeps the full width while
+    // the fully sharp inner tip tapers down to 0.05. The middle stays solid.
     let uf_strokes = balloon_to_linework_strokes(&uniflash_balloon);
     assert_eq!(uf_strokes.len(), 64);
-    assert!((uf_strokes[0].nodes[0].pressure - 0.95).abs() < 1e-6);
-    assert!((uf_strokes[0].nodes[2].pressure - 0.05).abs() < 1e-6);
+    assert!((uf_strokes[0].nodes[0].pressure - 1.0).abs() < 1e-6, "blunt outer tip keeps the full width, got {}", uf_strokes[0].nodes[0].pressure);
+    assert!((uf_strokes[0].nodes[2].pressure - 0.05).abs() < 1e-6, "sharp inner tip, got {}", uf_strokes[0].nodes[2].pressure);
+    assert!((uf_strokes[0].nodes[1].pressure - 1.0).abs() < 1e-6, "the middle stays solid, got {}", uf_strokes[0].nodes[1].pressure);
 
     // 3. The Cloud + Thought tail: the cloud plus 3 thought bubbles -> 4 closed Linework strokes.
     let cloud_strokes = balloon_to_linework_strokes(&thought_cloud);

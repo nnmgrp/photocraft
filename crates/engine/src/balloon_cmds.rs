@@ -159,12 +159,17 @@ fn validate_balloon(b: &LiveBalloon) -> std::result::Result<(), String> {
                 return Err("the balloon may have at most 128 spikes".into());
             }
         }
-        LiveBalloonBody::Uniflash { needles, inner_ratio, bundle_group, length_jitter, angle_jitter, needle_width, .. } => {
+        LiveBalloonBody::Uniflash {
+            needles, inner_ratio, bundle_group, length_jitter, angle_jitter, needle_width, outer_sharpness, inner_sharpness, ..
+        } => {
             if !finite(*inner_ratio) || !finite(*bundle_group) || !finite(*length_jitter) || !finite(*angle_jitter) || !finite(*needle_width) {
                 return Err("the uniflash's parameters must be finite".into());
             }
             if *needles > 400 {
                 return Err("the uniflash may have at most 400 needles".into());
+            }
+            if !finite(*outer_sharpness) || !finite(*inner_sharpness) || !(0.0..=1.0).contains(outer_sharpness) || !(0.0..=1.0).contains(inner_sharpness) {
+                return Err("the uniflash's outer and inner sharpness must be between 0.0 and 1.0".into());
             }
         }
     }
@@ -277,7 +282,7 @@ fn balloon_tail_add(s: &mut Session, p: &Value) -> Result<Value> {
     let preset = match p.get("preset") {
         Some(v) => {
             let id = v.as_str().ok_or_else(|| bad(CMD, "`preset` must be a string"))?;
-            TailPreset::from_id(id).ok_or_else(|| bad(CMD, format!("unknown tail preset `{id}` (wedge|arc|sCurve|lightning|double|thought)")))?
+            TailPreset::from_id(id).ok_or_else(|| bad(CMD, format!("unknown tail preset `{id}` (none|wedge|arc|sCurve|lightning|double|thought)")))?
         }
         None => TailPreset::Arc,
     };
@@ -573,7 +578,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "shape.balloon.create",
             "New Balloon",
             [],
-            r##"{{"kind":"cloud|spiky"="cloud","rect":[x,y,w,h] (required),"bumps":3..64=9,"amplitude":0..1=0.18,"jitter":0..1=0.35,"spikes":3..128=12,"length":0..2=0.45,"inward":bool=false,"smooth":bool=false,"seed":int=1,{fill}=foreground,{stroke}=none,"name":str?}} -> shape.info. cloud = scalloped thought balloon; spiky = shout/flash balloon. With "balloon" instead: {balloon:{id,body,tails,...}} = a parametric manga balloon (ellipse|rect|cloud|spiky|uniflash body, wedge|arc|sCurve|lightning|double|thought tails)."##,
+            r##"{{"kind":"cloud|spiky"="cloud","rect":[x,y,w,h] (required),"bumps":3..64=9,"amplitude":0..1=0.18,"jitter":0..1=0.35,"spikes":3..128=12,"length":0..2=0.45,"inward":bool=false,"smooth":bool=false,"seed":int=1,{fill}=foreground,{stroke}=none,"name":str?}} -> shape.info. cloud = scalloped thought balloon; spiky = shout/flash balloon. With "balloon" instead: {balloon:{id,body,tails,...}} = a parametric manga balloon (ellipse|rect|cloud|spiky|uniflash body, none|wedge|arc|sCurve|lightning|double|thought tails)."##,
             has_doc,
             balloon_create
         ),
@@ -589,7 +594,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "shape.balloon.tail.add",
             "Add Balloon Tail",
             [],
-            r##"{{"layer":id (required),"balloonId":int=1,"tip":[x,y] (required),"preset":"wedge|arc|sCurve|lightning|double|thought"="arc","mouthWidth":px=28,"bend":-1..1=0.18,"bubbles":1..8=3,"bubbleRadius":px=10}} -> {tailId}. The mouth sits on the body's perimeter nearest the tip."##,
+            r##"{{"layer":id (required),"balloonId":int=1,"tip":[x,y] (required),"preset":"none|wedge|arc|sCurve|lightning|double|thought"="arc","mouthWidth":px=28,"bend":-1..1=0.18,"bubbles":1..8=3,"bubbleRadius":px=10}} -> {tailId}. The mouth sits on the body's perimeter nearest the tip."##,
             has_doc,
             balloon_tail_add
         ),

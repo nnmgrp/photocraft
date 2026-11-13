@@ -138,9 +138,10 @@ pub fn edit_active(app: &mut PhotocraftApp) -> Result<(), String> {
     Ok(())
 }
 
-/// Double-click with the Move tool (Photoshop CC 2019+): edit the type layer under document
-/// point (`x`, `y`) with the caret on the glyph there, switching to the Type tool. False when no
-/// type is there.
+/// Double-click with the Move tool (Photoshop CC 2019+): enter type editing on the type layer
+/// under document point (`x`, `y`) with all of its text selected (`(0, len)`), switching to the
+/// Type tool so typing or pasting immediately replaces the layer's text. False when no type is
+/// there.
 pub fn edit_at(app: &mut PhotocraftApp, x: f64, y: f64) -> bool {
     let Some(id) = hit_layer(app, x, y) else { return false };
     let previous_tool = app.ui.tool;
@@ -152,12 +153,12 @@ pub fn edit_at(app: &mut PhotocraftApp, x: f64, y: f64) -> bool {
     if begin_edit(app, id, &key).is_err() {
         return false;
     }
-    let off = hit_offset(app, id, x, y);
+    let len = current_text(app, id).map_or(0, |t| t.chars().count());
     app.ui.text_edit = Some(TextEdit {
         layer: id.0,
         document: active_doc_id(app),
-        caret: off,
-        anchor: off,
+        caret: len,
+        anchor: 0,
         session: key,
         created: false,
         mask: false,
@@ -3217,6 +3218,21 @@ fn type_sections(app: &mut PhotocraftApp, ui: &mut egui::Ui, character: bool, pa
                 apply(app, ui.ctx(), json!({"spaceAfter": v / u}));
             }
         });
+        let cw = cell_width(full, items.len());
+        ui.add_space(2.0);
+        if toggle_cell(ui, cw, para.hanging_roman, "Roman Hanging Punctuation", |ui, r, col| {
+            let g = egui::Rect::from_center_size(r.center(), egui::vec2(12.0, 12.0));
+            let stroke = Stroke::new(1.2, col);
+            let p = ui.painter();
+            p.line_segment([egui::pos2(g.left(), g.top() + 2.0), egui::pos2(g.right() - 3.0, g.top() + 2.0)], stroke);
+            p.line_segment([egui::pos2(g.left(), g.center().y), egui::pos2(g.right(), g.center().y)], stroke);
+            p.line_segment([egui::pos2(g.left(), g.bottom() - 2.0), egui::pos2(g.right() - 3.0, g.bottom() - 2.0)], stroke);
+            p.circle_filled(egui::pos2(g.right() - 1.5, g.top() + 2.0), 1.3, col);
+            p.circle_filled(egui::pos2(g.right() - 1.5, g.center().y), 1.3, col);
+            p.circle_filled(egui::pos2(g.right() - 1.5, g.bottom() - 2.0), 1.3, col);
+        }) {
+            apply(app, ui.ctx(), json!({"hangingRoman": !para.hanging_roman}));
+        }
         // Hyphenate is stored (⌥⇧⌘H / PSD AutoHyphenate) but layout never breaks words (#6710).
         ui.add_space(ROW_GAP);
     }

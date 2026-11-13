@@ -72,6 +72,15 @@ pub struct VectorCurveState {
     #[serde(default)]
     pub closed_loop: bool,
     pub selected_node: Option<usize>,
+    /// The committed stroke an Edit or Weight press last picked on the active Linework layer. The
+    /// options bar's Width and the panel's quick sizes retarget that stroke while it is set, so a
+    /// width change edits the stroke instead of only arming the next one.
+    #[serde(default)]
+    pub selected_stroke: Option<usize>,
+    /// The layer `selected_stroke` was picked on. Selecting another layer drops the pick rather
+    /// than resizing a coincidentally same-numbered stroke there.
+    #[serde(default)]
+    pub selected_stroke_layer: Option<u64>,
     #[serde(skip)]
     pub drag_node: Option<usize>,
     #[serde(skip)]
@@ -109,6 +118,8 @@ impl Default for VectorCurveState {
             auto_taper_ends: true,
             closed_loop: false,
             selected_node: None,
+            selected_stroke: None,
+            selected_stroke_layer: None,
             drag_node: None,
             drag_kind: None,
             drag_origin: [0.0, 0.0],
@@ -1858,6 +1869,8 @@ pub fn vector_curve_down(app: &mut PhotocraftApp, x: f64, y: f64, ctrl: bool, al
             let node = lw.strokes[s_idx].nodes[n_idx];
             let kind = if cur_mode == VectorCurveMode::Weight || alt { LayerDragKind::AdjustNodePressure } else { LayerDragKind::MoveNode };
             let vc = app.ui.vector_curve.get_or_insert_with(VectorCurveState::default);
+            vc.selected_stroke = Some(s_idx);
+            vc.selected_stroke_layer = Some(active_id);
             vc.layer_drag = Some(ActiveLayerDrag {
                 layer_id: active_id,
                 stroke_idx: s_idx,
@@ -1875,6 +1888,8 @@ pub fn vector_curve_down(app: &mut PhotocraftApp, x: f64, y: f64, ctrl: bool, al
         {
             let bw = lw.strokes[s_idx].base_width;
             let vc = app.ui.vector_curve.get_or_insert_with(VectorCurveState::default);
+            vc.selected_stroke = Some(s_idx);
+            vc.selected_stroke_layer = Some(active_id);
             vc.layer_drag = Some(ActiveLayerDrag {
                 layer_id: active_id,
                 stroke_idx: s_idx,
@@ -1902,6 +1917,8 @@ pub fn vector_curve_down(app: &mut PhotocraftApp, x: f64, y: f64, ctrl: bool, al
             && let Some(ins_idx) = resp.get("insertedIndex").and_then(Value::as_u64)
         {
             let vc = app.ui.vector_curve.get_or_insert_with(VectorCurveState::default);
+            vc.selected_stroke = Some(s_idx);
+            vc.selected_stroke_layer = Some(active_id);
             vc.layer_drag = Some(ActiveLayerDrag {
                 layer_id: active_id,
                 stroke_idx: s_idx,
@@ -1959,6 +1976,54 @@ fn active_linework(app: &PhotocraftApp) -> Option<(u64, photocraft_vector::sai_c
     let layer = st.doc.layer(id)?;
     let lw = photocraft_engine::vector_cmds::get_live_linework(layer)?;
     Some((id.0, lw))
+}
+
+/// The stroke an Edit or Weight press last picked on the active Linework layer, as
+/// `(layer id, stroke index, its base width)`. `None` in Draw mode, with nothing picked, or once
+/// the layer or stroke is gone — a width change then only arms the next stroke.
+///
+/// Takes the two halves it reads rather than the whole app, so a caller holding
+/// `&mut tool_options` can still ask.
+pub fn picked_stroke_width(
+    vc: Option<&VectorCurveState>,
+    session: &photocraft_engine::Session,
+) -> Option<(u64, usize, f32)> {
+    let vc = vc?;
+    if vc.mode == VectorCurveMode::Draw {
+        return None;
+    }
+    let idx = vc.selected_stroke?;
+    let st = session.active()?;
+    let layer_id = st.active_layer?;
+    // The pick only belongs to the layer it was made on.
+    if vc.selected_stroke_layer != Some(layer_id.0) {
+        return None;
+    }
+    let lw = photocraft_engine::vector_cmds::get_live_linework(st.doc.layer(layer_id)?)?;
+    let stroke = lw.strokes.get(idx)?;
+    Some((layer_id.0, idx, stroke.base_width as f32))
+}
+
+/// [`picked_stroke_width`] for the app as a whole.
+pub fn selected_stroke_width(app: &PhotocraftApp) -> Option<(u64, usize, f32)> {
+    picked_stroke_width(app.ui.vector_curve.as_ref(), &app.session)
+}
+
+/// Sets the base width of the picked stroke and rebuilds it in place, one undo step per call.
+pub fn apply_stroke_width(app: &mut PhotocraftApp, width: f32) {
+    let Some((layer_id, idx, current)) = selected_stroke_width(app) else { return };
+    if !width.is_finite() || (width - current).abs() <= 1e-4 {
+        return;
+    }
+    let _ = app.run(
+        "shape.vectorCurve.updateNode",
+        json!({
+            "layer": layer_id,
+            "strokeIndex": idx,
+            "baseWidth": width,
+            "coalesce": format!("sai-curve-width-{layer_id}-{idx}"),
+        }),
+    );
 }
 
 pub fn vector_curve_move(app: &mut PhotocraftApp, x: f64, y: f64) {
@@ -2346,6 +2411,9 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
     let lbl = |ui: &mut egui::Ui, s: &str| {
         ui.label(egui::RichText::new(s).color(t.text_dim).size(12.0));
     };
+    // A width typed into the VectorCurve field edits the picked stroke, but that needs the whole
+    // app while `o` still holds `tool_options`; park it and apply once the borrow is released.
+    let mut curve_width_set: Option<f32> = None;
     let o = &mut app.ui.tool_options;
     let target = selected_shape(&app.session);
     if tool == Tool::PathSelection && target.is_none() {
@@ -2557,8 +2625,17 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             }
             crate::widgets::vline(ui, 22.0);
             lbl(ui, tl!("Width:"));
+            // With a stroke picked in Edit or Weight the field shows and edits that stroke; in Draw
+            // it is the width the next stroke will be drawn at.
+            let picked = picked_stroke_width(app.ui.vector_curve.as_ref(), &app.session);
+            if let Some((_, _, w)) = picked {
+                o.vector_curve_width = w;
+                // Keep the Linework panel's size bar and its quick-size ring on the picked stroke.
+                app.sai_panel.base_width = w;
+            }
             if crate::widgets::value_field(ui, &mut o.vector_curve_width, 0.5..=500.0, "px", 54.0).changed() {
                 app.sai_panel.base_width = o.vector_curve_width;
+                curve_width_set = Some(o.vector_curve_width);
             }
             if ui.checkbox(&mut o.vector_curve_tapered, tl!("Taper")).changed() {
                 app.sai_panel.auto_taper_ends = o.vector_curve_tapered;
@@ -2659,6 +2736,9 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 gesture.0 = gesture.0.wrapping_add(1);
             });
         }
+    }
+    if let Some(w) = curve_width_set {
+        apply_stroke_width(app, w);
     }
     true
 }

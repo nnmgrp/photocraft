@@ -483,6 +483,11 @@ fn quick_grid_cols(avail_w: f32) -> usize {
 pub fn panel(app: &mut PhotocraftApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let mut state = std::mem::take(&mut app.sai_panel);
+    // A stroke picked in Edit or Weight owns the size: the bar, the preview and the quick-size
+    // ring all read back that stroke instead of the width armed for the next one.
+    if let Some((_, _, w)) = crate::vector_ui::selected_stroke_width(app) {
+        state.base_width = w;
+    }
     let initial_state = state.clone();
 
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
@@ -567,6 +572,8 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut Ui) {
         if (bw - f64::from(state.base_width)).abs() > f64::EPSILON {
             state.base_width = bw as f32;
             sync_to_tool_options(app, &state);
+            // In Edit or Weight this resizes the picked stroke, not just the next one.
+            crate::vector_ui::apply_stroke_width(app, state.base_width);
             let to_width = app.ui.tool_options.vector_curve_width;
             log::info!("[Telemetry:SAI:BaseWidthSlider] sai_panel.base_width={}, tool_options.vector_curve_width={to_width}", state.base_width);
         }
@@ -775,6 +782,8 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut Ui) {
                     let prev_w = state.base_width;
                     state.base_width = sz;
                     sync_to_tool_options(app, &state);
+                    // In Edit or Weight a preset resizes the picked stroke, not just the next one.
+                    crate::vector_ui::apply_stroke_width(app, sz);
                     let to_width = app.ui.tool_options.vector_curve_width;
                     log::info!(
                         "[Telemetry:SAI:GridClick] clicked_sz={sz}, sai_panel.base_width: {prev_w} -> {sz}, \

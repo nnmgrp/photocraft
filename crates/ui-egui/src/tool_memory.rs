@@ -19,6 +19,12 @@ pub(crate) fn select(app: &mut PhotocraftApp, tool: Tool) {
     app.stylus.tool_before_eraser = None;
     app.ui.spring = None;
     app.ui.tool = tool;
+    if tool == Tool::Balloon
+        && !crate::comic_balloon_panel::showing(app)
+        && crate::panel_docking::command(app, "window.panel.balloon", &serde_json::json!({ "show": true })).is_none()
+    {
+        let _ = crate::comic_balloon_panel::menu(app, "window.panel.balloon", &serde_json::json!({ "show": true }));
+    }
 }
 
 /// Temporary canvas overrides do not change `ui.tool`. Spring-loaded letters and the pen's

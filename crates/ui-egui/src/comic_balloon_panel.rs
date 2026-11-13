@@ -6,12 +6,13 @@
 //! SCurve, Lightning, Double, Thought), dynamic parameter sliders, and 1-click spawn.
 //! Protected against deletion: guarantees minimum body bounds and preserves closed geometry.
 
-use egui::{Color32, RichText, Slider, Ui};
+use egui::{Color32, RichText, Ui, vec2};
 use photocraft_doc::vector::{LiveBalloon, LiveBalloonBody, LiveBalloonTail, TailPreset};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
+use crate::comic_sai_panel::adaptive_slider;
 use crate::state::Tool;
 use crate::theme::Tokens;
 
@@ -234,7 +235,7 @@ fn balloon_fill_value(app: &PhotocraftApp, mode: BalloonFillMode) -> Value {
     }
 }
 
-fn hydrate_state_from_balloon(state: &mut BalloonPanelUi, balloon: &LiveBalloon, fill: Option<&photocraft_doc::Fill>, stroke_width: Option<f32>) {
+pub(crate) fn hydrate_geometry_from_balloon(state: &mut BalloonPanelUi, balloon: &LiveBalloon) {
     match &balloon.body {
         LiveBalloonBody::Ellipse { squircle, .. } => {
             state.body_choice = BalloonBodyKindChoice::Ellipse;
@@ -278,6 +279,11 @@ fn hydrate_state_from_balloon(state: &mut BalloonPanelUi, balloon: &LiveBalloon,
         state.tail_bubbles = t.bubbles;
         state.tail_bubble_radius = t.bubble_radius;
     }
+    state.stroke_width = balloon.stroke_width.clamp(0.5, 20.0);
+}
+
+fn hydrate_state_from_balloon(state: &mut BalloonPanelUi, balloon: &LiveBalloon, fill: Option<&photocraft_doc::Fill>, stroke_width: Option<f32>) {
+    hydrate_geometry_from_balloon(state, balloon);
     state.stroke_width = stroke_width.map(f64::from).unwrap_or(balloon.stroke_width).clamp(0.5, 20.0);
     state.fill_mode = match fill {
         None => BalloonFillMode::Transparent,
@@ -299,6 +305,9 @@ pub(crate) fn apply_panel_to_active_layer(app: &mut PhotocraftApp, state: &Ballo
     let fill_changed = state.fill_mode != prev.fill_mode;
     let stroke_changed = (state.stroke_width - prev.stroke_width).abs() > 1e-4;
 
+    if state.body_choice != prev.body_choice {
+        balloon.vertex_overrides.clear();
+    }
     balloon.body = body_from_state(state, balloon.body.rect());
     balloon.stroke_width = state.stroke_width;
     if tail_changed && let Some(t) = balloon.tails.first_mut() {
@@ -383,81 +392,41 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut Ui) {
         // 2. Параметры выбранного тела
         match state.body_choice {
             BalloonBodyKindChoice::Ellipse => {
-                ui.horizontal(|ui| {
-                    ui.label("Сквиркл:");
-                    ui.add(Slider::new(&mut state.squircle, 0.0..=1.0));
-                });
+                adaptive_slider(ui, "Сквиркл:", &mut state.squircle, 0.0..=1.0, "", false);
             }
             BalloonBodyKindChoice::Rect => {
-                ui.horizontal(|ui| {
-                    ui.label("Радиус углов:");
-                    ui.add(Slider::new(&mut state.corner_radius, 0.0..=60.0).suffix(" px"));
-                });
+                adaptive_slider(ui, "Радиус углов:", &mut state.corner_radius, 0.0..=60.0, " px", false);
             }
             BalloonBodyKindChoice::Cloud => {
+                adaptive_slider(ui, "Волны (Bumps):", &mut state.cloud_bumps, 4..=64, "", false);
+                adaptive_slider(ui, "Высота фестонов:", &mut state.cloud_amplitude, 0.04..=0.60, "", false);
+                adaptive_slider(ui, "Заход стыков:", &mut state.cloud_cusp_bite, 0.0..=0.50, "", false);
                 ui.horizontal(|ui| {
-                    ui.label("Волны (Bumps):");
-                    ui.add(Slider::new(&mut state.cloud_bumps, 4..=64));
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Высота фестонов:");
-                    ui.add(Slider::new(&mut state.cloud_amplitude, 0.04..=0.60));
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Заход стыков:");
-                    ui.add(Slider::new(&mut state.cloud_cusp_bite, 0.0..=0.50));
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Асимметрия:");
-                    ui.add(Slider::new(&mut state.cloud_jitter, 0.0..=1.0));
+                    let slider_w = (ui.available_width() - 34.0).max(80.0);
+                    ui.allocate_ui(vec2(slider_w, 0.0), |ui| {
+                        adaptive_slider(ui, "Асимметрия:", &mut state.cloud_jitter, 0.0..=1.0, "", false);
+                    });
                     if ui.button("🎲").on_hover_text("Случайная вариация асимметрии").clicked() {
                         state.cloud_seed = state.cloud_seed.wrapping_add(13);
                     }
                 });
             }
             BalloonBodyKindChoice::Spiky => {
-                ui.horizontal(|ui| {
-                    ui.label("Зубья (Spikes):");
-                    ui.add(Slider::new(&mut state.spiky_spikes, 5..=128));
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Длина лучей:");
-                    ui.add(Slider::new(&mut state.spiky_length, 0.05..=1.50));
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Субгармоники:");
-                    ui.add(Slider::new(&mut state.spiky_sub_harmonic, 0.0..=1.0));
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Прогиб внутрь:");
-                    ui.add(Slider::new(&mut state.spiky_concavity, 0.0..=1.0));
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Асимметрия:");
-                    ui.add(Slider::new(&mut state.spiky_jitter, 0.0..=1.0));
-                });
+                adaptive_slider(ui, "Зубья (Spikes):", &mut state.spiky_spikes, 5..=128, "", false);
+                adaptive_slider(ui, "Длина лучей:", &mut state.spiky_length, 0.05..=1.50, "", false);
+                adaptive_slider(ui, "Субгармоники:", &mut state.spiky_sub_harmonic, 0.0..=1.0, "", false);
+                adaptive_slider(ui, "Прогиб внутрь:", &mut state.spiky_concavity, 0.0..=1.0, "", false);
+                adaptive_slider(ui, "Асимметрия:", &mut state.spiky_jitter, 0.0..=1.0, "", false);
                 ui.checkbox(&mut state.spiky_smooth, "Скруглять вершины");
             }
             BalloonBodyKindChoice::Uniflash => {
-                ui.horizontal(|ui| {
-                    ui.label("Иглы (Needles):");
-                    ui.add(Slider::new(&mut state.uniflash_needles, 32..=400));
-                });
-                ui.horizontal(|ui| {
-                    let mut pct = (state.uniflash_inner_ratio * 100.0).round();
-                    ui.label("Поле под текст:");
-                    if ui.add(Slider::new(&mut pct, 30.0..=90.0).suffix("%")).changed() {
-                        state.uniflash_inner_ratio = pct / 100.0;
-                    }
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Пучки (Bundle):");
-                    ui.add(Slider::new(&mut state.uniflash_bundle, 0.0..=1.0));
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Ширина иглы:");
-                    ui.add(Slider::new(&mut state.uniflash_needle_width, 1.0..=8.0).suffix(" px"));
-                });
+                adaptive_slider(ui, "Иглы (Needles):", &mut state.uniflash_needles, 32..=400, "", false);
+                let mut pct = (state.uniflash_inner_ratio * 100.0).round();
+                if adaptive_slider(ui, "Поле под текст:", &mut pct, 30.0..=90.0, "%", false).changed() {
+                    state.uniflash_inner_ratio = pct / 100.0;
+                }
+                adaptive_slider(ui, "Пучки (Bundle):", &mut state.uniflash_bundle, 0.0..=1.0, "", false);
+                adaptive_slider(ui, "Ширина иглы:", &mut state.uniflash_needle_width, 1.0..=8.0, " px", false);
             }
         }
 
@@ -483,23 +452,11 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut Ui) {
             }
         });
 
-        ui.horizontal(|ui| {
-            ui.label("Ширина устья:");
-            ui.add(Slider::new(&mut state.tail_mouth_width, 6.0..=120.0).suffix(" px"));
-        });
-        ui.horizontal(|ui| {
-            ui.label("Изгиб (Bend):");
-            ui.add(Slider::new(&mut state.tail_bend, -1.0..=1.0));
-        });
+        adaptive_slider(ui, "Ширина устья:", &mut state.tail_mouth_width, 6.0..=120.0, " px", false);
+        adaptive_slider(ui, "Изгиб (Bend):", &mut state.tail_bend, -1.0..=1.0, "", false);
         if state.tail_preset == TailPreset::Thought {
-            ui.horizontal(|ui| {
-                ui.label("Пузырьки мыслей:");
-                ui.add(Slider::new(&mut state.tail_bubbles, 1..=8));
-            });
-            ui.horizontal(|ui| {
-                ui.label("Радиус пузырька:");
-                ui.add(Slider::new(&mut state.tail_bubble_radius, 4.0..=30.0).suffix(" px"));
-            });
+            adaptive_slider(ui, "Пузырьки мыслей:", &mut state.tail_bubbles, 1..=8, "", false);
+            adaptive_slider(ui, "Радиус пузырька:", &mut state.tail_bubble_radius, 4.0..=30.0, " px", false);
         }
 
         ui.add_space(6.0);
@@ -507,17 +464,16 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut Ui) {
 
         // 4. Стиль контура и заливки
         ui.label(RichText::new("Обводка и заливка:").strong().color(t.text));
-        ui.horizontal(|ui| {
-            ui.label("Толщина:");
+        adaptive_slider(ui, "Толщина:", &mut state.stroke_width, 0.5..=20.0, " px", false);
+        ui.horizontal_wrapped(|ui| {
             for w in [1.5, 2.0, 2.5, 3.0, 4.0] {
                 let is_cur = (state.stroke_width - w).abs() < 0.1;
                 if ui.selectable_label(is_cur, format!("{w}")).clicked() {
                     state.stroke_width = w;
                 }
             }
-            ui.add(Slider::new(&mut state.stroke_width, 0.5..=20.0).suffix(" px"));
         });
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label("Заливка:");
             ui.radio_value(&mut state.fill_mode, BalloonFillMode::White, "Белая");
             ui.radio_value(&mut state.fill_mode, BalloonFillMode::Transparent, "Прозрачная");
@@ -537,12 +493,13 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut Ui) {
         }
 
         ui.add_space(4.0);
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             if ui.button("＋ Добавить хвост").on_hover_text("Добавить хвост к выделенному бабблу").clicked() {
                 add_tail_to_active(app, &state);
             }
-            if ui.button("⚡ Запечь в SAI Linework").on_hover_text("Превратить баббл в редактируемый векторный слой штрихов").clicked() {
-                let _ = app.run("shape.balloon.convertToLinework", json!({}));
+            if ui.button("⚡ Запечь в SAI Linework").on_hover_text("Превратить баббл в редактируемый векторный слой штрихов").clicked()
+                && app.run("shape.balloon.convertToLinework", json!({})).is_ok()
+            {
                 app.ui.tool = Tool::VectorCurve;
                 app.ui.dock_tabs.layers = 3;
                 crate::dock::reveal(app, crate::dock::Group::Layers);
@@ -577,30 +534,8 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut Ui) {
     app.ui.balloon_ui = state;
 }
 
-fn create_balloon_on_canvas(app: &mut PhotocraftApp, st: &BalloonPanelUi) {
-    let Some(active) = app.session.active() else { return };
-    let doc_size = active.doc.size;
-
-    let bounds = active.doc.selection.as_ref()
-        .map(photocraft_compose::bounds::content_bounds)
-        .filter(|r| r.width() >= 16 && r.height() >= 16);
-
-    let (bx, by, bw, bh) = match bounds {
-        Some(r) => {
-            let w = (r.width() as f64).max(MIN_BALLOON_SIZE);
-            let h = (r.height() as f64).max(MIN_BALLOON_SIZE);
-            (r.x0 as f64, r.y0 as f64, w, h)
-        }
-        None => {
-            let w = 240.0f64.min(doc_size.width as f64 * 0.8).max(MIN_BALLOON_SIZE);
-            let h = 160.0f64.min(doc_size.height as f64 * 0.8).max(MIN_BALLOON_SIZE);
-            let x = (doc_size.width as f64 - w) * 0.5;
-            let y = (doc_size.height as f64 - h) * 0.5;
-            (x, y, w, h)
-        }
-    };
-
-    let rect = [bx, by, bw, bh];
+pub(crate) fn create_live_balloon_in_rect(app: &mut PhotocraftApp, st: &BalloonPanelUi, rect: [f64; 4]) -> bool {
+    let [bx, by, bw, bh] = rect;
     log::info!(
         "[Telemetry:Balloon:Create] body_choice={:?}, tail_preset={:?}, rect={rect:?}, stroke_width={}",
         st.body_choice, st.tail_preset, st.stroke_width
@@ -631,23 +566,56 @@ fn create_balloon_on_canvas(app: &mut PhotocraftApp, st: &BalloonPanelUi) {
 
     let fill_val = balloon_fill_value(app, st.fill_mode);
 
-    let _ = app.run("shape.balloon.create", json!({
-        "balloon": balloon,
-        "fill": fill_val,
-        "stroke": { "width": st.stroke_width, "color": "#000000" }
-    }));
+    let ok = app
+        .run("shape.balloon.create", json!({
+            "balloon": balloon,
+            "fill": fill_val,
+            "stroke": { "width": st.stroke_width, "color": "#000000" }
+        }))
+        .is_ok();
+    if ok {
+        app.balloon_gizmo.active_balloon_id = Some(balloon.id);
+    }
 
     // Мгновенно переключаем инструмент на бабблы, чтобы на экране появились ручки Гизмо!
     app.ui.tool = Tool::Balloon;
+    ok
+}
+
+fn create_balloon_on_canvas(app: &mut PhotocraftApp, st: &BalloonPanelUi) {
+    let Some(active) = app.session.active() else { return };
+    let doc_size = active.doc.size;
+
+    let bounds = active.doc.selection.as_ref()
+        .map(photocraft_compose::bounds::content_bounds)
+        .filter(|r| r.width() >= 16 && r.height() >= 16);
+
+    let (bx, by, bw, bh) = match bounds {
+        Some(r) => {
+            let w = (r.width() as f64).max(MIN_BALLOON_SIZE);
+            let h = (r.height() as f64).max(MIN_BALLOON_SIZE);
+            (r.x0 as f64, r.y0 as f64, w, h)
+        }
+        None => {
+            let w = 240.0f64.min(doc_size.width as f64 * 0.8).max(MIN_BALLOON_SIZE);
+            let h = 160.0f64.min(doc_size.height as f64 * 0.8).max(MIN_BALLOON_SIZE);
+            let x = (doc_size.width as f64 - w) * 0.5;
+            let y = (doc_size.height as f64 - h) * 0.5;
+            (x, y, w, h)
+        }
+    };
+
+    create_live_balloon_in_rect(app, st, [bx, by, bw, bh]);
 }
 
 fn add_tail_to_active(app: &mut PhotocraftApp, st: &BalloonPanelUi) {
     let Some(active) = app.session.active() else { return };
     let Some(layer_id) = active.active_layer else { return };
+    let balloon_id = app.balloon_gizmo.active_balloon_id.unwrap_or(1);
 
     let _ = app.run("shape.balloon.tail.add", json!({
         "layer": layer_id.0,
-        "balloonId": 1,
+        "balloonId": balloon_id,
         "preset": st.tail_preset.id(),
         "mouthWidth": st.tail_mouth_width,
         "tip": [200.0, 300.0]

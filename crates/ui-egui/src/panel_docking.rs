@@ -238,6 +238,18 @@ pub(crate) fn command(app: &mut PhotocraftApp, id: &str, params: &Value) -> Opti
         );
     }
     if let Some(panel) = id.strip_prefix("window.panel.").or_else(|| id.strip_prefix("window.toggle.")).and_then(normalize) {
+        if panel == TOOLS && !tools_docked(app) {
+            let show = match params.get("show").or_else(|| params.get("on")) {
+                None => !app.ui.panels.toolbar,
+                Some(value) => match value.as_bool() {
+                    Some(show) => show,
+                    None => return Some(Err("show must be a boolean".into())),
+                },
+            };
+            app.ui.panels.toolbar = show;
+            dump_dock_topology(app, "after_command", panel);
+            return Some(Ok(json!({ "panel": panel, "toolbar": show })));
+        }
         dump_dock_topology(app, "before_command", panel);
         log::info!("[Telemetry:Dock] resolved panel '{panel}' for command '{id}' (docking_active={})", app.ui.docking.is_some());
         if app.ui.docking.is_none() && !panel_in_side_dock(app, panel) && panel != "brushes" {
@@ -281,6 +293,9 @@ pub(crate) fn command(app: &mut PhotocraftApp, id: &str, params: &Value) -> Opti
 
 pub(crate) fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
     let panel = id.strip_prefix("window.panel.").or_else(|| id.strip_prefix("window.toggle.")).and_then(normalize)?;
+    if panel == TOOLS {
+        return Some(panel_showing_anywhere(app, TOOLS) || (!tools_docked(app) && app.ui.panels.toolbar));
+    }
     if app.ui.docking.is_none() && !panel_in_side_dock(app, panel) {
         return None;
     }
@@ -1168,15 +1183,8 @@ pub(crate) fn count_dock_panes<P>(node: &craft_ui::docking::Node<P>) -> usize {
 }
 
 fn allow_split_in_side_dock(layout: &craft_ui::docking::Layout<String>, panel: &str, side: DockSide) -> bool {
-    if side != DockSide::Left {
-        return false;
-    }
-    let current_panes = layout.root.as_ref().map_or(0, count_dock_panes);
-    if current_panes < 2 {
-        return true;
-    }
-    let source_members = group_members(layout, panel);
-    source_members.len() == 1
+    let _ = (layout, panel);
+    side == DockSide::Left
 }
 
 pub(crate) fn toggle_split_left_dock(app: &mut PhotocraftApp) {
@@ -1972,5 +1980,43 @@ fn restore_hidden(layout: &mut Layout<String>, hidden: &mut std::collections::BT
         last.placement = Placement::Tab { before: None };
         last.size = None;
         last.sibling.clear();
+    }
+}
+
+#[cfg(test)]
+mod left_toolbar_and_split_tests {
+    use super::*;
+
+    #[test]
+    fn window_panel_tools_checks_left_toolbar_and_toggles_without_moving_right() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.ui.docking = Some(craft_ui::docking::Layout { root: None, floating: Vec::new() });
+        app.ui.panels.toolbar = true;
+
+        assert_eq!(checked(&app, "window.panel.tools"), Some(true));
+        let res = command(&mut app, "window.panel.tools", &json!({}));
+        assert!(res.is_some());
+        assert!(!app.ui.panels.toolbar, "toggling tools hides left toolbar");
+        assert!(!tools_docked(&app), "must stay undocked rather than jumping into right dock");
+        assert_eq!(checked(&app, "window.panel.tools"), Some(false));
+
+        let _ = command(&mut app, "window.panel.tools", &json!({ "show": true }));
+        assert!(app.ui.panels.toolbar);
+        assert!(!tools_docked(&app));
+        assert_eq!(checked(&app, "window.panel.tools"), Some(true));
+    }
+
+    #[test]
+    fn left_dock_allows_splits_without_pane_cap() {
+        let layout = craft_ui::docking::Layout {
+            root: Some(craft_ui::docking::Node::Split {
+                axis: craft_ui::layout::SplitAxis::Vertical,
+                size: craft_ui::layout::SplitSize::Ratio(0.5),
+                first: Box::new(craft_ui::docking::Node::Tabs { panels: vec!["pages".into(), "linework".into()], active: 0 }),
+                second: Box::new(craft_ui::docking::Node::Tabs { panels: vec!["typesetter".into(), "balloon".into()], active: 0 }),
+            }),
+            floating: Vec::new(),
+        };
+        assert!(allow_split_in_side_dock(&layout, "pages", DockSide::Left));
     }
 }

@@ -175,12 +175,18 @@ impl LiveVectorStroke {
     /// uniform `base_width`), so multiple strokes with different widths/tapering can coexist on
     /// a single multi-stroke `LiveLinework` layer.
     pub fn rebuild_outline_path(&self) -> Path {
+        self.rebuild_outline_path_with_step(1.5)
+    }
+
+    /// Same as [`Self::rebuild_outline_path`], using a caller-chosen maximum curve sampling step
+    /// `max_step_px` (for keeping dense multi-stroke layers within path budgets).
+    pub fn rebuild_outline_path_with_step(&self, max_step_px: f64) -> Path {
         let tension = self.effective_tension();
         if self.tapered {
-            tapered_curve_path(&self.nodes, self.base_width, self.min_ratio, self.closed, tension)
+            tapered_curve_path_with_step(&self.nodes, self.base_width, self.min_ratio, self.closed, tension, max_step_px)
         } else {
             let uniform_nodes: Vec<SaiPoint> = self.nodes.iter().map(|pt| SaiPoint::with_pressure(pt.p, 1.0, pt.corner)).collect();
-            tapered_curve_path(&uniform_nodes, self.base_width, 1.0, self.closed, tension)
+            tapered_curve_path_with_step(&uniform_nodes, self.base_width, 1.0, self.closed, tension, max_step_px)
         }
     }
 
@@ -209,9 +215,16 @@ impl LiveLinework {
 
     /// Rebuilds the combined multi-component `Path` for all strokes on this Linework layer.
     pub fn rebuild_path(&self) -> Path {
+        let total_nodes: usize = self.strokes.iter().map(|s| s.nodes.len()).sum();
+        let step_px = if self.strokes.len() > 16 || total_nodes > 256 {
+            let pressure = ((self.strokes.len() as f64 / 32.0).max(total_nodes as f64 / 512.0)).clamp(1.0, 4.0);
+            (1.5 * pressure).clamp(2.5, 6.0)
+        } else {
+            1.5
+        };
         let mut subpaths = Vec::new();
         for stroke in &self.strokes {
-            let p = stroke.rebuild_outline_path();
+            let p = stroke.rebuild_outline_path_with_step(step_px);
             for (i, mut sp) in p.subpaths.into_iter().enumerate() {
                 sp.op = if i == 0 { PathOp::Combine } else { PathOp::Join };
                 subpaths.push(sp);
@@ -822,8 +835,9 @@ pub fn tapered_outline_ex(points: &[SaiPoint], base_width: f64, min_ratio: f64, 
         let cap_normal = last.normal;
         let cap_half = last.half_width;
         if cap_half > 0.15 {
-            for step in 1..12 {
-                let angle = std::f64::consts::PI * (step as f64 / 12.0);
+            let cap_steps = if cap_half < 2.0 { 4 } else { 12 };
+            for step in 1..cap_steps {
+                let angle = std::f64::consts::PI * (step as f64 / cap_steps as f64);
                 let offset = add(mul(cap_normal, cap_half * angle.cos()), mul(cap_dir, cap_half * angle.sin()));
                 poly.push(add(last.p, offset));
             }
@@ -840,8 +854,9 @@ pub fn tapered_outline_ex(points: &[SaiPoint], base_width: f64, min_ratio: f64, 
         let start_normal = mul(first.normal, -1.0);
         let start_half = first.half_width;
         if start_half > 0.15 {
-            for step in 1..12 {
-                let angle = std::f64::consts::PI * (step as f64 / 12.0);
+            let cap_steps = if start_half < 2.0 { 4 } else { 12 };
+            for step in 1..cap_steps {
+                let angle = std::f64::consts::PI * (step as f64 / cap_steps as f64);
                 let offset = add(mul(start_normal, start_half * angle.cos()), mul(start_dir, start_half * angle.sin()));
                 poly.push(add(first.p, offset));
             }
@@ -879,8 +894,13 @@ fn clean_polygon(poly: &[P]) -> Vec<P> {
 /// For closed curves (`closed == true`), constructs two seamless closed ring subpaths
 /// (`PathOp::Combine` + opposite-wound `PathOp::Join`) so there is never a seam cut or gap.
 pub fn tapered_curve_path(points: &[SaiPoint], base_width: f64, min_ratio: f64, closed: bool, tension: f64) -> Path {
+    tapered_curve_path_with_step(points, base_width, min_ratio, closed, tension, 1.5)
+}
+
+/// Same as [`tapered_curve_path`], using a caller-specified maximum arc sampling step `max_step_px`.
+pub fn tapered_curve_path_with_step(points: &[SaiPoint], base_width: f64, min_ratio: f64, closed: bool, tension: f64, max_step_px: f64) -> Path {
     if closed {
-        let (left, right, _) = tapered_rings_ex(points, base_width, min_ratio, true, tension, 1.5);
+        let (left, right, _) = tapered_rings_ex(points, base_width, min_ratio, true, tension, max_step_px);
         let left_clean = clean_polygon(&left);
         let right_rev: Vec<P> = right.into_iter().rev().collect();
         let right_clean = clean_polygon(&right_rev);
@@ -891,7 +911,7 @@ pub fn tapered_curve_path(points: &[SaiPoint], base_width: f64, min_ratio: f64, 
         let inner = Subpath { closed: true, knots: right_clean.iter().map(|&(x, y)| Knot::corner(x, y)).collect(), op: PathOp::Join };
         Path::new(vec![outer, inner])
     } else {
-        let outline = tapered_outline_ex(points, base_width, min_ratio, false, tension, 1.5);
+        let outline = tapered_outline_ex(points, base_width, min_ratio, false, tension, max_step_px);
         if outline.len() < 3 { Path::default() } else { Path::new(vec![Subpath::polygon(&outline)]) }
     }
 }

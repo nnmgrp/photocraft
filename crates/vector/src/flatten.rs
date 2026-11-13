@@ -74,8 +74,8 @@ fn eval(seg: &[Point; 4], t: f64) -> (f64, f64) {
 /// dash workload. Arc length is bounded by the cubic control polygon, without allocating pixels.
 pub fn validate_shape(path: &Path, stroke: Option<&photocraft_doc::ShapeStroke>) -> Result<(), &'static str> {
     let knots = path.subpaths.iter().try_fold(0usize, |n, s| n.checked_add(s.knots.len())).ok_or("too many path knots")?;
-    if knots > 4096 || path.subpaths.len() > 4096 {
-        return Err("shape path exceeds 4096 knots/subpaths");
+    if knots > 65_536 || path.subpaths.len() > 65_536 {
+        return Err("shape path exceeds 65536 knots/subpaths");
     }
     let mut points = 0usize;
     let mut length = 0.0;

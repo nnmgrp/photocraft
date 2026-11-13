@@ -844,6 +844,8 @@ pub trait LiveBalloonGeom {
     fn point_and_normal_on_body(&self, t: f64) -> ([f64; 2], [f64; 2]);
     /// The manual offset of one spike or lobe vertex (zero when the user did not move it).
     fn get_vertex_offset(&self, index: u32) -> [f64; 2];
+    /// Canonical canvas-space handle positions `[x, y]` for draggable vertices (`Spiky` tips, `Cloud` cusps).
+    fn vertex_handle_positions(&self) -> Vec<(u32, [f64; 2])>;
     /// The balloon's closed outline, its tails merged in.
     fn rebuild_closed_path(&self) -> Path;
 }
@@ -900,7 +902,6 @@ fn build_cloud_body(balloon: &LiveBalloon, rect: [f64; 4], bumps: u32, amplitude
         let prev_amp = amplitude * (1.0 + (hash_f64(seed, prev_idx * 2 + 1) - 0.5) * jitter);
 
         let cur_off = balloon.get_vertex_offset(i as u32);
-        let prev_off = balloon.get_vertex_offset(prev_idx);
 
         let out_angle = a0 + span * 0.28;
         let in_angle = a0 - span * 0.28;
@@ -908,8 +909,8 @@ fn build_cloud_body(balloon: &LiveBalloon, rect: [f64; 4], bumps: u32, amplitude
         let r_in = 1.0 + prev_amp * 1.35;
 
         knots.push(Knot {
-            anchor: Point::new(vx, vy),
-            in_ctrl: Point::new(cx + rx * r_in * in_angle.cos() + prev_off[0], cy + ry * r_in * in_angle.sin() + prev_off[1]),
+            anchor: Point::new(vx + cur_off[0], vy + cur_off[1]),
+            in_ctrl: Point::new(cx + rx * r_in * in_angle.cos() + cur_off[0], cy + ry * r_in * in_angle.sin() + cur_off[1]),
             out_ctrl: Point::new(cx + rx * r_out * out_angle.cos() + cur_off[0], cy + ry * r_out * out_angle.sin() + cur_off[1]),
             smooth: false, // The joints between the lobes meet at a sharp angle.
         });
@@ -1272,6 +1273,50 @@ impl LiveBalloonGeom for LiveBalloon {
         self.vertex_overrides.iter().find(|v| v.index == index).map(|v| v.offset).unwrap_or([0.0, 0.0])
     }
 
+    fn vertex_handle_positions(&self) -> Vec<(u32, [f64; 2])> {
+        let mut out = Vec::new();
+        let r = self.body.rect();
+        let cx = r[0] + r[2] * 0.5;
+        let cy = r[1] + r[3] * 0.5;
+        let rx = (r[2] * 0.5).abs().max(4.0);
+        let ry = (r[3] * 0.5).abs().max(4.0);
+
+        match &self.body {
+            LiveBalloonBody::Cloud { bumps, cusp_bite, jitter, seed, .. } => {
+                let n = (*bumps).clamp(4, 64);
+                let step = std::f64::consts::TAU / (n as f64);
+                let inward_factor = 1.0 - cusp_bite.clamp(0.0, 0.5) * 0.35;
+                let jit = jitter.clamp(0.0, 0.8);
+                for i in 0..n {
+                    let j = (hash_f64(*seed, i * 2) - 0.5) * jit * step * 0.55;
+                    let a = -std::f64::consts::FRAC_PI_2 + (i as f64) * step + j;
+                    let off = self.get_vertex_offset(i);
+                    out.push((i, [cx + rx * inward_factor * a.cos() + off[0], cy + ry * inward_factor * a.sin() + off[1]]));
+                }
+            }
+            LiveBalloonBody::Spiky { spikes, length, sub_harmonic, jitter, seed, .. } => {
+                let n = (*spikes).clamp(5, 128);
+                let step = std::f64::consts::TAU / (n as f64);
+                let sub_h = sub_harmonic.clamp(0.0, 1.0);
+                for i in 0..n {
+                    let a_jitter = (hash_f64(*seed, i * 3) - 0.5) * jitter * step * 0.4;
+                    let angle = -std::f64::consts::FRAC_PI_2 + (i as f64) * step + a_jitter;
+                    let harmonic_mult = match i % 3 {
+                        0 => 1.0,
+                        1 => 1.0 - sub_h * 0.48,
+                        _ => 1.0 - sub_h * 0.28,
+                    };
+                    let rand_mult = 1.0 + (hash_f64(*seed, i * 3 + 1) - 0.5) * jitter * 0.6;
+                    let tip_r = 1.0 + length * harmonic_mult * rand_mult;
+                    let off = self.get_vertex_offset(i);
+                    out.push((i, [cx + rx * tip_r * angle.cos() + off[0], cy + ry * tip_r * angle.sin() + off[1]]));
+                }
+            }
+            _ => {}
+        }
+        out
+    }
+
     fn rebuild_closed_path(&self) -> Path {
         let mut base_path = match &self.body {
             LiveBalloonBody::Ellipse { rect, squircle } => {
@@ -1417,7 +1462,7 @@ fn polygons_bbox_overlap(a: &[P], b: &[P]) -> bool {
 /// Converts a balloon into SAI Linework strokes: every outline becomes a tapered stroke whose
 /// width follows the balloon's pressure, so the balloon can be redrawn as clean linework.
 pub fn balloon_to_linework_strokes(b: &LiveBalloon) -> Vec<LiveVectorStroke> {
-    // The sea urchin: every needle tapers from 0.95 to 0.05 towards the centre.
+    // The sea urchin: every needle tapers from 0.95 to 0.05 towards the centre as a straight tapered ray.
     if let LiveBalloonBody::Uniflash { needle_width, .. } = &b.body
         && let Some((_, needles_path)) = build_uniflash_paths(b)
     {
@@ -1428,11 +1473,9 @@ pub fn balloon_to_linework_strokes(b: &LiveBalloon) -> Vec<LiveVectorStroke> {
             .map(|sp| {
                 let p_out = sp.knots[0].anchor;
                 let p_in = sp.knots[1].anchor;
-                let mid = Point::new((p_out.x + p_in.x) * 0.5, (p_out.y + p_in.y) * 0.5);
                 LiveVectorStroke {
                     nodes: vec![
                         SaiPoint { p: (p_out.x, p_out.y), pressure: 0.95, density: 1.0, corner: true },
-                        SaiPoint { p: (mid.x, mid.y), pressure: 0.65, density: 1.0, corner: false },
                         SaiPoint { p: (p_in.x, p_in.y), pressure: 0.05, density: 0.85, corner: true },
                     ],
                     base_width: *needle_width,
@@ -1552,7 +1595,7 @@ pub fn balloon_to_linework_strokes(b: &LiveBalloon) -> Vec<LiveVectorStroke> {
 
             // The intermediate points on the Bézier curve.
             if is_curved {
-                let steps = 4;
+                let steps = if seg_count > 36 { 2 } else { 4 };
                 for step in 1..steps {
                     let t = (step as f64) / (steps as f64);
                     let pt = eval_cubic_bezier(k0.anchor, k0.out_ctrl, k1.in_ctrl, k1.anchor, t);
@@ -1754,5 +1797,98 @@ mod tests {
                 assert!(area(&polygons) > 1000.0, "positive contour area for {preset:?}");
             }
         }
+    }
+
+    #[test]
+    fn vertex_handle_positions_match_spiky_and_cloud_knots_with_offsets() {
+        use photocraft_doc::vector::VertexOverride;
+
+        let rect = [100.0, 120.0, 240.0, 160.0];
+        let spiky = LiveBalloon {
+            id: 1,
+            body: LiveBalloonBody::Spiky { rect, spikes: 18, length: 0.38, sub_harmonic: 0.45, concavity: 0.65, jitter: 0.30, smooth: false, seed: 101 },
+            tails: Vec::new(),
+            next_tail_id: 2,
+            vertex_overrides: vec![VertexOverride { index: 0, offset: [12.0, -18.0] }, VertexOverride { index: 5, offset: [-7.0, 9.0] }],
+            hand_drawn_noise: 0.0,
+            stroke_width: 2.5,
+            auto_merge_overlapping: false,
+        };
+        let spiky_path = spiky.rebuild_closed_path();
+        let spiky_handles = spiky.vertex_handle_positions();
+        assert_eq!(spiky_handles.len(), spiky_path.subpaths[0].knots.len());
+        for ((_, pos), knot) in spiky_handles.iter().zip(&spiky_path.subpaths[0].knots) {
+            assert!((pos[0] - knot.anchor.x).abs() < 1e-6 && (pos[1] - knot.anchor.y).abs() < 1e-6);
+        }
+
+        let cloud = LiveBalloon {
+            id: 2,
+            body: LiveBalloonBody::Cloud { rect, bumps: 10, amplitude: 0.18, cusp_bite: 0.22, jitter: 0.35, seed: 42 },
+            tails: Vec::new(),
+            next_tail_id: 2,
+            vertex_overrides: vec![VertexOverride { index: 2, offset: [15.0, -11.0] }],
+            hand_drawn_noise: 0.0,
+            stroke_width: 2.5,
+            auto_merge_overlapping: false,
+        };
+        let cloud_path = cloud.rebuild_closed_path();
+        let cloud_handles = cloud.vertex_handle_positions();
+        assert_eq!(cloud_handles.len(), cloud_path.subpaths[0].knots.len());
+        for ((_, pos), knot) in cloud_handles.iter().zip(&cloud_path.subpaths[0].knots) {
+            assert!((pos[0] - knot.anchor.x).abs() < 1e-6 && (pos[1] - knot.anchor.y).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn converting_large_spiky_and_uniflash_balloons_to_linework_passes_validate_shape() {
+        use crate::comic_sai_curve::LiveLinework;
+
+        let large_spiky = LiveBalloon {
+            id: 1,
+            body: LiveBalloonBody::Spiky {
+                rect: [50.0, 50.0, 900.0, 700.0],
+                spikes: 32,
+                length: 0.45,
+                sub_harmonic: 0.45,
+                concavity: 0.65,
+                jitter: 0.30,
+                smooth: true,
+                seed: 101,
+            },
+            tails: Vec::new(),
+            next_tail_id: 2,
+            vertex_overrides: Vec::new(),
+            hand_drawn_noise: 0.0,
+            stroke_width: 2.5,
+            auto_merge_overlapping: false,
+        };
+        let lw_spiky = LiveLinework::new(balloon_to_linework_strokes(&large_spiky));
+        let path_spiky = lw_spiky.rebuild_path();
+        assert!(!path_spiky.is_empty());
+        assert!(crate::flatten::validate_shape(&path_spiky, None).is_ok());
+
+        let uniflash = LiveBalloon {
+            id: 2,
+            body: LiveBalloonBody::Uniflash {
+                rect: [100.0, 100.0, 600.0, 480.0],
+                needles: 160,
+                inner_ratio: 0.62,
+                bundle_group: 0.40,
+                length_jitter: 0.5,
+                angle_jitter: 0.25,
+                needle_width: 2.2,
+                seed: 777,
+            },
+            tails: Vec::new(),
+            next_tail_id: 2,
+            vertex_overrides: Vec::new(),
+            hand_drawn_noise: 0.0,
+            stroke_width: 2.5,
+            auto_merge_overlapping: false,
+        };
+        let lw_uni = LiveLinework::new(balloon_to_linework_strokes(&uniflash));
+        let path_uni = lw_uni.rebuild_path();
+        assert!(!path_uni.is_empty());
+        assert!(crate::flatten::validate_shape(&path_uni, None).is_ok());
     }
 }

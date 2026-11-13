@@ -11,7 +11,7 @@
 
 use egui::{Color32, Pos2, Rect, Stroke, vec2};
 use photocraft_doc::vector::{LiveBalloon, LiveBalloonBody, LiveBalloonTail, TailPreset, VertexOverride};
-use photocraft_vector::balloon::{LiveBalloonGeom, hash_f64};
+use photocraft_vector::balloon::LiveBalloonGeom;
 use serde_json::json;
 
 use crate::PhotocraftApp;
@@ -104,7 +104,7 @@ fn special_body_handles_doc(body: &LiveBalloonBody) -> Option<([f64; 2], [f64; 2
 
     match body {
         LiveBalloonBody::Cloud { amplitude, .. } => Some(([cx + rx * (1.0 + amplitude), cy], [cx, cy - ry * 1.15])),
-        LiveBalloonBody::Spiky { length, .. } => Some(([cx + rx * (1.0 + length * 0.5), cy], [cx, cy - ry * 1.15])),
+        LiveBalloonBody::Spiky { length, .. } => Some(([cx + rx * (1.0 + length * 0.5), cy], [cx, cy - ry * 0.72])),
         LiveBalloonBody::Uniflash { inner_ratio, .. } => Some(([cx + rx * inner_ratio, cy], [cx, cy - ry * 1.08])),
         _ => None,
     }
@@ -112,45 +112,7 @@ fn special_body_handles_doc(body: &LiveBalloonBody) -> Option<([f64; 2], [f64; 2
 
 /// The document positions of the draggable vertices of the spikes and the cloud lobes.
 fn vertex_handles_doc(balloon: &LiveBalloon) -> Vec<(u32, [f64; 2])> {
-    let mut out = Vec::new();
-    let r = balloon.body.rect();
-    let cx = r[0] + r[2] * 0.5;
-    let cy = r[1] + r[3] * 0.5;
-    let rx = (r[2] * 0.5).abs().max(4.0);
-    let ry = (r[3] * 0.5).abs().max(4.0);
-
-    match &balloon.body {
-        LiveBalloonBody::Cloud { bumps, cusp_bite, jitter, seed, .. } => {
-            let n = (*bumps).clamp(4, 64);
-            let step = std::f64::consts::TAU / (n as f64);
-            let inward_factor = 1.0 - cusp_bite.clamp(0.0, 0.5) * 0.35;
-            for i in 0..n {
-                let j = (hash_f64(*seed, i * 2) - 0.5) * jitter.clamp(0.0, 0.8) * step * 0.55;
-                let a = -std::f64::consts::FRAC_PI_2 + (i as f64) * step + j;
-                let off = balloon.get_vertex_offset(i);
-                let vx = cx + rx * inward_factor * a.cos() + off[0];
-                let vy = cy + ry * inward_factor * a.sin() + off[1];
-                out.push((i, [vx, vy]));
-            }
-        }
-        LiveBalloonBody::Spiky { spikes, length, jitter, seed, .. } => {
-            let n = (*spikes).clamp(6, 64);
-            let step = std::f64::consts::TAU / (n as f64);
-            let r_base = (rx + ry) * 0.5;
-            for i in 0..n {
-                let j = (hash_f64(*seed, i * 2) - 0.5) * jitter.clamp(0.0, 0.8) * step * 0.45;
-                let a = (i as f64) * step + j;
-                let cur_len = length * (1.0 + (hash_f64(*seed, i * 2 + 1) - 0.5) * jitter);
-                let r_tip = r_base + (r_base * 0.75 * cur_len);
-                let off = balloon.get_vertex_offset(i);
-                let vx = cx + r_tip * a.cos() + off[0];
-                let vy = cy + r_tip * a.sin() + off[1];
-                out.push((i, [vx, vy]));
-            }
-        }
-        _ => {}
-    }
-    out
+    balloon.vertex_handle_positions()
 }
 
 /// What the pointer hits on the gizmo of `balloon`.
@@ -188,14 +150,6 @@ pub fn hit_test_balloon_gizmo(xf: &ViewXform, balloon: &LiveBalloon, cursor_scr:
         }
     }
 
-    // The spikes and the cloud lobes.
-    for (v_idx, v_pt) in vertex_handles_doc(balloon) {
-        let v_scr = xf.to_screen(v_pt[0] as f32, v_pt[1] as f32);
-        if cursor_scr.distance(v_scr) <= hit_r {
-            return Some(GizmoHit::VertexHandle { balloon_id: bid, vertex_index: v_idx });
-        }
-    }
-
     if let Some((rad_pt, dial_pt)) = special_body_handles_doc(&balloon.body) {
         let rad_scr = xf.to_screen(rad_pt[0] as f32, rad_pt[1] as f32);
         if cursor_scr.distance(rad_scr) <= hit_r {
@@ -204,6 +158,14 @@ pub fn hit_test_balloon_gizmo(xf: &ViewXform, balloon: &LiveBalloon, cursor_scr:
         let dial_scr = xf.to_screen(dial_pt[0] as f32, dial_pt[1] as f32);
         if cursor_scr.distance(dial_scr) <= hit_r + 2.0 {
             return Some(GizmoHit::CountDial { balloon_id: bid });
+        }
+    }
+
+    // The spikes and the cloud lobes.
+    for (v_idx, v_pt) in vertex_handles_doc(balloon) {
+        let v_scr = xf.to_screen(v_pt[0] as f32, v_pt[1] as f32);
+        if cursor_scr.distance(v_scr) <= hit_r {
+            return Some(GizmoHit::VertexHandle { balloon_id: bid, vertex_index: v_idx });
         }
     }
 
@@ -529,7 +491,9 @@ pub fn on_drag_move(app: &mut PhotocraftApp, drag: &BalloonGizmoDrag, cur_doc: [
     }
 
     let coalesce_key = format!("balloon-gizmo-drag-{}-{}", drag.layer_id, drag.gesture_id);
-    let _ = app.run("shape.balloon.update", json!({ "layer": drag.layer_id, "balloon": updated, "coalesce": coalesce_key }));
+    if app.run("shape.balloon.update", json!({ "layer": drag.layer_id, "balloon": updated, "coalesce": coalesce_key })).is_ok() {
+        crate::comic_balloon_panel::hydrate_geometry_from_balloon(&mut app.ui.balloon_ui, &updated);
+    }
 }
 
 /// Ends the drag.

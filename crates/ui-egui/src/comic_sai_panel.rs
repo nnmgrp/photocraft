@@ -142,8 +142,58 @@ fn paint_checkers(painter: &Painter, rect: Rect) {
     }
 }
 
+fn build_adaptive_slider<'a, Num: egui::emath::Numeric>(
+    val: &'a mut Num,
+    range: std::ops::RangeInclusive<Num>,
+    suffix: &str,
+    logarithmic: bool,
+) -> Slider<'a> {
+    let mut s = Slider::new(val, range);
+    if !suffix.is_empty() {
+        s = s.suffix(suffix);
+    }
+    if logarithmic {
+        s = s.logarithmic(true);
+    }
+    s
+}
+
+pub(crate) fn adaptive_slider<Num: egui::emath::Numeric>(
+    ui: &mut Ui,
+    label: &str,
+    value: &mut Num,
+    range: std::ops::RangeInclusive<Num>,
+    suffix: &str,
+    logarithmic: bool,
+) -> egui::Response {
+    let avail = ui.available_width();
+    if avail < 265.0 {
+        ui.vertical(|ui| {
+            ui.label(label);
+            let prev_w = ui.spacing().slider_width;
+            ui.spacing_mut().slider_width = (avail - 72.0).max(56.0);
+            let resp = ui.add(build_adaptive_slider(value, range, suffix, logarithmic));
+            ui.spacing_mut().slider_width = prev_w;
+            resp
+        })
+        .inner
+    } else {
+        ui.horizontal(|ui| {
+            let lbl_resp = ui.label(label);
+            let used = lbl_resp.rect.width() + ui.spacing().item_spacing.x;
+            let rem = (avail - used).max(80.0);
+            let prev_w = ui.spacing().slider_width;
+            ui.spacing_mut().slider_width = (rem - 72.0).clamp(60.0, 200.0);
+            let resp = ui.add(build_adaptive_slider(value, range, suffix, logarithmic));
+            ui.spacing_mut().slider_width = prev_w;
+            resp
+        })
+        .inner
+    }
+}
+
 pub fn draw_sai_preview(ui: &mut Ui, base_width: f32, min_ratio: f32, base_density: f32, min_density: f32, color: Color32) {
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width().max(180.0), 38.0), egui::Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width().max(60.0), 38.0), egui::Sense::hover());
     let painter = ui.painter_at(rect);
 
     paint_checkers(&painter, rect);
@@ -226,50 +276,42 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut Ui) {
         ui.separator();
 
         // 3. Слайдеры толщины и плотности
-        ui.horizontal(|ui| {
-            ui.label("Базовый размер:");
-            let resp = ui.add(Slider::new(&mut state.base_width, 0.7..=500.0).logarithmic(true).suffix(" px"));
-            if resp.changed() {
-                sync_to_tool_options(app, &state);
-                let to_width = app.ui.tool_options.vector_curve_width;
-                log::info!(
-                    "[Telemetry:SAI:BaseWidthSlider] sai_panel.base_width={}, tool_options.vector_curve_width={to_width}",
-                    state.base_width
-                );
-            }
-        });
-        ui.horizontal(|ui| {
-            let mut pct = state.min_size_ratio * 100.0;
-            ui.label("Мин. размер:");
-            if ui.add(Slider::new(&mut pct, 0.0..=100.0).suffix("%")).changed() {
-                state.min_size_ratio = pct / 100.0;
-            }
-        });
-        ui.horizontal(|ui| {
-            let mut pct = state.base_density * 100.0;
-            ui.label("Плотность:");
-            if ui.add(Slider::new(&mut pct, 0.0..=100.0).suffix("%")).changed() {
-                state.base_density = pct / 100.0;
-            }
-        });
-        ui.horizontal(|ui| {
-            let mut pct = state.min_density_ratio * 100.0;
-            ui.label("Мин. плотность:");
-            if ui.add(Slider::new(&mut pct, 0.0..=100.0).suffix("%")).changed() {
-                state.min_density_ratio = pct / 100.0;
-            }
-        });
+        let resp = adaptive_slider(ui, "Базовый размер:", &mut state.base_width, 0.7..=500.0, " px", true);
+        if resp.changed() {
+            sync_to_tool_options(app, &state);
+            let to_width = app.ui.tool_options.vector_curve_width;
+            log::info!(
+                "[Telemetry:SAI:BaseWidthSlider] sai_panel.base_width={}, tool_options.vector_curve_width={to_width}",
+                state.base_width
+            );
+        }
+        let mut min_pct = state.min_size_ratio * 100.0;
+        if adaptive_slider(ui, "Мин. размер:", &mut min_pct, 0.0..=100.0, "%", false).changed() {
+            state.min_size_ratio = min_pct / 100.0;
+        }
+        let mut dens_pct = state.base_density * 100.0;
+        if adaptive_slider(ui, "Плотность:", &mut dens_pct, 0.0..=100.0, "%", false).changed() {
+            state.base_density = dens_pct / 100.0;
+        }
+        let mut min_dens_pct = state.min_density_ratio * 100.0;
+        if adaptive_slider(ui, "Мин. плотность:", &mut min_dens_pct, 0.0..=100.0, "%", false).changed() {
+            state.min_density_ratio = min_dens_pct / 100.0;
+        }
 
         ui.add_space(6.0);
         ui.separator();
 
         // 4. Матрица 38 быстрых размеров PaintTool SAI Ver.2
         ui.label(RichText::new("Сетка размеров PaintTool SAI:").strong().color(t.text));
-        Grid::new("sai_sizes_grid").spacing(vec2(3.0, 3.0)).show(ui, |ui| {
+        let avail_w = ui.available_width();
+        let btn_w = 33.0_f32;
+        let gap_x = 3.0_f32;
+        let cols = ((avail_w + gap_x) / (btn_w + gap_x)).floor().clamp(3.0, 8.0) as usize;
+        Grid::new("sai_sizes_grid").spacing(vec2(gap_x, 3.0)).show(ui, |ui| {
             for (idx, &sz) in SAI_QUICK_SIZES.iter().enumerate() {
                 let is_sel = (state.base_width - sz).abs() < 0.05;
                 let text = if sz < 10.0 { format!("{:.1}", sz) } else { format!("{:.0}", sz) };
-                let btn = egui::Button::new(text).min_size(vec2(33.0, 22.0)).selected(is_sel);
+                let btn = egui::Button::new(text).min_size(vec2(btn_w, 22.0)).selected(is_sel);
                 if ui.add(btn).clicked() {
                     let prev_w = state.base_width;
                     state.base_width = sz;
@@ -281,7 +323,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut Ui) {
                         (sz - to_width).abs() < f32::EPSILON
                     );
                 }
-                if (idx + 1) % 8 == 0 {
+                if (idx + 1) % cols == 0 {
                     ui.end_row();
                 }
             }
@@ -292,7 +334,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut Ui) {
 
         // 5. Динамика нажима и параметры сплайна
         ui.label(RichText::new("Динамика нажима пера:").strong().color(t.text));
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             if ui.radio_value(&mut state.pressure_target, PressureTargetMode::Width, "● Width (Толщина 0..500%)").changed() {
                 log::info!("[Telemetry:SAI:PressureTarget] changed to Width");
             }
@@ -301,7 +343,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut Ui) {
             }
         });
 
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label("Тип кривой:");
             egui::ComboBox::from_id_salt("sai_curve_combo")
                 .selected_text(match state.curve_type {
@@ -315,10 +357,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut Ui) {
         });
 
         if state.curve_type == SaiCurveType::Normal {
-            ui.horizontal(|ui| {
-                ui.label("Натяжение T:");
-                ui.add(Slider::new(&mut state.tension, 0.0..=1.0));
-            });
+            adaptive_slider(ui, "Натяжение T:", &mut state.tension, 0.0..=1.0, "", false);
         }
         ui.checkbox(&mut state.auto_taper_ends, "Auto Taper Ends (Авто-заострение концов)");
         ui.checkbox(&mut state.closed_loop, "Closed Loop (Замкнутый контур)");
@@ -338,9 +377,10 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut Ui) {
         }
 
         ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            if ui.button("⚡ Запечь баббл в Linework").clicked() {
-                let _ = app.run("shape.balloon.convertToLinework", json!({}));
+        ui.horizontal_wrapped(|ui| {
+            if ui.button("⚡ Запечь баббл в Linework").clicked()
+                && app.run("shape.balloon.convertToLinework", json!({})).is_ok()
+            {
                 app.ui.tool = Tool::VectorCurve;
             }
             if ui.button("🔄 Сбросить параметры пера").clicked() {

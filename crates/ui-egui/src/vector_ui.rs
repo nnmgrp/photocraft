@@ -559,7 +559,20 @@ fn balloon_rect(start: [f64; 2], end: [f64; 2]) -> Option<[f64; 4]> {
     let y0 = start[1].min(end[1]);
     let w = (start[0] - end[0]).abs();
     let h = (start[1] - end[1]).abs();
-    (w >= 2.0 && h >= 2.0).then_some([x0, y0, w, h])
+    (w >= 16.0 || h >= 16.0).then_some([x0, y0, w.max(crate::comic_balloon_panel::MIN_BALLOON_SIZE), h.max(crate::comic_balloon_panel::MIN_BALLOON_SIZE)])
+}
+
+fn click_near_active_balloon(app: &PhotocraftApp, click_doc: [f64; 2]) -> bool {
+    let Some(active_bid) = app.balloon_gizmo.active_balloon_id else { return false };
+    let Some(st) = app.session.active() else { return false };
+    let Some(lid) = st.active_layer else { return false };
+    let Some(layer) = st.doc.layer(lid) else { return false };
+    let LayerContent::Shape(sh) = &layer.content else { return false };
+    let Some(photocraft_doc::LiveShape::BalloonGroup { group }) = &sh.live else { return false };
+    let Some(b) = group.items.iter().find(|b| b.id == active_bid) else { return false };
+    let r = b.body.rect();
+    let pad = 36.0;
+    click_doc[0] >= r[0] - pad && click_doc[0] <= r[0] + r[2] + pad && click_doc[1] >= r[1] - pad && click_doc[1] <= r[1] + r[3] + pad
 }
 
 fn is_shape_layer(layer: &photocraft_doc::Layer) -> bool {
@@ -586,87 +599,72 @@ fn balloon_body_at(app: &PhotocraftApp, p: [f64; 2]) -> Option<u64> {
     None
 }
 
-/// Finish a Balloon-tool drag: a tail from the balloon body to the pointer, or a cloud / spiky
-/// balloon drawn inside the drag rectangle.
+/// Finish a Balloon-tool click or drag: creates a live `BalloonGroup` driven by the `Balloons` dock
+/// state (or unions a legacy tail when dragging from an existing non-live shape).
 pub fn finish_balloon(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
     let o = app.ui.tool_options.clone();
-    let result = match o.balloon_mode.as_str() {
-        "cloud" | "spiky" => {
-            let Some(rect) = balloon_rect(start, end) else { return };
-            let mut params = json!({
-                "kind": o.balloon_mode,
-                "rect": rect,
-                "seed": o.balloon_seed,
-                "fill": fill_param(app),
-                "stroke": stroke_param(app),
-            });
-            if o.balloon_mode == "cloud" {
-                params["bumps"] = json!(o.balloon_bumps);
-                params["amplitude"] = json!(o.balloon_amplitude);
-                params["jitter"] = json!(o.balloon_jitter);
-            } else {
-                params["spikes"] = json!(o.balloon_spikes);
-                params["length"] = json!(o.balloon_length);
-                params["jitter"] = json!(o.balloon_jitter);
-                params["smooth"] = json!(o.balloon_smooth);
-                params["inward"] = json!(o.balloon_inward);
-            }
-            app.run("shape.balloon.create", params)
+    let w = (start[0] - end[0]).abs();
+    let h = (start[1] - end[1]).abs();
+
+    if w < 16.0 && h < 16.0 {
+        if click_near_active_balloon(app, start) {
+            return;
         }
-        _ => {
-            let length = (end[0] - start[0]).hypot(end[1] - start[1]);
-            if length < 3.0 {
-                return;
-            }
-            let Some(layer) = balloon_body_at(app, start) else {
-                app.ui.status = "Balloon: select a shape layer (the balloon body) or press on one".into();
-                app.ui.status_error = true;
-                return;
-            };
-            let curve = if o.balloon_preset == "arc" { 0.45 } else { 0.15 };
-            let mut params = json!({
-                "layer": layer,
-                "preset": o.balloon_preset,
-                "from": start,
-                "tip": end,
-                "mouthWidth": o.balloon_mouth,
-                "curve": curve,
-            });
-            if o.balloon_preset == "thought" {
-                params["bubbles"] = json!(3);
-                params["bubbleRadius"] = json!((length * 0.12).clamp(3.0, 18.0));
-            }
-            app.run("shape.balloon.tail", params)
+        let st = app.ui.balloon_ui.clone();
+        let rect = [start[0] - 120.0, start[1] - 80.0, 240.0, 160.0];
+        crate::comic_balloon_panel::create_live_balloon_in_rect(app, &st, rect);
+        return;
+    }
+
+    if o.balloon_mode == "tail"
+        && let Some(layer) = balloon_body_at(app, start)
+    {
+        let length = (end[0] - start[0]).hypot(end[1] - start[1]);
+        let curve = if o.balloon_preset == "arc" { 0.45 } else { 0.15 };
+        let mut params = json!({
+            "layer": layer,
+            "preset": o.balloon_preset,
+            "from": start,
+            "tip": end,
+            "mouthWidth": o.balloon_mouth,
+            "curve": curve,
+        });
+        if o.balloon_preset == "thought" {
+            params["bubbles"] = json!(3);
+            params["bubbleRadius"] = json!((length * 0.12).clamp(3.0, 18.0));
         }
-    };
-    if let Err(e) = result {
-        app.ui.status = e;
-        app.ui.status_error = true;
+        if let Err(e) = app.run("shape.balloon.tail", params) {
+            app.ui.status = e;
+            app.ui.status_error = true;
+        }
+        return;
+    }
+
+    if let Some(rect) = balloon_rect(start, end) {
+        let st = app.ui.balloon_ui.clone();
+        crate::comic_balloon_panel::create_live_balloon_in_rect(app, &st, rect);
     }
 }
 
-/// Balloon-tool drag preview: a dashed tail axis for tails, the balloon box for cloud / spiky.
+/// Balloon-tool drag preview: a dashed tail axis for tails on a shape, or the balloon box for live balloon creation.
 pub fn draw_balloon_preview(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, start: [f64; 2], end: [f64; 2]) {
     let accent = Tokens::get(painter.ctx()).accent;
     let stroke = Stroke::new(1.5, accent);
     let a = xf.to_screen(start[0] as f32, start[1] as f32);
     let b = xf.to_screen(end[0] as f32, end[1] as f32);
-    match app.ui.tool_options.balloon_mode.as_str() {
-        "cloud" | "spiky" => {
-            let r = Rect::from_two_pos(a, b);
-            painter.rect_stroke(r, 2.0, stroke, egui::StrokeKind::Inside);
+    if app.ui.tool_options.balloon_mode == "tail" && balloon_body_at(app, start).is_some() {
+        let steps = 12;
+        for i in 0..steps {
+            let t0 = i as f32 / steps as f32;
+            let t1 = (i as f32 + 0.6) / steps as f32;
+            painter.line_segment([a + (b - a) * t0, a + (b - a) * t1], stroke);
         }
-        _ => {
-            let steps = 12;
-            for i in 0..steps {
-                let t0 = i as f32 / steps as f32;
-                let t1 = (i as f32 + 0.6) / steps as f32;
-                painter.line_segment([a + (b - a) * t0, a + (b - a) * t1], stroke);
-            }
-            let dir = (b - a).normalized();
-            let side = vec2(-dir.y, dir.x) * (app.ui.tool_options.balloon_mouth * 0.5 * xf.zoom);
-            painter.line_segment([a - side, a + side], stroke);
-        }
+        let dir = (b - a).normalized();
+        let side = vec2(-dir.y, dir.x) * (app.ui.tool_options.balloon_mouth * 0.5 * xf.zoom);
+        painter.line_segment([a - side, a + side], stroke);
+    } else {
+        let r = Rect::from_two_pos(a, b);
+        painter.rect_stroke(r, 2.0, stroke, egui::StrokeKind::Inside);
     }
 }
 

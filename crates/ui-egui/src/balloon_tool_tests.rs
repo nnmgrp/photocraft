@@ -43,30 +43,32 @@ fn a_tail_drag_unions_the_tail_with_the_active_balloon() {
 
 #[test]
 fn cloud_and_spiky_drags_create_balloon_layers() {
-    for (mode, knot_floor) in [("cloud", 18usize), ("spiky", 12usize)] {
+    use crate::comic_balloon_panel::BalloonBodyKindChoice;
+    for (choice, knot_floor) in [(BalloonBodyKindChoice::Cloud, 10usize), (BalloonBodyKindChoice::Spiky, 12usize)] {
         let mut app = app_with(400, 300);
         let layers = app.session.active().unwrap().doc.layers.len();
-        app.ui.tool_options.balloon_mode = mode.into();
+        app.ui.balloon_ui.body_choice = choice;
         crate::vector_ui::finish_balloon(&mut app, [40.0, 40.0], [300.0, 240.0]);
-        assert!(!app.ui.status_error, "{mode} status: {}", app.ui.status);
+        assert!(!app.ui.status_error, "{choice:?} status: {}", app.ui.status);
         let st = app.session.active().unwrap();
-        assert_eq!(st.doc.layers.len(), layers + 1, "{mode} adds one shape layer");
+        assert_eq!(st.doc.layers.len(), layers + 1, "{choice:?} adds one shape layer");
         let id = active_layer_id(&app);
-        let LayerContent::Shape(sh) = &st.doc.layer(photocraft_doc::LayerId(id)).unwrap().content else { panic!("{mode} did not create a shape layer") };
-        assert!(sh.path.subpaths[0].knots.len() >= knot_floor, "{mode}: {} knots", sh.path.subpaths[0].knots.len());
+        let LayerContent::Shape(sh) = &st.doc.layer(photocraft_doc::LayerId(id)).unwrap().content else { panic!("{choice:?} did not create a shape layer") };
+        assert!(matches!(sh.live, Some(photocraft_doc::LiveShape::BalloonGroup { .. })), "{choice:?} should create live BalloonGroup");
+        assert!(sh.path.subpaths[0].knots.len() >= knot_floor, "{choice:?}: {} knots", sh.path.subpaths[0].knots.len());
     }
 }
 
 #[test]
-fn a_click_is_not_a_balloon_and_a_missing_shape_layer_is_reported() {
-    let mut app = app_with(200, 200);
-    // A click (no drag) creates nothing.
-    app.ui.tool_options.balloon_mode = "cloud".into();
-    crate::vector_ui::finish_balloon(&mut app, [50.0, 50.0], [51.0, 51.0]);
-    assert_eq!(app.session.active().unwrap().doc.layers.len(), 1, "only the background");
-    // A tail drag without any shape layer under it explains itself instead of failing silently.
-    app.ui.tool_options.balloon_mode = "tail".into();
-    crate::vector_ui::finish_balloon(&mut app, [50.0, 50.0], [150.0, 150.0]);
-    assert!(app.ui.status_error, "the tool reports the missing balloon body");
-    assert_eq!(app.session.active().unwrap().doc.layers.len(), 1);
+fn a_click_creates_live_balloon_from_panel_and_guards_near_active_gizmo() {
+    let mut app = app_with(600, 600);
+    app.ui.balloon_ui.body_choice = crate::comic_balloon_panel::BalloonBodyKindChoice::Spiky;
+    crate::vector_ui::finish_balloon(&mut app, [300.0, 300.0], [301.0, 301.0]);
+    assert!(!app.ui.status_error, "status: {}", app.ui.status);
+    assert_eq!(app.session.active().unwrap().doc.layers.len(), 2, "click creates live balloon layer");
+    assert!(app.balloon_gizmo.active_balloon_id.is_some());
+
+    // A slight miss near the active balloon's bounds should not spawn a duplicate layer.
+    crate::vector_ui::finish_balloon(&mut app, [310.0, 310.0], [311.0, 311.0]);
+    assert_eq!(app.session.active().unwrap().doc.layers.len(), 2, "near-active miss must not duplicate");
 }

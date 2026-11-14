@@ -8,6 +8,11 @@
 //! per-frame motion: the frame carrying the jump then can't be told from an ordinary one, the jump
 //! stays in the delta, and it drags the value towards that end of its range — zero for most
 //! fields — where the clamp holds it.
+//!
+//! Three guards keep that jump out of the value. A warp needs a real crossing since the previous
+//! frame ([`warp_crossed`]), so a widget that sits at an edge is not warped on the frame it is
+//! grabbed. A horizontal delta too long for a hand ([`plausible_step`]) is dropped rather than
+//! applied. And one frame may only move the value half its range ([`bounded_change`]).
 
 use egui::{Pos2, Rect, Response, Ui, Vec2};
 
@@ -16,6 +21,8 @@ struct Scrub {
     precise: f64,
     confined: bool,
     pending: Option<(Pos2, Pos2)>,
+    /// Where the pointer was on the previous frame of this drag.
+    prev: Option<Pos2>,
 }
 
 pub(crate) fn active(ui: &Ui) -> bool {
@@ -35,25 +42,62 @@ fn wrap_target(pos: Pos2, viewport: Rect) -> Option<Pos2> {
     }
 }
 
+/// The warp for a drag that reached an edge on this frame, having been inside it on the frame
+/// before.
+///
+/// Requiring the crossing keeps a pointer that merely sits at an edge from warping on the frame it
+/// is grabbed: the frame the drag starts on compares against the press point, which is at that edge
+/// too. A drag that starts inside and then reaches the edge still wraps, so a long scrub keeps
+/// going, and a pointer that lands on the opposite edge does not bounce there and back.
+fn warp_crossed(prev: Option<Pos2>, pos: Pos2, viewport: Rect) -> Option<Pos2> {
+    let prev = prev.filter(|p| p.is_finite())?;
+    let to = wrap_target(pos, viewport)?;
+    let crossed_left = prev.x > viewport.left() + 1.0 && pos.x <= viewport.left() + 1.0;
+    let crossed_right = prev.x < viewport.right() - 1.0 && pos.x >= viewport.right() - 1.0;
+    (crossed_left || crossed_right).then_some(to)
+}
+
+/// Whether a frame's horizontal motion is short enough for a hand to have made.
+///
+/// A warp the OS applies lands whole in that frame's delta — [`delta`](egui::PointerState::delta) is
+/// `latest_pos - old_pos` — and an uncompensated jump spans most of the window. Treating such a
+/// frame as motion is what used to drive the value to an end of its range: the whole jump became
+/// one `change`, and the clamp then held the value there. A frame that large is dropped instead, so
+/// a compensation that fails costs one frame rather than the value.
+fn plausible_step(dx: f32, viewport: Rect) -> bool {
+    dx.is_finite() && viewport.is_finite() && dx.abs() < (viewport.width() * 0.5).max(64.0)
+}
+
+/// One frame's change, kept from crossing more than half the range.
+///
+/// The change is bounded, not just the value it lands on: however large a jump reaches the delta, a
+/// single frame can never run the value from one end of its range to the other.
+fn bounded_change(change: f64, lo: f64, hi: f64) -> f64 {
+    if !change.is_finite() || lo > hi {
+        return 0.0;
+    }
+    let limit = (hi - lo) * 0.5;
+    change.clamp(-limit, limit)
+}
+
 /// [`delta`](Vec2) with the jump of a pending edge warp taken out.
 ///
 /// The warp reaches the app through the OS, so the frame that carries it holds the whole jump in
-/// its delta. The pointer coming back past the jump's midpoint is what tells that frame apart from
-/// one where the drag merely reversed; an edge warp spans most of the viewport, so no frame of real
-/// motion can reach that midpoint in time.
+/// its delta. Only the frame that actually put the pointer down at the warp's destination may be
+/// corrected, and only by that jump: a pointer that turned back before the warp landed is still
+/// where it looks, so its delta is already all real motion and subtracting the jump would inject
+/// one. That injection ran the value to an end of its range.
 fn unwarped(delta: Vec2, pos: Pos2, pending: &mut Option<(Pos2, Pos2)>) -> Vec2 {
     let Some((from, to)) = *pending else { return delta };
-    if from == to {
-        *pending = None;
+    *pending = None;
+    let step = to - from;
+    if !from.is_finite() || !to.is_finite() || step.x == 0.0 || !pos.is_finite() {
         return delta;
     }
-    let step = to - from;
-    let middle = from + step * 0.5;
-    if (pos - middle).dot(step) > 0.0 {
-        *pending = None;
-        return delta - step;
-    }
-    delta
+    let landed = (pos.x - to.x).abs() <= (step.x.abs() * 0.25).max(1.0);
+    // The jump has to be in this frame's delta for taking it out to mean anything.
+    let carries_jump = delta.x.abs() >= step.x.abs() * 0.5;
+    if landed && carries_jump { delta - step } else { delta }
 }
 
 pub(crate) fn is_holding(ui: &Ui, resp: &Response) -> bool {
@@ -81,19 +125,30 @@ pub(crate) fn drag_wrap(ui: &Ui, resp: &Response) -> (Vec2, bool) {
     let Some(pos) = pos else {
         return (ui.input(|i| i.pointer.delta()), false);
     };
-    let mut scrub = ui.data(|d| d.get_temp::<Scrub>(key)).unwrap_or(Scrub { precise: 0.0, confined: false, pending: None });
+    let mut scrub = ui.data(|d| d.get_temp::<Scrub>(key)).unwrap_or(Scrub { precise: 0.0, confined: false, pending: None, prev: None });
     if !scrub.confined {
         ui.ctx().send_viewport_cmd(egui::ViewportCommand::CursorGrab(egui::CursorGrab::Confined));
         scrub.confined = true;
     }
+    // On the first frame of a drag the previous position is the press point, not the position the
+    // pointer has already reached: a widget that sits against a window edge must not warp on the
+    // frame it is grabbed there, which is what flew the cursor across the window and ran the
+    // value to an end of its range.
+    if scrub.prev.is_none() {
+        scrub.prev = ui.input(|i| i.pointer.press_origin()).filter(|p| p.is_finite()).or(Some(pos));
+    }
     let delta = unwarped(delta, pos, &mut scrub.pending);
+    // A jump this long is a warp that escaped compensation, not a hand: leave the value alone and
+    // keep the drag alive from here.
+    let delta = if plausible_step(delta.x, viewport) { delta } else { Vec2::new(0.0, delta.y) };
     if scrub.pending.is_none()
-        && let Some(to) = wrap_target(pos, viewport)
+        && let Some(to) = warp_crossed(scrub.prev, pos, viewport)
     {
         ui.ctx().send_viewport_cmd(egui::ViewportCommand::CursorPosition(to));
         scrub.pending = Some((pos, to));
         ui.ctx().request_repaint();
     }
+    scrub.prev = Some(pos);
     ui.data_mut(|d| d.insert_temp(key, scrub));
     (delta, true)
 }
@@ -112,14 +167,14 @@ pub(crate) fn update(ui: &Ui, resp: &Response, value: &mut f32, before: f32, ran
         return;
     }
     let (slow, aim) = ui.input(|i| (i.modifiers.shift, i.aim_radius()));
-    let mut scrub = ui.data(|d| d.get_temp::<Scrub>(key)).unwrap_or(Scrub { precise: f64::from(before), confined: true, pending: None });
+    let mut scrub = ui.data(|d| d.get_temp::<Scrub>(key)).unwrap_or(Scrub { precise: f64::from(before), confined: true, pending: None, prev: None });
     if !had_scrub || !scrub.precise.is_finite() {
         scrub.precise = f64::from(before);
     }
     let speed = if slow { speed / 10.0 } else { speed };
-    let change = f64::from(delta.x - delta.y) * speed;
     let (lo, hi) = (f64::from(*range.start()), f64::from(*range.end()));
-    if change.is_finite() && change != 0.0 && lo <= hi {
+    let change = bounded_change(f64::from(delta.x - delta.y) * speed, lo, hi);
+    if change != 0.0 && lo <= hi {
         scrub.precise = (scrub.precise + change).clamp(lo, hi);
         let aim = f64::from(aim) * speed;
         let rounded = egui::emath::smart_aim::best_in_range_f64(scrub.precise - aim, scrub.precise + aim);
@@ -134,45 +189,71 @@ mod tests {
     use super::*;
     use egui::{pos2, vec2};
 
+    /// The press frame has no previous position, so a pointer that sits at a viewport edge is
+    /// never warped when the drag is grabbed. That press-frame warp is what flew the cursor to
+    /// the far edge and drove the value to an end of its range.
     #[test]
-    fn warp_preserves_real_motion_in_the_acknowledgement_frame() {
-        for (from, to, motion) in [(pos2(0.5, 600.0), pos2(997.0, 600.0), vec2(-8.0, 2.0)), (pos2(999.5, 600.0), pos2(3.0, 600.0), vec2(8.0, -2.0))] {
-            let mut pending = Some((from, to));
-            assert_eq!(unwarped(Vec2::ZERO, from, &mut pending), Vec2::ZERO, "wait for an actual warp acknowledgement");
-            assert!(pending.is_some());
-            assert_eq!(unwarped(to - from + motion, to + motion, &mut pending), motion);
-            assert!(pending.is_none());
-            assert_eq!(unwarped(motion, to + motion * 2.0, &mut pending), motion, "ordinary movement after the warp");
-        }
+    fn the_press_frame_never_warps() {
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
+        assert_eq!(warp_crossed(None, pos2(799.5, 300.0), rect), None, "no previous position means no crossing");
+        assert_eq!(warp_crossed(None, pos2(0.5, 300.0), rect), None, "the same at the left edge");
+        assert_eq!(warp_crossed(Some(pos2(799.5, 300.0)), pos2(799.5, 300.0), rect), None, "standing still at an edge is not a crossing");
+        assert_eq!(
+            warp_crossed(Some(pos2(799.5, 300.0)), pos2(800.0, 300.0), rect),
+            None,
+            "a drag grabbed at the edge and pushed further does not warp either"
+        );
     }
 
-    /// A warp in either direction across the viewport keeps the real pointer motion, and reversing
-    /// before it lands cancels it cleanly instead of injecting a jump.
+    /// Reaching an edge from inside the viewport warps, so a long scrub keeps going.
     #[test]
-    fn edge_warp_in_both_directions_preserves_real_motion() {
-        // Warped from the right edge to the left one.
-        let from_right = pos2(997.0, 302.0);
-        let to_left = pos2(3.0, 302.0);
-        let motion_right = vec2(-3.0, -1.5);
-        let mut pending_right = Some((from_right, to_left));
-        assert_eq!(unwarped(Vec2::ZERO, from_right, &mut pending_right), Vec2::ZERO);
-        assert_eq!(unwarped(to_left - from_right + motion_right, to_left + motion_right, &mut pending_right), motion_right);
-        assert!(pending_right.is_none());
+    fn reaching_an_edge_from_inside_warps() {
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
+        assert_eq!(warp_crossed(Some(pos2(700.0, 300.0)), pos2(799.5, 300.0), rect), Some(pos2(3.0, 300.0)), "the right edge wraps to the left one");
+        assert_eq!(warp_crossed(Some(pos2(100.0, 300.0)), pos2(0.5, 300.0), rect), Some(pos2(797.0, 300.0)), "the left edge wraps to the right one");
+        assert_eq!(warp_crossed(Some(pos2(400.0, 300.0)), pos2(410.0, 300.0), rect), None, "no edge, no warp");
+    }
 
-        // Warped from the left edge to the right one.
-        let from_left = pos2(3.0, 298.0);
-        let to_right = pos2(997.0, 298.0);
-        let motion_left = vec2(2.5, 1.0);
-        let mut pending_left = Some((from_left, to_right));
-        assert_eq!(unwarped(Vec2::ZERO, from_left, &mut pending_left), Vec2::ZERO);
-        assert_eq!(unwarped(to_right - from_left + motion_left, to_right + motion_left, &mut pending_left), motion_left);
-        assert!(pending_left.is_none());
+    /// A warp that lands takes its jump back out of the frame's delta; the real motion stays.
+    #[test]
+    fn a_landed_warp_keeps_the_real_motion() {
+        let from = pos2(799.5, 300.0);
+        let to = pos2(3.0, 300.0);
+        let motion = vec2(-2.0, 1.0);
+        let mut pending = Some((from, to));
+        assert_eq!(unwarped(to - from + motion, to + motion, &mut pending), motion);
+        assert!(pending.is_none());
+    }
 
-        // Reversing past the midpoint before the warp lands cancels it.
-        let mut reversed = Some((pos2(990.0, 300.0), pos2(10.0, 300.0)));
-        let returned = pos2(480.0, 300.0);
-        assert_eq!(unwarped(returned - pos2(990.0, 300.0), returned, &mut reversed), returned - pos2(10.0, 300.0));
-        assert!(reversed.is_none());
+    /// A frame that turned back before the warp landed is all real motion; taking the jump out of
+    /// it would inject a jump of its own.
+    #[test]
+    fn a_frame_that_never_landed_is_left_alone() {
+        let from = pos2(799.5, 300.0);
+        let to = pos2(3.0, 300.0);
+        let mut pending = Some((from, to));
+        let delta = vec2(-6.0, 0.5);
+        assert_eq!(unwarped(delta, pos2(793.5, 300.5), &mut pending), delta);
+        assert!(pending.is_none());
+    }
+
+    /// A jump longer than a hand can make is a warp that escaped compensation: it is dropped
+    /// rather than applied, so a failed compensation costs one frame and not the value.
+    #[test]
+    fn an_implausible_jump_is_dropped() {
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
+        assert!(plausible_step(-9.0, rect), "ordinary motion");
+        assert!(!plausible_step(-780.0, rect), "a warp across the window is not a hand");
+    }
+
+    /// One frame may not move the value across more than half its range, whatever reached the
+    /// delta: a single frame can no longer run the value from one end of its range to the other.
+    #[test]
+    fn one_frame_cannot_cross_the_range() {
+        assert_eq!(bounded_change(1000.0, 0.0, 10.0), 5.0);
+        assert_eq!(bounded_change(-1000.0, 0.0, 10.0), -5.0);
+        assert_eq!(bounded_change(1.0, 0.0, 10.0), 1.0);
+        assert_eq!(bounded_change(f64::NAN, 0.0, 10.0), 0.0);
     }
 
     /// A jump no larger than a frame of real motion can't be told from one, so nothing but the

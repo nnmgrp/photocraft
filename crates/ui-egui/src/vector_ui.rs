@@ -1984,10 +1984,7 @@ fn active_linework(app: &PhotocraftApp) -> Option<(u64, photocraft_vector::sai_c
 ///
 /// Takes the two halves it reads rather than the whole app, so a caller holding
 /// `&mut tool_options` can still ask.
-pub fn picked_stroke_width(
-    vc: Option<&VectorCurveState>,
-    session: &photocraft_engine::Session,
-) -> Option<(u64, usize, f32)> {
+pub fn picked_stroke_width(vc: Option<&VectorCurveState>, session: &photocraft_engine::Session) -> Option<(u64, usize, f32)> {
     let vc = vc?;
     if vc.mode == VectorCurveMode::Draw {
         return None;

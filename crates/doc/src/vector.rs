@@ -467,6 +467,29 @@ pub enum LiveBalloonBody {
         smooth: bool,
         seed: u32,
     },
+    /// A straight-edged explosion star: rays drawn with straight segments between jittered tips
+    /// and deep valleys, so it reads as an ink burst instead of a soft shout balloon.
+    Burst {
+        rect: [f64; 4],
+        /// Number of rays: 5..=64 (default 14).
+        rays: u32,
+        /// Tip reach as a fraction of the radius: 0.10..=1.20 (default 0.60).
+        length: f64,
+        /// Valley depth as a fraction of the radius: 0.0..=0.60 (default 0.26).
+        depth: f64,
+        /// Per-ray irregularity: 0.0..=1.0 (default 0.35).
+        jitter: f64,
+        seed: u32,
+    },
+    /// A balloon drawn twice: the inner contour and a concentric outer echo, the classic
+    /// double-line manga outline. Both contours share the layer's fill and stroke.
+    DoubleOutline {
+        rect: [f64; 4],
+        /// 0 = plain ellipse, 1 = full squircle (the inner contour).
+        squircle: f64,
+        /// Distance between the inner and the outer outline: 0.5..=64 px (default 6.0).
+        gap: f64,
+    },
     /// A sea-urchin flash (ウニフラ): radial needles tapering towards the centre over a white mask.
     Uniflash {
         rect: [f64; 4],
@@ -497,16 +520,26 @@ impl LiveBalloonBody {
     /// The body's bounding rectangle `[x, y, w, h]` in document px.
     pub fn rect(&self) -> [f64; 4] {
         match self {
-            Self::Ellipse { rect, .. } | Self::Rect { rect, .. } | Self::Cloud { rect, .. } | Self::Spiky { rect, .. } | Self::Uniflash { rect, .. } => *rect,
+            Self::Ellipse { rect, .. }
+            | Self::Rect { rect, .. }
+            | Self::Cloud { rect, .. }
+            | Self::Spiky { rect, .. }
+            | Self::Burst { rect, .. }
+            | Self::DoubleOutline { rect, .. }
+            | Self::Uniflash { rect, .. } => *rect,
         }
     }
 
     /// Moves the body to a new bounding rectangle.
     pub fn set_rect(&mut self, new_rect: [f64; 4]) {
         match self {
-            Self::Ellipse { rect, .. } | Self::Rect { rect, .. } | Self::Cloud { rect, .. } | Self::Spiky { rect, .. } | Self::Uniflash { rect, .. } => {
-                *rect = new_rect
-            }
+            Self::Ellipse { rect, .. }
+            | Self::Rect { rect, .. }
+            | Self::Cloud { rect, .. }
+            | Self::Spiky { rect, .. }
+            | Self::Burst { rect, .. }
+            | Self::DoubleOutline { rect, .. }
+            | Self::Uniflash { rect, .. } => *rect = new_rect,
         }
     }
 }

@@ -165,20 +165,22 @@ pub fn hit_test_balloon_gizmo(xf: &ViewXform, balloon: &LiveBalloon, cursor_scr:
         }
     }
 
-    // The spikes and the cloud lobes.
-    for (v_idx, v_pt) in vertex_handles_doc(balloon) {
-        let v_scr = xf.to_screen(v_pt[0] as f32, v_pt[1] as f32);
-        if cursor_scr.distance(v_scr) <= hit_r {
-            return Some(GizmoHit::VertexHandle { balloon_id: bid, vertex_index: v_idx });
-        }
-    }
-
+    // The frame corners resize the body, so they win over a vertex handle sitting on the same
+    // spot (an oval bulge dragged towards a corner must not steal the resize).
     let r = balloon.body.rect();
     let corners = [[r[0], r[1]], [r[0] + r[2], r[1]], [r[0] + r[2], r[1] + r[3]], [r[0], r[1] + r[3]]];
     for (idx, c) in corners.iter().enumerate() {
         let c_scr = xf.to_screen(c[0] as f32, c[1] as f32);
         if cursor_scr.distance(c_scr) <= hit_r {
             return Some(GizmoHit::BodyResize { balloon_id: bid, corner: idx });
+        }
+    }
+
+    // The spikes and the cloud lobes.
+    for (v_idx, v_pt) in vertex_handles_doc(balloon) {
+        let v_scr = xf.to_screen(v_pt[0] as f32, v_pt[1] as f32);
+        if cursor_scr.distance(v_scr) <= hit_r {
+            return Some(GizmoHit::VertexHandle { balloon_id: bid, vertex_index: v_idx });
         }
     }
 
@@ -390,7 +392,14 @@ pub fn on_drag_move(app: &mut PhotocraftApp, drag: &BalloonGizmoDrag, cur_doc: [
         }
         GizmoHit::VertexHandle { vertex_index, .. } => {
             let base_off = drag.initial_balloon.get_vertex_offset(vertex_index);
-            let new_off = [base_off[0] + dx, base_off[1] + dy];
+            let mut new_off = [base_off[0] + dx, base_off[1] + dy];
+            // An oval bulge only bows its quadrant of the contour: an offset past ~42 % of the
+            // body's short side would fold the spline through its neighbours.
+            if matches!(drag.initial_balloon.body, LiveBalloonBody::Ellipse { .. }) {
+                let r = drag.initial_balloon.body.rect();
+                let limit = (r[2].abs().min(r[3].abs()) * 0.42).max(4.0);
+                new_off = [new_off[0].clamp(-limit, limit), new_off[1].clamp(-limit, limit)];
+            }
             if let Some(ov) = updated.vertex_overrides.iter_mut().find(|v| v.index == vertex_index) {
                 ov.offset = new_off;
             } else {

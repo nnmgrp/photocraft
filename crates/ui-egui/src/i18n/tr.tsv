@@ -4586,3 +4586,62 @@ cameraData	Lens	Lens
 	Layer centered in the selection	Katman seçim içinde ortalandı
 	Align failed	Hizalama başarısız oldu
 	Create a Linework vector layer	Çizgi sanatı vektör katmanı oluştur
+	~ SCurve	~ SCurve
+	＋ Add tail	＋ Add tail
+	＋ Create balloon on canvas	＋ Create balloon on canvas
+	＋ Fit balloon	＋ Fit balloon
+	⊘ None	⊘ None
+	⌒ Arc	⌒ Arc
+	▽ Wedge	▽ Wedge
+	◎ Double outline	◎ Double outline
+	◌ Thought	◌ Thought
+	☁️ Cloud	☁️ Cloud
+	✓ Text fits: {lines} lines, {size} pt	✓ Text fits: {lines} lines, {size} pt
+	✴️ Burst	✴️ Burst
+	⑂ Double	⑂ Double
+	◽ Rect	◽ Rect
+	⚠ Text does not fit — enlarge the balloon or reduce the type size	⚠ Text does not fit — enlarge the balloon or reduce the type size
+	⚡ Bake to SAI Linework	⚡ Bake to SAI Linework
+	⚡ Lightning	⚡ Lightning
+	⚪ Ellipse	⚪ Ellipse
+	Add a tail to the selected balloon	Add a tail to the selected balloon
+	Background colour	Background colour
+	Balloon body:	Balloon body:
+	Bubble radius:	Bubble radius:
+	Bumps:	Bumps:
+	Bundle:	Bundle:
+	Corner radius:	Corner radius:
+	Cusp bite:	Cusp bite:
+	Dialogue and fit:	Dialogue and fit:
+	Dialogue text…	Dialogue text…
+	Fit the shape to the text: the balloon grows when the line does not fit	Fit the shape to the text: the balloon grows when the line does not fit
+	Hand-drawn noise:	Hand-drawn noise:
+	Inner sharpness:	Inner sharpness:
+	Inward concavity:	Inward concavity:
+	Jitter:	Jitter:
+	Lobe height:	Lobe height:
+	Mouth width:	Mouth width:
+	Needle width:	Needle width:
+	Needles:	Needles:
+	Outer sharpness:	Outer sharpness:
+	Outline gap:	Outline gap:
+	Random jitter variation	Random jitter variation
+	Random ray variation	Random ray variation
+	Ray extension:	Ray extension:
+	Ray length:	Ray length:
+	Rays:	Rays:
+	Round the tips	Round the tips
+	Spikes:	Spikes:
+	Squircle:	Squircle:
+	Stroke and fill:	Stroke and fill:
+	Sub-harmonics:	Sub-harmonics:
+	Tail type:	Tail type:
+	Text area:	Text area:
+	Thought bubbles:	Thought bubbles:
+	Turn the balloon into an editable vector linework layer	Turn the balloon into an editable vector linework layer
+	Type size:	Type size:
+	Valley depth:	Valley depth:
+	💥 Spiky	💥 Spiky
+	🔄 Reset to the manga default	🔄 Reset to the manga default
+	🦔 Uniflash	🦔 Uniflash
+	Snap Close	Snap Close

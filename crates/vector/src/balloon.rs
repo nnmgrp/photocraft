@@ -95,6 +95,82 @@ fn jittered(value: f64, seed: u32, index: u32, amount: f64) -> f64 {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Hand-drawn contour noise.
+// ---------------------------------------------------------------------------------------------
+
+/// One contour's deterministic outline noise: the same document always draws the same wobble.
+///
+/// The offset of every knot is a smooth (two-octave) function of its perimeter position, so the
+/// contour keeps its proportions instead of turning into a ragged polygon; only the contour's
+/// own vertices move, never the tails or the text area.
+pub fn hand_drawn_offsets(points: &[P], amount: f64, seed: u32) -> Vec<P> {
+    let n = points.len();
+    let mut out = Vec::with_capacity(n);
+    if n == 0 || !(amount.is_finite() && amount > 0.0) {
+        return vec![(0.0, 0.0); n];
+    }
+    let amount = amount.clamp(0.0, 1.0);
+
+    // The amplitude follows the balloon's own size, not the edge between its knots: a superellipse
+    // has only four knots, so an edge-based amplitude would move its corners by tens of pixels and
+    // fold the contour. The mean edge still caps it on a dense contour (a 128-spike shout or a
+    // burst), where a size-based wobble alone would make neighbouring knots cross.
+    let mut perimeter = 0.0;
+    let (mut min_x, mut min_y, mut max_x, mut max_y) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for i in 0..n {
+        let p = points[i];
+        perimeter += dist(p, points[(i + 1) % n]);
+        min_x = min_x.min(p.0);
+        min_y = min_y.min(p.1);
+        max_x = max_x.max(p.0);
+        max_y = max_y.max(p.1);
+    }
+    let min_dim = (max_x - min_x).min(max_y - min_y);
+    let mean_edge = perimeter / n as f64;
+    let amplitude = (min_dim.max(0.0) * 0.05).min(mean_edge.max(0.0) * 0.20) * amount;
+
+    for i in 0..n {
+        let t = i as f64 / n as f64;
+        // Two octaves of the seeded hash read as a low-frequency wobble plus a small tremor. The
+        // octaves carry different phase offsets (one of them seeded), so a four-knot contour does
+        // not sample both sines at the same zeros.
+        let a = hash01(seed, i as u32) - 0.5;
+        let b = hash01(seed ^ 0x5F35_6495, i as u32) - 0.5;
+        let phase = std::f64::consts::TAU * t;
+        let seed_phase = hash01(seed ^ 0x9E37_79B9, 0) * std::f64::consts::TAU;
+        let wobble = (phase * 3.0 + 0.7 + seed_phase).sin() * 0.45 + (phase * 7.0 + 2.1 + seed_phase * 1.7).sin() * 0.2 + a * 0.6 + b * 0.25;
+        let prev = points[(i + n - 1) % n];
+        let next = points[(i + 1) % n];
+        let along = norm(sub(next, prev));
+        let normal = if along == (0.0, 0.0) { (0.0, 0.0) } else { (-along.1, along.0) };
+        out.push(mul(normal, wobble * amplitude));
+    }
+    out
+}
+
+/// The same contour translated by per-knot offsets, controls included, so every segment keeps
+/// its shape and only its position wobbles.
+fn perturbed_path(path: &Path, amount: f64, seed: u32) -> Path {
+    if !(amount.is_finite() && amount > 0.0) {
+        return path.clone();
+    }
+    let mut out = path.clone();
+    for (sub_index, subpath) in out.subpaths.iter_mut().enumerate() {
+        if !subpath.closed || subpath.knots.len() < 3 {
+            continue;
+        }
+        let anchors: Vec<P> = subpath.knots.iter().map(|k| (k.anchor.x, k.anchor.y)).collect();
+        let offsets = hand_drawn_offsets(&anchors, amount, seed ^ (sub_index as u32).wrapping_mul(0x2545_F491));
+        for (knot, offset) in subpath.knots.iter_mut().zip(offsets) {
+            knot.anchor = Point::new(knot.anchor.x + offset.0, knot.anchor.y + offset.1);
+            knot.in_ctrl = Point::new(knot.in_ctrl.x + offset.0, knot.in_ctrl.y + offset.1);
+            knot.out_ctrl = Point::new(knot.out_ctrl.x + offset.0, knot.out_ctrl.y + offset.1);
+        }
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------------------------
 // Polygon union (the "С‚РРє" of a balloon body and its tail).
 // ---------------------------------------------------------------------------------------------
 
@@ -846,6 +922,8 @@ pub trait LiveBalloonGeom {
     fn get_vertex_offset(&self, index: u32) -> [f64; 2];
     /// Canonical canvas-space handle positions `[x, y]` for draggable vertices (`Spiky` tips, `Cloud` cusps).
     fn vertex_handle_positions(&self) -> Vec<(u32, [f64; 2])>;
+    /// The deterministic seed of the hand-drawn contour wobble.
+    fn noise_seed(&self) -> u32;
     /// The balloon's closed outline, its tails merged in.
     fn rebuild_closed_path(&self) -> Path;
 }
@@ -856,18 +934,188 @@ pub trait LiveBalloonGroupGeom {
     fn rebuild_group_path(&self) -> Path;
 }
 
-/// A superellipse (`squircle` 0 = ellipse, 1 = full squircle) as a closed path.
-fn build_superellipse_path(cx: f64, cy: f64, rx: f64, ry: f64, squircle: f64) -> Path {
+/// The parameters of a straight-edged burst, for the command that creates one without a live
+/// balloon ([`burst`]).
+#[derive(Clone, Copy, Debug)]
+pub struct BurstParams {
+    pub rays: u32,
+    pub length: f64,
+    pub depth: f64,
+    pub jitter: f64,
+    pub seed: u32,
+}
+
+impl Default for BurstParams {
+    fn default() -> Self {
+        Self { rays: 14, length: 0.60, depth: 0.26, jitter: 0.35, seed: 1 }
+    }
+}
+
+/// A straight-edged explosion: a sharp star polygon whose tips and valleys both wander.
+///
+/// Unlike [`build_spiky_body`] every edge is a straight segment (no concave arc between the
+/// rays) and the valleys bite well inside the radius, which is what makes an ink "burst" read as
+/// an explosion rather than as a raised-voice balloon.
+fn build_burst_body(balloon: &LiveBalloon, rect: [f64; 4], rays: u32, length: f64, depth: f64, jitter: f64, seed: u32) -> Path {
+    burst_path(rect, rays, length, depth, jitter, seed, |i| balloon.get_vertex_offset(i))
+}
+
+/// A burst without live per-vertex drags (the plain `shape.balloon.create` path).
+pub fn burst(rect: [f64; 4], params: BurstParams) -> Path {
+    burst_path(rect, params.rays, params.length, params.depth, params.jitter, params.seed, |_| [0.0, 0.0])
+}
+
+fn burst_path(rect: [f64; 4], rays: u32, length: f64, depth: f64, jitter: f64, seed: u32, offset: impl Fn(u32) -> [f64; 2]) -> Path {
+    let cx = rect[0] + rect[2] * 0.5;
+    let cy = rect[1] + rect[3] * 0.5;
+    let rx = (rect[2] * 0.5).abs().max(4.0);
+    let ry = (rect[3] * 0.5).abs().max(4.0);
+    let n = rays.clamp(5, 64);
+    let step = std::f64::consts::TAU / (n as f64);
+    let jit = jitter.clamp(0.0, 1.0);
+    let length = length.clamp(0.10, 1.20);
+    let depth = depth.clamp(0.0, 0.60);
+
+    let mut points: Vec<P> = Vec::with_capacity(n as usize * 2);
+    for i in 0..n {
+        let a_tip = -std::f64::consts::FRAC_PI_2 + (i as f64) * step + (hash_f64(seed, i * 4) - 0.5) * jit * step * 0.5;
+        let tip_r = 1.0 + length * (1.0 + (hash_f64(seed, i * 4 + 1) - 0.5) * jit * 0.8);
+        let tip = (cx + rx * tip_r * a_tip.cos(), cy + ry * tip_r * a_tip.sin());
+
+        let a_valley = a_tip + step * 0.5;
+        let valley_r = (1.0 - depth * (1.0 + (hash_f64(seed, i * 4 + 2) - 0.5) * jit * 0.6)).clamp(0.30, 1.0);
+        let valley = (cx + rx * valley_r * a_valley.cos(), cy + ry * valley_r * a_valley.sin());
+
+        // A manually dragged tip moves the ray it belongs to.
+        let off = offset(i);
+        points.push((tip.0 + off[0], tip.1 + off[1]));
+        points.push(valley);
+    }
+
+    Path::new(vec![Subpath::polygon(&points)])
+}
+
+/// The inner and the outer contour of a double outline, separately, so a tail can be welded into
+/// each of them (see [`LiveBalloon::rebuild_closed_path`]).
+fn double_outline_contours(rect: [f64; 4], squircle: f64, gap: f64) -> (Path, Path) {
+    let cx = rect[0] + rect[2] * 0.5;
+    let cy = rect[1] + rect[3] * 0.5;
+    let rx = (rect[2] * 0.5).abs().max(4.0);
+    let ry = (rect[3] * 0.5).abs().max(4.0);
+    let gap = gap.clamp(0.5, 64.0).min(rx.min(ry) * 0.45);
+
+    let inner = build_superellipse_path(cx, cy, rx - gap * 0.5, ry - gap * 0.5, squircle);
+    let outer = build_superellipse_path(cx, cy, rx + gap * 0.5, ry + gap * 0.5, squircle);
+    (inner, outer)
+}
+
+/// Two concentric outlines: the inner balloon contour and an outer echo `gap` px away.
+///
+/// The fill is the inner contour alone (the first subpath combines, the echo intersects it), so
+/// the gap between the two lines stays transparent instead of being filled as a disc by the
+/// NonZero rule. Both lines are stroked — the classic double-line balloon.
+fn build_double_outline_body(rect: [f64; 4], squircle: f64, gap: f64) -> Path {
+    let (mut inner, mut outer) = double_outline_contours(rect, squircle, gap);
+    // The first subpath combines, every later one combines with it by op: fill = inner ∩ outer.
+    for s in &mut inner.subpaths {
+        s.op = PathOp::Combine;
+    }
+    for s in &mut outer.subpaths {
+        s.op = PathOp::Intersect;
+    }
+    inner.subpaths.extend(outer.subpaths);
+    Path::new(inner.subpaths)
+}
+
+/// A double outline without a live balloon (the plain `shape.balloon.create` path).
+pub fn double_outline(rect: [f64; 4], squircle: f64, gap: f64) -> Path {
+    build_double_outline_body(rect, squircle, gap)
+}
+
+/// Whether the hand-drawn wobble may move this body's contour.
+///
+/// Only bodies built from one closed contour are eligible. Uniflash is hundreds of independent
+/// needle polygons and DoubleOutline is two contours: moving them by one shared offset either
+/// tears the needles apart or makes the echo cross the inner line.
+fn noise_applies(body: &LiveBalloonBody) -> bool {
+    matches!(
+        body,
+        LiveBalloonBody::Ellipse { .. }
+            | LiveBalloonBody::Rect { .. }
+            | LiveBalloonBody::Cloud { .. }
+            | LiveBalloonBody::Spiky { .. }
+            | LiveBalloonBody::Burst { .. }
+    )
+}
+
+/// The four knots of a superellipse (`squircle` 0 = ellipse, 1 = full squircle).
+fn superellipse_knots(cx: f64, cy: f64, rx: f64, ry: f64, squircle: f64) -> Vec<Knot> {
     let k = 0.5522847498 + squircle.clamp(0.0, 0.85) * 0.28;
     let kx = rx * k;
     let ky = ry * k;
-    let knots = vec![
+    vec![
         Knot { anchor: Point::new(cx, cy - ry), in_ctrl: Point::new(cx - kx, cy - ry), out_ctrl: Point::new(cx + kx, cy - ry), smooth: true },
         Knot { anchor: Point::new(cx + rx, cy), in_ctrl: Point::new(cx + rx, cy - ky), out_ctrl: Point::new(cx + rx, cy + ky), smooth: true },
         Knot { anchor: Point::new(cx, cy + ry), in_ctrl: Point::new(cx + kx, cy + ry), out_ctrl: Point::new(cx - kx, cy + ry), smooth: true },
         Knot { anchor: Point::new(cx - rx, cy), in_ctrl: Point::new(cx - rx, cy + ky), out_ctrl: Point::new(cx - rx, cy - ky), smooth: true },
-    ];
-    Path::new(vec![Subpath { knots, closed: true, op: PathOp::Combine }])
+    ]
+}
+
+/// A superellipse (`squircle` 0 = ellipse, 1 = full squircle) as a closed path.
+fn build_superellipse_path(cx: f64, cy: f64, rx: f64, ry: f64, squircle: f64) -> Path {
+    Path::new(vec![Subpath { knots: superellipse_knots(cx, cy, rx, ry, squircle), closed: true, op: PathOp::Combine }])
+}
+
+/// How many draggable bulges the oval body exposes. The same indices drive the geometry and the
+/// gizmo handles, so a handle always moves the knot it is drawn on.
+pub const OVAL_BULGES: u32 = 12;
+
+/// How many of a Uniflash body's needles get a drag handle (the rest follow the shape sliders).
+pub const UNIFLASH_HANDLES: u32 = 14;
+
+/// One point of a cubic Bézier.
+fn cubic_at(p0: P, c1: P, c2: P, p3: P, t: f64) -> P {
+    let u = 1.0 - t;
+    let (a, b, c, d) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
+    (p0.0 * a + c1.0 * b + c2.0 * c + p3.0 * d, p0.1 * a + c1.1 * b + c2.1 * c + p3.1 * d)
+}
+
+/// The [`OVAL_BULGES`] bulge knots of the oval body, clockwise from the top.
+///
+/// They are sampled from the very cubics [`build_superellipse_path`] draws, so a bulge the user
+/// grabs starts exactly on the contour instead of jumping to a different approximation of it.
+fn oval_bulge_points(cx: f64, cy: f64, rx: f64, ry: f64, squircle: f64) -> Vec<P> {
+    let knots = superellipse_knots(cx, cy, rx, ry, squircle);
+    let n = knots.len();
+    let mut out = Vec::with_capacity(n * 3);
+    for i in 0..n {
+        let a = &knots[i];
+        let b = &knots[(i + 1) % n];
+        let p0 = (a.anchor.x, a.anchor.y);
+        let c1 = (a.out_ctrl.x, a.out_ctrl.y);
+        let c2 = (b.in_ctrl.x, b.in_ctrl.y);
+        let p3 = (b.anchor.x, b.anchor.y);
+        // Three knots per quadrant: the corner plus two thirds points, so the twelve indices are
+        // evenly spread over the contour.
+        out.push(p0);
+        out.push(cubic_at(p0, c1, c2, p3, 1.0 / 3.0));
+        out.push(cubic_at(p0, c1, c2, p3, 2.0 / 3.0));
+    }
+    out
+}
+
+/// The outline of an oval whose bulges have been dragged: a smooth closed spline through the
+/// sampled knots, each moved by its own manual offset.
+fn build_bulged_oval(balloon: &LiveBalloon, cx: f64, cy: f64, rx: f64, ry: f64, squircle: f64) -> Path {
+    let points: Vec<P> = oval_bulge_points(cx, cy, rx, ry, squircle)
+        .into_iter()
+        .enumerate()
+        .map(|(i, p)| {
+            let off = balloon.get_vertex_offset(i as u32);
+            (p.0 + off[0], p.1 + off[1])
+        })
+        .collect();
+    catmull_rom_path(&points, true)
 }
 
 /// A thought cloud: scalloped lobes with cusped joints.
@@ -1148,7 +1396,14 @@ fn build_single_tail_path(balloon: &LiveBalloon, t: &LiveBalloonTail) -> (Option
     if t.preset == TailPreset::None {
         return (None, None);
     }
-    let (mouth_center, normal) = balloon.point_and_normal_on_body(t.perimeter_t);
+    let (analytic_center, analytic_normal) = balloon.point_and_normal_on_body(t.perimeter_t);
+    // The wobble moves the body's edge by a few px, so the mouth is re-seated on the contour that
+    // is actually drawn; otherwise the tail would float off the noisy body at its own mouth.
+    let (mouth_center, normal) = if balloon.hand_drawn_noise > 0.0 && noise_applies(&balloon.body) {
+        nearest_mouth_on_noisy_body(balloon, analytic_center, analytic_normal)
+    } else {
+        (analytic_center, analytic_normal)
+    };
     let tangent = [-normal[1], normal[0]];
     let r = balloon.body.rect();
     let min_half = (r[2].abs().min(r[3].abs()) * 0.5).max(4.0);
@@ -1308,6 +1563,135 @@ fn build_single_tail_path(balloon: &LiveBalloon, t: &LiveBalloonTail) -> (Option
     (Some(Path::new(vec![subpath])), None)
 }
 
+/// The mouth of a tail re-seated on the perturbed body contour.
+///
+/// The analytic [`LiveBalloonGeom::point_and_normal_on_body`] knows only the clean body; the
+/// wobble moves every knot by a few px, so the tail is welded to the nearest point of the contour
+/// that is actually drawn. The normal keeps the analytic orientation (outward), so the tip-side
+/// logic in [`build_single_tail_path`] is unchanged.
+fn nearest_mouth_on_noisy_body(balloon: &LiveBalloon, fallback: [f64; 2], fallback_normal: [f64; 2]) -> ([f64; 2], [f64; 2]) {
+    let path = body_outline_with_noise(balloon);
+    let rings = crate::flatten::flatten_path(&path, UNION_TOL);
+    let Some(ring) = rings.first() else { return (fallback, fallback_normal) };
+    let pts = &ring.pts;
+    let n = pts.len();
+    if n < 2 {
+        return (fallback, fallback_normal);
+    }
+    let mut best = f64::INFINITY;
+    let mut result = (fallback, fallback_normal);
+    for i in 0..n {
+        let a = pts[i];
+        let b = pts[(i + 1) % n];
+        let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+        let len2 = dx * dx + dy * dy;
+        if len2 <= 1e-12 {
+            continue;
+        }
+        let t = (((fallback[0] - a.0) * dx + (fallback[1] - a.1) * dy) / len2).clamp(0.0, 1.0);
+        let p = (a.0 + dx * t, a.1 + dy * t);
+        let d = (p.0 - fallback[0]).powi(2) + (p.1 - fallback[1]).powi(2);
+        if d < best {
+            best = d;
+            let len = len2.sqrt();
+            let mut normal = (dy / len, -dx / len);
+            if normal.0 * fallback_normal[0] + normal.1 * fallback_normal[1] < 0.0 {
+                normal = (-normal.0, -normal.1);
+            }
+            result = ([p.0, p.1], [normal.0, normal.1]);
+        }
+    }
+    result
+}
+
+/// The body outline alone (no tails), with the hand-drawn wobble applied where it is allowed.
+///
+/// `LiveBalloon` lives in `photocraft-doc`, so this stays a free function: the vector crate only
+/// sees the geometry through the traits.
+fn body_outline_with_noise(balloon: &LiveBalloon) -> Path {
+    let path = match &balloon.body {
+        LiveBalloonBody::Ellipse { rect, squircle } => {
+            let cx = rect[0] + rect[2] * 0.5;
+            let cy = rect[1] + rect[3] * 0.5;
+            let rx = (rect[2] * 0.5).abs();
+            let ry = (rect[3] * 0.5).abs();
+            // With no dragged bulge the exact superellipse is kept; the moment a real oval
+            // bulge is moved the contour becomes a spline through the `OVAL_BULGES` knots.
+            if !has_oval_bulge_override(balloon) {
+                build_superellipse_path(cx, cy, rx, ry, *squircle)
+            } else {
+                build_bulged_oval(balloon, cx, cy, rx, ry, *squircle)
+            }
+        }
+        LiveBalloonBody::Rect { rect, corner_radius } => {
+            let r = *corner_radius;
+            crate::shapes::rounded_rect(rect[0], rect[1], rect[2], rect[3], [r, r, r, r])
+        }
+        LiveBalloonBody::Cloud { rect, bumps, amplitude, cusp_bite, jitter, seed } => {
+            build_cloud_body(balloon, *rect, *bumps, *amplitude, *cusp_bite, *jitter, *seed)
+        }
+        LiveBalloonBody::Spiky { rect, spikes, length, sub_harmonic, concavity, jitter, smooth, seed } => build_spiky_body(
+            balloon,
+            SpikyBody {
+                rect: *rect,
+                spikes: *spikes,
+                length: *length,
+                sub_harmonic: *sub_harmonic,
+                concavity: *concavity,
+                jitter: *jitter,
+                smooth: *smooth,
+                seed: *seed,
+            },
+        ),
+        LiveBalloonBody::Burst { rect, rays, length, depth, jitter, seed } => build_burst_body(balloon, *rect, *rays, *length, *depth, *jitter, *seed),
+        LiveBalloonBody::DoubleOutline { rect, squircle, gap } => build_double_outline_body(*rect, *squircle, *gap),
+        // The needles are closed wedge polygons filled with the stroke colour; the white oval
+        // mask is gone (TZ v5.0). The tails are appended below like for every other body,
+        // so active Uniflash tails reach `balloon_to_linework_strokes` too.
+        LiveBalloonBody::Uniflash { .. } => build_uniflash_paths(balloon).unwrap_or_default(),
+    };
+
+    // The wobble moves the body's own knots only, before the tails are welded, so the tail
+    // edges stay straight and the union never sees two noisy boundaries. Multi-contour bodies
+    // (Uniflash, DoubleOutline) are excluded: one shared offset would tear them apart.
+    if balloon.hand_drawn_noise > 0.0 && noise_applies(&balloon.body) { perturbed_path(&path, balloon.hand_drawn_noise, balloon.noise_seed()) } else { path }
+}
+
+/// Whether an ellipse override index really belongs to one of the [`OVAL_BULGES`] sampled
+/// knots. Older documents (or a leftover override from another body kind) can carry indices
+/// past the oval, which must not silently switch the exact superellipse to a spline.
+fn has_oval_bulge_override(balloon: &LiveBalloon) -> bool {
+    balloon.vertex_overrides.iter().any(|v| v.index < OVAL_BULGES)
+}
+
+/// The double outline: both contours are welded to the tails independently, then composited as
+/// a ring. Routing the pair through one polygonal union would flatten the echo into the inner
+/// contour and lose the inner line.
+fn rebuild_double_outline(balloon: &LiveBalloon, rect: [f64; 4], squircle: f64, gap: f64) -> Path {
+    let (mut inner, mut outer) = double_outline_contours(rect, squircle, gap);
+    let mut detached_subpaths = Vec::new();
+    for tail in &balloon.tails {
+        let (welded, detached) = build_single_tail_path(balloon, tail);
+        if let Some(w) = welded {
+            inner = merge_paths_union(&inner, &w);
+            outer = merge_paths_union(&outer, &w);
+        }
+        if let Some(d) = detached {
+            detached_subpaths.extend(d.subpaths);
+        }
+    }
+    for s in &mut inner.subpaths {
+        s.op = PathOp::Combine;
+    }
+    for s in &mut outer.subpaths {
+        s.op = PathOp::Intersect;
+    }
+    let mut subpaths = inner.subpaths;
+    subpaths.extend(outer.subpaths);
+    subpaths.extend(detached_subpaths);
+    Path::new(subpaths)
+}
+
 impl LiveBalloonGeom for LiveBalloon {
     fn safe_text_rect(&self) -> [f64; 4] {
         let r = self.body.rect();
@@ -1332,6 +1716,16 @@ impl LiveBalloonGeom for LiveBalloon {
             LiveBalloonBody::Spiky { length, concavity, .. } => {
                 let f = (1.0 - length * 0.60 - concavity * 0.15).clamp(0.35, 0.88) * 0.72;
                 (rx * f, ry * f)
+            }
+            LiveBalloonBody::Burst { length, depth, .. } => {
+                // The text sits in the star's core: inside the valleys, not out at the rays.
+                let f = (1.0 - length * 0.55 - depth * 0.35).clamp(0.28, 0.80) * 0.66;
+                (rx * f, ry * f)
+            }
+            LiveBalloonBody::DoubleOutline { squircle, gap, .. } => {
+                // Only the inner contour holds the words.
+                let f = (0.71 + 0.17 * squircle.clamp(0.0, 1.0)) * 0.94;
+                (((rx - gap * 0.5) * f).max(4.0), ((ry - gap * 0.5) * f).max(4.0))
             }
             LiveBalloonBody::Uniflash { inner_ratio, .. } => {
                 let f = inner_ratio.clamp(0.30, 0.90) * 0.78;
@@ -1393,6 +1787,19 @@ impl LiveBalloonGeom for LiveBalloon {
                 let valley_factor = (1.0 - concavity.clamp(0.0, 1.0) * 0.28).clamp(0.55, 1.0);
                 let bx = rx * valley_factor;
                 let by = ry * valley_factor;
+                let px = cx + bx * angle.cos();
+                let py = cy + by * angle.sin();
+                let ux = angle.cos() / bx.max(1.0);
+                let uy = angle.sin() / by.max(1.0);
+                let len = (ux * ux + uy * uy).sqrt().max(1e-9);
+                ([px, py], [ux / len, uy / len])
+            }
+            LiveBalloonBody::Burst { depth, .. } => {
+                // The text and the tail sit in the star's core: anchor on the valley contour, not
+                // at the ray tips (which would leave the mouth floating in a gap).
+                let f = (1.0 - depth.clamp(0.0, 0.60) * 0.85).clamp(0.32, 1.0);
+                let bx = rx * f;
+                let by = ry * f;
                 let px = cx + bx * angle.cos();
                 let py = cy + by * angle.sin();
                 let ux = angle.cos() / bx.max(1.0);
@@ -1467,43 +1874,71 @@ impl LiveBalloonGeom for LiveBalloon {
                     out.push((i, [cx + rx * tip_r * angle.cos() + off[0], cy + ry * tip_r * angle.sin() + off[1]]));
                 }
             }
+            LiveBalloonBody::Burst { rays, length, jitter, seed, .. } => {
+                let n = (*rays).clamp(5, 64);
+                let step = std::f64::consts::TAU / (n as f64);
+                let jit = jitter.clamp(0.0, 1.0);
+                let len = length.clamp(0.10, 1.20);
+                for i in 0..n {
+                    let a_tip = -std::f64::consts::FRAC_PI_2 + (i as f64) * step + (hash_f64(*seed, i * 4) - 0.5) * jit * step * 0.5;
+                    let tip_r = 1.0 + len * (1.0 + (hash_f64(*seed, i * 4 + 1) - 0.5) * jit * 0.8);
+                    let off = self.get_vertex_offset(i);
+                    out.push((i, [cx + rx * tip_r * a_tip.cos() + off[0], cy + ry * tip_r * a_tip.sin() + off[1]]));
+                }
+            }
+            LiveBalloonBody::Ellipse { squircle, .. } => {
+                for (i, p) in oval_bulge_points(cx, cy, rx, ry, *squircle).into_iter().enumerate() {
+                    let off = self.get_vertex_offset(i as u32);
+                    out.push((i as u32, [p.0 + off[0], p.1 + off[1]]));
+                }
+            }
+            LiveBalloonBody::Uniflash { needles, inner_ratio, bundle_group, length_jitter, angle_jitter, seed, .. } => {
+                // Uniflash has up to 400 needles: a handle on every one would be an unreadable
+                // wall of dots, so an evenly spread sample is exposed. The index stays the real
+                // needle index, so a dragged handle still moves the needle it sits on.
+                let n = (*needles).clamp(24, 450);
+                let shown = n.min(UNIFLASH_HANDLES);
+                let stride = n as f64 / shown as f64;
+                let step = std::f64::consts::TAU / (n as f64);
+                for slot in 0..shown {
+                    let i = ((slot as f64) * stride).round() as u32;
+                    let rand_a = hash_f64(*seed, i * 3) - 0.5;
+                    let rand_in = hash_f64(*seed, i * 3 + 1);
+                    let bundle_phase = ((i as f64) * 0.35 * std::f64::consts::TAU).sin();
+                    let bundle_shift = bundle_phase * step * 0.35 * bundle_group.clamp(0.0, 1.0);
+                    let theta = (i as f64) * step + bundle_shift + rand_a * step * angle_jitter.clamp(0.0, 1.0);
+                    let harmonic_in = if i % 2 == 0 { 1.0 } else { 0.85 };
+                    let r_in = inner_ratio * (1.0 - 0.32 * length_jitter * rand_in * harmonic_in);
+                    let off = self.get_vertex_offset(i);
+                    out.push((i, [cx + rx * r_in * theta.cos() + off[0], cy + ry * r_in * theta.sin() + off[1]]));
+                }
+            }
             _ => {}
         }
         out
     }
 
-    fn rebuild_closed_path(&self) -> Path {
-        let mut base_path = match &self.body {
-            LiveBalloonBody::Ellipse { rect, squircle } => {
-                let cx = rect[0] + rect[2] * 0.5;
-                let cy = rect[1] + rect[3] * 0.5;
-                build_superellipse_path(cx, cy, (rect[2] * 0.5).abs(), (rect[3] * 0.5).abs(), *squircle)
-            }
-            LiveBalloonBody::Rect { rect, corner_radius } => {
-                let r = *corner_radius;
-                crate::shapes::rounded_rect(rect[0], rect[1], rect[2], rect[3], [r, r, r, r])
-            }
-            LiveBalloonBody::Cloud { rect, bumps, amplitude, cusp_bite, jitter, seed } => {
-                build_cloud_body(self, *rect, *bumps, *amplitude, *cusp_bite, *jitter, *seed)
-            }
-            LiveBalloonBody::Spiky { rect, spikes, length, sub_harmonic, concavity, jitter, smooth, seed } => build_spiky_body(
-                self,
-                SpikyBody {
-                    rect: *rect,
-                    spikes: *spikes,
-                    length: *length,
-                    sub_harmonic: *sub_harmonic,
-                    concavity: *concavity,
-                    jitter: *jitter,
-                    smooth: *smooth,
-                    seed: *seed,
-                },
-            ),
-            // The needles are closed wedge polygons filled with the stroke colour; the white oval
-            // mask is gone (TZ v5.0). The tails are appended below like for every other body,
-            // so active Uniflash tails reach `balloon_to_linework_strokes` too.
-            LiveBalloonBody::Uniflash { .. } => build_uniflash_paths(self).unwrap_or_default(),
+    fn noise_seed(&self) -> u32 {
+        // The body's own seed when it has one, so a wobble follows the shape's variation; the
+        // balloon id separates two otherwise identical bodies.
+        let body_seed = match &self.body {
+            LiveBalloonBody::Cloud { seed, .. }
+            | LiveBalloonBody::Spiky { seed, .. }
+            | LiveBalloonBody::Burst { seed, .. }
+            | LiveBalloonBody::Uniflash { seed, .. } => *seed,
+            LiveBalloonBody::Ellipse { .. } | LiveBalloonBody::Rect { .. } | LiveBalloonBody::DoubleOutline { .. } => 0x9E37_79B9,
         };
+        body_seed ^ self.id.wrapping_mul(0x85EB_CA6B)
+    }
+
+    fn rebuild_closed_path(&self) -> Path {
+        // A double outline is two contours with a ring fill: the tails are welded into each
+        // contour separately and the pair is composited by path operations, never unioned.
+        if let LiveBalloonBody::DoubleOutline { rect, squircle, gap } = &self.body {
+            return rebuild_double_outline(self, *rect, *squircle, *gap);
+        }
+
+        let mut base_path = body_outline_with_noise(self);
 
         let mut detached_subpaths = Vec::new();
         for tail in &self.tails {
@@ -1528,7 +1963,7 @@ impl LiveBalloonGroupGeom for LiveBalloonGroup {
 
         for b in &self.items {
             let p = b.rebuild_closed_path();
-            if b.auto_merge_overlapping && !matches!(b.body, LiveBalloonBody::Uniflash { .. }) {
+            if b.auto_merge_overlapping && !matches!(b.body, LiveBalloonBody::Uniflash { .. } | LiveBalloonBody::DoubleOutline { .. }) {
                 merged_pool = Some(match merged_pool {
                     None => p,
                     Some(acc) => merge_paths_union(&acc, &p),
@@ -2083,5 +2518,408 @@ mod tests {
         let path_uni = lw_uni.rebuild_path();
         assert!(!path_uni.is_empty());
         assert!(crate::flatten::validate_shape(&path_uni, None).is_ok());
+    }
+
+    /// The hand-drawn wobble moves the contour, never the tails, and the same seed always draws
+    /// the same balloon.
+    #[test]
+    fn hand_drawn_noise_moves_the_contour_deterministically() {
+        use photocraft_doc::vector::VertexOverride;
+
+        let rect = [100.0, 120.0, 240.0, 160.0];
+        let plain = LiveBalloon {
+            id: 7,
+            body: LiveBalloonBody::Ellipse { rect, squircle: 0.0 },
+            tails: Vec::new(),
+            next_tail_id: 2,
+            vertex_overrides: Vec::new(),
+            hand_drawn_noise: 0.0,
+            stroke_width: 2.5,
+            auto_merge_overlapping: false,
+        };
+        let noisy = LiveBalloon { hand_drawn_noise: 0.5, ..plain.clone() };
+        let noisy_again = LiveBalloon { hand_drawn_noise: 0.5, ..plain.clone() };
+
+        let plain_path = plain.rebuild_closed_path();
+        let noisy_path = noisy.rebuild_closed_path();
+        assert_eq!(noisy_path.subpaths[0].knots.len(), plain_path.subpaths[0].knots.len(), "the wobble keeps the knot count");
+        assert!(
+            noisy_path.subpaths[0]
+                .knots
+                .iter()
+                .zip(&plain_path.subpaths[0].knots)
+                .any(|(a, b)| ((a.anchor.x - b.anchor.x).powi(2) + (a.anchor.y - b.anchor.y).powi(2)).sqrt() > 0.5),
+            "the noise must move the contour"
+        );
+
+        let again = noisy_again.rebuild_closed_path();
+        assert!(
+            noisy_path.subpaths[0]
+                .knots
+                .iter()
+                .zip(&again.subpaths[0].knots)
+                .all(|(a, b)| (a.anchor.x - b.anchor.x).abs() < 1e-9 && (a.anchor.y - b.anchor.y).abs() < 1e-9),
+            "the same seed must draw the same balloon"
+        );
+
+        // Another balloon of the same shape gets its own wobble: the id separates them.
+        let other = LiveBalloon { id: 8, hand_drawn_noise: 0.5, ..plain.clone() };
+        let other_path = other.rebuild_closed_path();
+        assert!(
+            noisy_path.subpaths[0].knots.iter().zip(&other_path.subpaths[0].knots).any(|(a, b)| (a.anchor.x - b.anchor.x).abs() > 0.01),
+            "two balloons must not share one wobble"
+        );
+
+        // The tail is welded after the wobble, so it stays attached to the moved body.
+        let mut tailed = noisy.clone();
+        tailed.tails = vec![LiveBalloonTail {
+            id: 1,
+            preset: TailPreset::Wedge,
+            perimeter_t: 0.25,
+            mouth_width: 28.0,
+            tip: [40.0, 60.0],
+            bend: 0.0,
+            bubbles: 3,
+            bubble_radius: 10.0,
+        }];
+        let tailed_path = tailed.rebuild_closed_path();
+        assert!(crate::flatten::validate_shape(&tailed_path, None).is_ok());
+
+        // A dragged bulge is not the noise: it is an explicit offset.
+        let bulged = LiveBalloon { vertex_overrides: vec![VertexOverride { index: 0, offset: [10.0, -6.0] }], ..plain.clone() };
+        let bulged_path = bulged.rebuild_closed_path();
+        assert!(
+            bulged_path.subpaths[0].knots.iter().zip(&plain_path.subpaths[0].knots).any(|(a, b)| (a.anchor.x - b.anchor.x).abs() > 0.5),
+            "a dragged bulge must move the contour"
+        );
+    }
+
+    /// The offsets of the wobble are a pure function of the contour, the amount and the seed.
+    #[test]
+    fn hand_drawn_offsets_are_a_pure_function() {
+        let points = vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)];
+        assert!(hand_drawn_offsets(&points, 0.0, 5).iter().all(|o| *o == (0.0, 0.0)), "no noise means no offsets");
+        let a = hand_drawn_offsets(&points, 0.4, 5);
+        let b = hand_drawn_offsets(&points, 0.4, 5);
+        assert_eq!(a, b, "the same seed gives the same offsets");
+        let c = hand_drawn_offsets(&points, 0.4, 6);
+        assert_ne!(a, c, "another seed gives another wobble");
+        assert!(a.iter().any(|o| o.0.abs() + o.1.abs() > 0.01), "the offsets are not all zero");
+    }
+
+    /// A burst is a closed star with straight edges whose rays reach past the body.
+    #[test]
+    fn a_burst_body_is_a_closed_star_with_reaching_rays() {
+        let rect = [100.0, 120.0, 240.0, 160.0];
+        let burst = LiveBalloon {
+            id: 11,
+            body: LiveBalloonBody::Burst { rect, rays: 14, length: 0.6, depth: 0.26, jitter: 0.35, seed: 909 },
+            tails: Vec::new(),
+            next_tail_id: 2,
+            vertex_overrides: Vec::new(),
+            hand_drawn_noise: 0.0,
+            stroke_width: 2.5,
+            auto_merge_overlapping: false,
+        };
+        let path = burst.rebuild_closed_path();
+        assert_eq!(path.subpaths.len(), 1);
+        assert!(path.subpaths[0].closed, "the burst is a closed contour");
+        assert_eq!(path.subpaths[0].knots.len(), 28, "every ray has a tip and a valley");
+
+        let (cx, cy) = (rect[0] + rect[2] * 0.5, rect[1] + rect[3] * 0.5);
+        let reach = path.subpaths[0].knots.iter().map(|k| (k.anchor.x - cx).abs().max((k.anchor.y - cy).abs())).fold(0.0_f64, f64::max);
+        assert!(reach > rect[3] * 0.5, "the rays must reach past the body: {reach}");
+
+        let same = LiveBalloon { id: 11, ..burst.clone() }.rebuild_closed_path();
+        assert!(
+            path.subpaths[0].knots.iter().zip(&same.subpaths[0].knots).all(|(a, b)| (a.anchor.x - b.anchor.x).abs() < 1e-9),
+            "the same seed must draw the same burst"
+        );
+        assert!(crate::flatten::validate_shape(&path, None).is_ok());
+    }
+
+    /// A double outline is two concentric contours sharing the layer's fill and stroke.
+    #[test]
+    fn a_double_outline_has_two_concentric_contours() {
+        let rect = [100.0, 120.0, 240.0, 160.0];
+        let balloon = LiveBalloon {
+            id: 12,
+            body: LiveBalloonBody::DoubleOutline { rect, squircle: 0.0, gap: 6.0 },
+            tails: Vec::new(),
+            next_tail_id: 2,
+            vertex_overrides: Vec::new(),
+            hand_drawn_noise: 0.0,
+            stroke_width: 2.5,
+            auto_merge_overlapping: false,
+        };
+        let path = balloon.rebuild_closed_path();
+        assert_eq!(path.subpaths.len(), 2, "the echo is a second contour");
+        assert!(path.subpaths.iter().all(|s| s.closed));
+
+        let (cx, cy) = (rect[0] + rect[2] * 0.5, rect[1] + rect[3] * 0.5);
+        let radius = |sub: &Subpath| sub.knots.iter().map(|k| ((k.anchor.x - cx).powi(2) + (k.anchor.y - cy).powi(2)).sqrt()).fold(0.0_f64, f64::max);
+        let (a, b) = (radius(&path.subpaths[0]), radius(&path.subpaths[1]));
+        assert!((a - b).abs() > 1.0, "the two contours must differ in size: {a} vs {b}");
+        assert!(crate::flatten::validate_shape(&path, None).is_ok());
+    }
+
+    /// The oval exposes draggable bulges, and a dragged bulge moves the contour it sits on.
+    #[test]
+    fn an_oval_bulge_moves_the_contour_under_its_handle() {
+        use photocraft_doc::vector::VertexOverride;
+
+        let rect = [100.0, 120.0, 240.0, 160.0];
+        let plain = LiveBalloon {
+            id: 13,
+            body: LiveBalloonBody::Ellipse { rect, squircle: 0.0 },
+            tails: Vec::new(),
+            next_tail_id: 2,
+            vertex_overrides: Vec::new(),
+            hand_drawn_noise: 0.0,
+            stroke_width: 2.5,
+            auto_merge_overlapping: false,
+        };
+        let plain_path = plain.rebuild_closed_path();
+        assert_eq!(plain_path.subpaths[0].knots.len(), 4, "an untouched oval stays the exact superellipse");
+
+        let bulged = LiveBalloon { vertex_overrides: vec![VertexOverride { index: 0, offset: [0.0, -20.0] }], ..plain.clone() };
+        let bulged_path = bulged.rebuild_closed_path();
+        assert!(bulged_path.subpaths[0].knots.len() > 4, "a dragged bulge turns the oval into a spline");
+        assert!(
+            bulged_path.subpaths[0].knots.iter().zip(&plain_path.subpaths[0].knots).any(|(a, b)| (a.anchor.y - b.anchor.y).abs() > 1.0),
+            "the dragged bulge must move the contour"
+        );
+
+        let handles = bulged.vertex_handle_positions();
+        assert_eq!(handles.len(), OVAL_BULGES as usize, "the oval exposes its bulge handles");
+        for ((_, pos), knot) in handles.iter().zip(&bulged_path.subpaths[0].knots) {
+            assert!((pos[0] - knot.anchor.x).abs() < 1e-6 && (pos[1] - knot.anchor.y).abs() < 1e-6, "a handle sits on its own knot");
+        }
+        assert!(crate::flatten::validate_shape(&bulged_path, None).is_ok());
+    }
+
+    #[test]
+    fn the_noise_amplitude_follows_the_body_size() {
+        // A four-knot contour must not be thrown tens of pixels off: the amplitude is a share of
+        // the body's short side, not of the (very long) edge between two opposite knots.
+        let square = square(0.0, 0.0, 100.0);
+        for offset in hand_drawn_offsets(&square, 1.0, 3) {
+            assert!(offset.0.hypot(offset.1) <= 5.01, "a four-knot contour folds: {offset:?}");
+        }
+    }
+
+    /// Whether two segments cross strictly between their endpoints.
+    fn segments_cross(a: P, b: P, c: P, d: P) -> bool {
+        let orient = |p: P, q: P, r: P| (q.0 - p.0) * (r.1 - p.1) - (q.1 - p.1) * (r.0 - p.0);
+        let (o1, o2) = (orient(a, b, c), orient(a, b, d));
+        let (o3, o4) = (orient(c, d, a), orient(c, d, b));
+        o1 * o2 < -1e-9 && o3 * o4 < -1e-9
+    }
+
+    #[test]
+    fn the_noise_never_self_intersects_a_dense_contour() {
+        let rect = [100.0, 120.0, 240.0, 160.0];
+        let balloon = LiveBalloon {
+            id: 21,
+            body: LiveBalloonBody::Spiky { rect, spikes: 64, length: 0.35, sub_harmonic: 0.4, concavity: 0.65, jitter: 0.3, smooth: false, seed: 7 },
+            tails: Vec::new(),
+            next_tail_id: 2,
+            vertex_overrides: Vec::new(),
+            hand_drawn_noise: 1.0,
+            stroke_width: 2.5,
+            auto_merge_overlapping: false,
+        };
+        let path = balloon.rebuild_closed_path();
+        let rings = crate::flatten::flatten_path(&path, 0.2);
+        let pts = &rings.first().expect("one contour").pts;
+        let n = pts.len();
+        assert!(n > 60, "the dense contour is sampled: {n}");
+        for i in 0..n {
+            for j in (i + 1)..n {
+                let adjacent = j == i + 1 || (i == 0 && j == n - 1);
+                if adjacent {
+                    continue;
+                }
+                assert!(!segments_cross(pts[i], pts[(i + 1) % n], pts[j], pts[(j + 1) % n]), "noisy segments {i} and {j} cross");
+            }
+        }
+        // The wobble stays near the body: compare against the same body without noise, so the
+        // test measures the wobble (5 % of the short side) and not the body's own overhang.
+        let plain = LiveBalloon { hand_drawn_noise: 0.0, ..balloon };
+        let plain_path = plain.rebuild_closed_path();
+        let plain_rings = crate::flatten::flatten_path(&plain_path, 0.2);
+        let plain_pts = &plain_rings.first().expect("one plain contour").pts;
+        let (mut px0, mut py0, mut px1, mut py1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+        for p in plain_pts {
+            px0 = px0.min(p.0);
+            py0 = py0.min(p.1);
+            px1 = px1.max(p.0);
+            py1 = py1.max(p.1);
+        }
+        // 5 % of the 160 px short side is 8 px; the flattening of the noisy cubics adds a little.
+        for p in pts {
+            assert!(p.0 >= px0 - 10.0 && p.0 <= px1 + 10.0, "x {}", p.0);
+            assert!(p.1 >= py0 - 10.0 && p.1 <= py1 + 10.0, "y {}", p.1);
+        }
+        let _ = rect;
+    }
+
+    #[test]
+    fn a_noisy_body_keeps_its_tail_welded() {
+        let rect = [100.0, 120.0, 240.0, 160.0];
+        let bodies = [
+            LiveBalloonBody::Ellipse { rect, squircle: 0.2 },
+            LiveBalloonBody::Spiky { rect, spikes: 24, length: 0.4, sub_harmonic: 0.4, concavity: 0.65, jitter: 0.3, smooth: false, seed: 11 },
+            LiveBalloonBody::Burst { rect, rays: 14, length: 0.6, depth: 0.26, jitter: 0.35, seed: 13 },
+        ];
+        for body in bodies {
+            let balloon = LiveBalloon {
+                id: 22,
+                body,
+                tails: vec![LiveBalloonTail {
+                    id: 1,
+                    preset: TailPreset::Wedge,
+                    perimeter_t: 0.5,
+                    mouth_width: 30.0,
+                    tip: [220.0, 360.0],
+                    bend: 0.0,
+                    bubbles: 3,
+                    bubble_radius: 10.0,
+                }],
+                next_tail_id: 2,
+                vertex_overrides: Vec::new(),
+                hand_drawn_noise: 0.8,
+                stroke_width: 2.5,
+                auto_merge_overlapping: false,
+            };
+            let path = balloon.rebuild_closed_path();
+            let rings = crate::flatten::flatten_path(&path, 0.05);
+            assert_eq!(rings.len(), 1, "the noisy body and its tail must union into one contour");
+            assert!(crate::flatten::validate_shape(&path, None).is_ok());
+
+            // The mouth really is read from the perturbed contour, not from the clean one.
+            let (analytic, normal) = balloon.point_and_normal_on_body(0.5);
+            let (mouth, mouth_normal) = nearest_mouth_on_noisy_body(&balloon, analytic, normal);
+            assert!((mouth[0] - analytic[0]).hypot(mouth[1] - analytic[1]) > 0.02, "the noise must move the mouth: {mouth:?} vs {analytic:?}");
+            assert!(mouth_normal[0] * normal[0] + mouth_normal[1] * normal[1] > 0.0, "the mouth normal stays outward");
+        }
+    }
+
+    #[test]
+    fn the_burst_tail_anchors_on_its_valley_core() {
+        let rect = [100.0, 120.0, 240.0, 160.0];
+        let balloon = LiveBalloon {
+            id: 23,
+            body: LiveBalloonBody::Burst { rect, rays: 14, length: 0.6, depth: 0.30, jitter: 0.35, seed: 3 },
+            tails: Vec::new(),
+            next_tail_id: 2,
+            vertex_overrides: Vec::new(),
+            hand_drawn_noise: 0.0,
+            stroke_width: 2.5,
+            auto_merge_overlapping: false,
+        };
+        let (p, n) = balloon.point_and_normal_on_body(0.0);
+        let cy = rect[1] + rect[3] * 0.5;
+        let ry = rect[3] * 0.5;
+        assert!(cy - p[1] < ry * 0.95, "the mouth sits inside the ray tips: {}", cy - p[1]);
+        assert!(cy - p[1] > ry * 0.5, "the mouth is not the fallback radius either: {}", cy - p[1]);
+        assert!(n[0] * 0.0 + n[1] * -1.0 > 0.9, "the normal points outward: {n:?}");
+    }
+
+    #[test]
+    fn the_noise_leaves_multi_contour_bodies_alone() {
+        let rect = [100.0, 120.0, 240.0, 160.0];
+        for body in [
+            LiveBalloonBody::DoubleOutline { rect, squircle: 0.0, gap: 6.0 },
+            LiveBalloonBody::Uniflash {
+                rect,
+                needles: 48,
+                inner_ratio: 0.62,
+                bundle_group: 0.4,
+                length_jitter: 0.5,
+                angle_jitter: 0.25,
+                needle_width: 2.2,
+                outer_sharpness: 1.0,
+                inner_sharpness: 1.0,
+                seed: 5,
+            },
+        ] {
+            let plain = LiveBalloon {
+                id: 24,
+                body: body.clone(),
+                tails: Vec::new(),
+                next_tail_id: 2,
+                vertex_overrides: Vec::new(),
+                hand_drawn_noise: 0.0,
+                stroke_width: 2.5,
+                auto_merge_overlapping: false,
+            };
+            let noisy = LiveBalloon { hand_drawn_noise: 1.0, ..plain.clone() };
+            assert_eq!(noisy.rebuild_closed_path(), plain.rebuild_closed_path(), "the wobble must not touch this body");
+        }
+    }
+
+    #[test]
+    fn a_double_outline_tail_keeps_the_ring() {
+        let rect = [100.0, 120.0, 240.0, 160.0];
+        let make = |tails: Vec<LiveBalloonTail>| LiveBalloon {
+            id: 25,
+            body: LiveBalloonBody::DoubleOutline { rect, squircle: 0.0, gap: 6.0 },
+            tails,
+            next_tail_id: 2,
+            vertex_overrides: Vec::new(),
+            hand_drawn_noise: 0.0,
+            stroke_width: 2.5,
+            auto_merge_overlapping: false,
+        };
+        let plain = make(Vec::new());
+        let path = plain.rebuild_closed_path();
+        assert_eq!(path.subpaths.len(), 2);
+        assert_eq!(path.subpaths[0].op, PathOp::Combine, "the inner contour is the fill");
+        assert_eq!(path.subpaths[1].op, PathOp::Intersect, "the echo only intersects: the gap is transparent");
+
+        let (cx, cy) = (rect[0] + rect[2] * 0.5, rect[1] + rect[3] * 0.5);
+        let raster = crate::fill_rasterizer(&path, 0.05);
+        let centre = raster.render(photocraft_geom::Rect::new(cx as i32 - 1, cy as i32 - 1, cx as i32 + 1, cy as i32 + 1));
+        assert!(centre.iter().all(|c| *c > 0.99), "the inner contour is filled: {centre:?}");
+        let mid_gap = cx + 120.0;
+        let ring = raster.render(photocraft_geom::Rect::new(mid_gap as i32, cy as i32, mid_gap as i32 + 1, cy as i32 + 1));
+        assert!(ring.iter().all(|c| *c < 0.01), "the gap between the contours is not filled: {ring:?}");
+
+        let with_tail = make(vec![LiveBalloonTail {
+            id: 1,
+            preset: TailPreset::Wedge,
+            perimeter_t: 0.5,
+            mouth_width: 30.0,
+            tip: [220.0, 360.0],
+            bend: 0.0,
+            bubbles: 3,
+            bubble_radius: 10.0,
+        }]);
+        let tailed = with_tail.rebuild_closed_path();
+        assert!(tailed.subpaths.len() >= 2, "both contours survive the weld");
+        assert_eq!(tailed.subpaths[0].op, PathOp::Combine);
+        assert!(tailed.subpaths[1..].iter().any(|s| s.op == PathOp::Intersect), "the echo is still an intersect contour");
+        let raster = crate::fill_rasterizer(&tailed, 0.05);
+        let ring = raster.render(photocraft_geom::Rect::new(mid_gap as i32, cy as i32, mid_gap as i32 + 1, cy as i32 + 1));
+        assert!(ring.iter().all(|c| *c < 0.01), "the welded ring keeps its transparent gap: {ring:?}");
+    }
+
+    #[test]
+    fn an_override_outside_the_oval_knots_keeps_the_exact_superellipse() {
+        use photocraft_doc::vector::VertexOverride;
+
+        let rect = [100.0, 120.0, 240.0, 160.0];
+        let balloon = LiveBalloon {
+            id: 26,
+            body: LiveBalloonBody::Ellipse { rect, squircle: 0.0 },
+            tails: Vec::new(),
+            next_tail_id: 2,
+            vertex_overrides: vec![VertexOverride { index: OVAL_BULGES, offset: [8.0, 8.0] }],
+            hand_drawn_noise: 0.0,
+            stroke_width: 2.5,
+            auto_merge_overlapping: false,
+        };
+        assert_eq!(balloon.rebuild_closed_path().subpaths[0].knots.len(), 4, "a stale index must not switch to a spline");
     }
 }

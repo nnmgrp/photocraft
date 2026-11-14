@@ -9,7 +9,7 @@ use photocraft_doc::vector::{LiveBalloon, LiveBalloonBody, LiveBalloonGroup, Liv
 use photocraft_doc::{Color, Fill, Layer, LayerContent, LayerId, LiveShape, ShapeLayer, ShapeStroke};
 use photocraft_geom::Point;
 use photocraft_vector as vector;
-use photocraft_vector::balloon::{self, BalloonTail, CloudParams, LegacyTailPreset, LiveBalloonGeom, LiveBalloonGroupGeom, SaiPoint, SpikeParams};
+use photocraft_vector::balloon::{self, BalloonTail, BurstParams, CloudParams, LegacyTailPreset, LiveBalloonGeom, LiveBalloonGroupGeom, SaiPoint, SpikeParams};
 use photocraft_vector::sai_curve::LiveLinework;
 use serde_json::{Value, json};
 
@@ -131,6 +131,9 @@ fn validate_balloon(b: &LiveBalloon) -> std::result::Result<(), String> {
     if !b.hand_drawn_noise.is_finite() {
         return Err("the balloon's noise must be finite".into());
     }
+    if !(0.0..=1.0).contains(&b.hand_drawn_noise) {
+        return Err("the balloon's noise must be between 0.0 and 1.0".into());
+    }
     let finite = |v: f64| v.is_finite();
     match &b.body {
         LiveBalloonBody::Ellipse { squircle, .. } => {
@@ -157,6 +160,34 @@ fn validate_balloon(b: &LiveBalloon) -> std::result::Result<(), String> {
             }
             if *spikes > 128 {
                 return Err("the balloon may have at most 128 spikes".into());
+            }
+        }
+        LiveBalloonBody::Burst { rays, length, depth, jitter, .. } => {
+            if !finite(*length) || !finite(*depth) || !finite(*jitter) {
+                return Err("the burst's parameters must be finite".into());
+            }
+            if !(5..=64).contains(rays) {
+                return Err("the burst must have between 5 and 64 rays".into());
+            }
+            if !(0.10..=1.20).contains(length) {
+                return Err("the burst's ray length must be between 0.10 and 1.20".into());
+            }
+            if !(0.0..=0.60).contains(depth) {
+                return Err("the burst's valley depth must be between 0.0 and 0.60".into());
+            }
+            if !(0.0..=1.0).contains(jitter) {
+                return Err("the burst's jitter must be between 0.0 and 1.0".into());
+            }
+        }
+        LiveBalloonBody::DoubleOutline { squircle, gap, .. } => {
+            if !finite(*squircle) || !finite(*gap) {
+                return Err("the double outline's parameters must be finite".into());
+            }
+            if !(0.0..=1.0).contains(squircle) {
+                return Err("the double outline's squircle must be between 0.0 and 1.0".into());
+            }
+            if !(0.5..=64.0).contains(gap) {
+                return Err("the double outline's gap must be between 0.5 and 64 px".into());
             }
         }
         LiveBalloonBody::Uniflash {
@@ -470,7 +501,22 @@ fn balloon_create(s: &mut Session, p: &Value) -> Result<Value> {
             };
             (balloon::spiky(rect, params), "Shout Balloon")
         }
-        other => return Err(bad(CMD, format!("unknown balloon kind `{other}` (cloud|spiky)"))),
+        "burst" | "explosion" | "star" => {
+            let params = BurstParams {
+                rays: opt_u32(p, "rays", CMD)?.map_or(14, |v| v.clamp(5, 64)),
+                length: opt_f64(p, "length", CMD)?.map_or(0.60, |v| v.clamp(0.10, 1.20)),
+                depth: opt_f64(p, "depth", CMD)?.map_or(0.26, |v| v.clamp(0.0, 0.60)),
+                jitter: opt_f64(p, "jitter", CMD)?.map_or(0.35, |v| v.clamp(0.0, 1.0)),
+                seed: opt_u32(p, "seed", CMD)?.unwrap_or(1),
+            };
+            (balloon::burst(rect, params), "Burst Balloon")
+        }
+        "doubleOutline" | "double-outline" | "double" => {
+            let squircle = opt_f64(p, "squircle", CMD)?.map_or(0.0, |v| v.clamp(0.0, 1.0));
+            let gap = opt_f64(p, "gap", CMD)?.map_or(6.0, |v| v.clamp(0.5, 64.0));
+            (balloon::double_outline(rect, squircle, gap), "Double Outline Balloon")
+        }
+        other => return Err(bad(CMD, format!("unknown balloon kind `{other}` (cloud|spiky|burst|doubleOutline)"))),
     };
     let fg = s.tools.foreground;
     let fgc = Color::rgba(fg[0], fg[1], fg[2], fg[3]);
@@ -578,7 +624,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "shape.balloon.create",
             "New Balloon",
             [],
-            r##"{{"kind":"cloud|spiky"="cloud","rect":[x,y,w,h] (required),"bumps":3..64=9,"amplitude":0..1=0.18,"jitter":0..1=0.35,"spikes":3..128=12,"length":0..2=0.45,"inward":bool=false,"smooth":bool=false,"seed":int=1,{fill}=foreground,{stroke}=none,"name":str?}} -> shape.info. cloud = scalloped thought balloon; spiky = shout/flash balloon. With "balloon" instead: {balloon:{id,body,tails,...}} = a parametric manga balloon (ellipse|rect|cloud|spiky|uniflash body, none|wedge|arc|sCurve|lightning|double|thought tails)."##,
+            r##"{{"kind":"cloud|spiky|burst|doubleOutline"="cloud","rect":[x,y,w,h] (required),"bumps":3..64=9,"amplitude":0..1=0.18,"jitter":0..1=0.35,"spikes":3..128=12,"length":0..2=0.45,"inward":bool=false,"smooth":bool=false,"rays":5..64=14,"depth":0..0.6=0.26,"squircle":0..1=0,"gap":0.5..64=6,"seed":int=1,{fill}=foreground,{stroke}=none,"name":str?}} -> shape.info. cloud = scalloped thought balloon; spiky = shout/flash balloon; burst = straight-edged explosion star; doubleOutline = inner line plus an outer echo with transparent gap. With "balloon" instead: {balloon:{id,body,tails,...}} = a parametric manga balloon (ellipse|rect|cloud|spiky|burst|doubleOutline|uniflash body, none|wedge|arc|sCurve|lightning|double|thought tails)."##,
             has_doc,
             balloon_create
         ),

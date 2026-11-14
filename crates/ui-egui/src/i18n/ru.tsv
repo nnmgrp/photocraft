@@ -5220,3 +5220,62 @@ shape	Appearance	Оформление
 	Layer centered in the selection	Слой выровнен по центру выделения
 	Align failed	Не удалось выровнять
 	Create a Linework vector layer	Создать векторный слой штрихов
+	~ SCurve	~ SCurve
+	＋ Add tail	＋ Добавить хвост
+	＋ Create balloon on canvas	＋ Создать баллон на холсте
+	＋ Fit balloon	＋ Вписать баббл
+	⊘ None	⊘ Нет
+	⌒ Arc	⌒ Дуга
+	▽ Wedge	▽ Клин
+	◎ Double outline	◎ Двойной контур
+	◌ Thought	◌ Мысль
+	☁️ Cloud	☁️ Облако
+	✓ Text fits: {lines} lines, {size} pt	✓ Текст влезает: строк {lines}, кегль {size} pt
+	✴️ Burst	✴️ Взрыв
+	⑂ Double	⑂ Двойной
+	◽ Rect	◽ Прямоугольник
+	⚠ Text does not fit — enlarge the balloon or reduce the type size	⚠ Текст не влезает — увеличьте баллон или уменьшите кегль
+	⚡ Bake to SAI Linework	⚡ Запечь в лайнворк SAI
+	⚡ Lightning	⚡ Молния
+	⚪ Ellipse	⚪ Эллипс
+	Add a tail to the selected balloon	Добавить хвост к выбранному баллону
+	Background colour	Цвет фона
+	Balloon body:	Форма тела баллона:
+	Bubble radius:	Радиус пузыря:
+	Bumps:	Волны:
+	Bundle:	Пучки:
+	Corner radius:	Радиус углов:
+	Cusp bite:	Заход стыков:
+	Dialogue and fit:	Реплика и подгонка:
+	Dialogue text…	Текст реплики…
+	Fit the shape to the text: the balloon grows when the line does not fit	Подогнать форму под текст: баллон вырастет, если реплика не влезает
+	Hand-drawn noise:	Неряшливость контура:
+	Inner sharpness:	Острота внутрь:
+	Inward concavity:	Прогиб внутрь:
+	Jitter:	Асимметрия:
+	Lobe height:	Высота фестонов:
+	Mouth width:	Ширина устья:
+	Needle width:	Ширина иглы:
+	Needles:	Иглы:
+	Outer sharpness:	Острота наружу:
+	Outline gap:	Зазор контуров:
+	Random jitter variation	Случайная вариация асимметрии
+	Random ray variation	Случайная вариация лучей
+	Ray extension:	Вылет лучей:
+	Ray length:	Длина лучей:
+	Rays:	Лучи:
+	Round the tips	Скруглять вершины
+	Spikes:	Зубья:
+	Squircle:	Сквиркл:
+	Stroke and fill:	Контур и заливка:
+	Sub-harmonics:	Субгармоники:
+	Tail type:	Тип хвоста:
+	Text area:	Поле под текст:
+	Thought bubbles:	Хвосты-мысли:
+	Turn the balloon into an editable vector linework layer	Превратить баллон в редактируемый векторный слой лайнворка
+	Type size:	Кегль:
+	Valley depth:	Глубина впадин:
+	💥 Spiky	💥 Шипастый
+	🔄 Reset to the manga default	🔄 Сбросить на манга-стандарт
+	🦔 Uniflash	🦔 Унифлеш
+	Snap Close	Привязка замыкания

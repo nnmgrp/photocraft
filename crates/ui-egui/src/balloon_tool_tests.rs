@@ -72,3 +72,72 @@ fn a_click_creates_live_balloon_from_panel_and_guards_near_active_gizmo() {
     crate::vector_ui::finish_balloon(&mut app, [310.0, 310.0], [311.0, 311.0]);
     assert_eq!(app.session.active().unwrap().doc.layers.len(), 2, "near-active miss must not duplicate");
 }
+
+#[test]
+fn chamfer_rect_and_double_outline_create_distinct_live_balloons() {
+    let mut app = app_with(600, 600);
+    app.ui.tool_options.balloon_mode = "body".into();
+    app.ui.balloon_ui.body_choice = crate::comic_balloon_panel::BalloonBodyKindChoice::ChamferRect;
+    crate::vector_ui::finish_balloon(&mut app, [60.0, 60.0], [220.0, 160.0]);
+    {
+        let doc = &app.session.active().unwrap().doc;
+        assert_eq!(doc.layers.len(), 2);
+        let photocraft_doc::LayerContent::Shape(sh) = &doc.layers[1].content else {
+            panic!("expected shape layer for ChamferRect");
+        };
+        let Some(photocraft_doc::LiveShape::BalloonGroup { ref group }) = sh.live else {
+            panic!("expected BalloonGroup");
+        };
+        assert!(matches!(group.items[0].body, photocraft_doc::vector::LiveBalloonBody::ChamferRect { .. }));
+    }
+
+    app.ui.balloon_ui.body_choice = crate::comic_balloon_panel::BalloonBodyKindChoice::DoubleOutline;
+    crate::vector_ui::finish_balloon(&mut app, [320.0, 80.0], [500.0, 200.0]);
+    let doc = &app.session.active().unwrap().doc;
+    assert_eq!(doc.layers.len(), 3);
+    let photocraft_doc::LayerContent::Shape(sh) = &doc.layers[2].content else {
+        panic!("expected shape layer for DoubleOutline");
+    };
+    let Some(photocraft_doc::LiveShape::BalloonGroup { ref group }) = sh.live else {
+        panic!("expected BalloonGroup");
+    };
+    assert!(matches!(group.items[0].body, photocraft_doc::vector::LiveBalloonBody::DoubleOutline { .. }));
+}
+
+#[test]
+fn script_batch_svg_and_vector_brush_commands_roundtrip_via_app() {
+    let mut app = app_with(800, 800);
+    let batch = app.run("shape.balloon.batchFromScript", serde_json::json!({ "script": "Line 1\nLine 2!!", "sizePt": 14.0, "vertical": false })).unwrap();
+    assert_eq!(batch["createdBalloons"].as_u64(), Some(2));
+    let layer_id = batch["layer"].as_u64().unwrap();
+
+    let exported = app.run("shape.balloon.exportSvg", serde_json::json!({ "layer": layer_id, "balloonId": 1, "text": "Hi!", "sizePt": 14.0 })).unwrap();
+    let svg = exported["svg"].as_str().unwrap();
+    assert!(svg.contains("<svg"), "exported SVG must include <svg root");
+
+    let imported = app
+        .run(
+            "shape.balloon.importSvg",
+            serde_json::json!({
+                "layer": layer_id,
+                "balloonId": 1,
+                "svg": "M 0 0 L 120 0 L 120 80 L 0 80 Z"
+            }),
+        )
+        .unwrap();
+    assert_eq!(imported["ok"].as_bool(), Some(true));
+    assert_eq!(imported["importedKnots"].as_u64(), Some(4));
+
+    let list1 = app.run("shape.vectorBrush.list", serde_json::json!({})).unwrap();
+    let base = list1["presets"].as_array().unwrap().first().unwrap().clone();
+    let mut custom: photocraft_doc::vector_brush::VectorBrushPreset = serde_json::from_value(base).unwrap();
+    custom.id = "custom:ui_roundtrip_test".to_string();
+    custom.name = "UI Roundtrip Brush".to_string();
+
+    let imp_brush = app.run("shape.vectorBrush.import", serde_json::json!({ "preset": custom })).unwrap();
+    assert_eq!(imp_brush["ok"].as_bool(), Some(true));
+
+    let list2 = app.run("shape.vectorBrush.list", serde_json::json!({})).unwrap();
+    let has_custom = list2["presets"].as_array().unwrap().iter().any(|p| p.get("id").and_then(|v| v.as_str()) == Some("custom:ui_roundtrip_test"));
+    assert!(has_custom, "imported vector brush preset must persist in session library");
+}

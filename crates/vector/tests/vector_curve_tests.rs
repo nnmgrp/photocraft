@@ -6,7 +6,7 @@
 //! `LiveBalloonGeom` / `LiveBalloonGroupGeom` traits (the balloon types themselves belong to
 //! the `photocraft-doc` crate, which stays pure data).
 
-use photocraft_doc::vector::{LiveBalloon, LiveBalloonBody, LiveBalloonGroup, LiveBalloonTail, LiveShape, TailPreset};
+use photocraft_doc::vector::{LiveBalloon, LiveBalloonBody, LiveBalloonGroup, LiveBalloonTail, LiveShape, TailPreset, UniflashMode};
 use photocraft_vector::balloon::{LiveBalloonGeom, LiveBalloonGroupGeom, balloon_to_linework_strokes};
 use photocraft_vector::comic_sai_curve::{
     LiveVectorStroke, SAI_BEZIER_TENSION, SAI_DEFAULT_TENSION, SaiCurveType, SaiPoint, alpha_at, sample_sai_curve, tapered_curve_path, tapered_rings_ex,
@@ -98,6 +98,7 @@ fn test_balloon_v3_1_all_5_bodies_and_linework_conversion() {
             needle_width: 2.2,
             outer_sharpness: 0.0,
             inner_sharpness: 1.0,
+            mode: UniflashMode::InwardNeedles,
             seed: 42,
         },
         tails: Vec::new(),
@@ -106,6 +107,7 @@ fn test_balloon_v3_1_all_5_bodies_and_linework_conversion() {
         hand_drawn_noise: 0.0,
         stroke_width: 2.2,
         auto_merge_overlapping: false,
+        ..LiveBalloon::default()
     };
     let thought_cloud = LiveBalloon {
         id: 3,
@@ -125,6 +127,7 @@ fn test_balloon_v3_1_all_5_bodies_and_linework_conversion() {
         hand_drawn_noise: 0.0,
         stroke_width: 3.0,
         auto_merge_overlapping: true,
+        ..LiveBalloon::default()
     };
 
     let group = LiveBalloonGroup { items: vec![ellipse_balloon.clone(), uniflash_balloon.clone(), thought_cloud.clone()], next_balloon_id: 4 };

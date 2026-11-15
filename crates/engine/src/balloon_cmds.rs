@@ -5,7 +5,7 @@
 //! [`ShapeLayer`](photocraft_doc::ShapeLayer) path, so Free Transform, history, PSD export and the
 //! rest of the shape tooling keep working unchanged.
 
-use photocraft_doc::vector::{LiveBalloon, LiveBalloonBody, LiveBalloonGroup, LiveBalloonTail, TailPreset};
+use photocraft_doc::vector::{BalloonVoice, LiveBalloon, LiveBalloonBody, LiveBalloonGroup, LiveBalloonTail, TailPreset, TextDirection};
 use photocraft_doc::{Color, Fill, Layer, LayerContent, LayerId, LiveShape, ShapeLayer, ShapeStroke};
 use photocraft_geom::Point;
 use photocraft_vector as vector;
@@ -13,7 +13,9 @@ use photocraft_vector::balloon::{self, BalloonTail, BurstParams, CloudParams, Le
 use photocraft_vector::sai_curve::LiveLinework;
 use serde_json::{Value, json};
 
+use crate::balloon_fit::{body_size_for_text_oriented, fit_text_directed};
 use crate::commands::CommandSpec;
+use crate::vector_brush_lib::is_safe_single_filename;
 use crate::vector_cmds::{bad, has_doc, layer_id, nums, parse_fill, pt, refresh_shape, set_live_linework, shape_info, with_shape};
 use crate::{EngineError, Result, Session};
 
@@ -128,11 +130,36 @@ fn validate_balloon(b: &LiveBalloon) -> std::result::Result<(), String> {
     if !b.stroke_width.is_finite() || !(0.1..=1.0e4).contains(&b.stroke_width) {
         return Err("the balloon's stroke width must be between 0.1 and 10000 px".into());
     }
-    if !b.hand_drawn_noise.is_finite() {
-        return Err("the balloon's noise must be finite".into());
-    }
-    if !(0.0..=1.0).contains(&b.hand_drawn_noise) {
+    if !b.hand_drawn_noise.is_finite() || !(0.0..=1.0).contains(&b.hand_drawn_noise) {
         return Err("the balloon's noise must be between 0.0 and 1.0".into());
+    }
+    if !b.hand_drawn_warp.is_finite() || !(0.0..=1.0).contains(&b.hand_drawn_warp) {
+        return Err("the balloon's warp noise must be between 0.0 and 1.0".into());
+    }
+    if !b.noise_scale.is_finite() || !(0.25..=4.0).contains(&b.noise_scale) {
+        return Err("the balloon's noise scale must be between 0.25 and 4.0".into());
+    }
+    if !b.voice_intensity.is_finite() || !(0.0..=1.0).contains(&b.voice_intensity) {
+        return Err("the balloon's voice intensity must be between 0.0 and 1.0".into());
+    }
+    if let Some(u) = &b.underlay
+        && (!u.offset.iter().all(|v| v.is_finite() && v.abs() <= 1.0e5)
+            || !u.scale.is_finite()
+            || !(0.5..=2.0).contains(&u.scale)
+            || !u.rectness.is_finite()
+            || !(0.0..=1.0).contains(&u.rectness))
+    {
+        return Err("the balloon's underlay parameters are out of range".into());
+    }
+    if let Some(ref preset_id) = b.brush_preset_id
+        && !is_safe_single_filename(preset_id)
+    {
+        return Err("the balloon's `brush_preset_id` must be a valid preset identifier".into());
+    }
+    if let Some(ref svg) = b.custom_svg_contour
+        && svg.len() > 262_144
+    {
+        return Err("the balloon's custom SVG contour exceeds 256 KiB".into());
     }
     let finite = |v: f64| v.is_finite();
     match &b.body {
@@ -144,6 +171,11 @@ fn validate_balloon(b: &LiveBalloon) -> std::result::Result<(), String> {
         LiveBalloonBody::Rect { corner_radius, .. } => {
             if !finite(*corner_radius) {
                 return Err("the balloon's corner radius must be finite".into());
+            }
+        }
+        LiveBalloonBody::ChamferRect { chamfer, concave, .. } => {
+            if !finite(*chamfer) || !finite(*concave) || *chamfer < 0.0 || !(0.0..=1.0).contains(concave) {
+                return Err("the chamfer rect's chamfer and concave must be valid".into());
             }
         }
         LiveBalloonBody::Cloud { bumps, amplitude, cusp_bite, jitter, .. } => {
@@ -196,13 +228,50 @@ fn validate_balloon(b: &LiveBalloon) -> std::result::Result<(), String> {
             if !finite(*inner_ratio) || !finite(*bundle_group) || !finite(*length_jitter) || !finite(*angle_jitter) || !finite(*needle_width) {
                 return Err("the uniflash's parameters must be finite".into());
             }
-            if *needles > 400 {
-                return Err("the uniflash may have at most 400 needles".into());
+            if *needles > 450 {
+                return Err("the uniflash may have at most 450 needles".into());
             }
             if !finite(*outer_sharpness) || !finite(*inner_sharpness) || !(0.0..=1.0).contains(outer_sharpness) || !(0.0..=1.0).contains(inner_sharpness) {
                 return Err("the uniflash's outer and inner sharpness must be between 0.0 and 1.0".into());
             }
         }
+    }
+    if !b.double_gap_px.is_finite() || !(0.5..=64.0).contains(&b.double_gap_px) {
+        return Err("double_gap_px must be between 0.5 and 64 px".into());
+    }
+    if !(6..=96).contains(&b.whisper_dash_count) || !b.whisper_duty.is_finite() || !(0.20..=0.85).contains(&b.whisper_duty) {
+        return Err("whisper line style parameters (whisper_dash_count 6..=96, whisper_duty 0.20..=0.85) are out of range".into());
+    }
+    if !(1..=8).contains(&b.pencil_strands) || !b.pencil_roughness.is_finite() || !(0.0..=1.0).contains(&b.pencil_roughness) {
+        return Err("pencil line style parameters are out of range".into());
+    }
+    if !b.pixel_size_px.is_finite() || !(1.5..=32.0).contains(&b.pixel_size_px) {
+        return Err("pixel_size_px must be between 1.5 and 32 px".into());
+    }
+    if !b.ukiyo_contrast.is_finite() || !(0.0..=1.0).contains(&b.ukiyo_contrast) {
+        return Err("ukiyo_contrast must be between 0.0 and 1.0".into());
+    }
+    if !b.haze_spread.is_finite()
+        || !(0.0..=100.0).contains(&b.haze_spread)
+        || !b.stipple_density.is_finite()
+        || !(0.0..=100.0).contains(&b.stipple_density)
+        || !(24..=600).contains(&b.stipple_count)
+        || !b.stipple_randomness.is_finite()
+        || !(0.0..=100.0).contains(&b.stipple_randomness)
+        || !b.grain_size.is_finite()
+        || !(5.0..=100.0).contains(&b.grain_size)
+        || !b.edge_roughness.is_finite()
+        || !(0.0..=100.0).contains(&b.edge_roughness)
+    {
+        return Err("stipple_dots line style parameters are out of range".into());
+    }
+    if !(0..=128).contains(&b.sparkle_count)
+        || !b.sparkle_size.is_finite()
+        || !(0.2..=4.0).contains(&b.sparkle_size)
+        || !b.sparkle_randomness.is_finite()
+        || !(0.0..=100.0).contains(&b.sparkle_randomness)
+    {
+        return Err("sparkle_glitter line style parameters are out of range".into());
     }
     if b.tails.len() > 64 {
         return Err("a balloon may have at most 64 tails".into());
@@ -227,6 +296,11 @@ fn validate_balloon(b: &LiveBalloon) -> std::result::Result<(), String> {
     for v in &b.vertex_overrides {
         if !v.offset.iter().all(|x| x.is_finite() && x.abs() <= 1.0e7) {
             return Err("a vertex offset must be finite and within 10000000 px".into());
+        }
+    }
+    for s in &b.stipple_overrides {
+        if !s.offset.iter().all(|x| x.is_finite() && x.abs() <= 1.0e7) || !s.radius_scale.is_finite() || !(0.1..=5.0).contains(&s.radius_scale) {
+            return Err("a stipple override offset and radius_scale (0.1..=5.0) must be finite".into());
         }
     }
     Ok(())
@@ -516,7 +590,21 @@ fn balloon_create(s: &mut Session, p: &Value) -> Result<Value> {
             let gap = opt_f64(p, "gap", CMD)?.map_or(6.0, |v| v.clamp(0.5, 64.0));
             (balloon::double_outline(rect, squircle, gap), "Double Outline Balloon")
         }
-        other => return Err(bad(CMD, format!("unknown balloon kind `{other}` (cloud|spiky|burst|doubleOutline)"))),
+        "whisper" | "dashed" => {
+            let dash_count = opt_u32(p, "dashCount", CMD)?.map_or(18, |v| v.clamp(6, 48));
+            let dash_duty = opt_f64(p, "dashDuty", CMD)?.map_or(0.58, |v| v.clamp(0.20, 0.85));
+            let squircle = opt_f64(p, "squircle", CMD)?.map_or(0.25, |v| v.clamp(0.0, 1.0));
+            let seed = opt_u32(p, "seed", CMD)?.unwrap_or(1);
+            (balloon::whisper(rect, dash_count, dash_duty, squircle, seed), "Whisper Balloon")
+        }
+        "chamferRect" | "chamfer-rect" => {
+            let chamfer = opt_f64(p, "chamfer", CMD)?.map_or(16.0, |v| v.max(1.0));
+            let concave = opt_f64(p, "concave", CMD)?.map_or(0.40, |v| v.clamp(0.0, 1.0));
+            (balloon::chamfer_rect(rect, chamfer, concave), "Chamfered Rect Balloon")
+        }
+        other => {
+            return Err(bad(CMD, format!("unknown balloon kind `{other}` (cloud|spiky|burst|doubleOutline|whisper|chamferRect)")));
+        }
     };
     let fg = s.tools.foreground;
     let fgc = Color::rgba(fg[0], fg[1], fg[2], fg[3]);
@@ -540,6 +628,146 @@ fn balloon_create(s: &mut Session, p: &Value) -> Result<Value> {
         Ok(id)
     })?;
     shape_info(s, id)
+}
+
+/// `shape.balloon.batchFromScript`: creates a `BalloonGroup` layer of N balloons from a multiline
+/// script (`script: "Line 1\nLine 2"` or `lines: ["Line 1", ...]`), sizing each balloon to its
+/// line and staggering them down the panel (`TZ 4.3`).
+fn balloon_batch_from_script(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "shape.balloon.batchFromScript";
+    let lines: Vec<String> = if let Some(arr) = p.get("lines").and_then(Value::as_array) {
+        arr.iter().filter_map(|v| v.as_str().map(str::trim)).filter(|l| !l.is_empty()).map(str::to_string).collect()
+    } else if let Some(raw) = p.get("script").and_then(Value::as_str) {
+        raw.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect()
+    } else {
+        return Err(bad(CMD, "provide `lines` ([str, ...]) or `script` (multiline string)"));
+    };
+    if lines.is_empty() || lines.len() > 64 {
+        return Err(bad(CMD, "script must contain between 1 and 64 non-empty lines"));
+    }
+
+    let size_pt = opt_f64(p, "sizePt", CMD)?.unwrap_or(14.0).clamp(4.0, 72.0) as f32;
+    let vertical = opt_bool(p, "vertical", CMD)?.unwrap_or(false);
+    let direction = if vertical { TextDirection::Vertical } else { TextDirection::Horizontal };
+    let (doc_w, doc_h, dpi) = s.active().map(|a| (a.doc.size.width as f64, a.doc.size.height as f64, a.doc.resolution_dpi)).ok_or(EngineError::NoDocument)?;
+
+    let mut items = Vec::with_capacity(lines.len());
+    let mut cur_y = (doc_h * 0.08).max(24.0);
+    for (idx, line) in lines.iter().enumerate() {
+        let [w, h] = body_size_for_text_oriented(line, size_pt, dpi, 0.72, direction);
+        let w = w.clamp(64.0, (doc_w * 0.85).max(80.0));
+        let h = h.clamp(48.0, (doc_h * 0.65).max(64.0));
+        let x = if idx.is_multiple_of(2) {
+            (doc_w * 0.68 - w * 0.5).clamp(16.0, (doc_w - w - 16.0).max(16.0))
+        } else {
+            (doc_w * 0.32 - w * 0.5).clamp(16.0, (doc_w - w - 16.0).max(16.0))
+        };
+        let rect = [x, cur_y, w, h];
+        cur_y += h + 28.0;
+
+        let id = (idx as u32) + 1;
+        let is_shout = line.ends_with("!!") || line.ends_with("!?");
+        let body = if is_shout {
+            LiveBalloonBody::Spiky { rect, spikes: 18, length: 0.36, sub_harmonic: 0.45, concavity: 0.65, jitter: 0.30, smooth: false, seed: 100 + id }
+        } else {
+            LiveBalloonBody::Ellipse { rect, squircle: 0.25 }
+        };
+        items.push(LiveBalloon {
+            id,
+            body,
+            tails: vec![LiveBalloonTail {
+                id: 1,
+                preset: TailPreset::Arc,
+                perimeter_t: 0.56,
+                mouth_width: 24.0,
+                tip: [x + w * 0.35, rect[1] + h + 36.0],
+                bend: 0.16,
+                bubbles: 3,
+                bubble_radius: 10.0,
+            }],
+            next_tail_id: 2,
+            voice: if is_shout { BalloonVoice::Shout } else { BalloonVoice::Neutral },
+            text_direction: direction,
+            auto_merge_overlapping: false,
+            ..LiveBalloon::default()
+        });
+    }
+
+    let group = LiveBalloonGroup { next_balloon_id: (items.len() as u32) + 1, items };
+    let path = group.rebuild_group_path();
+    vector::flatten::validate_shape(&path, None).map_err(|e| bad(CMD, e))?;
+
+    let mut sh = ShapeLayer {
+        path,
+        fill: Some(Fill::Solid(Color::WHITE)),
+        stroke: Some(ShapeStroke { width: 2.5, paint: Fill::Solid(Color::BLACK), ..Default::default() }),
+        live: Some(LiveShape::BalloonGroup { group }),
+        ..Default::default()
+    };
+    let count = lines.len();
+    let id = s.edit("Batch Balloons from Script", |doc, active| {
+        refresh_shape(doc, &mut sh);
+        let name = doc.next_layer_name("Script Balloons");
+        let id = doc.insert_new(*active, Layer::new(name, LayerContent::Shape(sh)));
+        *active = Some(id);
+        Ok(id)
+    })?;
+    Ok(json!({ "layer": id.0, "createdBalloons": count }))
+}
+
+/// `shape.balloon.importSvg`: imports and validates a simple closed SVG contour onto a balloon of
+/// the active layer (`TZ 4.3`).
+fn balloon_import_svg(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "shape.balloon.importSvg";
+    let id = layer_id(s, p)?;
+    let balloon_id = p.get("balloonId").and_then(Value::as_u64).unwrap_or(1) as u32;
+    let svg = p.get("svg").or_else(|| p.get("d")).and_then(Value::as_str).ok_or_else(|| bad(CMD, "missing `svg` or `d` string"))?;
+    if svg.len() > 262_144 {
+        return Err(bad(CMD, "SVG contour exceeds 256 KiB limit"));
+    }
+
+    with_shape(s, id, "Import Balloon SVG Contour", |sh, _l| {
+        let Some(LiveShape::BalloonGroup { ref mut group }) = sh.live else {
+            return Err(bad(CMD, "the layer is not a balloon group"));
+        };
+        let b = group.items.iter_mut().find(|it| it.id == balloon_id).ok_or_else(|| bad(CMD, "the layer has no such balloon"))?;
+        let validated = balloon::parse_simple_svg_contour(svg, b.body.rect()).map_err(|e| bad(CMD, e))?;
+        let knots = validated.subpaths.first().map_or(0, |sp| sp.knots.len());
+        b.custom_svg_contour = Some(svg.to_string());
+        let path = group.rebuild_group_path();
+        vector::flatten::validate_shape(&path, sh.stroke.as_ref()).map_err(|e| bad(CMD, e))?;
+        sh.path = path;
+        Ok(json!({ "ok": true, "importedKnots": knots }))
+    })
+}
+
+/// `shape.balloon.exportSvg`: exports the active balloon to a standalone SVG string (`TZ 4.3`).
+fn balloon_export_svg(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "shape.balloon.exportSvg";
+    let id = layer_id(s, p)?;
+    let balloon_id = p.get("balloonId").and_then(Value::as_u64).unwrap_or(1) as u32;
+    let text = p.get("text").and_then(Value::as_str).unwrap_or("");
+    let size_pt = opt_f64(p, "sizePt", CMD)?.unwrap_or(14.0).clamp(4.0, 72.0) as f32;
+
+    let doc_state = s.active().ok_or(EngineError::NoDocument)?;
+    let dpi = doc_state.doc.resolution_dpi;
+    let layer = doc_state.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+    let LayerContent::Shape(sh) = &layer.content else {
+        return Err(bad(CMD, "the layer is not a shape layer"));
+    };
+    let Some(LiveShape::BalloonGroup { ref group }) = sh.live else {
+        return Err(bad(CMD, "the layer is not a balloon group"));
+    };
+    let b = group.items.iter().find(|it| it.id == balloon_id).or_else(|| group.items.first()).ok_or_else(|| bad(CMD, "no balloon found"))?;
+
+    let svg = if text.trim().is_empty() {
+        balloon::export_balloon_svg(b, None, size_pt)
+    } else {
+        let safe = b.safe_text_rect();
+        let fit = fit_text_directed(text, safe[2] as f32, safe[3] as f32, size_pt, dpi, b.text_direction);
+        balloon::export_balloon_svg(b, Some(&fit.lines), fit.size_pt)
+    };
+    Ok(json!({ "svg": svg }))
 }
 
 /// One click-placed node of `shape.balloon.stroke`.
@@ -624,7 +852,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "shape.balloon.create",
             "New Balloon",
             [],
-            r##"{{"kind":"cloud|spiky|burst|doubleOutline"="cloud","rect":[x,y,w,h] (required),"bumps":3..64=9,"amplitude":0..1=0.18,"jitter":0..1=0.35,"spikes":3..128=12,"length":0..2=0.45,"inward":bool=false,"smooth":bool=false,"rays":5..64=14,"depth":0..0.6=0.26,"squircle":0..1=0,"gap":0.5..64=6,"seed":int=1,{fill}=foreground,{stroke}=none,"name":str?}} -> shape.info. cloud = scalloped thought balloon; spiky = shout/flash balloon; burst = straight-edged explosion star; doubleOutline = inner line plus an outer echo with transparent gap. With "balloon" instead: {balloon:{id,body,tails,...}} = a parametric manga balloon (ellipse|rect|cloud|spiky|burst|doubleOutline|uniflash body, none|wedge|arc|sCurve|lightning|double|thought tails)."##,
+            r##"{{"kind":"cloud|spiky|burst|doubleOutline|whisper|chamferRect"="cloud","rect":[x,y,w,h] (required),"bumps":3..64=9,"amplitude":0..1=0.18,"jitter":0..1=0.35,"spikes":3..128=12,"length":0..2=0.45,"inward":bool=false,"smooth":bool=false,"rays":5..64=14,"depth":0..0.6=0.26,"squircle":0..1=0,"gap":0.5..64=6,"seed":int=1,{fill}=foreground,{stroke}=none,"name":str?}} -> shape.info. With "balloon" instead: {balloon:{id,body,line_style,tails,...}} = a parametric manga balloon."##,
             has_doc,
             balloon_create
         ),
@@ -659,6 +887,30 @@ pub fn specs() -> Vec<CommandSpec> {
             r##"{{"layer":id (required)}} -> {convertedStrokes}. The balloon is redrawn as SAI Linework strokes on the same layer."##,
             has_doc,
             balloon_to_linework
+        ),
+        spec!(
+            "shape.balloon.batchFromScript",
+            "Batch Balloons from Script",
+            [],
+            r##"{{"script":str? or "lines":[str,...],"sizePt":4..72=14,"vertical":bool=false}} -> {layer,createdBalloons}. Creates a BalloonGroup layer with one sized balloon per line of script."##,
+            has_doc,
+            balloon_batch_from_script
+        ),
+        spec!(
+            "shape.balloon.importSvg",
+            "Import Balloon SVG Contour",
+            [],
+            r##"{{"layer":id?,"balloonId":int=1,"svg":str (required)}} -> {ok:true,importedKnots}. Validates and attaches a simple closed SVG contour to the balloon."##,
+            has_shape,
+            balloon_import_svg
+        ),
+        spec!(
+            "shape.balloon.exportSvg",
+            "Export Balloon SVG",
+            [],
+            r##"{{"layer":id?,"balloonId":int=1,"text":str?,"sizePt":4..72=14}} -> {svg:str}. Exports the balloon contour (and optional fitted dialogue) as standalone SVG."##,
+            has_shape,
+            balloon_export_svg
         ),
         spec!(
             "shape.balloon.stroke",

@@ -425,6 +425,8 @@ fn command_uses_ambient_path(id: &str, params: &Value) -> bool {
             // `data` wins over `path` in these commands; any `path` without it reads the filesystem.
             params.get("data").is_none() && params.get("path").is_some()
         }
+        // In-memory `preset` imports are pure data; a `path` without `preset` reads the host filesystem.
+        "shape.vectorBrush.import" => params.get("preset").is_none() && params.get("path").is_some(),
         // With a `path` the file is written there; without one the bytes come back as `data`.
         "actions.save" | "swatches.export" | "layer.layerStyle.contours.save" => params.get("path").is_some(),
         // Shortcut sets: a .kys read or written by path, or a Summarize page written by path.
@@ -871,6 +873,7 @@ mod tests {
             ("actions.save", serde_json::json!({"path": "/outside/set.atn"})),
             ("layer.layerStyle.contours.load", serde_json::json!({"path": "/outside/set.shc"})),
             ("layer.layerStyle.contours.save", serde_json::json!({"path": "/outside/set.shc"})),
+            ("shape.vectorBrush.import", serde_json::json!({"path": "/outside/brush.json"})),
         ] {
             assert!(authorize_engine_command(id, &params).is_err(), "{id}: {params}");
         }
@@ -886,6 +889,7 @@ mod tests {
             ("actions.save", serde_json::json!({"set": "S"})),
             ("layer.layerStyle.contours.load", serde_json::json!({"data": "QUJD"})),
             ("layer.layerStyle.contours.save", serde_json::json!({"names": ["a"]})),
+            ("shape.vectorBrush.import", serde_json::json!({"preset": {"id": "custom:probe", "name": "Probe"}})),
         ] {
             assert!(authorize_engine_command(id, &params).is_ok(), "{id}: {params}");
         }

@@ -561,43 +561,119 @@ pub struct CompiledShape {
     stroke: Option<(Rasterizer, Paint, f32)>,
     /// Fill area used to clip inside/outside strokes.
     align: Option<(Rasterizer, bool)>,
+    /// Stylized balloon Pass 1: white/colored body interiors (`shape.fill`, no stroke).
+    extra_fills: Vec<(Rasterizer, Paint, f32)>,
+    /// Stylized balloon Pass 2: styled ink subpaths (`shape.stroke.paint`, no stroke).
+    extra_inks: Vec<(Rasterizer, Paint, f32)>,
     bounds: Option<Rect>,
+}
+
+fn union_rect_opt(a: Option<Rect>, b: Option<Rect>) -> Option<Rect> {
+    match (a, b) {
+        (Some(x), Some(y)) => Some(x.union(&y)),
+        (x, y) => x.or(y),
+    }
+}
+
+fn composite_raster_over(out: &mut [[f32; 4]], rect: Rect, r: &Rasterizer, paint: &Paint, opacity: f32, align: Option<&(Rasterizer, bool)>) {
+    let w = rect.width() as usize;
+    let mut cov = r.render(rect);
+    if let Some((area, inside)) = align {
+        let a = area.render(rect);
+        for (c, f) in cov.iter_mut().zip(&a) {
+            *c *= if *inside { *f } else { 1.0 - *f };
+        }
+    }
+    for (i, (o, c)) in out.iter_mut().zip(&cov).enumerate() {
+        if *c <= 0.0 {
+            continue;
+        }
+        let (x, y) = ((rect.x0 + (i % w) as i32) as f64 + 0.5, (rect.y0 + (i / w) as i32) as f64 + 0.5);
+        let s = paint.at(x, y);
+        let sa = s[3] * c * opacity;
+        let da = o[3];
+        let a = sa + da * (1.0 - sa);
+        if a > 0.0 {
+            for k in 0..3 {
+                o[k] = (s[k] * sa + o[k] * da * (1.0 - sa)) / a;
+            }
+        }
+        o[3] = a;
+    }
 }
 
 impl CompiledShape {
     /// Compiles the shape at flattening tolerance `tol`. `canvas` is the frame gradients
     /// without "Align with layer" are laid out in.
     pub fn new(shape: &ShapeLayer, tol: f64, canvas: Rect) -> Self {
-        let pb = shape.path.control_bounds().unwrap_or((0.0, 0.0, 0.0, 0.0));
         let cb = (f64::from(canvas.x0), f64::from(canvas.y0), f64::from(canvas.x1), f64::from(canvas.y1));
-        let area = fill_rasterizer(&shape.path, tol);
+        let mut extra_fills = Vec::new();
+        let mut extra_inks = Vec::new();
         let mut bounds = None;
-        let fill = shape.fill.as_ref().map(|f| {
-            let coverage = FillCoverage::new(shape, &area, canvas);
-            bounds = coverage.bounds();
-            (coverage, Paint::from_fill(f, pb, cb))
-        });
-        let all_closed = shape.path.subpaths.iter().all(|s| s.closed);
-        let mut align = None;
-        let stroke = shape.stroke.as_ref().filter(|s| s.width > 0.0 && s.opacity > 0.0).map(|s| {
-            let mut st = stroke_style(s);
-            if all_closed && s.align != StrokeAlign::Center {
-                // Inside/outside strokes: a centred stroke twice as wide, clipped by the fill area.
-                st.width *= 2.0;
-                align = Some((area.clone(), s.align == StrokeAlign::Inside));
+
+        let balloon_passes = match &shape.live {
+            Some(photocraft_doc::LiveShape::BalloonGroup { group }) => {
+                let p = crate::balloon::rebuild_group_render_paths(group);
+                if p.fill_only_path.subpaths.is_empty() && p.ink_from_stroke_path.subpaths.is_empty() { None } else { Some(p) }
             }
-            let r = stroke_rasterizer(&shape.path, &st, tol);
-            let sb = r.pixel_bounds();
-            bounds = match (bounds, sb) {
-                (Some(a), Some(b)) => Some(a.union(&b)),
-                (a, b) => a.or(b),
-            };
-            (r, Paint::from_fill(&s.paint, pb, cb), s.opacity.clamp(0.0, 1.0))
-        });
-        if shape.path.inverted && shape.fill.is_some() {
-            bounds = Some(Rect::new(i32::MIN / 4, i32::MIN / 4, i32::MAX / 4, i32::MAX / 4));
+            _ => None,
+        };
+
+        let standard_path: &Path = match &balloon_passes {
+            Some(passes) => &passes.standard_path,
+            None => &shape.path,
+        };
+
+        let mut fill = None;
+        let mut stroke = None;
+        let mut align = None;
+
+        if !standard_path.subpaths.is_empty() || standard_path.inverted {
+            let pb = standard_path.control_bounds().unwrap_or((0.0, 0.0, 0.0, 0.0));
+            let area = fill_rasterizer(standard_path, tol);
+            fill = shape.fill.as_ref().map(|f| {
+                let coverage = FillCoverage::new(shape, &area, canvas);
+                bounds = coverage.bounds();
+                (coverage, Paint::from_fill(f, pb, cb))
+            });
+            let all_closed = standard_path.subpaths.iter().all(|s| s.closed);
+            stroke = shape.stroke.as_ref().filter(|s| s.width > 0.0 && s.opacity > 0.0).map(|s| {
+                let mut st = stroke_style(s);
+                if all_closed && s.align != StrokeAlign::Center {
+                    // Inside/outside strokes: a centred stroke twice as wide, clipped by the fill area.
+                    st.width *= 2.0;
+                    align = Some((area.clone(), s.align == StrokeAlign::Inside));
+                }
+                let r = stroke_rasterizer(standard_path, &st, tol);
+                bounds = union_rect_opt(bounds, r.pixel_bounds());
+                (r, Paint::from_fill(&s.paint, pb, cb), s.opacity.clamp(0.0, 1.0))
+            });
+            if standard_path.inverted && shape.fill.is_some() {
+                bounds = Some(Rect::new(i32::MIN / 4, i32::MIN / 4, i32::MAX / 4, i32::MAX / 4));
+            }
         }
-        CompiledShape { fill, stroke, align, bounds }
+
+        if let Some(passes) = &balloon_passes {
+            if !passes.fill_only_path.subpaths.is_empty()
+                && let Some(f) = &shape.fill
+            {
+                let fpb = passes.fill_only_path.control_bounds().unwrap_or((0.0, 0.0, 0.0, 0.0));
+                let r = fill_rasterizer(&passes.fill_only_path, tol);
+                bounds = union_rect_opt(bounds, r.pixel_bounds());
+                let density = if shape.density.is_finite() { shape.density.clamp(0.0, 1.0) } else { 1.0 };
+                extra_fills.push((r, Paint::from_fill(f, fpb, cb), density));
+            }
+            if !passes.ink_from_stroke_path.subpaths.is_empty()
+                && let Some(s) = shape.stroke.as_ref().filter(|s| s.width > 0.0 && s.opacity > 0.0)
+            {
+                let ipb = passes.ink_from_stroke_path.control_bounds().unwrap_or((0.0, 0.0, 0.0, 0.0));
+                let r = fill_rasterizer(&passes.ink_from_stroke_path, tol);
+                bounds = union_rect_opt(bounds, r.pixel_bounds());
+                extra_inks.push((r, Paint::from_fill(&s.paint, ipb, cb), s.opacity.clamp(0.0, 1.0)));
+            }
+        }
+
+        CompiledShape { fill, stroke, align, extra_fills, extra_inks, bounds }
     }
 
     /// Pixel bounds of the rendering (`None` = nothing visible).
@@ -622,29 +698,13 @@ impl CompiledShape {
             }
         }
         if let Some((r, paint, opacity)) = &self.stroke {
-            let mut cov = r.render(rect);
-            if let Some((area, inside)) = &self.align {
-                let a = area.render(rect);
-                for (c, f) in cov.iter_mut().zip(&a) {
-                    *c *= if *inside { *f } else { 1.0 - *f };
-                }
-            }
-            for (i, (o, c)) in out.iter_mut().zip(&cov).enumerate() {
-                if *c <= 0.0 {
-                    continue;
-                }
-                let (x, y) = ((rect.x0 + (i % w) as i32) as f64 + 0.5, (rect.y0 + (i / w) as i32) as f64 + 0.5);
-                let s = paint.at(x, y);
-                let sa = s[3] * c * opacity;
-                let da = o[3];
-                let a = sa + da * (1.0 - sa);
-                if a > 0.0 {
-                    for k in 0..3 {
-                        o[k] = (s[k] * sa + o[k] * da * (1.0 - sa)) / a;
-                    }
-                }
-                o[3] = a;
-            }
+            composite_raster_over(&mut out, rect, r, paint, *opacity, self.align.as_ref());
+        }
+        for (r, paint, opacity) in &self.extra_fills {
+            composite_raster_over(&mut out, rect, r, paint, *opacity, None);
+        }
+        for (r, paint, opacity) in &self.extra_inks {
+            composite_raster_over(&mut out, rect, r, paint, *opacity, None);
         }
         out
     }

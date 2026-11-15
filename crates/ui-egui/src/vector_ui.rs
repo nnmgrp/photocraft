@@ -1943,6 +1943,8 @@ pub fn vector_curve_down(app: &mut PhotocraftApp, x: f64, y: f64, ctrl: bool, al
         let done = vc.on_primary_down(x, y, ctrl, alt, shift, double_clicked, closed, zoom);
         if was_empty && !vc.points.is_empty() {
             vc.target_layer_id = active_layer_id;
+            vc.selected_stroke = None;
+            vc.selected_stroke_layer = None;
         }
         done
     };
@@ -1978,17 +1980,14 @@ fn active_linework(app: &PhotocraftApp) -> Option<(u64, photocraft_vector::sai_c
     Some((id.0, lw))
 }
 
-/// The stroke an Edit or Weight press last picked on the active Linework layer, as
-/// `(layer id, stroke index, its base width)`. `None` in Draw mode, with nothing picked, or once
-/// the layer or stroke is gone — a width change then only arms the next stroke.
+/// The stroke an Edit or Weight press (or temporary Shift/Alt pick) last selected on the active Linework layer, as
+/// `(layer id, stroke index, its base width)`. `None` with nothing picked, once a new Draw curve starts,
+/// or once the layer or stroke is gone — a width change then only arms the next stroke.
 ///
 /// Takes the two halves it reads rather than the whole app, so a caller holding
 /// `&mut tool_options` can still ask.
 pub fn picked_stroke_width(vc: Option<&VectorCurveState>, session: &photocraft_engine::Session) -> Option<(u64, usize, f32)> {
     let vc = vc?;
-    if vc.mode == VectorCurveMode::Draw {
-        return None;
-    }
     let idx = vc.selected_stroke?;
     let st = session.active()?;
     let layer_id = st.active_layer?;

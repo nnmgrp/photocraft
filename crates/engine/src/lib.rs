@@ -149,6 +149,7 @@ pub mod type_spell_cmds;
 pub mod type_styles_cmds;
 mod variables_cmds;
 pub use variables_cmds::{export_data_sets_with, import_data_sets_text};
+pub mod vector_brush_lib;
 pub mod vector_cmds;
 mod video_cmds;
 pub use video_cmds::render_video_with;
@@ -569,6 +570,8 @@ pub struct Session {
     next_held_open: u64,
     /// File › Timelapse: recordings of the open documents ([`timelapse_cmds`]).
     pub timelapse: timelapse_cmds::Recorder,
+    /// Extensible vector & texture brush preset library (`shape.vectorBrush.*`).
+    pub vector_brushes: vector_brush_lib::VectorBrushLibrary,
 }
 
 /// Move item `i` of `v` to position `to`, clamped to the end. Returns where it went; `None` when

@@ -419,6 +419,191 @@ pub struct VertexOverride {
     pub offset: [f64; 2],
 }
 
+/// Voice preset of a manga line (controls type scale, slant, and contour roughness).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BalloonVoice {
+    /// Calm everyday speech.
+    #[default]
+    Neutral,
+    /// Quiet / whispered remark (smaller type, finer contour).
+    Whisper,
+    /// Loud shout / exclamation (larger type, italic slant, rougher contour).
+    Shout,
+    /// Irritated / tense remark (jagged tremor and deep bends).
+    Irritated,
+    /// Broadcast / speakerphone / telepathy (even mechanical cadence).
+    Broadcast,
+    /// Eerie / ominous remark (deep wavering contour warp).
+    Eerie,
+}
+
+impl BalloonVoice {
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::Neutral => "neutral",
+            Self::Whisper => "whisper",
+            Self::Shout => "shout",
+            Self::Irritated => "irritated",
+            Self::Broadcast => "broadcast",
+            Self::Eerie => "eerie",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Self> {
+        match id {
+            "neutral" | "plain" => Some(Self::Neutral),
+            "whisper" | "weak" => Some(Self::Whisper),
+            "shout" => Some(Self::Shout),
+            "irritated" => Some(Self::Irritated),
+            "broadcast" | "distant" => Some(Self::Broadcast),
+            "eerie" => Some(Self::Eerie),
+            _ => None,
+        }
+    }
+}
+
+/// Reading and layout direction of text inside a balloon.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TextDirection {
+    /// Standard horizontal left-to-right lines.
+    #[default]
+    Horizontal,
+    /// Manga vertical top-to-bottom, right-to-left columns (tategaki).
+    Vertical,
+}
+
+/// Horizontal/column alignment of text inside the balloon's safe area.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BalloonTextAlign {
+    #[default]
+    Center,
+    Left,
+    Justify,
+}
+
+/// Optional underlay figure rendered behind the balloon body.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BalloonUnderlay {
+    pub enabled: bool,
+    /// Offset `[dx, dy]` relative to the balloon's rect in document px.
+    #[serde(default = "default_underlay_offset")]
+    pub offset: [f64; 2],
+    /// Scale multiplier relative to the balloon's rect (default `1.04`).
+    #[serde(default = "default_underlay_scale")]
+    pub scale: f64,
+    /// 0.0 = ellipse, 1.0 = rounded rectangle.
+    #[serde(default)]
+    pub rectness: f64,
+}
+
+fn default_underlay_offset() -> [f64; 2] {
+    [6.0, 6.0]
+}
+
+fn default_underlay_scale() -> f64 {
+    1.04
+}
+
+impl Default for BalloonUnderlay {
+    fn default() -> Self {
+        Self { enabled: false, offset: default_underlay_offset(), scale: default_underlay_scale(), rectness: 0.35 }
+    }
+}
+
+/// A manual position and radius override for an individual stipple dot in `BalloonLineStyle::StippleDots`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StippleDotOverride {
+    pub index: u32,
+    pub offset: [f64; 2],
+    #[serde(default = "default_one_f64")]
+    pub radius_scale: f64,
+}
+
+/// Display mode for a `Uniflash` (sea-urchin flash) balloon.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum UniflashMode {
+    /// Classic Uniflash: separate needles tapering inward over a white mask.
+    #[default]
+    InwardNeedles,
+    /// Solid black collar ring around the white text window with sharp spikes radiating outward.
+    SolidRingSpikes,
+}
+
+impl UniflashMode {
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::InwardNeedles => "inwardNeedles",
+            Self::SolidRingSpikes => "solidRingSpikes",
+        }
+    }
+
+    pub fn from_id(s: &str) -> Option<Self> {
+        match s {
+            "inwardNeedles" => Some(Self::InwardNeedles),
+            "solidRingSpikes" => Some(Self::SolidRingSpikes),
+            _ => None,
+        }
+    }
+}
+
+/// Dedicated stroke / line rendering style for a balloon contour (8 styles).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BalloonLineStyle {
+    /// Clean single vector ink stroke.
+    #[default]
+    Solid,
+    /// Concentric double manga outline (works on any body shape + tail).
+    Double,
+    /// Whisper dashed / broken contour along the actual body + tail perimeter.
+    Whisper,
+    /// Multi-strand sketchy graphite pencil stroke.
+    Pencil,
+    /// 1-bit pixel-art stepped contour (staircase rasterised vector outline).
+    Pixel1Bit,
+    /// Ukiyo-e / sumi-e manga brush stroke with variable pressure swells and ink flares.
+    UkiyoBrush,
+    /// Stipple dots contour (Aura ring or Gloom filled mass) with individually editable dots.
+    StippleDots,
+    /// Shoujo sparkle / glittery contour with 4-point stars, diamonds, and dust along the rim.
+    SparkleGlitter,
+}
+
+impl BalloonLineStyle {
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::Solid => "solid",
+            Self::Double => "double",
+            Self::Whisper => "whisper",
+            Self::Pencil => "pencil",
+            Self::Pixel1Bit => "pixel1Bit",
+            Self::UkiyoBrush => "ukiyoBrush",
+            Self::StippleDots => "stippleDots",
+            Self::SparkleGlitter => "sparkleGlitter",
+        }
+    }
+
+    pub fn from_id(s: &str) -> Option<Self> {
+        match s {
+            "solid" => Some(Self::Solid),
+            "double" => Some(Self::Double),
+            "whisper" | "dashed" => Some(Self::Whisper),
+            "pencil" => Some(Self::Pencil),
+            "pixel1Bit" => Some(Self::Pixel1Bit),
+            "ukiyoBrush" => Some(Self::UkiyoBrush),
+            "stippleDots" => Some(Self::StippleDots),
+            "sparkleGlitter" => Some(Self::SparkleGlitter),
+            _ => None,
+        }
+    }
+}
+
 /// The parametric body of a balloon.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "bodyKind", rename_all = "camelCase")]
@@ -437,6 +622,16 @@ pub enum LiveBalloonBody {
         /// Corner radius in px.
         #[serde(default)]
         corner_radius: f64,
+    },
+    /// Chamfered rectangle (octagon / plaque box).
+    ChamferRect {
+        rect: [f64; 4],
+        /// Corner chamfer size in px: 1.0..=60.0 (default 16.0).
+        #[serde(default = "default_chamfer")]
+        chamfer: f64,
+        /// Corner concavity (`0.0` = flat 45 deg bevel, `1.0` = inward scoop).
+        #[serde(default)]
+        concave: f64,
     },
     /// A thought cloud with asymmetric lobes and cusped joints.
     Cloud {
@@ -481,8 +676,8 @@ pub enum LiveBalloonBody {
         jitter: f64,
         seed: u32,
     },
-    /// A balloon drawn twice: the inner contour and a concentric outer echo, the classic
-    /// double-line manga outline. Both contours share the layer's fill and stroke.
+    /// Legacy concentric double-line squircle body retained for backward document compatibility;
+    /// new authoring uses `BalloonLineStyle::Double` which works on any body shape + tail.
     DoubleOutline {
         rect: [f64; 4],
         /// 0 = plain ellipse, 1 = full squircle (the inner contour).
@@ -490,7 +685,8 @@ pub enum LiveBalloonBody {
         /// Distance between the inner and the outer outline: 0.5..=64 px (default 6.0).
         gap: f64,
     },
-    /// A sea-urchin flash (ウニフラ): radial needles tapering towards the centre over a white mask.
+    /// A sea-urchin flash (uniflash): radial needles tapering towards the centre over a white mask,
+    /// or a solid ink collar ring with spikes radiating outward.
     Uniflash {
         rect: [f64; 4],
         /// Number of needles: 32..=400 (default 160).
@@ -512,6 +708,9 @@ pub enum LiveBalloonBody {
         /// Sharpness of the needle ends inside, at the mask edge: 0.0..=1.0 (default 1.0).
         #[serde(default = "default_inner_sharpness")]
         inner_sharpness: f64,
+        /// Display mode (`InwardNeedles` or `SolidRingSpikes`).
+        #[serde(default)]
+        mode: UniflashMode,
         seed: u32,
     },
 }
@@ -522,6 +721,7 @@ impl LiveBalloonBody {
         match self {
             Self::Ellipse { rect, .. }
             | Self::Rect { rect, .. }
+            | Self::ChamferRect { rect, .. }
             | Self::Cloud { rect, .. }
             | Self::Spiky { rect, .. }
             | Self::Burst { rect, .. }
@@ -535,6 +735,7 @@ impl LiveBalloonBody {
         match self {
             Self::Ellipse { rect, .. }
             | Self::Rect { rect, .. }
+            | Self::ChamferRect { rect, .. }
             | Self::Cloud { rect, .. }
             | Self::Spiky { rect, .. }
             | Self::Burst { rect, .. }
@@ -577,8 +778,97 @@ pub struct LiveBalloon {
     pub next_tail_id: u32,
     #[serde(default)]
     pub vertex_overrides: Vec<VertexOverride>,
+    /// Dedicated line / stroke rendering style (`Solid`, `Double`, `Whisper`, `Pencil`, `Pixel1Bit`,
+    /// `UkiyoBrush`, `StippleDots`, `SparkleGlitter`).
+    #[serde(default)]
+    pub line_style: BalloonLineStyle,
+    /// Gap between inner and outer contour in `BalloonLineStyle::Double` (`0.5..=64.0`, default `6.0`).
+    #[serde(default = "default_double_gap_px")]
+    pub double_gap_px: f64,
+    /// Number of perimeter dashes in `BalloonLineStyle::Whisper` (`6..=96`, default `18`).
+    #[serde(default = "default_whisper_dashes")]
+    pub whisper_dash_count: u32,
+    /// Duty cycle of each dash in `BalloonLineStyle::Whisper` (`0.20..=0.85`, default `0.58`).
+    #[serde(default = "default_whisper_duty")]
+    pub whisper_duty: f64,
+    /// Number of graphite strands in `BalloonLineStyle::Pencil` (`2..=7`, default `3`).
+    #[serde(default = "default_pencil_strands")]
+    pub pencil_strands: u32,
+    /// Graphite jitter / roughness in `BalloonLineStyle::Pencil` (`0.0..=1.0`, default `0.45`).
+    #[serde(default = "default_pencil_roughness")]
+    pub pencil_roughness: f64,
+    /// Step size in px for `BalloonLineStyle::Pixel1Bit` (`2.0..=24.0`, default `5.0`).
+    #[serde(default = "default_pixel_size_px")]
+    pub pixel_size_px: f64,
+    /// Pressure contrast for `BalloonLineStyle::UkiyoBrush` (`0.0..=1.0`, default `0.72`).
+    #[serde(default = "default_ukiyo_contrast")]
+    pub ukiyo_contrast: f64,
+    /// Stipple haze spread (`0.0..=100.0`, default `63.0`).
+    #[serde(default = "default_haze_spread")]
+    pub haze_spread: f64,
+    /// Stipple dot density / ring compactness (`0.0..=100.0`, default `96.0`).
+    #[serde(default = "default_stipple_density")]
+    pub stipple_density: f64,
+    /// Explicit base dot count (`24..=600`, default `180`) for `BalloonLineStyle::StippleDots`.
+    #[serde(default = "default_stipple_count")]
+    pub stipple_count: u32,
+    /// Positional & radius randomness (`0.0..=100.0`, default `55.0`) for `BalloonLineStyle::StippleDots`.
+    #[serde(default = "default_stipple_randomness")]
+    pub stipple_randomness: f64,
+    /// Stipple dot grain size (`5.0..=100.0`, default `45.0`).
+    #[serde(default = "default_grain_size")]
+    pub grain_size: f64,
+    /// Stipple edge roughness (`0.0..=100.0`, default `15.0`).
+    #[serde(default = "default_edge_roughness")]
+    pub edge_roughness: f64,
+    /// Whether `StippleDots` fills the interior solid black (`false` = Aura ring, `true` = Gloom filled mass).
+    #[serde(default)]
+    pub stipple_fill_interior: bool,
+    /// Individual stipple dot position and radius overrides (editable on canvas).
+    #[serde(default)]
+    pub stipple_overrides: Vec<StippleDotOverride>,
+    /// Number of sparkle stars around the contour in `BalloonLineStyle::SparkleGlitter` (`6..=96`, default `28`).
+    #[serde(default = "default_sparkle_count")]
+    pub sparkle_count: u32,
+    /// Size scale of sparkle stars in `BalloonLineStyle::SparkleGlitter` (`0.2..=2.5`, default `1.0`).
+    #[serde(default = "default_one_f64")]
+    pub sparkle_size: f64,
+    /// Positional & scale randomness (`0.0..=100.0`, default `50.0`) for `BalloonLineStyle::SparkleGlitter`.
+    #[serde(default = "default_sparkle_randomness")]
+    pub sparkle_randomness: f64,
+    /// Level-1 hand-drawn contour noise (fine pen tremor): `0.0..=1.0`.
     #[serde(default)]
     pub hand_drawn_noise: f64,
+    /// Level-2 hand-drawn contour warp (rare deep bends / "wandering ink"): `0.0..=1.0`.
+    #[serde(default)]
+    pub hand_drawn_warp: f64,
+    /// Frequency scale of the hand-drawn wobble (`0.25..=4.0`, default `1.0`).
+    #[serde(default = "default_noise_scale")]
+    pub noise_scale: f64,
+    /// Voice preset (`Neutral`, `Whisper`, `Shout`, `Irritated`, `Broadcast`, `Eerie`).
+    #[serde(default)]
+    pub voice: BalloonVoice,
+    /// Voice intensity (`0.0..=1.0`, default `0.5`).
+    #[serde(default = "default_voice_intensity")]
+    pub voice_intensity: f64,
+    /// Text reading direction (`Horizontal` or `Vertical`).
+    #[serde(default)]
+    pub text_direction: TextDirection,
+    /// Text alignment inside the safe rect (`Center`, `Left`, `Justify`).
+    #[serde(default)]
+    pub text_align: BalloonTextAlign,
+    /// Whether handwritten manga lettering style is enabled.
+    #[serde(default)]
+    pub handwritten_font: bool,
+    /// Optional underlay shape rendered behind the balloon body.
+    #[serde(default)]
+    pub underlay: Option<BalloonUnderlay>,
+    /// Optional imported simple SVG path `d` string overriding the procedural contour.
+    #[serde(default)]
+    pub custom_svg_contour: Option<String>,
+    /// Optional `VectorBrushPreset` id driving variable-width / texture strokes.
+    #[serde(default)]
+    pub brush_preset_id: Option<String>,
     #[serde(default = "default_stroke_width")]
     pub stroke_width: f64,
     #[serde(default = "default_true")]
@@ -589,12 +879,88 @@ fn default_one() -> u32 {
     1
 }
 
+fn default_one_f64() -> f64 {
+    1.0
+}
+
+fn default_chamfer() -> f64 {
+    16.0
+}
+
+fn default_whisper_dashes() -> u32 {
+    18
+}
+
+fn default_whisper_duty() -> f64 {
+    0.58
+}
+
 fn default_outer_sharpness() -> f64 {
     1.0
 }
 
 fn default_inner_sharpness() -> f64 {
     1.0
+}
+
+fn default_double_gap_px() -> f64 {
+    6.0
+}
+
+fn default_pencil_strands() -> u32 {
+    3
+}
+
+fn default_pencil_roughness() -> f64 {
+    0.45
+}
+
+fn default_pixel_size_px() -> f64 {
+    5.0
+}
+
+fn default_ukiyo_contrast() -> f64 {
+    0.72
+}
+
+fn default_haze_spread() -> f64 {
+    63.0
+}
+
+fn default_stipple_density() -> f64 {
+    96.0
+}
+
+fn default_stipple_count() -> u32 {
+    180
+}
+
+fn default_stipple_randomness() -> f64 {
+    55.0
+}
+
+fn default_grain_size() -> f64 {
+    45.0
+}
+
+fn default_edge_roughness() -> f64 {
+    15.0
+}
+
+fn default_sparkle_count() -> u32 {
+    28
+}
+
+fn default_sparkle_randomness() -> f64 {
+    50.0
+}
+
+fn default_noise_scale() -> f64 {
+    1.0
+}
+
+fn default_voice_intensity() -> f64 {
+    0.5
 }
 
 fn default_true() -> bool {
@@ -622,7 +988,36 @@ impl Default for LiveBalloon {
             }],
             next_tail_id: 2,
             vertex_overrides: Vec::new(),
+            line_style: BalloonLineStyle::Solid,
+            double_gap_px: 6.0,
+            whisper_dash_count: 18,
+            whisper_duty: 0.58,
+            pencil_strands: 3,
+            pencil_roughness: 0.45,
+            pixel_size_px: 5.0,
+            ukiyo_contrast: 0.72,
+            haze_spread: 63.0,
+            stipple_density: 96.0,
+            stipple_count: 180,
+            stipple_randomness: 55.0,
+            grain_size: 45.0,
+            edge_roughness: 15.0,
+            stipple_fill_interior: false,
+            stipple_overrides: Vec::new(),
+            sparkle_count: 28,
+            sparkle_size: 1.0,
+            sparkle_randomness: 50.0,
             hand_drawn_noise: 0.0,
+            hand_drawn_warp: 0.0,
+            noise_scale: 1.0,
+            voice: BalloonVoice::Neutral,
+            voice_intensity: 0.5,
+            text_direction: TextDirection::Horizontal,
+            text_align: BalloonTextAlign::Center,
+            handwritten_font: false,
+            underlay: None,
+            custom_svg_contour: None,
+            brush_preset_id: None,
             stroke_width: 3.0,
             auto_merge_overlapping: true,
         }
@@ -696,6 +1091,74 @@ mod tests {
     }
 
     #[test]
+    fn all_7_balloon_bodies_and_8_line_styles_survive_serde_roundtrip() {
+        let rect = [40.0, 50.0, 220.0, 150.0];
+        let bodies = [
+            LiveBalloonBody::Ellipse { rect, squircle: 0.25 },
+            LiveBalloonBody::Rect { rect, corner_radius: 16.0 },
+            LiveBalloonBody::ChamferRect { rect, chamfer: 18.0, concave: 0.35 },
+            LiveBalloonBody::Cloud { rect, bumps: 10, amplitude: 0.18, cusp_bite: 0.22, jitter: 0.35, seed: 42 },
+            LiveBalloonBody::Spiky { rect, spikes: 18, length: 0.38, sub_harmonic: 0.45, concavity: 0.65, jitter: 0.30, smooth: false, seed: 101 },
+            LiveBalloonBody::Burst { rect, rays: 14, length: 0.60, depth: 0.26, jitter: 0.35, seed: 303 },
+            LiveBalloonBody::Uniflash {
+                rect,
+                needles: 160,
+                inner_ratio: 0.62,
+                bundle_group: 0.40,
+                length_jitter: 0.50,
+                angle_jitter: 0.25,
+                needle_width: 2.2,
+                outer_sharpness: 1.0,
+                inner_sharpness: 1.0,
+                mode: UniflashMode::SolidRingSpikes,
+                seed: 777,
+            },
+        ];
+        assert_eq!(bodies.len(), 7);
+        let styles = [
+            BalloonLineStyle::Solid,
+            BalloonLineStyle::Double,
+            BalloonLineStyle::Whisper,
+            BalloonLineStyle::Pencil,
+            BalloonLineStyle::Pixel1Bit,
+            BalloonLineStyle::UkiyoBrush,
+            BalloonLineStyle::StippleDots,
+            BalloonLineStyle::SparkleGlitter,
+        ];
+        assert_eq!(styles.len(), 8);
+        for (idx, body) in bodies.into_iter().enumerate() {
+            let mut b = LiveBalloon {
+                body: body.clone(),
+                line_style: styles[idx % styles.len()],
+                whisper_dash_count: 20,
+                whisper_duty: 0.58,
+                stipple_count: 200,
+                stipple_randomness: 60.0,
+                sparkle_randomness: 45.0,
+                stipple_overrides: vec![StippleDotOverride { index: 3, offset: [4.0, -5.0], radius_scale: 1.4 }],
+                hand_drawn_noise: 0.3,
+                hand_drawn_warp: 0.45,
+                noise_scale: 1.25,
+                voice: BalloonVoice::Shout,
+                voice_intensity: 0.8,
+                underlay: Some(BalloonUnderlay { enabled: true, offset: [8.0, 6.0], scale: 1.08, rectness: 0.2 }),
+                brush_preset_id: Some("fukidashi-fude".to_string()),
+                ..LiveBalloon::default()
+            };
+            assert_eq!(b.body.rect(), rect);
+            b.body.set_rect([10.0, 20.0, 300.0, 200.0]);
+            assert_eq!(b.body.rect(), [10.0, 20.0, 300.0, 200.0]);
+            let s = serde_json::to_string(&b).unwrap();
+            let back: LiveBalloon = serde_json::from_str(&s).unwrap();
+            assert_eq!(back, b);
+        }
+        let legacy_double = LiveBalloonBody::DoubleOutline { rect, squircle: 0.4, gap: 8.0 };
+        let s = serde_json::to_string(&legacy_double).unwrap();
+        let back: LiveBalloonBody = serde_json::from_str(&s).unwrap();
+        assert_eq!(back, legacy_double);
+    }
+
+    #[test]
     fn a_balloon_saved_before_the_optional_fields_loads_with_defaults() {
         let old = r#"{"bodyKind":"ellipse","rect":[0.0,0.0,100.0,80.0]}"#;
         let body: LiveBalloonBody = serde_json::from_str(old).unwrap();
@@ -704,7 +1167,21 @@ mod tests {
         let balloon: LiveBalloon = serde_json::from_str(old).unwrap();
         assert!(balloon.tails.is_empty());
         assert_eq!(balloon.next_tail_id, 1);
+        assert_eq!(balloon.line_style, BalloonLineStyle::Solid);
+        assert_eq!(balloon.double_gap_px, 6.0);
+        assert_eq!(balloon.whisper_dash_count, 18);
+        assert_eq!(balloon.whisper_duty, 0.58);
+        assert_eq!(balloon.haze_spread, 63.0);
+        assert_eq!(balloon.stipple_density, 96.0);
+        assert_eq!(balloon.stipple_count, 180);
+        assert_eq!(balloon.stipple_randomness, 55.0);
+        assert_eq!(balloon.grain_size, 45.0);
+        assert_eq!(balloon.edge_roughness, 15.0);
+        assert_eq!(balloon.sparkle_randomness, 50.0);
         assert_eq!(balloon.stroke_width, 3.0);
+        assert_eq!(balloon.hand_drawn_warp, 0.0);
+        assert_eq!(balloon.noise_scale, 1.0);
+        assert!(balloon.brush_preset_id.is_none());
         assert!(balloon.auto_merge_overlapping);
     }
 

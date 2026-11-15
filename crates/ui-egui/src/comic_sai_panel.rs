@@ -114,6 +114,9 @@ pub struct LineworkPanelState {
     /// Whether the quick-sizes table is expanded (the `▾` on the Brush Size row).
     #[serde(default = "default_show_quick_sizes")]
     pub show_quick_sizes: bool,
+    /// Optional custom or built-in vector brush preset applied to Linework strokes.
+    #[serde(default)]
+    pub brush_preset_id: Option<String>,
 }
 
 fn default_show_quick_sizes() -> bool {
@@ -135,6 +138,7 @@ impl Default for LineworkPanelState {
             closed_loop: false,
             snap_close: true,
             show_quick_sizes: true,
+            brush_preset_id: None,
         }
     }
 }
@@ -392,29 +396,67 @@ fn sai_bar_slider(ui: &mut Ui, id_salt: &str, value: &mut f64, range: std::ops::
         }
         painter.text(pos2(rect.max.x - 6.0, rect.center().y), Align2::RIGHT_CENTER, fmt.show(*value), FontId::proportional(11.0), Color32::WHITE);
 
-        // Fine step: `Shift` while dragging, or a drag started on the badge.
+        // Click anywhere on the track outside the `x0.1` badge jumps directly to that fraction.
         let fine_drag_key = id.with("fine_drag");
-        if resp.drag_started() {
-            let on_badge = resp.interact_pointer_pos().is_some_and(|p| badge.contains(p));
-            let shift = ui.input(|i| i.modifiers.shift);
-            ui.ctx().data_mut(|d| d.insert_temp(fine_drag_key, on_badge || shift));
-        }
-        if resp.dragged() {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::None);
-            let (delta, _) = crate::scrub_wrap::drag_wrap(ui, &resp);
-            let fine = ui.ctx().data(|d| d.get_temp::<bool>(fine_drag_key)).unwrap_or(false) || ui.input(|i| i.modifiers.shift);
-            let speed = if fine { 0.1 } else { 1.0 };
-            let delta_x = delta.x as f64 / rect.width().max(1.0) as f64 * speed;
-            let v = val_of((frac_of(*value) + delta_x).clamp(0.0, 1.0));
+        let precise_key = id.with("precise_frac");
+        if resp.clicked()
+            && let Some(pos) = resp.interact_pointer_pos()
+            && !badge.contains(pos)
+        {
+            let frac = f64::from((pos.x - rect.left()) / rect.width().max(1.0)).clamp(0.0, 1.0);
+            ui.ctx().data_mut(|d| d.insert_temp(precise_key, frac));
+            let v = val_of(frac).clamp(min, max);
             if (v - *value).abs() > f64::EPSILON {
                 *value = v;
                 changed = true;
             }
+        }
+
+        // Fine step: `Shift` while dragging, or a drag started on the `x0.1` badge.
+        if resp.drag_started() {
+            let on_badge = resp.interact_pointer_pos().is_some_and(|p| badge.contains(p));
+            let shift = ui.input(|i| i.modifiers.shift);
+            let initial_frac = frac_of(*value);
+            ui.ctx().data_mut(|d| {
+                d.insert_temp(fine_drag_key, on_badge || shift);
+                d.insert_temp(precise_key, initial_frac);
+            });
+        }
+        if resp.dragged() {
+            let started_fine = ui.ctx().data(|d| d.get_temp::<bool>(fine_drag_key)).unwrap_or(false);
+            let fine_mode = started_fine || ui.input(|i| i.modifiers.shift);
+            if fine_mode {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::None);
+                let (delta, _) = crate::scrub_wrap::drag_wrap(ui, &resp);
+                let prev_frac = ui.ctx().data(|d| d.get_temp::<f64>(precise_key)).unwrap_or_else(|| frac_of(*value));
+                let next_frac = (prev_frac + f64::from(delta.x) / f64::from(rect.width().max(1.0)) * 0.1).clamp(0.0, 1.0);
+                ui.ctx().data_mut(|d| d.insert_temp(precise_key, next_frac));
+                let v = val_of(next_frac).clamp(min, max);
+                if (v - *value).abs() > f64::EPSILON {
+                    *value = v;
+                    changed = true;
+                }
+            } else if let Some(pos) = resp.interact_pointer_pos() {
+                if crate::scrub_wrap::is_holding(ui, &resp) {
+                    crate::scrub_wrap::release(ui, resp.id);
+                }
+                let frac = f64::from((pos.x - rect.left()) / rect.width().max(1.0)).clamp(0.0, 1.0);
+                ui.ctx().data_mut(|d| d.insert_temp(precise_key, frac));
+                let v = val_of(frac).clamp(min, max);
+                if (v - *value).abs() > f64::EPSILON {
+                    *value = v;
+                    changed = true;
+                }
+            }
         } else if crate::scrub_wrap::is_holding(ui, &resp) {
-            crate::scrub_wrap::drag_wrap(ui, &resp);
+            crate::scrub_wrap::release(ui, resp.id);
         }
         if resp.drag_stopped() {
-            ui.ctx().data_mut(|d| d.remove::<bool>(fine_drag_key));
+            ui.ctx().data_mut(|d| {
+                d.remove::<bool>(fine_drag_key);
+                d.remove::<f64>(precise_key);
+            });
+            crate::scrub_wrap::release(ui, resp.id);
         }
         if resp.double_clicked() || resp.secondary_clicked() {
             editing = Some(fmt.show(*value));
@@ -794,7 +836,11 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut Ui) {
             }
         }
 
-        ui.add_space(10.0);
+        ui.add_space(6.0);
+        ui.separator();
+        crate::comic_balloon_panel::vector_brush_picker_row(app, ui, "sai_linework_brush_combo", &mut state.brush_preset_id, false);
+
+        ui.add_space(6.0);
         ui.separator();
 
         // 5. Нижние кнопки действий — все во всю ширину (28 / 26 / 27 px, шаг 4 px).
@@ -958,5 +1004,77 @@ mod tests {
         assert_eq!(BarFmt::Percent.parse("65%"), Some(0.65));
         assert_eq!(BarFmt::Px1.parse("12.5"), Some(12.5));
         assert_eq!(BarFmt::Px1.parse("not a number"), None);
+    }
+
+    #[test]
+    fn sai_bar_slider_click_and_fine_drag() {
+        let ctx = egui::Context::default();
+        let mut val = 10.0_f64;
+        let screen_rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(260.0, 80.0));
+
+        fn run_frame(ctx: &egui::Context, screen_rect: egui::Rect, val: &mut f64, events: Vec<egui::Event>) -> (bool, egui::Rect) {
+            let mut changed = false;
+            let mut bar_rect = egui::Rect::NOTHING;
+            let raw = egui::RawInput { screen_rect: Some(screen_rect), events, ..Default::default() };
+            let mut out = ctx.run_ui(raw, |ui| {
+                ui.vertical(|ui| {
+                    let spec = SaiBarSpec { log: true, fmt: BarFmt::Px1, fine: true, checker: false };
+                    changed = sai_bar_slider(ui, "test_bar", val, 0.7..=500.0, spec, Color32::GOLD);
+                    bar_rect = ui.min_rect();
+                });
+            });
+            out.textures_delta.clear();
+            (changed, bar_rect)
+        }
+
+        let (_, bar_rect) = run_frame(&ctx, screen_rect, &mut val, vec![]);
+        let mid = egui::pos2(bar_rect.left() + bar_rect.width() * 0.5, bar_rect.center().y);
+
+        let _ = run_frame(
+            &ctx,
+            screen_rect,
+            &mut val,
+            vec![
+                egui::Event::PointerMoved(mid),
+                egui::Event::PointerButton { pos: mid, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE },
+            ],
+        );
+        let (clicked, _) = run_frame(
+            &ctx,
+            screen_rect,
+            &mut val,
+            vec![egui::Event::PointerButton { pos: mid, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }],
+        );
+        assert!(clicked, "single click on track must update value");
+        assert!((val - 18.7).abs() < 4.5, "clicked value should track midpoint fraction (~18.7), got {val}");
+
+        let before_fine = val;
+        let badge_pt = egui::pos2(bar_rect.left() + 14.0, bar_rect.center().y);
+        let _ = run_frame(
+            &ctx,
+            screen_rect,
+            &mut val,
+            vec![
+                egui::Event::PointerMoved(badge_pt),
+                egui::Event::PointerButton { pos: badge_pt, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE },
+            ],
+        );
+        let _ = run_frame(&ctx, screen_rect, &mut val, vec![egui::Event::PointerMoved(badge_pt + vec2(8.0, 0.0))]);
+        let (dragged, _) = run_frame(&ctx, screen_rect, &mut val, vec![egui::Event::PointerMoved(badge_pt + vec2(20.0, 0.0))]);
+        assert!(dragged, "fine drag must adjust value smoothly");
+        assert!(val > before_fine && val < before_fine * 1.2, "fine badge drag must step at 0.1x without snapping to badge X, {before_fine} -> {val}");
+    }
+
+    #[test]
+    fn linework_panel_state_roundtrips_brush_preset_id_and_defaults_none() {
+        let def = LineworkPanelState::default();
+        assert_eq!(def.brush_preset_id, None);
+        let parsed: LineworkPanelState = serde_json::from_value(serde_json::json!({ "curveType": "Normal" })).unwrap();
+        assert_eq!(parsed.brush_preset_id, None);
+
+        let mut custom = def;
+        custom.brush_preset_id = Some("builtin:ukiyo_rough".into());
+        let rt: LineworkPanelState = serde_json::from_str(&serde_json::to_string(&custom).unwrap()).unwrap();
+        assert_eq!(rt.brush_preset_id.as_deref(), Some("builtin:ukiyo_rough"));
     }
 }

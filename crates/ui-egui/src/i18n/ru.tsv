@@ -5279,3 +5279,68 @@ shape	Appearance	Оформление
 	🔄 Reset to the manga default	🔄 Сбросить на манга-стандарт
 	🦔 Uniflash	🦔 Унифлеш
 	Snap Close	Привязка замыкания
+	Align:	Выравнивание:
+	Batch balloons from script (one line per balloon):	Пакет баллонов по сценарию (по строке на баллон):
+	Brush contrast:	Контраст кисти:
+	Brush preset:	Пресет кисти:
+	Chamfer size:	Размер фаски:
+	Corner scoop:	Вырез углов:
+	Dash duty:	Заполнение штриха:
+	Dashes:	Штрихи:
+	Deep contour warp:	Глубокое искажение:
+	Default (Style Engine)	По умолчанию (Style Engine)
+	Direction:	Направление:
+	Dot count:	Число точек:
+	Dot randomness:	Случайность точек:
+	Edge roughness:	Шероховатость края:
+	Enable underlay / shadow contour	Включить подложку / теневой контур
+	Fill interior (Gloom mode)	Заливать внутри (режим мрака)
+	Fit mode:	Режим вписывания:
+	Grain size:	Размер зерна:
+	Grow balloon	Увеличить баллон
+	Handwritten font	Рукописный шрифт
+	Haze spread:	Рассеивание дымки:
+	Import a VectorBrushPreset JSON or grayscale PNG ribbon texture	Импортировать JSON-пресет VectorBrushPreset или градационную PNG-текстуру ленты
+	Inward needles	Иглы внутрь
+	Line 1\nLine 2!!	Строка 1\nСтрока 2!!
+	Line style:	Стиль линии:
+	Noise scale:	Масштаб шума:
+	Pencil roughness:	Шероховатость карандаша:
+	Pencil strands:	Штрихи карандаша:
+	Pixel step:	Шаг пикселя:
+	Shrink text to shape	Уменьшать текст по контуру
+	Solid ring + spikes	Сплошное кольцо + зубья
+	Sparkle count:	Число блёсток:
+	Sparkle randomness:	Разброс блёсток:
+	Sparkle size:	Размер блёсток:
+	Underlay X offset:	Смещение подложки X:
+	Underlay Y offset:	Смещение подложки Y:
+	Underlay rectness:	Прямоугольность подложки:
+	Underlay scale:	Масштаб подложки:
+	Uniflash mode:	Режим унифлеша:
+	Vertical (Tategaki)	Вертикальный (Татэгаки)
+	Voice and intonation:	Голос и интонация:
+	Voice intensity:	Сила эффекта:
+	Workflow: Presets, Script & SVG	Рабочий процесс: пресеты, сценарий и SVG
+	━ Solid	━ Сплошная
+	◌ Whisper	◌ Шёпот
+	◎ Double	◎ Двойная
+	★ Save current style to favorites	★ Сохранить текущий стиль в избранное
+	⚠ Overflow by height (+{px} px needed)	⚠ Переполнение по высоте (нужно +{px} px)
+	⚠ Overflow by width (+{px} px needed)	⚠ Переполнение по ширине (нужно +{px} px)
+	⚫ Stipple dots	⚫ Точечная (пуантилизм)
+	✏ Pencil stroke	✏ Карандашный штрих
+	✨ Sparkle / glitter	✨ Блёстки / искры
+	⬆ Import SVG contour	⬆ Импорт SVG-контура
+	⬇ Export balloon SVG	⬇ Экспорт SVG баллона
+	＋ Create batch from script	＋ Создать пакет из сценария
+	＋ Import (.json/.png)	＋ Импорт (.json/.png)
+	👻 Eerie	👻 Жуткий
+	👾 1-bit pixel	👾 1-бит пиксель
+	💢 Irritated	💢 Раздражённый
+	💬 Neutral	💬 Нейтральный
+	📢 Shout	📢 Крик
+	📻 Broadcast	📻 Радио / экран
+	🖌 Ukiyo-e brush	🖌 Кисть укиё-э
+	🤫 Whisper	🤫 Шёпот
+	🪪 Chamfer rect	🪪 Срезанный прям.

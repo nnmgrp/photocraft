@@ -10,7 +10,7 @@
 //! gesture collapses into a single history step (the command carries a `coalesce` key).
 
 use egui::{Color32, Pos2, Rect, Stroke, vec2};
-use photocraft_doc::vector::{LiveBalloon, LiveBalloonBody, LiveBalloonTail, TailPreset, VertexOverride};
+use photocraft_doc::vector::{LiveBalloon, LiveBalloonBody, LiveBalloonTail, StippleDotOverride, TailPreset, VertexOverride};
 use photocraft_vector::balloon::LiveBalloonGeom;
 use serde_json::json;
 
@@ -31,6 +31,8 @@ pub enum GizmoHit {
     TailMouthCenter { balloon_id: u32, tail_id: u32 },
     /// One spike or cloud lobe.
     VertexHandle { balloon_id: u32, vertex_index: u32 },
+    /// One manual dot in `BalloonLineStyle::StippleDots` (`Alt`+drag scales radius).
+    StippleDot { balloon_id: u32, dot_index: u32 },
     /// The radial parameter of the cloud / spike / uniflash body.
     RadialParam { balloon_id: u32 },
     /// The dial that changes the number of spikes, lobes or needles.
@@ -54,6 +56,8 @@ pub struct BalloonGizmoDrag {
     pub initial_balloon: LiveBalloon,
     /// Where the pointer was when the drag started, in document px.
     pub start_pos_doc: [f64; 2],
+    /// Whether Alt/Option was held at drag start (`Alt`+drag scales stipple dot radius).
+    pub alt_held: bool,
 }
 
 /// The gizmo's state between frames.
@@ -105,6 +109,7 @@ fn special_body_handles_doc(body: &LiveBalloonBody) -> Option<([f64; 2], [f64; 2
     match body {
         LiveBalloonBody::Cloud { amplitude, .. } => Some(([cx + rx * (1.0 + amplitude), cy], [cx, cy - ry * 1.15])),
         LiveBalloonBody::Spiky { length, .. } => Some(([cx + rx * (1.0 + length * 0.5), cy], [cx, cy - ry * 0.72])),
+        LiveBalloonBody::Burst { length, .. } => Some(([cx + rx * (1.0 + length * 0.5), cy], [cx, cy - ry * 0.76])),
         LiveBalloonBody::Uniflash { inner_ratio, .. } => Some(([cx + rx * inner_ratio, cy], [cx, cy - ry * 1.08])),
         _ => None,
     }
@@ -181,6 +186,14 @@ pub fn hit_test_balloon_gizmo(xf: &ViewXform, balloon: &LiveBalloon, cursor_scr:
         let v_scr = xf.to_screen(v_pt[0] as f32, v_pt[1] as f32);
         if cursor_scr.distance(v_scr) <= hit_r {
             return Some(GizmoHit::VertexHandle { balloon_id: bid, vertex_index: v_idx });
+        }
+    }
+
+    // Individual stipple dots when BalloonLineStyle::StippleDots is active.
+    for (d_idx, d_pt, _) in balloon.stipple_dot_positions() {
+        let d_scr = xf.to_screen(d_pt[0] as f32, d_pt[1] as f32);
+        if cursor_scr.distance(d_scr) <= hit_r {
+            return Some(GizmoHit::StippleDot { balloon_id: bid, dot_index: d_idx });
         }
     }
 
@@ -305,6 +318,29 @@ pub fn draw_balloon_gizmo(painter: &egui::Painter, xf: &ViewXform, balloon: &Liv
         painter.circle_filled(v_scr, sz, if v_hov { yellow } else { accent });
         painter.circle_stroke(v_scr, sz, Stroke::new(1.0, white));
     }
+
+    // 7. Draggable stipple dots in `BalloonLineStyle::StippleDots` mode.
+    for (d_idx, d_pt, _) in balloon.stipple_dot_positions() {
+        let d_scr = xf.to_screen(d_pt[0] as f32, d_pt[1] as f32);
+        let d_hov = state.hovered == Some(GizmoHit::StippleDot { balloon_id: bid, dot_index: d_idx });
+        let is_overridden = balloon.stipple_overrides.iter().any(|s| s.index == d_idx);
+        let sz = if d_hov {
+            5.5
+        } else if is_overridden {
+            4.0
+        } else {
+            3.0
+        };
+        let dot_fill = if d_hov {
+            yellow
+        } else if is_overridden {
+            Color32::from_rgb(255, 165, 60)
+        } else {
+            Color32::from_rgb(90, 200, 250)
+        };
+        painter.circle_filled(d_scr, sz, dot_fill);
+        painter.circle_stroke(d_scr, sz, Stroke::new(1.0, white));
+    }
 }
 
 /// Starts a gizmo drag. `Alt` + click on a tail tip removes the tail.
@@ -343,11 +379,12 @@ pub fn on_pointer_down(app: &mut PhotocraftApp, layer_id: u64, balloon: &LiveBal
             hit: GizmoHit::TailTip { balloon_id, tail_id: new_tail_id },
             initial_balloon: initial,
             start_pos_doc: pos_doc,
+            alt_held: false,
         });
         return;
     }
 
-    app.balloon_gizmo.drag = Some(BalloonGizmoDrag { gesture_id, layer_id, hit, initial_balloon: balloon.clone(), start_pos_doc: pos_doc });
+    app.balloon_gizmo.drag = Some(BalloonGizmoDrag { gesture_id, layer_id, hit, initial_balloon: balloon.clone(), start_pos_doc: pos_doc, alt_held });
 }
 
 /// Applies the drag to the balloon and sends it to the engine. The whole gesture shares one
@@ -406,11 +443,28 @@ pub fn on_drag_move(app: &mut PhotocraftApp, drag: &BalloonGizmoDrag, cur_doc: [
                 updated.vertex_overrides.push(VertexOverride { index: vertex_index, offset: new_off });
             }
         }
+        GizmoHit::StippleDot { dot_index, .. } => {
+            let base_ov =
+                drag.initial_balloon.stipple_overrides.iter().find(|s| s.index == dot_index).map(|s| (s.offset, s.radius_scale)).unwrap_or(([0.0, 0.0], 1.0));
+            let (new_off, new_scale) = if drag.alt_held {
+                let rx = (drag.initial_balloon.body.rect()[2] * 0.5).abs().max(20.0);
+                (base_ov.0, (base_ov.1 * (1.0 + dx / rx)).clamp(0.2, 4.0))
+            } else {
+                ([base_ov.0[0] + dx, base_ov.0[1] + dy], base_ov.1)
+            };
+            if let Some(ov) = updated.stipple_overrides.iter_mut().find(|s| s.index == dot_index) {
+                ov.offset = new_off;
+                ov.radius_scale = new_scale;
+            } else {
+                updated.stipple_overrides.push(StippleDotOverride { index: dot_index, offset: new_off, radius_scale: new_scale });
+            }
+        }
         GizmoHit::RadialParam { .. } => {
             let rx = (updated.body.rect()[2] * 0.5).abs().max(10.0);
             match &mut updated.body {
-                LiveBalloonBody::Cloud { amplitude, .. } => *amplitude = (*amplitude + dx / rx).clamp(0.04, 0.60),
+                LiveBalloonBody::Cloud { amplitude, .. } => *amplitude = (*amplitude + dx / rx).clamp(0.04, 0.55),
                 LiveBalloonBody::Spiky { length, .. } => *length = (*length + (dx * 2.0) / rx).clamp(0.05, 1.50),
+                LiveBalloonBody::Burst { length, .. } => *length = (*length + (dx * 2.0) / rx).clamp(0.10, 1.20),
                 LiveBalloonBody::Uniflash { inner_ratio, .. } => *inner_ratio = (*inner_ratio + dx / rx).clamp(0.30, 0.90),
                 _ => {}
             }
@@ -420,49 +474,13 @@ pub fn on_drag_move(app: &mut PhotocraftApp, drag: &BalloonGizmoDrag, cur_doc: [
             match &mut updated.body {
                 LiveBalloonBody::Cloud { bumps, .. } => *bumps = ((*bumps as i32 + delta).clamp(4, 64)) as u32,
                 LiveBalloonBody::Spiky { spikes, .. } => *spikes = ((*spikes as i32 + delta).clamp(5, 128)) as u32,
-                LiveBalloonBody::Uniflash { needles, .. } => *needles = ((*needles as i32 + delta * 2).clamp(32, 400)) as u32,
+                LiveBalloonBody::Burst { rays, .. } => *rays = ((*rays as i32 + delta).clamp(5, 64)) as u32,
+                LiveBalloonBody::Uniflash { needles, .. } => *needles = ((*needles as i32 + delta * 2).clamp(32, 450)) as u32,
                 _ => {}
             }
         }
         GizmoHit::BodyResize { corner, .. } => {
-            let mut r = drag.initial_balloon.body.rect();
-            match corner {
-                0 => {
-                    r[0] += dx;
-                    r[1] += dy;
-                    r[2] -= dx;
-                    r[3] -= dy;
-                }
-                1 => {
-                    r[1] += dy;
-                    r[2] += dx;
-                    r[3] -= dy;
-                }
-                2 => {
-                    r[2] += dx;
-                    r[3] += dy;
-                }
-                3 => {
-                    r[0] += dx;
-                    r[2] -= dx;
-                    r[3] += dy;
-                }
-                _ => {}
-            }
-            let min_size = 24.0;
-            if r[2].abs() >= min_size && r[3].abs() >= min_size {
-                if r[2] < 0.0 {
-                    r[0] += r[2];
-                    r[2] = -r[2];
-                }
-                if r[3] < 0.0 {
-                    r[1] += r[3];
-                    r[3] = -r[3];
-                }
-                r[2] = r[2].max(min_size);
-                r[3] = r[3].max(min_size);
-                updated.body.set_rect(r);
-            }
+            updated.body.set_rect(apply_body_resize(drag.initial_balloon.body.rect(), corner, dx, dy));
         }
         GizmoHit::BodyMove { .. } => {
             let mut r = drag.initial_balloon.body.rect();
@@ -530,6 +548,41 @@ fn active_balloons(app: &PhotocraftApp) -> Option<(u64, Vec<LiveBalloon>)> {
     let photocraft_doc::LayerContent::Shape(sh) = &layer.content else { return None };
     let Some(photocraft_doc::LiveShape::BalloonGroup { group }) = &sh.live else { return None };
     Some((lid.0, group.items.clone()))
+}
+
+/// Applies clamped opposite-edge resize for `GizmoHit::BodyResize` so dragging across an anchor never flips width/height or pushes `x`/`y` negative.
+fn apply_body_resize(init: [f64; 4], corner: usize, dx: f64, dy: f64) -> [f64; 4] {
+    if !dx.is_finite() || !dy.is_finite() {
+        return init;
+    }
+    let mut r = init;
+    let min_size = 24.0;
+    let right = init[0] + init[2];
+    let bottom = init[1] + init[3];
+    match corner {
+        0 => {
+            r[2] = (init[2] - dx).max(min_size);
+            r[3] = (init[3] - dy).max(min_size);
+            r[0] = right - r[2];
+            r[1] = bottom - r[3];
+        }
+        1 => {
+            r[2] = (init[2] + dx).max(min_size);
+            r[3] = (init[3] - dy).max(min_size);
+            r[1] = bottom - r[3];
+        }
+        2 => {
+            r[2] = (init[2] + dx).max(min_size);
+            r[3] = (init[3] + dy).max(min_size);
+        }
+        3 => {
+            r[2] = (init[2] - dx).max(min_size);
+            r[3] = (init[3] + dy).max(min_size);
+            r[0] = right - r[2];
+        }
+        _ => {}
+    }
+    r
 }
 
 /// The handle under the pointer, if any.
@@ -616,5 +669,57 @@ mod tests {
         let r = b.body.rect();
         assert!(safe[0] >= r[0] - 0.001 && safe[1] >= r[1] - 0.001, "{safe:?} {r:?}");
         assert!(safe[0] + safe[2] <= r[0] + r[2] + 0.001, "{safe:?} {r:?}");
+    }
+
+    #[test]
+    fn test_body_resize_left_drag_clamps_without_negative_flip() {
+        let init = [100.0, 120.0, 200.0, 140.0];
+        let ne = apply_body_resize(init, 1, -500.0, 20.0);
+        assert_eq!(ne[0], 100.0);
+        assert_eq!(ne[2], 24.0);
+        let se = apply_body_resize(init, 2, -500.0, -500.0);
+        assert_eq!(se[0], 100.0);
+        assert_eq!(se[1], 120.0);
+        assert_eq!(se[2], 24.0);
+        assert_eq!(se[3], 24.0);
+        let nw = apply_body_resize(init, 0, 500.0, 500.0);
+        assert_eq!(nw[0], 276.0);
+        assert_eq!(nw[1], 236.0);
+        assert_eq!(nw[2], 24.0);
+        assert_eq!(nw[3], 24.0);
+    }
+
+    #[test]
+    fn dragging_one_vertex_handle_or_stipple_dot_moves_only_that_handle_position() {
+        use photocraft_doc::vector::BalloonLineStyle;
+        let mut b = LiveBalloon {
+            body: LiveBalloonBody::Spiky {
+                rect: [40.0, 40.0, 220.0, 140.0],
+                spikes: 14,
+                length: 0.35,
+                sub_harmonic: 0.4,
+                concavity: 0.5,
+                jitter: 0.2,
+                smooth: false,
+                seed: 7,
+            },
+            line_style: BalloonLineStyle::StippleDots,
+            stipple_count: 32,
+            ..LiveBalloon::default()
+        };
+        let handles_before = vertex_handles_doc(&b);
+        assert!(handles_before.len() >= 10);
+        b.vertex_overrides.push(VertexOverride { index: 2, offset: [18.0, -14.0] });
+        let handles_after = vertex_handles_doc(&b);
+        assert!((handles_after[2].1[0] - (handles_before[2].1[0] + 18.0)).abs() < 1e-4);
+        assert!((handles_after[2].1[1] - (handles_before[2].1[1] - 14.0)).abs() < 1e-4);
+        assert!((handles_after[3].1[0] - handles_before[3].1[0]).abs() < 1e-4);
+
+        let dots_before = b.stipple_dot_positions();
+        b.stipple_overrides.push(StippleDotOverride { index: 1, offset: [10.0, -6.0], radius_scale: 1.5 });
+        let dots_after = b.stipple_dot_positions();
+        assert!((dots_after[1].1[0] - (dots_before[1].1[0] + 10.0)).abs() < 1e-4);
+        assert!((dots_after[1].1[1] - (dots_before[1].1[1] - 6.0)).abs() < 1e-4);
+        assert!((dots_after[2].1[0] - dots_before[2].1[0]).abs() < 1e-4);
     }
 }

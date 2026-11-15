@@ -20,9 +20,19 @@ use egui::{Pos2, Rect, Response, Ui, Vec2};
 struct Scrub {
     precise: f64,
     confined: bool,
-    pending: Option<(Pos2, Pos2)>,
+    pending: Option<(Pos2, Pos2, u8)>,
     /// Where the pointer was on the previous frame of this drag.
     prev: Option<Pos2>,
+}
+
+const MAX_FRAME_SCRUB_PT: f32 = 64.0;
+const PENDING_WARP_TTL: u8 = 6;
+
+fn clamp_frame_delta(delta: Vec2) -> Vec2 {
+    if !delta.is_finite() {
+        return Vec2::ZERO;
+    }
+    Vec2::new(delta.x.clamp(-MAX_FRAME_SCRUB_PT, MAX_FRAME_SCRUB_PT), delta.y.clamp(-MAX_FRAME_SCRUB_PT, MAX_FRAME_SCRUB_PT))
 }
 
 pub(crate) fn active(ui: &Ui) -> bool {
@@ -87,17 +97,27 @@ fn bounded_change(change: f64, lo: f64, hi: f64) -> f64 {
 /// corrected, and only by that jump: a pointer that turned back before the warp landed is still
 /// where it looks, so its delta is already all real motion and subtracting the jump would inject
 /// one. That injection ran the value to an end of its range.
-fn unwarped(delta: Vec2, pos: Pos2, pending: &mut Option<(Pos2, Pos2)>) -> Vec2 {
-    let Some((from, to)) = *pending else { return delta };
-    *pending = None;
+fn unwarped(delta: Vec2, pos: Pos2, pending: &mut Option<(Pos2, Pos2, u8)>) -> Vec2 {
+    let Some((from, to, ttl)) = *pending else { return delta };
     let step = to - from;
     if !from.is_finite() || !to.is_finite() || step.x == 0.0 || !pos.is_finite() {
+        *pending = None;
         return delta;
     }
     let landed = (pos.x - to.x).abs() <= (step.x.abs() * 0.25).max(1.0);
     // The jump has to be in this frame's delta for taking it out to mean anything.
     let carries_jump = delta.x.abs() >= step.x.abs() * 0.5;
-    if landed && carries_jump { delta - step } else { delta }
+    if landed {
+        *pending = None;
+        if carries_jump { delta - step } else { delta }
+    } else if ttl > 1 {
+        // The OS warp is still in flight; keep `pending` across intermediate frames.
+        *pending = Some((from, to, ttl - 1));
+        delta
+    } else {
+        *pending = None;
+        delta
+    }
 }
 
 pub(crate) fn is_holding(ui: &Ui, resp: &Response) -> bool {
@@ -121,9 +141,10 @@ pub(crate) fn drag_wrap(ui: &Ui, resp: &Response) -> (Vec2, bool) {
         release(ui, resp.id);
         return (Vec2::ZERO, false);
     }
-    let (pos, delta, viewport) = ui.input(|i| (i.pointer.latest_pos(), i.pointer.delta(), i.viewport_rect()));
+    let (pos, delta, motion, viewport) = ui.input(|i| (i.pointer.latest_pos(), i.pointer.delta(), i.pointer.motion(), i.viewport_rect()));
     let Some(pos) = pos else {
-        return (ui.input(|i| i.pointer.delta()), false);
+        let raw = motion.filter(|m| m.is_finite()).unwrap_or(delta);
+        return (clamp_frame_delta(raw), false);
     };
     let mut scrub = ui.data(|d| d.get_temp::<Scrub>(key)).unwrap_or(Scrub { precise: 0.0, confined: false, pending: None, prev: None });
     if !scrub.confined {
@@ -140,17 +161,18 @@ pub(crate) fn drag_wrap(ui: &Ui, resp: &Response) -> (Vec2, bool) {
     let delta = unwarped(delta, pos, &mut scrub.pending);
     // A jump this long is a warp that escaped compensation, not a hand: leave the value alone and
     // keep the drag alive from here.
-    let delta = if plausible_step(delta.x, viewport) { delta } else { Vec2::new(0.0, delta.y) };
+    let fallback = if plausible_step(delta.x, viewport) { delta } else { Vec2::new(0.0, delta.y) };
+    let step = clamp_frame_delta(motion.filter(|m| m.is_finite()).unwrap_or(fallback));
     if scrub.pending.is_none()
         && let Some(to) = warp_crossed(scrub.prev, pos, viewport)
     {
         ui.ctx().send_viewport_cmd(egui::ViewportCommand::CursorPosition(to));
-        scrub.pending = Some((pos, to));
+        scrub.pending = Some((pos, to, PENDING_WARP_TTL));
         ui.ctx().request_repaint();
     }
     scrub.prev = Some(pos);
     ui.data_mut(|d| d.insert_temp(key, scrub));
-    (delta, true)
+    (step, true)
 }
 
 pub(crate) fn update(ui: &Ui, resp: &Response, value: &mut f32, before: f32, range: std::ops::RangeInclusive<f32>, speed: f64, wrapping: bool) {
@@ -173,6 +195,7 @@ pub(crate) fn update(ui: &Ui, resp: &Response, value: &mut f32, before: f32, ran
     }
     let speed = if slow { speed / 10.0 } else { speed };
     let (lo, hi) = (f64::from(*range.start()), f64::from(*range.end()));
+    let delta = clamp_frame_delta(delta);
     let change = bounded_change(f64::from(delta.x - delta.y) * speed, lo, hi);
     if change != 0.0 && lo <= hi {
         scrub.precise = (scrub.precise + change).clamp(lo, hi);
@@ -220,21 +243,47 @@ mod tests {
         let from = pos2(799.5, 300.0);
         let to = pos2(3.0, 300.0);
         let motion = vec2(-2.0, 1.0);
-        let mut pending = Some((from, to));
+        let mut pending = Some((from, to, PENDING_WARP_TTL));
         assert_eq!(unwarped(to - from + motion, to + motion, &mut pending), motion);
         assert!(pending.is_none());
     }
 
-    /// A frame that turned back before the warp landed is all real motion; taking the jump out of
-    /// it would inject a jump of its own.
+    /// An early frame that arrives before the OS delivers the warp leaves the delta untouched and
+    /// retains the pending warp across intermediate frames, expiring after `PENDING_WARP_TTL`.
     #[test]
     fn a_frame_that_never_landed_is_left_alone() {
         let from = pos2(799.5, 300.0);
         let to = pos2(3.0, 300.0);
-        let mut pending = Some((from, to));
+        let mut pending = Some((from, to, PENDING_WARP_TTL));
         let delta = vec2(-6.0, 0.5);
-        assert_eq!(unwarped(delta, pos2(793.5, 300.5), &mut pending), delta);
+        for _ in 0..PENDING_WARP_TTL {
+            assert_eq!(unwarped(delta, pos2(793.5, 300.5), &mut pending), delta);
+        }
         assert!(pending.is_none());
+    }
+
+    /// An intermediate render frame arriving before Windows delivers `SetCursorPos` must NOT drop
+    /// `pending`, otherwise the actual warp jump in the next frame would slam the value negative.
+    #[test]
+    fn pending_warp_is_not_dropped_on_early_frame() {
+        let from = pos2(799.5, 300.0);
+        let to = pos2(3.0, 300.0);
+        let mut pending = Some((from, to, PENDING_WARP_TTL));
+        let early_delta = vec2(1.0, 0.0);
+        assert_eq!(unwarped(early_delta, pos2(799.5, 300.0), &mut pending), early_delta);
+        assert!(pending.is_some(), "pending warp must survive early frames before OS warp arrives");
+
+        let real_motion = vec2(2.0, 0.0);
+        let compensated = unwarped((to - from) + real_motion, to + real_motion, &mut pending);
+        assert_eq!(compensated, real_motion);
+        assert!(pending.is_none());
+    }
+
+    #[test]
+    fn frame_delta_clamps_to_max_scrub_pt() {
+        assert_eq!(clamp_frame_delta(vec2(-1500.0, 200.0)), vec2(-64.0, 64.0));
+        assert_eq!(clamp_frame_delta(vec2(12.5, -3.0)), vec2(12.5, -3.0));
+        assert_eq!(clamp_frame_delta(vec2(f32::NAN, 5.0)), Vec2::ZERO);
     }
 
     /// A jump longer than a hand can make is a warp that escaped compensation: it is dropped

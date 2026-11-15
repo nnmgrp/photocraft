@@ -4612,3 +4612,68 @@ curves	Smooth	スムーズ
 	🔄 Reset to the manga default	🔄 Reset to the manga default
 	🦔 Uniflash	🦔 Uniflash
 	Snap Close	Snap Close
+	Align:	配置:
+	Batch balloons from script (one line per balloon):	台本から一括作成 (1行につき1吹き出し):
+	Brush contrast:	ブラシコントラスト:
+	Brush preset:	ブラシプリセット:
+	Chamfer size:	面取りサイズ:
+	Corner scoop:	隅の凹み:
+	Dash duty:	破線の比率:
+	Dashes:	破線数:
+	Deep contour warp:	輪郭の深いゆがみ:
+	Default (Style Engine)	既定 (スタイルエンジン)
+	Direction:	文字組方向:
+	Dot count:	ドット数:
+	Dot randomness:	ドットの不規則さ:
+	Edge roughness:	縁の粗さ:
+	Enable underlay / shadow contour	下地・影輪郭を有効にする
+	Fill interior (Gloom mode)	内側を塗る (陰鬱モード)
+	Fit mode:	フィット方法:
+	Grain size:	粒子サイズ:
+	Grow balloon	吹き出しを拡大
+	Handwritten font	手書き風フォント
+	Haze spread:	ぼかし広がり:
+	Import a VectorBrushPreset JSON or grayscale PNG ribbon texture	VectorBrushPreset JSON またはグレースケール PNG リボンテクスチャをインポート
+	Inward needles	内向きのトゲ
+	Line 1\nLine 2!!	1行目\n2行目!!
+	Line style:	線のスタイル:
+	Noise scale:	ノイズ倍率:
+	Pencil roughness:	鉛筆の粗さ:
+	Pencil strands:	鉛筆の重ね線:
+	Pixel step:	ピクセル幅:
+	Shrink text to shape	枠に合わせて文字を縮小
+	Solid ring + spikes	実線リング＋トゲ
+	Sparkle count:	キラキラ数:
+	Sparkle randomness:	キラキラの不規則さ:
+	Sparkle size:	キラキラサイズ:
+	Underlay X offset:	下地 X オフセット:
+	Underlay Y offset:	下地 Y オフセット:
+	Underlay rectness:	下地の角張り:
+	Underlay scale:	下地スケール:
+	Uniflash mode:	ウニフラッシュ種別:
+	Vertical (Tategaki)	縦書き (Tategaki)
+	Voice and intonation:	声質と抑揚:
+	Voice intensity:	効果の強さ:
+	Workflow: Presets, Script & SVG	ワークフロー: プリセット・台本・SVG
+	━ Solid	━ 実線
+	◌ Whisper	◌ ささやき (破線)
+	◎ Double	◎ 二重線
+	★ Save current style to favorites	★ 現在のスタイルをお気に入りに保存
+	⚠ Overflow by height (+{px} px needed)	⚠ 高さがはみ出しています (+{px} px 必要)
+	⚠ Overflow by width (+{px} px needed)	⚠ 幅がはみ出しています (+{px} px 必要)
+	⚫ Stipple dots	⚫ 点描ドット
+	✏ Pencil stroke	✏ 鉛筆ストローク
+	✨ Sparkle / glitter	✨ キラキラ・グリッター
+	⬆ Import SVG contour	⬆ SVG輪郭をインポート
+	⬇ Export balloon SVG	⬇ 吹き出しSVGをエクスポート
+	＋ Create batch from script	＋ 台本から一括作成
+	＋ Import (.json/.png)	＋ インポート (.json/.png)
+	👻 Eerie	👻 不気味
+	👾 1-bit pixel	👾 1ビットピクセル
+	💢 Irritated	💢 イライラ
+	💬 Neutral	💬 通常
+	📢 Shout	📢 叫び
+	📻 Broadcast	📻 機械音・通信
+	🖌 Ukiyo-e brush	🖌 浮世絵ブラシ
+	🤫 Whisper	🤫 ささやき
+	🪪 Chamfer rect	🪪 面取り矩形

@@ -570,3 +570,42 @@ fn thin_antialiased_edges_still_count_toward_bounds() {
     let c = r.render(Rect::new(0, 0, 102, 10));
     assert!(c[100] > 5e-5 && c[101] == 0.0, "{} {}", c[100], c[101]);
 }
+
+#[test]
+fn two_pass_balloon_renders_white_interior_and_ink_rim() {
+    use crate::balloon::LiveBalloonGroupGeom;
+    use photocraft_doc::vector::{BalloonLineStyle, LiveBalloon, LiveBalloonBody, LiveBalloonGroup};
+    use photocraft_doc::{LiveShape, ShapeStroke};
+
+    let balloon = LiveBalloon {
+        id: 1,
+        body: LiveBalloonBody::Ellipse { rect: [20.0, 20.0, 160.0, 120.0], squircle: 0.1 },
+        line_style: BalloonLineStyle::UkiyoBrush,
+        ukiyo_contrast: 0.75,
+        stroke_width: 6.0,
+        ..LiveBalloon::default()
+    };
+    let group = LiveBalloonGroup { items: vec![balloon], ..LiveBalloonGroup::default() };
+    let sh = ShapeLayer {
+        path: group.rebuild_group_path(),
+        fill: Some(Fill::Solid(Color::WHITE)),
+        stroke: Some(ShapeStroke { paint: Fill::Solid(Color::BLACK), width: 6.0, ..Default::default() }),
+        live: Some(LiveShape::BalloonGroup { group }),
+        ..Default::default()
+    };
+
+    let canvas = Rect::new(0, 0, 200, 160);
+    let compiled = CompiledShape::new(&sh, DEFAULT_TOLERANCE, canvas);
+    let rgba = compiled.render_rgba(canvas);
+    let idx = |x: i32, y: i32| (y as usize) * 200 + (x as usize);
+
+    // Center inside the balloon interior must be solid white (from Pass 1 fill, not black ink!).
+    let center = rgba[idx(100, 80)];
+    assert!(center[0] > 0.98 && center[1] > 0.98 && center[2] > 0.98 && center[3] > 0.98, "interior should be white: {center:?}");
+    // Rim at top of ellipse (x = 100, y = 20) must have dark ink pixels from Pass 2.
+    let rim_ink = (15..26).any(|y| {
+        let p = rgba[idx(100, y)];
+        p[3] > 0.5 && p[0] < 0.25 && p[1] < 0.25 && p[2] < 0.25
+    });
+    assert!(rim_ink, "ukiyo ink annulus should render solid black along the rim");
+}

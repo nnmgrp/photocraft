@@ -288,3 +288,49 @@ fn hostile_live_balloon_params_are_errors_without_editing_the_document() {
 
     assert_eq!(s.active().unwrap().history.past_len(), history + 1, "only the balloon creation is a step");
 }
+
+#[test]
+fn batch_from_script_and_svg_import_export_roundtrip() {
+    let mut s = session(600, 800);
+    let batch = s.execute("shape.balloon.batchFromScript", json!({"script": "Привет!\nОсторожно!!", "sizePt": 14.0, "vertical": false})).unwrap();
+    assert_eq!(batch["createdBalloons"].as_u64(), Some(2));
+    let layer_id = batch["layer"].as_u64().unwrap();
+    let group = balloon_group(&s, layer_id);
+    assert_eq!(group.items.len(), 2);
+    assert!(matches!(group.items[1].body, LiveBalloonBody::Spiky { .. }));
+
+    // Export standalone SVG with fitted dialogue.
+    let exp = s.execute("shape.balloon.exportSvg", json!({"layer": layer_id, "balloonId": 1, "text": "Привет!", "sizePt": 14.0})).unwrap();
+    let svg = exp["svg"].as_str().unwrap();
+    assert!(svg.contains("<svg") && svg.contains("<path") && svg.contains("<text"));
+
+    // Import valid custom contour and reject self-intersecting bowtie.
+    let imp = s.execute("shape.balloon.importSvg", json!({"layer": layer_id, "balloonId": 1, "svg": "M 0 0 L 100 0 L 100 80 L 0 80 Z"})).unwrap();
+    assert_eq!(imp["ok"].as_bool(), Some(true));
+    assert_eq!(imp["importedKnots"].as_u64(), Some(4));
+
+    assert!(
+        s.execute("shape.balloon.importSvg", json!({"layer": layer_id, "balloonId": 1, "svg": "M 0 0 L 100 80 L 100 0 L 0 80 Z"})).is_err(),
+        "self-intersecting SVG contour must be rejected"
+    );
+}
+
+#[test]
+fn double_outline_chamfer_rect_and_brush_preset_validation() {
+    let mut s = session(400, 400);
+    let dbl = s.execute("shape.balloon.create", json!({"kind": "doubleOutline", "rect": [40, 40, 160, 100], "gap": 6.0})).unwrap();
+    let dbl_id = dbl["layer"].as_u64().unwrap();
+    assert!(!shape(&s, dbl_id).path.subpaths.is_empty());
+
+    let mut ch_payload = live_balloon(json!({"bodyKind": "chamferRect", "rect": [40.0, 40.0, 180.0, 110.0], "chamfer": 16.0, "concave": 0.4}));
+    ch_payload["lineStyle"] = json!("ukiyoBrush");
+    ch_payload["ukiyoContrast"] = json!(0.8);
+    ch_payload["brushPresetId"] = json!("fukidashi-fude");
+    let ch = s.execute("shape.balloon.create", json!({"balloon": ch_payload})).unwrap();
+    let ch_id = ch["layer"].as_u64().unwrap();
+    assert_eq!(balloon_group(&s, ch_id).items[0].brush_preset_id.as_deref(), Some("fukidashi-fude"));
+
+    let mut bad_payload = live_balloon(json!({"bodyKind": "ellipse", "rect": [20.0, 20.0, 100.0, 80.0]}));
+    bad_payload["brushPresetId"] = json!("../escape");
+    assert!(s.execute("shape.balloon.create", json!({"balloon": bad_payload})).is_err());
+}

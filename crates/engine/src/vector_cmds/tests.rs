@@ -1283,3 +1283,40 @@ fn test_linework_layer_appends_multiple_strokes_to_single_layer() {
         .unwrap();
     assert_eq!(upd["baseWidth"], 18.0);
 }
+
+#[test]
+fn single_stroke_update_node_keeps_centerline_and_stroke() {
+    let mut s = session(400, 400, 8);
+    let r1 = s
+        .execute(
+            "shape.vectorCurve.create",
+            json!({
+                "points": [
+                    {"x": 40.0, "y": 100.0, "pressure": 1.0, "corner": false},
+                    {"x": 240.0, "y": 100.0, "pressure": 1.0, "corner": false}
+                ],
+                "width": 8.0,
+                "tapered": false
+            }),
+        )
+        .unwrap();
+    let layer_id = r1["id"].as_u64().unwrap();
+
+    let upd = s
+        .execute(
+            "shape.vectorCurve.updateNode",
+            json!({
+                "layer": layer_id,
+                "strokeIndex": 0,
+                "baseWidth": 22.0
+            }),
+        )
+        .unwrap();
+    assert_eq!(upd["baseWidth"], 22.0);
+
+    let sh = shape(&s, layer_id);
+    let stroke = sh.stroke.as_ref().expect("single non-tapered stroke must retain sh.stroke");
+    assert!((stroke.width - 22.0).abs() < 1e-4, "sh.stroke.width must sync with baseWidth");
+    assert_eq!(sh.path.subpaths.len(), 1);
+    assert!(!sh.path.subpaths[0].closed, "single non-tapered stroke must stay open centerline rather than multi-stroke ribbon");
+}

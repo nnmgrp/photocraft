@@ -498,6 +498,7 @@ fn label_scrub_response(ui: &Ui, resp: &Response, original_rect: Rect, max_gap: 
             (true, Some(origin), Some(pos)) if was_holding || linked => pos.x - origin.x,
             _ => delta.x,
         };
+        let dx = dx.clamp(-64.0, 64.0);
         acc += dx * rate;
         if !acc.is_finite() {
             acc = 0.0;

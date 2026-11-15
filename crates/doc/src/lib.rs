@@ -21,6 +21,7 @@ pub mod text;
 pub mod text_styles;
 pub mod variables;
 pub mod vector;
+pub mod vector_brush;
 pub mod video;
 
 use std::sync::Arc;
@@ -48,6 +49,7 @@ pub use variables::{DataSet, DataValue, PixelAlign, PixelMethod, VarKind, Variab
 pub use vector::{
     ClippingPath, FillRule, Knot, LineCap, LineJoin, LiveShape, NamedPath, Path, PathOp, ShapeLayer, ShapeStroke, StrokeAlign, Subpath, VectorMask,
 };
+pub use vector_brush::{VectorBrushCategory, VectorBrushPreset};
 pub use video::{Timeline, VideoData, VideoSource};
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);

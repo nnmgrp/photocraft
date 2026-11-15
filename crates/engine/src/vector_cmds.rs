@@ -877,17 +877,7 @@ pub fn build_vector_curve_layer(p: &Value) -> std::result::Result<VectorCurveCom
     let closed = p.get("closed").and_then(Value::as_bool).unwrap_or(false);
     let tension = p.get("tension").and_then(Value::as_f64).unwrap_or(SAI_DEFAULT_TENSION).clamp(0.0, 1.0);
 
-    let live_stroke = LiveVectorStroke {
-        nodes: points,
-        base_width: width,
-        min_ratio,
-        base_density,
-        min_density_ratio,
-        curve_type,
-        tapered,
-        closed,
-        tension,
-    };
+    let live_stroke = LiveVectorStroke { nodes: points, base_width: width, min_ratio, base_density, min_density_ratio, curve_type, tapered, closed, tension };
 
     let path = live_stroke.rebuild_path();
     if path.is_empty() {
@@ -997,11 +987,7 @@ fn layer_new_linework(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn effective_stroke_fg(s: &Session, stroke: &LiveVectorStroke) -> Color {
     let fg = s.tools.foreground;
-    let avg_density = if stroke.nodes.is_empty() {
-        1.0
-    } else {
-        stroke.nodes.iter().map(|n| n.density).sum::<f32>() / stroke.nodes.len() as f32
-    };
+    let avg_density = if stroke.nodes.is_empty() { 1.0 } else { stroke.nodes.iter().map(|n| n.density).sum::<f32>() / stroke.nodes.len() as f32 };
     let effective_alpha = vector::sai_curve::alpha_at(stroke.base_density, stroke.min_density_ratio, avg_density);
     Color::rgba(fg[0], fg[1], fg[2], (fg[3] * effective_alpha).clamp(0.0, 1.0))
 }
@@ -1102,13 +1088,16 @@ fn vector_curve_update_node(s: &mut Session, p: &Value) -> Result<Value> {
             return Err(bad(CMD, "linework layer has no strokes"));
         }
         let s_idx = stroke_idx_opt.unwrap_or(lw.strokes.len() - 1);
-        let multi = lw.strokes.len() > 1 || stroke_idx_opt.is_some() || sh.stroke.is_none();
+        let multi = lw.strokes.len() > 1 || sh.stroke.is_none();
         let stroke = lw.strokes.get_mut(s_idx).ok_or_else(|| bad(CMD, format!("strokeIndex {s_idx} out of bounds")))?;
 
         if let Some(bw) = new_base_width
             && bw.is_finite()
         {
             stroke.base_width = bw.clamp(0.1, 100_000.0);
+            if !multi && let Some(st) = sh.stroke.as_mut() {
+                st.width = stroke.base_width as f32;
+            }
         }
 
         if delete_node {
@@ -1144,7 +1133,7 @@ fn vector_curve_insert_node(s: &mut Session, p: &Value) -> Result<Value> {
         if lw.strokes.is_empty() {
             return Err(bad(CMD, "linework layer has no strokes"));
         }
-        let multi = lw.strokes.len() > 1 || stroke_idx_opt.is_some() || sh.stroke.is_none();
+        let multi = lw.strokes.len() > 1 || sh.stroke.is_none();
         let (target_s, idx) = if let Some(s_i) = stroke_idx_opt {
             let stroke = lw.strokes.get_mut(s_i).ok_or_else(|| bad(CMD, format!("strokeIndex {s_i} out of bounds")))?;
             let (n_i, _) = insert_vector_curve_node_at(stroke, x, y, max_dist).map_err(|e| bad(CMD, e))?;

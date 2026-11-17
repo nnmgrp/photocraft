@@ -74,7 +74,7 @@ fn eval(seg: &[Point; 4], t: f64) -> (f64, f64) {
 /// Validate before interactive rendering: finite coordinates and a bounded tessellation and
 /// dash workload. Arc length is bounded by the cubic control polygon, without allocating pixels.
 pub fn validate_shape(path: &Path, stroke: Option<&photocraft_doc::ShapeStroke>) -> Result<(), &'static str> {
-    validate_workload(path, stroke, 1_000_000.0, "shape coordinates must be finite and within ±1000000 px")
+    validate_workload_with_limit(path, stroke, 1_000_000.0, "shape coordinates must be finite and within ±1000000 px", 65_536)
 }
 
 fn validate_workload(
@@ -83,9 +83,19 @@ fn validate_workload(
     coordinate_limit: f64,
     coordinate_error: &'static str,
 ) -> Result<(), &'static str> {
+    validate_workload_with_limit(path, stroke, coordinate_limit, coordinate_error, 4096)
+}
+
+fn validate_workload_with_limit(
+    path: &Path,
+    stroke: Option<&photocraft_doc::ShapeStroke>,
+    coordinate_limit: f64,
+    coordinate_error: &'static str,
+    knot_limit: usize,
+) -> Result<(), &'static str> {
     let knots = path.subpaths.iter().try_fold(0usize, |n, s| n.checked_add(s.knots.len())).ok_or("too many path knots")?;
-    if knots > 4096 || path.subpaths.len() > 4096 {
-        return Err("path exceeds 4096 knots/subpaths");
+    if knots > knot_limit || path.subpaths.len() > knot_limit {
+        return Err(if knot_limit <= 4096 { "path exceeds 4096 knots/subpaths" } else { "shape path exceeds 65536 knots/subpaths" });
     }
     let mut points = 0usize;
     let mut length = 0.0;

@@ -1,6 +1,7 @@
 //! Parametric ("live") shapes → paths: rectangles with corner radii, ellipses, polygons, stars
 //! and lines. Knots run clockwise on screen (y down), starting at the top.
 
+use crate::balloon::LiveBalloonGroupGeom;
 use photocraft_doc::{Knot, LiveShape, Path, Subpath};
 use photocraft_geom::Point;
 
@@ -323,9 +324,7 @@ pub fn live_path(s: &LiveShape) -> Path {
         LiveShape::ArrowLine { from, to, weight, start, end, width, length, concavity } => {
             arrow_line((from[0], from[1]), (to[0], to[1]), *weight, *start, *end, *width, *length, *concavity)
         }
-        // Balloon geometry is not generated here yet: a balloon layer keeps the path stored with
-        // its shape layer, so nothing is drawn from the group's parameters.
-        LiveShape::BalloonGroup { .. } => Path::default(),
+        LiveShape::BalloonGroup { group } => group.rebuild_group_path(),
     }
 }
 

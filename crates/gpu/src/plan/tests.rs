@@ -594,6 +594,10 @@ fn screentone_plans_on_gpu_and_falls_back_by_backend() {
     assert_eq!(lut[0][18], 1.0);
     assert_eq!(lut[0][19], 0.0);
 
+    // Disabling runtime gpu_screentone forces fallback to baked Kernel::Content.
+    let disabled_gpu = plan_with_options(&gpu_doc, false).expect("disabled gpu_screentone falls back to Content");
+    assert!(disabled_gpu.passes.iter().all(|pass| pass.kernel != Kernel::Screentone));
+
     // Shading mode with use_source_luminance retains backdrop in pass.a.
     let shade_doc = make_doc(64, 64, ColorMode::Rgb, ScreentoneBackend::Gpu, ScreentoneMode::Shading, true);
     let p = plan(&shade_doc).expect("shading screentone plans");

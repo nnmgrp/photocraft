@@ -168,7 +168,13 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let (_, bx) = toolbar_columns(t.pro);
     let m = if t.pro { 5i8 } else { 7i8 };
-    let sections = visible_sections(&app.session.prefs().toolbar.hidden);
+    let seam = app.session.seam_flags();
+    let mut hidden = app.session.prefs().toolbar.hidden.clone();
+    if !seam.toolbar_tools {
+        hidden.push("Balloon Tool".into());
+        hidden.push("Vector Curve Tool".into());
+    }
+    let sections = visible_sections(&hidden);
     // Two columns when the header chevron asks for them; a column that doesn't fit scrolls.
     let double = app.ui.panels.toolbar_double;
     let w = toolbar_width(t.pro, double);

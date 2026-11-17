@@ -291,6 +291,8 @@ pub struct DocCtx<'a> {
     pub depth: photocraft_color::SampleType,
     /// The document (effect geometry the CPU computes, e.g. gradient stroke frames).
     pub doc: &'a Document,
+    /// Whether procedural GPU screentone (`Kernel::Screentone`) is permitted by runtime seam config.
+    pub gpu_screentone: bool,
 }
 
 impl<'a> DocCtx<'a> {
@@ -303,6 +305,7 @@ impl<'a> DocCtx<'a> {
             mode: doc.mode,
             depth: doc.depth,
             doc,
+            gpu_screentone: true,
         }
     }
 }

@@ -634,7 +634,7 @@ fn row_context_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, rc: &RowCtx<'_>,
                 crate::layer_menu_ui::show_mask(app, ui, l, actions);
                 return;
             }
-            if ui.ctx().data(|d| d.get_temp::<bool>(on_second_id)).unwrap_or(false) {
+            if ui.ctx().data(|d| d.get_temp::<bool>(on_second_id)).unwrap_or(false) && app.session.seam_flags().second_mask {
                 crate::layer_menu_ui::show_second_mask(ui, l, actions);
                 return;
             }

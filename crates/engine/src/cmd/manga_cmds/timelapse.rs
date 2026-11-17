@@ -57,6 +57,10 @@ impl Session {
     /// [`Session::timelapse_tick`] at an explicit time (ms on [`recorder::mono_ms`]'s clock);
     /// returns the absolute time of the next needed tick.
     pub fn timelapse_tick_at(&mut self, now: f64, input: bool) -> Option<f64> {
+        let seam = self.seam_flags();
+        if !seam.timelapse {
+            return None;
+        }
         let jobs = if self.has_jobs() { self.jobs() } else { Vec::new() };
         let exporting = jobs.iter().any(|j| j.command == EXPORT);
         let locked: Vec<_> = jobs.iter().filter_map(|j| j.document).collect();

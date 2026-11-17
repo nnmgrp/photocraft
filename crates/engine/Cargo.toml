@@ -31,6 +31,7 @@ photocraft-algo = { workspace = true }
 photocraft-text = { workspace = true }
 photocraft-vector = { workspace = true }
 photocraft-io = { workspace = true }
+photocraft-manga-bridge = { workspace = true }
 photocraft-manga-core = { workspace = true }
 craft-xml = { workspace = true }
 craft-psd = { workspace = true }

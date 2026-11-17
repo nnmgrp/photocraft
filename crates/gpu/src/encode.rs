@@ -4,7 +4,7 @@ use super::convert::lut_texture;
 use super::kit::FrameRes;
 use super::paging::{OVER_BUDGET, cell_rect, first_error, grid_rect_count, grid_rects, lru_victims, scoped_work, uniform_buffer_len};
 use super::textures::{ChunkOut, FxKey, ResKey, Resident, Stats};
-use super::{Compositor, Document, LayerId, Plan, Rect, Surface, Unsupported, plan, timing};
+use super::{Compositor, Document, LayerId, Plan, Rect, Surface, Unsupported, timing};
 
 impl Compositor {
     /// Composite `region` of `doc`. Each finished chunk is passed to `sink` while its encoder is
@@ -132,7 +132,7 @@ impl Compositor {
     ) -> Result<Stats, Unsupported> {
         let canvas = doc.bounds();
         let region = region.intersect(&canvas);
-        let plan = plan(doc)?;
+        let plan = crate::plan::plan_with_options(doc, self.gpu_screentone)?;
         self.check_fx(doc, &plan)?;
         self.pattern_mode = doc.pixel_format().mode;
         self.pattern_doc = doc.id;

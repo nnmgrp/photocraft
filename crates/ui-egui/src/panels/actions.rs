@@ -1649,6 +1649,9 @@ pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if ui.add_enabled(any || set_selected, egui::Button::new(tl!("Save Actions…"))).clicked() {
         act = Some("save");
     }
+    if ui.button(tl!("Load Manga Actions")).clicked() {
+        act = Some("mangaPreset");
+    }
     let Some(a) = act else { return };
     ui.close();
     let r = match a {
@@ -1686,6 +1689,13 @@ pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         "newSet" => new_set_dialog(app),
         "stop" => insert_stop_dialog(app),
         "playbackOptions" => playback::open_dialog(app),
+        "mangaPreset" => {
+            let res = app.run("actions.loadMangaPreset", json!({}));
+            if res.is_ok() {
+                app.ui.actions.button_mode = true;
+            }
+            res
+        }
         _ => save_dialog(app, None),
     };
     if let Err(e) = r

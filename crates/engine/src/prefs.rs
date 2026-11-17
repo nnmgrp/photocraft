@@ -25,6 +25,7 @@ use serde_json::{Map, Value, json};
 
 use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
+pub use photocraft_manga_bridge::SeamFlags;
 
 /// A string-valued choice enum with its JSON names (used to validate `prefs.set` and to fill
 /// dropdowns in the Preferences dialog).
@@ -1457,6 +1458,8 @@ pub struct Preferences {
     pub script_events: crate::automate_cmds::ScriptEvents,
     /// Layer Mask Display Options: the layer mask rubylith's colour and opacity.
     pub layer_mask_overlay: LayerMaskOverlay,
+    /// Runtime seam toggles (`seam.*` in config / `PHOTOCRAFT_SEAM_MANGA` env override).
+    pub seam: SeamFlags,
 }
 
 impl Preferences {
@@ -1589,6 +1592,15 @@ impl Session {
     /// The current preferences.
     pub fn prefs(&self) -> &Preferences {
         self.prefs.get()
+    }
+
+    /// Runtime manga seam flags with optional `PHOTOCRAFT_SEAM_MANGA` global env override.
+    pub fn seam_flags(&self) -> SeamFlags {
+        let mut seam = self.prefs().seam;
+        if let Ok(raw) = std::env::var("PHOTOCRAFT_SEAM_MANGA") {
+            seam.apply_global_override(&raw);
+        }
+        seam
     }
 
     /// Change preferences and apply the engine-side ones.
@@ -1768,7 +1780,7 @@ impl Session {
         }
         let mut next = self.prefs().clone();
         let mut color_changed = false;
-        if path.is_empty() || SECTIONS.iter().any(|(id, _)| *id == path) || matches!(path, "shortcuts" | "alternateShortcuts" | "menus" | "toolbar") {
+        if path.is_empty() || SECTIONS.iter().any(|(id, _)| *id == path) || matches!(path, "shortcuts" | "alternateShortcuts" | "menus" | "toolbar" | "seam") {
             // Whole section (or everything): merge the object key by key so each value is checked.
             let obj = value.as_object().ok_or_else(|| format!("`{path}` needs an object"))?;
             for (k, v) in obj {

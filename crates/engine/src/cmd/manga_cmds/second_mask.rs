@@ -17,7 +17,19 @@ fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
 }
 
 fn has_doc(s: &Session) -> std::result::Result<(), String> {
+    let seam = s.seam_flags();
+    if !seam.second_mask {
+        return Err("second layer mask is disabled (seam.second_mask)".into());
+    }
     s.active().map(|_| ()).ok_or_else(|| "no document open".into())
+}
+
+fn ensure_enabled(s: &Session, cmd: &str) -> Result<()> {
+    let seam = s.seam_flags();
+    if !seam.second_mask {
+        return Err(bad(cmd, "second layer mask is disabled by seam.second_mask"));
+    }
+    Ok(())
 }
 
 fn opt_bool(p: &Value, key: &str, cmd: &str) -> Result<Option<bool>> {
@@ -29,6 +41,7 @@ fn opt_bool(p: &Value, key: &str, cmd: &str) -> Result<Option<bool>> {
 }
 
 fn add(s: &mut Session, p: &Value) -> Result<Value> {
+    ensure_enabled(s, ADD)?;
     let id = layer_param(s, p)?;
     let hide = opt_bool(p, "hide", ADD)?.unwrap_or(false);
     s.edit("Add Second Layer Mask", |doc, _| {
@@ -56,6 +69,7 @@ fn add(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn delete(s: &mut Session, p: &Value) -> Result<Value> {
+    ensure_enabled(s, DELETE)?;
     let id = layer_param(s, p)?;
     s.edit("Delete Second Layer Mask", |doc, _| {
         check_all_unlocked(doc, id)?;
@@ -69,6 +83,7 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn set_enabled(s: &mut Session, p: &Value) -> Result<Value> {
+    ensure_enabled(s, ENABLED)?;
     let id = layer_param(s, p)?;
     let enabled = opt_bool(p, "enabled", ENABLED)?;
     let mut final_val = false;
@@ -84,6 +99,7 @@ fn set_enabled(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn set_linked(s: &mut Session, p: &Value) -> Result<Value> {
+    ensure_enabled(s, LINKED)?;
     let id = layer_param(s, p)?;
     let linked = opt_bool(p, "linked", LINKED)?;
     let mut final_val = false;
@@ -99,6 +115,7 @@ fn set_linked(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn to_vector_mask(s: &mut Session, p: &Value) -> Result<Value> {
+    ensure_enabled(s, TO_VECTOR)?;
     let id = layer_param(s, p)?;
     let tol = match p.get("tolerance") {
         None | Some(Value::Null) => 2.0,

@@ -732,7 +732,7 @@ impl<'a> Planner<'a> {
 
     /// Whether `tone` should be evaluated procedurally via `Kernel::Screentone` on the GPU.
     fn screentone_on_gpu(&self, tone: &ScreentoneLayer) -> bool {
-        if self.cx.mode == photocraft_color::ColorMode::Cmyk || self.cx.mode == photocraft_color::ColorMode::Lab {
+        if !self.cx.gpu_screentone || self.cx.mode == photocraft_color::ColorMode::Cmyk || self.cx.mode == photocraft_color::ColorMode::Lab {
             return false;
         }
         match tone.spec.backend {

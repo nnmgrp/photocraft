@@ -170,7 +170,13 @@ pub fn show(app: &crate::PhotocraftApp, ui: &mut egui::Ui, l: &Layer, on_set: bo
         ui.set_min_width(220.0);
         let mut rename = false;
         let has_selection = app.session.active().is_some_and(|s| s.doc.selection.is_some());
-        items(app, ui, l, on_set, entries(l, on_set, has_selection), actions);
+        let seam = app.session.seam_flags();
+        let mut menu_entries = entries(l, on_set, has_selection);
+        if !seam.second_mask {
+            use photocraft_engine::manga_cmds::second_mask as second;
+            menu_entries.retain(|e| !matches!(e, Some((_, id)) if matches!(*id, second::ADD | second::ENABLED | second::DELETE)));
+        }
+        items(app, ui, l, on_set, menu_entries, actions);
         ui.separator();
         if ui.button(tl!("Rename Layer…")).clicked() {
             rename = true;

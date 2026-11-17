@@ -637,6 +637,8 @@ pub(super) fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
 /// structural change, not per brush dab) and whenever either preference changes.
 fn gpu_budget(app: &mut PhotocraftApp, gpu: &crate::gpu_canvas::GpuCanvas, idx: usize, partial: bool, visible: DRect) {
     gpu.set_focus(Some(visible));
+    let seam = app.session.seam_flags();
+    gpu.set_gpu_screentone(seam.gpu_screentone);
     let allowance = budget_allowance(app);
     let changed = app.perf.gpu_budget_allowance != allowance;
     if partial && !changed && gpu.memory_budget().is_some() {

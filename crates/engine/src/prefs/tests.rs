@@ -1235,3 +1235,25 @@ fn a_saved_control_port_turns_the_agent_connection_on() {
     assert!(!load(r#"{"integrations":{"controlPort":7878,"connectAgents":false}}"#).connect_agents, "an explicit choice wins");
     assert!(!load("{}").connect_agents, "off by default");
 }
+
+#[test]
+fn seam_flags_roundtrip_and_reset_via_prefs_commands() {
+    let mut s = Session::new();
+    assert_eq!(s.seam_flags(), SeamFlags::all_enabled());
+
+    s.execute("prefs.set", json!({"path": "seam.gpu_screentone", "value": false})).unwrap();
+    s.execute("prefs.set", json!({"path": "seam.second_mask", "value": false})).unwrap();
+    assert!(!s.prefs().seam.gpu_screentone);
+    assert!(!s.prefs().seam.second_mask);
+    assert!(s.prefs().seam.pages);
+
+    let mut restored = Session::new();
+    restored.load_prefs_json(&s.prefs_to_json()).unwrap();
+    assert!(!restored.prefs().seam.gpu_screentone);
+    assert!(!restored.prefs().seam.second_mask);
+
+    assert!(s.execute("prefs.set", json!({"path": "seam.gpu_screentone", "value": "no"})).is_err());
+
+    s.execute("prefs.reset", json!({"path": "seam"})).unwrap();
+    assert_eq!(s.prefs().seam, SeamFlags::all_enabled());
+}

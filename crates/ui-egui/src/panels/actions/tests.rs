@@ -3044,3 +3044,17 @@ fn bulk_load_summary_counts_unsupported_steps_of_surviving_sets() {
     assert_eq!(names, ["A", "B"]);
     assert!(app.session.actions.list[0].steps.iter().any(|(id, _)| id == "actions.photoshopStep"));
 }
+
+#[test]
+fn load_manga_actions_preset_populates_button_mode_and_switches_on() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    assert!(!app.ui.actions.button_mode);
+    let mut h = Harness::builder().with_size(vec2(360.0, 600.0)).build_ui_state(|ui, app| panel_menu(app, ui), app);
+    h.run_steps(2);
+    h.get_by_label("Load Manga Actions").click();
+    h.run_steps(2);
+    assert!(h.state().ui.actions.button_mode, "status={} err={}", h.state().ui.status, h.state().ui.status_error);
+    assert!(h.state().session.actions.list.iter().any(|a| a.set.as_deref() == Some("Manga Tools")));
+}

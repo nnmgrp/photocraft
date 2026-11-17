@@ -56,12 +56,17 @@ pub struct Plan<'a> {
     pub checkpoints: Vec<Checkpoint>,
 }
 
-/// Build the pass list for `doc`.
+/// Build the pass list for `doc` (with procedural GPU screentone enabled).
 pub fn plan(doc: &Document) -> Result<Plan<'_>, Unsupported> {
+    plan_with_options(doc, true)
+}
+
+/// Build the pass list for `doc` with explicit runtime seam options.
+pub fn plan_with_options(doc: &Document, gpu_screentone: bool) -> Result<Plan<'_>, Unsupported> {
     if doc.mode == photocraft_color::ColorMode::Multichannel {
         return Err(Unsupported("Multichannel inks (printed on the CPU)".into()));
     }
-    let mut p = Planner::new(DocCtx::of(doc));
+    let mut p = Planner::new(DocCtx { gpu_screentone, ..DocCtx::of(doc) });
     let root = p.clear();
     // Start at the topmost layer that hides everything beneath it (an opaque fill layer): the
     // layers below can't change the result, so they cost no passes or uploads.

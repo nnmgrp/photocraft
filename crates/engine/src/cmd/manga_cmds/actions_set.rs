@@ -232,6 +232,49 @@ fn options(s: &mut Session, p: &Value) -> Result<Value> {
     }))
 }
 
+pub const MANGA_TOOLS_SET: &str = "Manga Tools";
+
+fn manga_preset_actions() -> Vec<Action> {
+    let entry = |name: &str, color: &str, steps: Vec<(&str, Value)>| -> Action {
+        let mut a = Action::new(name, steps.into_iter().map(|(id, p)| (id.to_owned(), p)).collect());
+        a.set = Some(MANGA_TOOLS_SET.to_owned());
+        a.color = color.to_owned();
+        a
+    };
+    vec![
+        entry("New Linework", "blue", vec![("layer.newLinework", json!({}))]),
+        entry("Add Screentone", "violet", vec![("layer.screentone", json!({"patternType": "dots", "spacingX": 12.0, "spacingY": 12.0, "dotSize": 3.5}))]),
+        entry("Add Second Mask", "yellow", vec![("layer.secondMask.add", json!({}))]),
+        entry("Set Reference", "green", vec![("layer.setReference", json!({}))]),
+        entry("Toggle Lock All", "gray", vec![("layer.toggleLockAll", json!({}))]),
+        entry("Grain Overlay", "orange", vec![("layer.newAdjustmentLayer.grain", json!({"amount": 25.0, "size": 34.0, "roughness": 50.0}))]),
+        entry("Deselect", "red", vec![("select.deselect", json!({}))]),
+    ]
+}
+
+fn load_manga_preset(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "actions.loadMangaPreset";
+    not_playing(s, cmd)?;
+    let replace = p.get("replace").and_then(Value::as_bool).unwrap_or(true);
+    let preset = manga_preset_actions();
+    let count = preset.len();
+    if replace {
+        s.actions.list.retain(|a| a.set.as_deref() != Some(MANGA_TOOLS_SET));
+    }
+    let existing: std::collections::HashSet<String> =
+        s.actions.list.iter().filter(|a| a.set.as_deref() == Some(MANGA_TOOLS_SET)).map(|a| a.name.clone()).collect();
+    let mut added = 0usize;
+    for action in preset {
+        if replace || !existing.contains(&action.name) {
+            s.actions.list.push(action);
+            added += 1;
+        }
+    }
+    s.actions.sets.retain(|n| n != MANGA_TOOLS_SET);
+    s.actions.touch();
+    Ok(json!({ "set": MANGA_TOOLS_SET, "actions": count, "added": added }))
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec {
@@ -282,6 +325,16 @@ pub fn specs() -> Vec<CommandSpec> {
             params: r##"{"allowToolRecording":bool?,"playback":{"mode":"accelerated"|"stepByStep"|"pause","seconds":1..=60?}?} -> {allowToolRecording,playback}"##,
             enabled: always,
             run: options,
+            journal: false,
+        },
+        CommandSpec {
+            id: "actions.loadMangaPreset",
+            label: "Load Manga Actions",
+            menu: &[],
+            shortcut: None,
+            params: r##"{"replace":bool?=true} -> {set,actions,added}"##,
+            enabled: always,
+            run: load_manga_preset,
             journal: false,
         },
     ]
@@ -394,5 +447,29 @@ mod tests {
             assert!(s.execute("actions.options", bad_req.clone()).is_err(), "{bad_req}");
         }
         assert_eq!(s.prefs().actions.performance, PlaybackPerformance::StepByStep);
+    }
+
+    #[test]
+    fn load_manga_preset_installs_action_buttons_idempotently() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 32, "height": 32, "background": "white"})).unwrap();
+        let all_ids: std::collections::HashSet<&'static str> = crate::commands::command_specs().iter().map(|c| c.id).collect();
+        let res = s.execute("actions.loadMangaPreset", json!({})).unwrap();
+        assert_eq!(res["set"], MANGA_TOOLS_SET);
+        let first_len = s.actions.list.len();
+        assert!(first_len >= 5);
+        for a in &s.actions.list {
+            assert_eq!(a.set.as_deref(), Some(MANGA_TOOLS_SET));
+            assert!(!a.color.is_empty(), "{} should have a Button Mode color swatch", a.name);
+            for (step_id, _) in &a.steps {
+                assert!(all_ids.contains(step_id.as_str()), "unknown command id {step_id}");
+            }
+        }
+        // Re-running with default replace=true is idempotent.
+        s.execute("actions.loadMangaPreset", json!({})).unwrap();
+        assert_eq!(s.actions.list.len(), first_len);
+        // Playing the Screentone button action adds a screentone layer cleanly.
+        s.execute("actions.play", json!({"action": "Add Screentone"})).unwrap();
+        assert!(s.active().unwrap().doc.layers.len() >= 2);
     }
 }

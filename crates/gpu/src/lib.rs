@@ -128,6 +128,8 @@ pub struct Compositor {
     /// Timestamp queries measuring how long the GPU spends on a refresh (see
     /// [`Compositor::measure_gpu_time`]); `None` = not measured.
     timer: Option<timing::GpuTimer>,
+    /// Runtime `seam.gpu_screentone` gate (falls back to baked `tone.surface` when `false`).
+    gpu_screentone: bool,
 }
 use W::{F, I, U};
 

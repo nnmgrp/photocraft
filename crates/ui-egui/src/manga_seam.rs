@@ -99,6 +99,44 @@ mod native {
         CanvasViewXform { rect: xf.rect, zoom: xf.zoom, center: xf.center, flip: xf.flip, rotation: xf.rotation, aspect: xf.aspect }
     }
 
+    /// Captures a read-only [`photocraft_manga_bridge::HostSnapshot`] from `app`.
+    pub fn host_snapshot(app: &PhotocraftApp) -> photocraft_manga_bridge::HostSnapshot {
+        use photocraft_manga_bridge::{BridgeLayerId, DocRef, HostSnapshot};
+        let docs: Vec<DocRef> = app
+            .session
+            .documents()
+            .iter()
+            .enumerate()
+            .map(|(index, d)| DocRef {
+                id: photocraft_manga_bridge::BridgeDocId(d.doc.id.0),
+                index,
+                name: d.doc.name.clone(),
+                path: d.path.clone(),
+                revision: d.revision,
+                is_dirty: d.is_dirty(),
+                size: (d.doc.size.width, d.doc.size.height),
+            })
+            .collect();
+        let active_idx = app.session.active_index();
+        let active_doc = active_idx.and_then(|i| docs.get(i).cloned());
+        let (active_layer, selected_layers) = match app.session.active() {
+            Some(st) => (st.active_layer.map(|l| BridgeLayerId(l.0)), st.selected_layers().into_iter().map(|l| BridgeLayerId(l.0)).collect()),
+            None => (None, Vec::new()),
+        };
+        HostSnapshot {
+            active_doc,
+            active_doc_index: active_idx,
+            active_layer,
+            selected_layers,
+            documents: docs,
+            tool_id: app.active_tool().label(),
+            locale: crate::i18n::current().code().to_owned(),
+            foreground: app.session.tools.foreground,
+            background: app.session.tools.background,
+            flags: app.session.seam_flags(),
+        }
+    }
+
     fn to_manga_ev(ev: ToolEvent) -> CanvasToolEvent {
         match ev {
             ToolEvent::Down { x, y, pressure } => CanvasToolEvent::Down { x, y, pressure },
@@ -661,13 +699,32 @@ mod native {
 
     /// Renders the body of manga panel `id` when owned by this seam. Returns `true` if handled.
     pub fn render_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: &str) -> bool {
+        let seam = app.session.seam_flags();
         match id {
-            "timelapse" => crate::timelapse_ui::panel(app, ui),
+            "timelapse" => {
+                if seam.timelapse {
+                    crate::timelapse_ui::panel(app, ui);
+                } else {
+                    ui.label("Timelapse is disabled by seam.timelapse.");
+                }
+            }
             "screentone" => render_screentone(app, ui),
             "balloon" => render_balloon(app, ui),
             "linework" => render_linework(app, ui),
-            "pages" => render_pages(app, ui),
-            "typesetter" => render_typesetter(app, ui),
+            "pages" => {
+                if seam.pages {
+                    render_pages(app, ui);
+                } else {
+                    ui.label("Pages is disabled by seam.pages.");
+                }
+            }
+            "typesetter" => {
+                if seam.typesetter {
+                    render_typesetter(app, ui);
+                } else {
+                    ui.label("TypeR Manga is disabled by seam.typesetter.");
+                }
+            }
             _ => return false,
         }
         true
@@ -747,7 +804,8 @@ mod native {
 
     /// Hides the screentone layer being dragged live from the base document composite.
     pub fn screentone_display_doc(app: &PhotocraftApp, idx: usize) -> Option<(Arc<Document>, u64)> {
-        if app.session.active_index() != Some(idx) {
+        let seam = app.session.seam_flags();
+        if !seam.canvas_gizmos || app.session.active_index() != Some(idx) {
             return None;
         }
         let st = app.session.documents().get(idx)?;
@@ -757,6 +815,10 @@ mod native {
 
     /// Refreshes the screentone live drag preview texture when handles move.
     pub fn screentone_refresh_preview(app: &mut PhotocraftApp, ctx: &egui::Context, xf: &ViewXform, output: Option<u32>) {
+        let seam = app.session.seam_flags();
+        if !seam.canvas_gizmos {
+            return;
+        }
         let Some(st) = app.session.active() else {
             return;
         };
@@ -776,6 +838,9 @@ mod native {
 
     /// Cancels any active screentone gizmo drag on Escape.
     pub fn screentone_escape(app: &mut PhotocraftApp, ctx: &egui::Context) {
+        if !app.session.seam_flags().canvas_gizmos {
+            return;
+        }
         comic_screentone_gizmo::escape(ctx, &mut app.manga.ui.screentone_ui, &mut app.manga.ui.screentone_gizmo);
     }
 
@@ -819,6 +884,10 @@ mod native {
 
     /// Processes screentone and balloon gizmo pointer events before canvas tools handle them.
     pub fn canvas_pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) -> bool {
+        let seam = app.session.seam_flags();
+        if !seam.canvas_gizmos {
+            return false;
+        }
         let Some(xf) = ViewXform::active(app) else {
             return false;
         };
@@ -827,6 +896,9 @@ mod native {
 
     /// Hover cursor for screentone and balloon gizmo handles over the canvas.
     pub fn canvas_hover_cursor(app: &PhotocraftApp, xf: &ViewXform, cursor_scr: egui::Pos2) -> Option<egui::CursorIcon> {
+        if !app.session.seam_flags().canvas_gizmos {
+            return None;
+        }
         let st = app.session.active()?;
         let mxf = to_manga_xf(xf);
         let panel_showing = is_panel_active(app, "screentone");
@@ -846,6 +918,9 @@ mod native {
 
     /// Draws screentone and balloon gizmos onto the canvas overlay painter.
     pub fn draw_canvas_overlays(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) {
+        if !app.session.seam_flags().canvas_gizmos {
+            return;
+        }
         let Some(st) = app.session.active() else {
             return;
         };
@@ -865,7 +940,7 @@ mod native {
 
     /// Removes a hovered balloon tail on Delete/Backspace when the Balloon tool is active.
     pub fn balloon_tail_delete_key(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
-        if app.ui.tool != Tool::Balloon {
+        if !app.session.seam_flags().canvas_gizmos || app.ui.tool != Tool::Balloon {
             return false;
         }
         let mods = ctx.input(|i| i.modifiers);
@@ -982,7 +1057,8 @@ mod native {
     }
 
     fn draw_typesetter_aux_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
-        let open = is_panel_shown(app, "typesetter");
+        let seam = app.session.seam_flags();
+        let open = seam.typesetter && is_panel_shown(app, "typesetter");
         app.manga.ui.typesetter.is_open = open;
         if !open {
             app.manga.ui.typesetter.flush_auto_save();
@@ -1035,7 +1111,9 @@ mod native {
     }
 
     fn show_canvas_capsule(app: &mut PhotocraftApp, ctx: &egui::Context) {
-        if !app.ui.panels.canvas_capsule
+        let seam = app.session.seam_flags();
+        if !seam.canvas_capsule
+            || !app.ui.panels.canvas_capsule
             || app.ui.view.hides_chrome()
             || !app.ui.dialogs.is_empty()
             || app.ui.canvas_tool_menu.is_some()
@@ -1117,11 +1195,11 @@ mod native {
     }
 
     fn apply_search_activation(app: &mut PhotocraftApp, act: SearchActivation) {
-        if act.doc_index >= app.session.documents().len() {
+        let Some(doc_idx) = doc_index_of(app, act.doc_id) else {
             return;
-        }
-        if app.session.active_index() != Some(act.doc_index) {
-            if !app.session.set_active(act.doc_index) {
+        };
+        if app.session.active_index() != Some(doc_idx) {
+            if !app.session.set_active(doc_idx) {
                 return;
             }
             app.sync_views();
@@ -1137,6 +1215,9 @@ mod native {
     }
 
     fn refresh_typesetter_contour(app: &mut PhotocraftApp) {
+        if !app.session.seam_flags().typesetter {
+            return;
+        }
         let layer = app.session.active().and_then(|st| st.active_layer);
         app.manga.ui.typesetter.note_contour_layer(layer);
         if !app.manga.ui.typesetter.take_bubble_contour_request() {
@@ -1160,8 +1241,12 @@ mod native {
     }
 
     fn typesetter_requests(app: &mut PhotocraftApp, ctx: &egui::Context) {
-        if ctx.data_mut(|d| d.remove_temp::<bool>(egui::Id::unique("photocraft_toggle_pages_cmd"))).unwrap_or(false) {
+        let seam = app.session.seam_flags();
+        if ctx.data_mut(|d| d.remove_temp::<bool>(egui::Id::unique("photocraft_toggle_pages_cmd"))).unwrap_or(false) && seam.pages {
             let _ = app.run("window.panel.pages", json!({}));
+        }
+        if !seam.typesetter {
+            return;
         }
         if app.manga.ui.typesetter.take_document_style_scan_request()
             && let Some(st) = app.session.active()
@@ -1854,6 +1939,56 @@ mod native {
         let trimmed = text.trim();
         !trimmed.is_empty()
             && trimmed.chars().all(|c| c.is_ascii_punctuation() || matches!(c, '…' | '—' | '–' | '«' | '»' | '“' | '”' | '‘' | '’' | '！' | '？'))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use serde_json::json;
+
+        use super::*;
+        use crate::{PhotocraftApp, Services};
+        use photocraft_manga_ui::comic_pages_panel::PagesPanelAction;
+
+        #[test]
+        fn host_snapshot_carries_seam_flags_and_doc_refs() {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
+            app.run("file.new", json!({"name": "P1", "width": 16, "height": 16})).unwrap();
+            app.run("prefs.set", json!({"path": "seam.canvas_gizmos", "value": false})).unwrap();
+            let snap = host_snapshot(&app);
+            assert!(!snap.flags.canvas_gizmos);
+            assert!(snap.flags.pages);
+            assert_eq!(snap.documents.len(), 1);
+            assert_eq!(snap.active_doc.as_ref().map(|d| d.name.as_str()), Some("P1"));
+        }
+
+        #[test]
+        fn pages_actions_use_stable_doc_id_across_reorders_and_closes() {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
+            for name in ["A", "B", "C"] {
+                app.run("file.new", json!({"name": name, "width": 16, "height": 16})).unwrap();
+            }
+            let id_a = photocraft_manga_bridge::BridgeDocId(app.session.documents()[0].doc.id.0);
+            let id_c = photocraft_manga_bridge::BridgeDocId(app.session.documents()[2].doc.id.0);
+
+            let ctx = egui::Context::default();
+            // Swap C before A, then close B; id_a still selects A even though its index changed.
+            handle_pages_action(&mut app, &ctx, PagesPanelAction::ReorderPages { from_id: id_c, to_id: id_a });
+            let idx_b = app.session.documents().iter().position(|d| d.doc.name == "B").unwrap();
+            app.session.close(idx_b);
+            handle_pages_action(&mut app, &ctx, PagesPanelAction::SelectPage(id_a));
+            assert_eq!(app.session.active().map(|s| s.doc.name.as_str()), Some("A"));
+
+            // Closed doc id is safely ignored by search activation instead of panicking or selecting wrong tab.
+            let act = SearchActivation {
+                doc_id: photocraft_manga_bridge::BridgeDocId(999_999),
+                doc_index: 0,
+                layer: LayerId(1),
+                groups_to_expand: Vec::new(),
+                center: [0.0, 0.0],
+            };
+            apply_search_activation(&mut app, act);
+            assert_eq!(app.session.active().map(|s| s.doc.name.as_str()), Some("A"));
+        }
     }
 }
 

@@ -530,6 +530,17 @@ impl GpuCanvas {
         }
     }
 
+    /// Runtime `seam.gpu_screentone` gate for the wgpu compositor.
+    pub fn set_gpu_screentone(&self, enabled: bool) {
+        let mut r = self.rs.renderer.write();
+        if let Some(res) = r.callback_resources.get_mut::<Resources>() {
+            res.compositor_gpu_screentone = Some(enabled);
+            if let Some(comp) = &mut res.compositor {
+                comp.set_gpu_screentone(enabled);
+            }
+        }
+    }
+
     /// Take any GPU measurement that has landed since the last call, without compositing
     /// anything. [`Compositor::render`] carries measurements out in its stats, but a refresh is
     /// the only thing that collects them, so the last refresh before the app goes idle would
@@ -595,10 +606,11 @@ impl GpuCanvas {
         if res.compositor_failed.is_some() {
             return false;
         }
+        let gpu_screentone = res.compositor_gpu_screentone.unwrap_or(true);
         match &res.compositor {
             Some(c) => c.supports(doc).is_ok(),
             // Layers larger than the texture limit are stored in pages, so any size qualifies.
-            None => photocraft_gpu::plan(doc).is_ok(),
+            None => photocraft_gpu::plan::plan_with_options(doc, gpu_screentone).is_ok(),
         }
     }
 
@@ -742,6 +754,9 @@ impl GpuCanvas {
             comp.set_composite_cache_budget(b);
         }
         comp.set_focus(res.compositor_focus);
+        if let Some(enabled) = res.compositor_gpu_screentone {
+            comp.set_gpu_screentone(enabled);
+        }
         let key = doc.id.0;
         let format = self.format_for(doc.depth, size);
         let fresh = res.docs.get(&key).is_none_or(|d| d.size != size || d.format != format);

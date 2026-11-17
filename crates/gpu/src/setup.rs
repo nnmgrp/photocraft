@@ -217,6 +217,7 @@ impl Compositor {
     pub fn sibling(&self) -> Self {
         let mut sibling = Self::from_kit(self.kit.clone(), self.device_max, self.acc_format, self.effect_maps);
         sibling.health = self.health.clone();
+        sibling.gpu_screentone = self.gpu_screentone;
         sibling
     }
 
@@ -254,6 +255,7 @@ impl Compositor {
             cmyk: 0,
             health: None,
             timer: None,
+            gpu_screentone: true,
         }
         .with_texture_limit(device_max)
     }
@@ -368,10 +370,15 @@ impl Compositor {
         self.fx_budget = caches.saturating_sub(self.prefix.budget());
     }
 
+    /// Enable or disable procedural `Kernel::Screentone` evaluation (`seam.gpu_screentone`).
+    pub fn set_gpu_screentone(&mut self, enabled: bool) {
+        self.gpu_screentone = enabled;
+    }
+
     /// Bytes of the layer pages a render of `region` needs resident (each layer and mask
     /// surface's tiles within the region's page cells, in their texture format).
     pub fn working_set(&self, doc: &Document, region: Rect) -> u64 {
-        let Ok(plan) = plan(doc) else { return 0 };
+        let Ok(plan) = crate::plan::plan_with_options(doc, self.gpu_screentone) else { return 0 };
         let grid = tile_grid(doc.bounds());
         let cells = grid_rects(region.intersect(&doc.bounds()), self.page)
             .into_iter()
@@ -427,7 +434,7 @@ impl Compositor {
     /// limit are fine: surfaces are stored in page-sized textures and effect maps of regions
     /// larger than the limit are built per page cell.
     pub fn supports(&self, doc: &Document) -> Result<(), Unsupported> {
-        let p = plan(doc)?;
+        let p = crate::plan::plan_with_options(doc, self.gpu_screentone)?;
         self.check_fx(doc, &p)
     }
 

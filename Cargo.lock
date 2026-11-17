@@ -5597,6 +5597,7 @@ dependencies = [
  "photocraft-geom",
  "photocraft-io",
  "photocraft-ipp",
+ "photocraft-manga-bridge",
  "photocraft-manga-core",
  "photocraft-ops",
  "photocraft-paint",

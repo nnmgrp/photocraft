@@ -396,9 +396,10 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     widgets::panel_footer(ui, |ui| {
         let active_layer = active.and_then(|id| doc.layer(id));
+        let seam = app.session.seam_flags();
         let (delete, label) = if app.ui.vector_mask_target && active_layer.is_some_and(|l| l.vector_mask.is_some()) {
             ("layer.vectorMask.delete", "Delete Vector Mask")
-        } else if app.ui.mask_target && app.ui.second_mask_target && active_layer.is_some_and(|l| l.second_mask.is_some()) {
+        } else if seam.second_mask && app.ui.mask_target && app.ui.second_mask_target && active_layer.is_some_and(|l| l.second_mask.is_some()) {
             (photocraft_engine::manga_cmds::second_mask::DELETE, "Delete Second Mask")
         } else if app.ui.mask_target && active_layer.is_some_and(|l| l.mask.is_some()) {
             ("layer.layerMask.delete", "Delete Layer Mask")

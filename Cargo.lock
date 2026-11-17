@@ -5833,6 +5833,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "photocraft-tone"
+version = "0.23.1"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "photocraft-ui-egui"
 version = "0.23.1"
 dependencies = [

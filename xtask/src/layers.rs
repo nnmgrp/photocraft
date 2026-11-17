@@ -36,7 +36,8 @@ pub const TABLE: &[(&str, Class)] = &[
     ("geom", Class::Layer(0)),
     ("color", Class::Layer(0)),
     ("raster", Class::Layer(0)),
-    // Manga fork: pure L0 seam contracts (no workspace deps).
+    // Manga fork: pure L0 seam contracts and screentone specs (no workspace deps).
+    ("tone", Class::Layer(0)),
     ("manga-bridge", Class::Layer(0)),
     ("codecs", Class::Standalone),
     // Optional HEIF/HEIC decoder (heic-rs), used only by `codecs` behind its `heif` feature.

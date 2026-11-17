@@ -120,6 +120,7 @@ fn perturbed_para() -> ParagraphStyle {
     use photocraft_doc::text::{TextAlign, TextDirection};
     ParagraphStyle {
         align: TextAlign::JustifyAll,
+        vertical_align: photocraft_doc::text::VerticalAlign::Bottom,
         first_line_indent_pt: -1.0,
         start_indent_pt: -1.0,
         end_indent_pt: -1.0,
@@ -128,6 +129,7 @@ fn perturbed_para() -> ParagraphStyle {
         auto_leading: -1.0,
         direction: TextDirection::Rtl,
         hyphenate: true,
+        hanging_roman: true,
         style_sheet: None,
     }
 }

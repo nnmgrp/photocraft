@@ -189,7 +189,7 @@ pub(super) struct Para<'a> {
     pub(super) start: usize,
     pub(super) content_end: usize,
     pub(super) prefix: &'static str,
-    ptext: String,
+    pub(super) ptext: String,
     synthetic_small_caps: Vec<(Range<usize>, f32)>,
     /// Offsets in the paragraph text of the spaces standing in for tabs.
     pub(super) tabs: Vec<usize>,

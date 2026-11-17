@@ -101,10 +101,15 @@ pub struct Locks {
     pub position: bool,
     pub artboard: bool,
     pub all: bool,
+    /// PhotoCraft's Lock Selection: clicks on the canvas pass through the layer, or a group's
+    /// layers, to what is below; the Layers panel still selects it.
+    #[serde(default)]
+    pub selection: bool,
 }
 
 impl Locks {
-    /// Set the lock a command names (`transparency`, `pixels`, `position`, `artboard`, `all`);
+    /// Set the lock a command names (`transparency`, `pixels`, `position`, `artboard`, `all`,
+    /// `selection`);
     /// false for an unknown name. Lock Image Pixels includes Lock Transparent Pixels, so, as in
     /// Photoshop, locking the pixels clears the transparency lock, and that one stays off while the
     /// pixels are locked (#4892).
@@ -120,6 +125,7 @@ impl Locks {
             "position" => self.position = on,
             "artboard" => self.artboard = on,
             "all" => self.all = on,
+            "selection" => self.selection = on,
             _ => return false,
         }
         true
@@ -127,7 +133,12 @@ impl Locks {
 
     /// Whether any lock is set: Photoshop then shows the lock icon on the layer's row.
     pub fn any(self) -> bool {
-        self.transparency || self.pixels || self.position || self.artboard || self.all
+        self.transparency || self.pixels || self.position || self.artboard || self.all || self.selection
+    }
+
+    /// Whether canvas clicks pass through the layer: Lock All or Lock Selection.
+    pub fn unpickable(self) -> bool {
+        self.all || self.selection
     }
 
     pub fn union(self, o: Locks) -> Locks {
@@ -137,6 +148,7 @@ impl Locks {
             position: self.position || o.position,
             artboard: self.artboard || o.artboard,
             all: self.all || o.all,
+            selection: self.selection || o.selection,
         }
     }
 }
@@ -471,6 +483,11 @@ impl TextLayer {
             self.size_pt = r.style.size_pt;
             self.color = r.style.color;
         }
+    }
+
+    /// Effective vertical alignment inside a paragraph box (from the first paragraph run).
+    pub fn vertical_align(&self) -> text::VerticalAlign {
+        self.paragraphs.first().map_or(text::VerticalAlign::Top, |r| r.style.vertical_align)
     }
 }
 
@@ -1369,8 +1386,39 @@ mod tests {
             Locks { position: true, ..Locks::default() },
             Locks { artboard: true, ..Locks::default() },
             Locks { all: true, ..Locks::default() },
+            Locks { selection: true, ..Locks::default() },
         ];
         assert!(each.iter().all(|k| k.any()));
+    }
+
+    #[test]
+    fn selection_lock_roundtrips_and_marks_unpickable() {
+        let mut locks = Locks::default();
+        assert!(locks.set("selection", true));
+        assert!(locks.selection && locks.any() && locks.unpickable());
+        assert!(locks.set("selection", false));
+        assert!(!locks.selection && !locks.any() && !locks.unpickable());
+
+        let legacy: Locks = serde_json::from_str(r#"{"transparency":false,"pixels":false,"position":false,"artboard":false,"all":false}"#).unwrap();
+        assert!(!legacy.selection);
+
+        let mut a = Locks::default();
+        a.set("selection", true);
+        let mut b = Locks::default();
+        b.set("pixels", true);
+        let merged = a.union(b);
+        assert!(merged.selection && merged.pixels && merged.unpickable());
+    }
+
+    #[test]
+    fn text_layer_vertical_align_follows_first_paragraph() {
+        let empty = TextLayer::default();
+        assert_eq!(empty.vertical_align(), text::VerticalAlign::Top);
+        let with_bottom = TextLayer {
+            paragraphs: vec![text::ParagraphRun { len: 1, style: text::ParagraphStyle { vertical_align: text::VerticalAlign::Bottom, ..Default::default() } }],
+            ..Default::default()
+        };
+        assert_eq!(with_bottom.vertical_align(), text::VerticalAlign::Bottom);
     }
 
     #[test]

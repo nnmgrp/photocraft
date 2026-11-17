@@ -85,6 +85,7 @@ pub(crate) fn paragraph_properties(p: &ParagraphStyle, k: f32) -> E {
         ("SpaceBefore".into(), real(p.space_before_pt / k)),
         ("SpaceAfter".into(), real(p.space_after_pt / k)),
         ("AutoHyphenate".into(), E::Bool(p.hyphenate)),
+        ("HangingRoman".into(), E::Bool(p.hanging_roman)),
         ("AutoLeading".into(), real(p.auto_leading)),
         ("LeadingType".into(), E::Int(0)),
     ])

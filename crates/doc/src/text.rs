@@ -175,6 +175,39 @@ impl TextAlign {
     }
 }
 
+/// Vertical alignment of text inside a paragraph box (manga TypeR vertical centering).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum VerticalAlign {
+    #[default]
+    Top,
+    Center,
+    Bottom,
+    Justify,
+}
+
+impl VerticalAlign {
+    pub const ALL: [Self; 4] = [Self::Top, Self::Center, Self::Bottom, Self::Justify];
+
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Top => "top",
+            Self::Center => "center",
+            Self::Bottom => "bottom",
+            Self::Justify => "justify",
+        }
+    }
+
+    pub fn from_id(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "top" => Some(Self::Top),
+            "center" | "middle" => Some(Self::Center),
+            "bottom" => Some(Self::Bottom),
+            "justify" => Some(Self::Justify),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TextDirection {
     /// From the first strong character (Unicode bidi rules).
@@ -189,6 +222,8 @@ pub enum TextDirection {
 #[serde(default)]
 pub struct ParagraphStyle {
     pub align: TextAlign,
+    #[serde(default)]
+    pub vertical_align: VerticalAlign,
     pub first_line_indent_pt: f32,
     pub start_indent_pt: f32,
     pub end_indent_pt: f32,
@@ -198,6 +233,8 @@ pub struct ParagraphStyle {
     pub auto_leading: f32,
     pub direction: TextDirection,
     pub hyphenate: bool,
+    #[serde(default)]
+    pub hanging_roman: bool,
     /// Applied paragraph style (id in [`crate::TextStyles`]); `None` = Basic Paragraph.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub style_sheet: Option<u32>,
@@ -207,6 +244,7 @@ impl Default for ParagraphStyle {
     fn default() -> Self {
         Self {
             align: TextAlign::Left,
+            vertical_align: VerticalAlign::Top,
             first_line_indent_pt: 0.0,
             start_indent_pt: 0.0,
             end_indent_pt: 0.0,
@@ -215,6 +253,7 @@ impl Default for ParagraphStyle {
             auto_leading: 1.2,
             direction: TextDirection::Auto,
             hyphenate: false,
+            hanging_roman: false,
             style_sheet: None,
         }
     }
@@ -354,6 +393,27 @@ mod tests {
         assert_eq!(back, s);
         // Missing keys take defaults.
         let p: ParagraphStyle = serde_json::from_str(r#"{"align":"Center"}"#).unwrap();
-        assert_eq!((p.align, p.auto_leading), (TextAlign::Center, 1.2));
+        assert_eq!((p.align, p.vertical_align, p.auto_leading), (TextAlign::Center, VerticalAlign::Top, 1.2));
+        assert!(!p.hanging_roman);
+        let p2: ParagraphStyle = serde_json::from_str(r#"{"vertical_align":"Bottom","hanging_roman":true}"#).unwrap();
+        assert_eq!(p2.vertical_align, VerticalAlign::Bottom);
+        assert!(p2.hanging_roman);
+        for align in VerticalAlign::ALL {
+            let styled = ParagraphStyle { vertical_align: align, hanging_roman: true, ..Default::default() };
+            let encoded = serde_json::to_string(&styled).unwrap();
+            let decoded: ParagraphStyle = serde_json::from_str(&encoded).unwrap();
+            assert_eq!(decoded, styled);
+        }
+    }
+
+    #[test]
+    fn vertical_align_ids_round_trip() {
+        for align in VerticalAlign::ALL {
+            let id = align.id();
+            assert_eq!(VerticalAlign::from_id(id), Some(align));
+            assert_eq!(VerticalAlign::from_id(&id.to_uppercase()), Some(align));
+        }
+        assert_eq!(VerticalAlign::from_id("Middle"), Some(VerticalAlign::Center));
+        assert_eq!(VerticalAlign::from_id("invalid"), None);
     }
 }

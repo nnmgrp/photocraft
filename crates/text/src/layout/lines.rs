@@ -417,7 +417,15 @@ impl Para<'_> {
         let (trailing_tabs, trailing_growth) = self.apply_tab_stops(&slots, &mut kern_px, f.index);
         let line_kern: f32 = kern_px.iter().sum::<f32>() - trailing_tabs;
         let growth = if self.env.path_range.is_some() { slots.iter().map(|s| s.growth).sum::<f32>() - trailing_growth } else { 0.0 };
-        let dx = self.line_start(f, m.offset, adv, line_kern + growth);
+        let mut dx = self.line_start(f, m.offset, adv, line_kern + growth);
+        if !env.vertical && self.ps.hanging_roman {
+            let (hang_left, hang_right) = hanging_roman_offsets(&self.ptext, &slots, &kern_px, self.prefix.len(), adv, line_kern);
+            dx += match self.ps.align {
+                TextAlign::Left | TextAlign::JustifyLeft | TextAlign::JustifyAll => -hang_left,
+                TextAlign::Right | TextAlign::JustifyRight => hang_right,
+                TextAlign::Center | TextAlign::JustifyCenter => (hang_right - hang_left) * 0.5,
+            };
+        }
         let lc = LineCtx { dx, baseline: f.baseline, slots: &slots, kern_px: &kern_px, line_index: out.lines.len() };
         let (g0, c0) = (out.glyphs.len(), out.clusters.len());
         let mut state = LineState { cursors: kern_cursors(line, &slots), seen_runs: Vec::new(), vinfo: Vec::new(), extra: 0.0 };
@@ -542,4 +550,71 @@ impl Para<'_> {
             c.after_run(lc.slots, lc.kern_px, &mut state.extra);
         }
     }
+}
+
+/// Closing punctuation eligible for optical hanging at the end of a horizontal line (`hang_right`).
+fn is_hanging_trailing(c: char) -> bool {
+    matches!(c, '.' | ',' | ':' | ';' | '!' | '?' | '—' | '–' | '-' | '»' | '”' | '’' | ')' | ']' | '}' | '"' | '\'' | '…')
+}
+
+/// Opening punctuation eligible for optical hanging before the left edge of a horizontal line (`hang_left`).
+fn is_hanging_leading(c: char) -> bool {
+    matches!(c, '«' | '“' | '‘' | '(' | '[' | '{' | '"' | '\'' | '—')
+}
+
+/// Optical punctuation compensation (`hangingRoman`) for a horizontal line:
+/// `(hang_left, hang_right)` in line-space pixels, measured from the shaped cluster advances and kerning.
+fn hanging_roman_offsets(ptext: &str, slots: &[KernSlot], kern_px: &[f32], prefix_len: usize, adv: f32, line_kern: f32) -> (f32, f32) {
+    let ch_at = |idx: usize| -> Option<char> {
+        let slot = slots.get(idx)?;
+        ptext.get(slot.start..).and_then(|s| s.chars().next())
+    };
+
+    let mut last_idx = slots.len();
+    while last_idx > 0 && slots.get(last_idx - 1).is_some_and(|s| s.blank) {
+        last_idx -= 1;
+    }
+    let mut hang_right = 0.0f32;
+    if last_idx > 0
+        && let Some(last_ch) = ch_at(last_idx - 1)
+        && is_hanging_trailing(last_ch)
+    {
+        let mut hang_start = last_idx - 1;
+        if matches!(last_ch, '.' | '…')
+            && let Some(prev_ch) = hang_start.checked_sub(1).and_then(ch_at)
+            && matches!(prev_ch, '.' | '…')
+        {
+            hang_start -= 1;
+            if let Some(prev2_ch) = hang_start.checked_sub(1).and_then(ch_at)
+                && matches!(prev2_ch, '.' | '…')
+            {
+                hang_start -= 1;
+            }
+        }
+        // Do not hang if the whole line consists only of punctuation.
+        if hang_start > 0 {
+            let prev_kern = if hang_start > 0 { kern_px.get(hang_start - 1).copied().unwrap_or(0.0).min(0.0) } else { 0.0 };
+            let width: f32 =
+                prev_kern + (hang_start..last_idx).map(|j| slots.get(j).map_or(0.0, |s| s.advance) + kern_px.get(j).copied().unwrap_or(0.0)).sum::<f32>();
+            let max_width = (adv + line_kern).max(0.0);
+            if width.is_finite() && width > 0.0 && width < adv && width <= max_width {
+                hang_right = width;
+            }
+        }
+    }
+
+    let first_idx = slots.iter().position(|s| !s.blank).unwrap_or(0);
+    let mut hang_left = 0.0f32;
+    if first_idx + 1 < last_idx
+        && slots.get(first_idx).is_some_and(|s| s.start >= prefix_len)
+        && let Some(first_ch) = ch_at(first_idx)
+        && is_hanging_leading(first_ch)
+    {
+        let w = slots[first_idx].advance;
+        if w.is_finite() && w > 0.0 && w < adv {
+            hang_left = w;
+        }
+    }
+
+    (hang_left, hang_right)
 }

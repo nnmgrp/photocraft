@@ -1,6 +1,8 @@
 use photocraft_color::{Color, PixelFormat, SampleType};
 use photocraft_doc::TextLayer;
-use photocraft_doc::text::{AntiAlias, Caps, CharStyle, FontFeature, Orientation, ParagraphRun, ParagraphStyle, TextAlign, TextDirection, TextRun, TextShape};
+use photocraft_doc::text::{
+    AntiAlias, Caps, CharStyle, FontFeature, Orientation, ParagraphRun, ParagraphStyle, TextAlign, TextDirection, TextRun, TextShape, VerticalAlign,
+};
 use photocraft_geom::Affine;
 
 use crate::{TextEngine, fonts};
@@ -3917,4 +3919,99 @@ fn vertical_path_decoration_clipping_and_warp() {
     let rect = crate::render::ink_rect_warped(&layout, &Affine::IDENTITY, Some(&warp));
     assert!(!rect.is_empty(), "clipped vertical decoration must draw");
     assert!(rect.y0 >= 19 && rect.y1 <= 61, "decoration bounds should be within clipped range: {rect:?}");
+}
+
+#[test]
+fn hanging_roman_compensates_trailing_and_leading_punctuation_in_point_and_box_text() {
+    let mut e = TextEngine::new();
+    let center_of = |l: &crate::TextLayout, li: usize, byte_start: usize, byte_end: usize| -> f32 {
+        let cs: Vec<_> = l.clusters.iter().filter(|c| c.line == li && c.range.start >= byte_start && c.range.end <= byte_end).collect();
+        let min_x = cs.iter().map(|c| c.x).fold(f32::INFINITY, f32::min);
+        let max_x = cs.iter().map(|c| c.x + c.advance).fold(f32::NEG_INFINITY, f32::max);
+        (min_x + max_x) * 0.5
+    };
+    for (name, shape) in [("point", TextShape::Point), ("box", TextShape::Box { x: 80.0, y: 40.0, width: 360.0, height: 200.0 })] {
+        let src = "Я СНЯЛА\nОЧКИ...";
+        let layer = TextLayer {
+            shape: shape.clone(),
+            text: src.into(),
+            runs: vec![
+                TextRun { len: 13, style: CharStyle { font_family: "Inter".into(), size_pt: 18.0, ..Default::default() } },
+                TextRun { len: 12, style: CharStyle { font_family: "Inter".into(), size_pt: 36.0, ..Default::default() } },
+            ],
+            ..Default::default()
+        };
+        let base = with_para(layer, ParagraphStyle { align: TextAlign::Center, ..Default::default() });
+        let off = e.layout(&base, 72.0);
+        let center_top_off = center_of(&off, 0, 0, 13);
+        let center_bot_off = center_of(&off, 1, 14, 22);
+        assert!((center_bot_off - center_top_off).abs() > 2.5, "{name}: without hanging roman, ОЧКИ shifts left relative to Я СНЯЛА");
+
+        let hang = with_para(base.clone(), ParagraphStyle { align: TextAlign::Center, hanging_roman: true, ..Default::default() });
+        let on = e.layout(&hang, 72.0);
+        let center_top_on = center_of(&on, 0, 0, 13);
+        let center_bot_on = center_of(&on, 1, 14, 22);
+        let right_top_on = on.lines[0].x1;
+        let dots_x0 = on.clusters.iter().find(|c| c.line == 1 && c.range.start == 22).map(|c| c.x).unwrap();
+        assert!((center_bot_on - center_top_on).abs() < 0.01, "{name}: with hanging roman, ОЧКИ centres under Я СНЯЛА ({center_bot_on} vs {center_top_on})");
+        assert!(dots_x0 > right_top_on, "{name}: ... hangs to the right of Я СНЯЛА ({dots_x0} > {right_top_on})");
+
+        let open_src = "«ОЧКИ\nЯ СНЯЛА";
+        let open_base = with_para(
+            TextLayer { shape: shape.clone(), ..styled(open_src, CharStyle { font_family: "Inter".into(), size_pt: 24.0, ..Default::default() }) },
+            ParagraphStyle { align: TextAlign::Left, ..Default::default() },
+        );
+        let open_off = e.layout(&open_base, 72.0);
+        let box_l = if let TextShape::Box { x, .. } = shape { x } else { 0.0 };
+        let guillemet_off = open_off.clusters.iter().find(|c| c.range.start == 0).map(|c| c.x).unwrap() - box_l;
+        let o_off = open_off.clusters.iter().find(|c| c.range.start == 2).map(|c| c.x).unwrap() - box_l;
+        assert!(guillemet_off.abs() < 0.01 && o_off > 2.0, "{name}: without hanging roman, « sits inside the left edge");
+
+        let open_hang = with_para(open_base, ParagraphStyle { align: TextAlign::Left, hanging_roman: true, ..Default::default() });
+        let open_on = e.layout(&open_hang, 72.0);
+        let guillemet_on = open_on.clusters.iter().find(|c| c.range.start == 0).map(|c| c.x).unwrap() - box_l;
+        let o_on = open_on.clusters.iter().find(|c| c.range.start == 2).map(|c| c.x).unwrap() - box_l;
+        assert!(guillemet_on < -2.0 && o_on.abs() < 0.01, "{name}: with hanging roman, « hangs left and О aligns with the edge ({guillemet_on}, {o_on})");
+    }
+}
+
+#[test]
+fn box_text_vertical_align_top_center_bottom_and_justify() {
+    let mut e = TextEngine::new();
+    let box_height = 200.0;
+    let make_box = |text: &str, va: VerticalAlign| {
+        let mut t = styled(text, CharStyle { font_family: "Inter".into(), size_pt: 12.0, underline: true, ..Default::default() });
+        t.shape = TextShape::Box { x: 10.0, y: 20.0, width: 120.0, height: box_height };
+        with_para(t, ParagraphStyle { vertical_align: va, ..Default::default() })
+    };
+
+    let top = e.layout(&make_box("One\nTwo", VerticalAlign::Top), 72.0);
+    let center = e.layout(&make_box("One\nTwo", VerticalAlign::Center), 72.0);
+    let bottom = e.layout(&make_box("One\nTwo", VerticalAlign::Bottom), 72.0);
+    let justify = e.layout(&make_box("One\nTwo\nThree", VerticalAlign::Justify), 72.0);
+    let justify_top = e.layout(&make_box("One\nTwo\nThree", VerticalAlign::Top), 72.0);
+
+    let top_y = top.lines.first().map(|l| l.baseline - l.ascent).unwrap_or(0.0);
+    let bottom_y = top.lines.last().map(|l| l.baseline + l.descent).unwrap_or(0.0);
+    let text_height = (bottom_y - top_y).max(0.0);
+    let expected_center_offset = ((box_height - text_height) * 0.5).max(0.0);
+    let expected_bottom_offset = (box_height - text_height).max(0.0);
+
+    assert!((center.lines[0].baseline - (top.lines[0].baseline + expected_center_offset)).abs() < 1e-3);
+    assert!((bottom.lines[0].baseline - (top.lines[0].baseline + expected_bottom_offset)).abs() < 1e-3);
+    assert!((center.glyphs[0].y - (top.glyphs[0].y + expected_center_offset)).abs() < 1e-3);
+    assert!((bottom.glyphs[0].y - (top.glyphs[0].y + expected_bottom_offset)).abs() < 1e-3);
+    assert!((center.decorations[0].y0 - (top.decorations[0].y0 + expected_center_offset)).abs() < 1e-3);
+    assert!((bottom.decorations[0].y0 - (top.decorations[0].y0 + expected_bottom_offset)).abs() < 1e-3);
+
+    assert!((justify.lines[0].baseline - justify_top.lines[0].baseline).abs() < 1e-3);
+    let j_top_y = justify_top.lines.first().map(|l| l.baseline - l.ascent).unwrap_or(0.0);
+    let j_bot_y = justify_top.lines.last().map(|l| l.baseline + l.descent).unwrap_or(0.0);
+    let j_slack = (box_height - (j_bot_y - j_top_y).max(0.0)).max(0.0);
+    assert!((justify.lines[1].baseline - (justify_top.lines[1].baseline + j_slack * 0.5)).abs() < 1e-3);
+    assert!((justify.lines[2].baseline - (justify_top.lines[2].baseline + j_slack)).abs() < 1e-3);
+
+    let pt_top = e.layout(&with_para(point("Point", 12.0), ParagraphStyle { vertical_align: VerticalAlign::Top, ..Default::default() }), 72.0);
+    let pt_bot = e.layout(&with_para(point("Point", 12.0), ParagraphStyle { vertical_align: VerticalAlign::Bottom, ..Default::default() }), 72.0);
+    assert_eq!(pt_top.lines[0].baseline, pt_bot.lines[0].baseline);
 }

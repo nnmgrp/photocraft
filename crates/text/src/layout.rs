@@ -19,7 +19,7 @@ use std::ops::Range;
 
 use parley::{FontData, FontFamily, FontFeatures, FontStyle, FontVariations, FontWeight, Layout, LayoutContext, PositionedLayoutItem, StyleProperty};
 use photocraft_doc::TextLayer;
-use photocraft_doc::text::{Caps, CharStyle, FontBaseline, Kerning, Orientation, ParagraphStyle, TextShape};
+use photocraft_doc::text::{Caps, CharStyle, FontBaseline, Kerning, Orientation, ParagraphStyle, TextShape, VerticalAlign};
 use skrifa::raw::types::Tag;
 
 use crate::fonts::FontDb;
@@ -326,19 +326,28 @@ impl Layouter {
             area,
         };
         let mut flow = Flow::default();
+        let mut line_spans: Vec<(Range<usize>, Range<usize>)> = Vec::new();
         for (pi, prange) in split_paragraphs(&t.text).into_iter().enumerate() {
             if flow.stop {
                 break;
             }
             let ps = paras[run_index_at(&para_starts, prange.start)].style.clone();
-            self.layout_paragraph(fonts, &mut out, &mut flow, Para::new(&env, fonts, pi, prange, ps));
+            self.layout_paragraph(fonts, &mut out, &mut flow, &mut line_spans, Para::new(&env, fonts, pi, prange, ps));
         }
+        apply_vertical_align(paras.first().map_or(VerticalAlign::Top, |p| p.style.vertical_align), box_rect.3, is_box, vertical, &mut out, &line_spans);
         out.styles = styles;
         out
     }
 
     /// Breaks one paragraph and stacks its lines below the previous paragraph's.
-    fn layout_paragraph(&mut self, fonts: &mut FontDb, out: &mut TextLayout, flow: &mut Flow, para: Para<'_>) {
+    fn layout_paragraph(
+        &mut self,
+        fonts: &mut FontDb,
+        out: &mut TextLayout,
+        flow: &mut Flow,
+        line_spans: &mut Vec<(Range<usize>, Range<usize>)>,
+        para: Para<'_>,
+    ) {
         let env = para.env;
         let (mut layout, area_slots, area_full) = para.break_paragraph(&mut self.lcx, &mut fonts.fcx, flow);
         layout.align(para.alignment(), para.align_options());
@@ -357,13 +366,76 @@ impl Layouter {
                 flow.stop = true;
                 break;
             };
+            let g0 = out.glyphs.len();
+            let d0 = out.decorations.len();
             para.place_line(&mut self.optical, out, &line, &frame);
+            line_spans.push((g0..out.glyphs.len(), d0..out.decorations.len()));
         }
         if area_full {
             // The shape is full: later paragraphs are hidden too.
             flow.stop = true;
         }
         flow.pending_space += para.ps.space_after_pt * env.k;
+    }
+}
+
+/// Shifts placed horizontal lines vertically inside a paragraph box to satisfy [`VerticalAlign`].
+fn apply_vertical_align(
+    vertical_align: VerticalAlign,
+    box_height: f32,
+    is_box: bool,
+    vertical: bool,
+    out: &mut TextLayout,
+    line_spans: &[(Range<usize>, Range<usize>)],
+) {
+    if !is_box || vertical || out.lines.is_empty() {
+        return;
+    }
+    let top_y = out.lines.first().map(|l| l.baseline - l.ascent).unwrap_or(0.0);
+    let bottom_y = out.lines.last().map(|l| l.baseline + l.descent).unwrap_or(0.0);
+    let text_height = (bottom_y - top_y).max(0.0);
+    match vertical_align {
+        VerticalAlign::Top => {}
+        VerticalAlign::Center | VerticalAlign::Bottom => {
+            let y_offset = match vertical_align {
+                VerticalAlign::Center => ((box_height - text_height) * 0.5).max(0.0),
+                _ => (box_height - text_height).max(0.0),
+            };
+            if y_offset > 0.0 {
+                for line in &mut out.lines {
+                    line.baseline += y_offset;
+                }
+                for g in &mut out.glyphs {
+                    g.y += y_offset;
+                }
+                for d in &mut out.decorations {
+                    d.y0 += y_offset;
+                    d.y1 += y_offset;
+                }
+            }
+        }
+        VerticalAlign::Justify => {
+            let n = out.lines.len();
+            let slack = (box_height - text_height).max(0.0);
+            if n > 1 && slack > 0.0 {
+                let step = slack / (n - 1) as f32;
+                for (li, (line, (g_span, d_span))) in out.lines.iter_mut().zip(line_spans.iter().cloned()).enumerate() {
+                    let y_offset = step * li as f32;
+                    line.baseline += y_offset;
+                    if let Some(glyphs) = out.glyphs.get_mut(g_span) {
+                        for g in glyphs {
+                            g.y += y_offset;
+                        }
+                    }
+                    if let Some(decorations) = out.decorations.get_mut(d_span) {
+                        for d in decorations {
+                            d.y0 += y_offset;
+                            d.y1 += y_offset;
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

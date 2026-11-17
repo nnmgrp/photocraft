@@ -286,9 +286,11 @@ fn placed_layer_warp_is_read() {
 fn locks_and_labels() {
     // Reference values round-trip byte for byte; Background layers carry 0x0D
     // (transparency + position + the bit-3 lock reference files write).
-    for bits in [0u32, 1, 2, 4, 8, 0x0D, 0x8000_0000, 0x8000_000F] {
+    for bits in [0u32, 1, 2, 4, 8, 0x0D, 0x8000_0000, 0x8000_000F, LSPF_SELECTION, LSPF_SELECTION | 4] {
         assert_eq!(lspf_from_locks(&locks_from_lspf(bits)), bits);
     }
+    // PhotoCraft's Lock Selection rides in an unused bit, alone or with the others.
+    assert!(locks_from_lspf(LSPF_SELECTION).selection && !locks_from_lspf(0x8000_000F).selection);
     // Older PhotoCraft files wrote the artboard lock at 0x10; it reads back as artboard
     // and is rewritten at the reference value 0x08.
     assert!(locks_from_lspf(0x10).artboard);

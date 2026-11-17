@@ -644,6 +644,7 @@ pub(crate) fn para_style(base: &[Option<&E>], d: &E, k: f32) -> ParagraphStyle {
         space_after_pt: numk("SpaceAfter", k).unwrap_or(0.0),
         auto_leading: numk("AutoLeading", 1.0).unwrap_or(1.2),
         hyphenate: lookup(d, base, "AutoHyphenate").and_then(E::as_bool).unwrap_or(false),
+        hanging_roman: lookup(d, base, "HangingRoman").and_then(E::as_bool).unwrap_or(false),
         ..Default::default()
     }
 }

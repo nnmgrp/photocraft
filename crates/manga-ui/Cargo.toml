@@ -1,0 +1,32 @@
+[package]
+name = "photocraft-manga-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+photocraft-manga-bridge = { workspace = true }
+photocraft-manga-core = { workspace = true }
+photocraft-geom = { workspace = true }
+photocraft-color = { workspace = true }
+photocraft-raster = { workspace = true }
+photocraft-tone = { workspace = true }
+photocraft-doc = { workspace = true }
+photocraft-compose = { workspace = true }
+photocraft-algo = { workspace = true }
+photocraft-text = { workspace = true }
+photocraft-vector = { workspace = true }
+craft-ui = { workspace = true }
+egui = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }
+rfd = "0.17"
+web-time = { workspace = true }
+
+[dev-dependencies]
+egui = { workspace = true, features = ["default_fonts"] }
+tempfile = "3"

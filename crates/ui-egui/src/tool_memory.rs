@@ -40,6 +40,9 @@ pub(crate) fn select(app: &mut PhotocraftApp, tool: Tool) {
     }
     app.ui.tool = tool;
     ended_by_tool(app);
+    if tool == Tool::Balloon && crate::manga_seam::panel_checked(app, "window.panel.balloon") == Some(false) {
+        let _ = crate::panel_docking::command(app, "window.panel.balloon", &serde_json::json!({ "show": true }));
+    }
 }
 
 /// Add New Artboard's placing mode ends with the Artboard tool (#11386): every place that sets

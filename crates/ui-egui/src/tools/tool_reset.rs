@@ -209,7 +209,7 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         Tool::SingleRowMarquee | Tool::SingleColumnMarquee => reset!(feather),
         Tool::Lasso | Tool::PolygonLasso => reset!(feather, anti_alias),
         Tool::MagneticLasso => reset!(feather, anti_alias, magnetic_width, magnetic_contrast, magnetic_frequency, magnetic_pressure),
-        Tool::MagicWand => reset!(tolerance, anti_alias, contiguous),
+        Tool::MagicWand => reset!(tolerance, anti_alias, contiguous, wand_fill),
         Tool::QuickSelection => reset!(enhance_edge),
         Tool::ObjectSelection => reset!(enhance_edge, object_finder),
         Tool::Crop => reset!(
@@ -238,6 +238,21 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         Tool::MagicEraser => reset!(tolerance, anti_alias, contiguous, magic_eraser_opacity),
         Tool::Gradient => reset!(gradient_style, gradient_reverse, gradient_dither, gradient_classic, gradient_blend_mode, fill_opacity),
         Tool::PaintBucket => reset!(bucket_fill_pattern, bucket_blend_mode, bucket_clear, fill_opacity, tolerance, anti_alias, contiguous),
+        Tool::Fill => reset!(fill_tool, fill_opacity),
+        Tool::Balloon => reset!(
+            balloon_mode,
+            balloon_preset,
+            balloon_mouth,
+            balloon_bumps,
+            balloon_amplitude,
+            balloon_jitter,
+            balloon_spikes,
+            balloon_length,
+            balloon_smooth,
+            balloon_inward,
+            balloon_seed
+        ),
+        Tool::VectorCurve => reset!(vector_curve_width, vector_curve_tapered, vector_curve_closed, vector_curve_min_ratio, vector_curve_tension),
         Tool::Type | Tool::VerticalType | Tool::HorizontalTypeMask | Tool::VerticalTypeMask => {
             reset!(type_font, type_style, type_size, type_aa, type_align, type_direction, type_style_defaults)
         }

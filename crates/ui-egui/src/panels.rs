@@ -58,6 +58,7 @@ pub mod props_layout;
 pub mod smart_ui;
 mod status_bar;
 pub mod swatches_ui;
+pub mod timelapse_ui;
 pub(super) mod timeline_ui;
 pub(crate) mod title_bar;
 pub(super) mod titlebar;

@@ -1,0 +1,543 @@
+	File	Файл
+	Left	Левый
+	Save	Сохранить
+	Paste	Вставить
+	Clear	Очистить
+	Search…	Найти…
+	Delete	Удалить
+	Horizontal	Горизонтальная
+	All Layers	Все слои
+	Noise	Шум
+	Extras	Вспомогательные элементы
+	Screentones	Скринтоны
+	Manga Balloons	Манга-баллоны
+	Balloons	Баллоны
+	SAI Linework	Лайнворк SAI
+	Linework	Лайнворк
+	Gradient	Градиент
+	Foreground	Передний план
+	Background	Фон
+	Opacity	Непрозрачность
+	Size	Размер
+	Angle:	Угол:
+	Align	Выравнивание
+	OK	OK
+	Cancel	Отмена
+	Done	Готово
+	Apply	Применить
+	Preview	Просмотр
+	Options	Параметры
+	Custom	Свой
+	Default	По умолчанию
+	None	Нет
+	Width	Ширина
+	Height	Высота
+	Width:	Ширина:
+	Fill:	Заливка:
+	Color	Цвет
+	Density	Плотность
+	Density:	Плотность:
+	Anti-alias	Сглаживание
+	Contiguous	Смежные пикселы
+	Auto	Авто
+	Size:	Размер:
+	Preset:	Набор:
+	Preset	Набор
+	Type:	Текст:
+	Style	Стиль
+	Leading	Интерлиньяж
+	All Caps	Все прописные
+	Small Caps	Капитель
+	Superscript	Надстрочный
+	Subscript	Подстрочный
+	Underline	Подчёркнутый
+	Strikethrough	Зачёркнутый
+	Hanging Punctuation	Висячая пунктуация
+	Center	По центру
+	Justify	По ширине
+	Angle	Угол
+	Scale	Масштаб
+	Video	Видео
+	Name:	Имя:
+	High	Высокая
+	Normal	Обычная
+	Low	Низкая
+	Choose…	Выбрать…
+	Settings	Наборы
+	White	Белый
+	Transparent	Прозрачный
+	Find in Open Pages…	Найти в открытых страницах…
+	Find layer or text across open pages (@text, #group)...	Найти слой или текст в открытых страницах (@текст, #группа)...
+	Enter: Jump • Shift+Enter: Peek • Esc: Close	Enter: Перейти • Shift+Enter: Просмотр • Esc: Закрыть
+	No matching layers or text in open pages	Нет подходящих слоёв или текста в открытых страницах
+	Reverse	Обратить
+	name	имя
+	Bend:	Изгиб:
+	Result	Результат
+	New Layer	Новый слой
+	Duplicate	Дублировать
+	Folder	Папка
+	Square	Квадрат
+	Automatic	Автоматически
+	Mode:	Режим:
+	Roundness	Круглость
+	Shape:	Фигура:
+	Dots	Точки
+	Lines	Линии
+	Linear	Линейный
+	Round	Круглые
+	Tolerance	Допуск
+	No document open	Документ не открыт
+	Length	Длина
+	Button Mode	Режим кнопок
+	Random	Случайно
+	Diamond	Ромб
+	Topaz Gigapixel AI…	Topaz Gigapixel AI…
+	Opened in Topaz Gigapixel AI: export the image there to bring it back	Открыто в Topaz Gigapixel AI: экспортируйте там изображение, чтобы вернуть его сюда
+	Stopped waiting for Topaz Gigapixel AI	Ожидание Topaz Gigapixel AI остановлено
+	Topaz Gigapixel AI's image could not be applied: {error}	Не удалось применить изображение из Topaz Gigapixel AI: {error}
+	Topaz Gigapixel AI: upscaled {scale}× to {w} × {h} px (new layer)	Topaz Gigapixel AI: увеличено в {scale}× до {w} × {h} пикс. (новый слой)
+	Waiting for Topaz Gigapixel AI: export the upscaled image there to bring it back.	Ожидание Topaz Gigapixel AI: экспортируйте там увеличенное изображение, чтобы вернуть его сюда.
+	Model:	Модель:
+	There is no such Topaz Gigapixel preset	Такого набора Topaz Gigapixel нет
+	Saved Topaz Gigapixel preset “{name}”	Набор Topaz Gigapixel «{name}» сохранен
+	New Preset	Новый набор
+	Upscale:	Увеличение:
+	With these settings	С этими параметрами
+	With two presets	Двумя наборами
+	Save two presets with their own settings first; then this one can run them together.	Сначала сохраните два набора с собственными параметрами; затем этот набор сможет запускать их вместе.
+	First:	Сначала:
+	Then:	Затем:
+	Results:	Результаты:
+	One after the other	Один за другим
+	Each on its own layer	Каждый на своем слое
+	Both presets upscale the image; each result becomes a layer, to compare or blend.	Оба набора увеличивают изображение; каждый результат становится слоем для сравнения или смешивания.
+	The second preset upscales the first one's result.	Второй набор увеличивает результат первого.
+	Run a saved preset from File › Automate › Topaz Gigapixel Presets.	Сохраненный набор запускается из меню Файл › Автоматизация › Наборы Topaz Gigapixel.
+	Auto lets Gigapixel choose.	«Авто» оставляет выбор за Gigapixel.
+	Choose a folder for your timelapse recordings	Выберите папку для записей таймлапса
+	Timelapse	Таймлапс
+	Auto record	Автозапись
+	Recording	Запись
+	Click to pause	Нажмите, чтобы приостановить
+	Start recording	Начать запись
+	Reference layer	Опорный слой
+	Recorded	Записывается
+	{count} of {total} not recorded	{count} из {total} не записываются
+	Reference	Опорный
+	Play video	Воспроизвести видео
+	Show in folder	Показать в папке
+	Advanced settings	Дополнительные параметры
+	Flash before the final image	Вспышка перед итоговым изображением
+	Slow down at the end	Замедлить в конце
+	Remove flicker	Убрать мерцание
+	Remove frames with undo	Удалять кадры при отмене
+	Makes the MP4. Automatic looks next to PhotoCraft, then on PATH.	Создаёт MP4. «Автоматически» ищет рядом с PhotoCraft, затем в PATH.
+	Choose the ffmpeg program on this computer	Выберите программу ffmpeg на этом компьютере
+	Opening files isn't available here	Открытие файлов здесь недоступно
+@plural	{n} frame|{n} frames	{n} кадр|{n} кадра|{n} кадров
+	Library	Библиотека
+	Refresh	Обновить
+	Recordings will be listed here once you've chosen a folder.	Записи появятся здесь, когда вы выберете папку.
+	No recordings yet.	Записей пока нет.
+	Open folder	Открыть папку
+	Delete frames	Удалить кадры
+	Delete folder	Удалить папку
+	Pause the recording first	Сначала приостановите запись
+	REC	REC
+	EXPORTED	ЭКСПОРТИРОВАНО
+	NOT EXPORTED	НЕ ЭКСПОРТИРОВАНО
+	{time} work	{time} работы
+	“{name}” hasn't been exported yet. If you delete its {frames}, you can't make a video of it anymore. This can't be undone.	Запись «{name}» ещё не экспортирована. Если удалить её кадры ({frames}), видео из неё сделать уже не получится. Это действие нельзя отменить.
+	Delete the {frames} of “{name}”?	Удалить кадры записи «{name}» ({frames})?
+	You've recorded more since the last export, and that part isn't in the video.	После последнего экспорта вы записали ещё, и эта часть не попала в видео.
+	Your videos and the work time are kept. This can't be undone.	Ваши видео и время работы сохранятся. Это действие нельзя отменить.
+	Delete “{name}” and its folder? It's removed from the library, along with its work time. Videos you exported stay where you saved them. This can't be undone.	Удалить запись «{name}» вместе с папкой? Она исчезнет из библиотеки вместе со временем работы. Экспортированные видео останутся там, где вы их сохранили. Это действие нельзя отменить.
+	Frames deleted.	Кадры удалены.
+	Deleted “{name}”. Its folder holds other files, so it was kept.	Запись «{name}» удалена. В папке есть другие файлы, поэтому папка сохранена.
+	Deleted “{name}”.	Запись «{name}» удалена.
+@plural	{n} recording|{n} recordings	{n} запись|{n} записи|{n} записей
+	No upscale has come back from Topaz Gigapixel AI yet	Из Topaz Gigapixel AI еще не вернулось ни одного увеличения
+	Topaz Gigapixel AI: upscaled {scale}× to {w} × {h} px (new layer). Keep these settings with Topaz Gigapixel Presets › Save Preset from Last Upscale	Topaz Gigapixel AI: увеличено в {scale}× до {w} × {h} пикс. (новый слой). Сохраните эти параметры: Наборы Topaz Gigapixel › Сохранить набор из последнего увеличения
+	Saved {name} ({seconds} video).	{name} сохранён (видео {seconds}).
+	Export failed: {error}	Не удалось экспортировать: {error}
+	Export cancelled.	Экспорт отменён.
+	just now	только что
+	{n} min ago	{n} мин назад
+	{n} h ago	{n} ч назад
+	yesterday	вчера
+	{n} days ago	{n} дн. назад
+	Smaller files and the quickest capturing. Fine for quick sketches and previews.	Файлы меньше, запись быстрее всего. Подходит для быстрых набросков и предпросмотра.
+	Sharper video for big screens. Uses about twice the disk space.	Более чёткое видео для больших экранов. Занимает примерно вдвое больше места на диске.
+	Full-HD video, good for social media. Recommended.	Видео Full HD, подходит для соцсетей. Рекомендуется.
+	idle	простой
+	Record	Запись
+	Paused	Пауза
+	Click to resume recording	Нажмите, чтобы продолжить запись
+	Open a document to record it.	Откройте документ, чтобы записать его.
+	You'll be asked where to save recordings.	Вас спросят, куда сохранять записи.
+	Export again	Экспортировать снова
+	Export video	Экспорт видео
+	Show the export results	Показать результаты экспорта
+	Hide the export results	Скрыть результаты экспорта
+	≈ {seconds} video from {frames}.	≈ {seconds} видео из {frames}.
+	Confirm	Подтвердить
+	Cancel export	Отменить экспорт
+	Frames	Кадры
+	Timer	Время
+	On disk	На диске
+	Hide the live preview	Скрыть живой просмотр
+	Show the newest frame	Показать последний кадр
+	No frames yet — just start drawing	Кадров пока нет — просто начните рисовать
+	No frames yet	Кадров пока нет
+	No layer selected	Слой не выбран
+	{n} layers selected	Выбрано слоёв: {n}
+	Not recorded	Не записывается
+	A reference layer works like a normal layer, but won't show up in the timelapse.	Опорный слой работает как обычный, но не попадает в таймлапс.
+	Back	Назад
+	Export settings	Параметры экспорта
+	Make video with	Создавать видео с помощью
+	Bars colour	Цвет полей
+	Bars fill the empty space when the canvas size changed during recording.	Поля заполняют пустое место, если размер холста менялся во время записи.
+	Show finished drawing first	Сначала готовый рисунок
+	Hold final image	Задержать итоговое изображение
+	Show work-time counter	Показывать счётчик рабочего времени
+	Record something in this document to see how long the video will be.	Запишите что-нибудь в этом документе, чтобы увидеть длину видео.
+	≈ {seconds} video	≈ {seconds} видео
+	{n} recorded frames	Записано кадров: {n}
+	Auto shows every frame once (at least 5 s, at most 1 min).	«Авто» показывает каждый кадр один раз (не меньше 5 с, не больше 1 мин).
+	The canvas size changed during recording; earlier frames are fitted inside the final size.	Размер холста менялся во время записи; ранние кадры вписываются в итоговый размер.
+	Remove flicker leaves out frames that flash in and out (a layer hidden for a moment, a stroke undone right away), so the video can be a bit shorter.	Удаление мерцания пропускает кадры, которые лишь мелькают (ненадолго скрытый слой, сразу отменённый мазок), поэтому видео может стать немного короче.
+	Recordings folder	Папка записей
+	Not chosen yet — see Settings	Ещё не выбрана — см. «Настройки»
+	recorded {when}	записано {when}
+	Recorded more since the last export.	После последнего экспорта записано ещё.
+	Frames folder	Папка кадров
+	Not chosen yet	Ещё не выбрана
+	Where the recorded frames are kept. Videos are saved wherever you choose when you export.	Здесь хранятся записанные кадры. Видео сохраняется туда, куда вы укажете при экспорте.
+	Choose folder…	Выбрать папку…
+	Change folder…	Изменить папку…
+	Recording quality	Качество записи
+	Undoing something removes those recorded frames.	Отмена действия удаляет записанные кадры.
+	Reference layers	Опорные слои
+	Name tag	Метка в имени
+	Layers with this in their name are left out of the timelapse.	Слои с этим в имени не попадают в таймлапс.
+	Work timer	Таймер работы
+	Idle after	Простой после
+	The timer stops counting after this long without activity.	Таймер перестаёт считать после такого времени без действий.
+	Timelapse Recorder · PhotoCraft	Timelapse Recorder · PhotoCraft
+	Run	Запустить
+	Fill Tool	Инструмент «Заливка»
+	Nothing to fill there	Здесь нечего заливать
+	No enclosed area to fill there	Здесь нет замкнутой области для заливки
+	Fill: click an area	Заливка: щёлкните область
+	Enclose and Fill: draw round the areas to fill	Обвести и залить: обведите области для заливки
+	Paint Unfilled Area: paint over the gaps a fill left	Закрасить пропуски: проведите по пропускам заливки
+	Refer	Ссылка
+	Editing Layer	Редактируемый слой
+	Selected Layers	Выбранные слои
+	Layers in Folder	Слои в папке
+	Reference Layers	Опорные слои
+	Exclude	Исключить
+	Editing layer	Редактируемый слой
+	Text layers	Текстовые слои
+	Locked layers	Закреплённые слои
+	Layers the fill doesn't read	Слои, которые заливка не учитывает
+	Close Gap	Закрыть зазоры
+	Area Scaling	Масштаб области
+	Grow the fill under the lines, or shrink it	Расширить заливку под линии или сузить её
+	To Darkest Pixel	До самого тёмного пикселя
+	Follow Adjacent Pixels	Только смежные пиксели
+	Target	Цель
+	White and Transparent	Белый и прозрачный
+	Image Border	Край изображения
+	The canvas edge closes gaps as a line does	Край холста закрывает зазоры, как линия
+	Fill Tool Options	Параметры инструмента «Заливка»
+	Save as:	Сохранить как:
+	Save Preset	Сохранить набор
+	Keep these two presets as one, listed with the others	Сохранить эти два набора как один, в списке с остальными
+	seconds	с
+	Close gaps up to {px} px	Закрывать разрывы до {px} пикс.
+	Grow the selection under the lines, or shrink it	Расширить выделение под линии или сузить его
+	Circle	Круг
+	Crosshatch	Перекрёстная штриховка
+	Enable	Включить
+	Hearts	Сердца
+	Hexagon	Шестиугольник
+	Delete Second Mask	Удалить вторую маску
+	Disable Second Mask	Выключить вторую маску
+	Enable Second Mask	Включить вторую маску
+	Editing layer blocks the fill	Редактируемый слой останавливает заливку
+	Paint on the layer being filled stops the fill at any tolerance, and the fill goes in behind it: draw over a gap to close it	Краска на заливаемом слое останавливает заливку при любом допуске, а заливка уходит под неё: проведите по зазору, чтобы закрыть его
+	Undo widens Close Gap	Отмена расширяет «Закрыть зазоры»
+	Each Undo of a fill closes bigger gaps for the next click, until you pick another tool	Каждая отмена заливки закрывает при следующем щелчке зазоры больше, пока вы не выберете другой инструмент
+	Close Gap widened to {px} px: click again to fill	«Закрыть зазоры» расширено до {px} пикс.: щёлкните снова, чтобы залить
+	Screentone…	Полутон…
+	Satellites	Спутники
+	Count:	Количество:
+	Distance:	Расстояние:
+	Stretch:	Растяжение:
+	Distortion & Jitter	Искажение и джиттер
+	Aspect X:	Пропорции X:
+	Aspect Y:	Пропорции Y:
+	Row Offset:	Смещение рядов:
+	Merge:	Слияние:
+	Jitter Pos:	Дрожание позиции:
+	Jitter Size:	Дрожание размера:
+	Midpoint:	Средняя точка:
+	Start Size:	Начальный размер:
+	End Size:	Конечный размер:
+	Save as Pattern	Сохранить как паттерн
+	Checker	Шахматные клетки
+	Concentric	Концентрические
+	Cross Angle	Угол перекрестия
+	Dot Shape	Форма точки
+	Dot Size	Размер точки
+	Gaussian Noise	Гауссов шум
+	Hexgrid	Гексагональная сетка
+	Line Width	Толщина линий
+	Spacing X	Шаг по X
+	Spacing Y	Шаг по Y
+	Stipple	Стохастика
+	Triangles	Треугольники
+	Metrics	Метрики
+	Optical	Оптический
+	Pattern Type	Тип узора
+	Radial	Радиальный
+	Seed	Зерно
+	Smoothness	Сглаженность
+	Stars	Звёзды
+cameraRaw	Color	Цвет
+cameraRaw	Roundness	Округлость
+cameraRaw	Size	Размер
+layers	Fill:	Заливка:
+	Preserve Lines	Сохранять линии
+	(end of script)	(конец сценария)
+	Auto-advance to next page	Автопереход на след. страницу
+	Automatically advance script to the next page	Автоматический переход на следующую страницу скрипта
+	Baseline shift:	Сдвиг базовой линии:
+	Choose TypeR styles file	Выберите файл стилей TypeR
+	Choose script file	Выберите файл сценария
+	Clear entire script	Очистить весь сценарий
+	Clear script	Очистить сценарий
+	Each line becomes a separate dialogue entry. [Page 1] tags split pages.	Каждая строка станет отдельной репликой в очереди. Метки [Стр. 1] или [1] делят по страницам.
+	Editor	Редактор
+	Enter in Editor	Ввести в редакторе
+	Enter script manually	Ввести сценарий вручную
+	Export TypeR JSON…	Экспорт TypeR JSON…
+	Export TypeR styles	Экспорт стилей TypeR
+	Export error	Ошибка экспорта
+	Font Settings	Настройки шрифта
+	GEOMETRY & CENTERING	ГЕОМЕТРИЯ И ЦЕНТРИРОВАНИЕ
+	Go to current line/page	Перейти к текущей странице/реплике
+	Import TypeR JSON…	Импорт TypeR JSON…
+	Import error	Ошибка импорта
+	Insert current line into selection/bubble (Enter)	Вставить текущую строку в выделение/баббл (Enter)
+	Insert this line into bubble (Enter)	Вставить эту строку в баббл (Enter)
+	Load .txt	Загрузить .txt
+	Load file (.txt)…	Загрузить файл (.txt)…
+	Load from file	Загрузить из файла
+	Load into typesetter	Загрузить в тайпсеттер
+	Load script file (.txt)	Загрузить файл сценария (.txt)
+	Load script file (.txt)…	Загрузить файл сценария (.txt)…
+	Loaded dialogues	Загружено реплик
+	Loaded styles	Загружено стилей
+	Make this line current	Сделать эту реплику активной
+	Manga Script (Full Text)	Сценарий манги (Полный текст)
+	New Folder	Новая папка
+	Next line (↓)	Следующая строка (↓)
+	Next page	Следующая страница
+	No folder	Без папки
+	No script loaded	Сценарий не загружен
+	Open .txt	Открыть .txt
+	Open script in separate window	Открыть текст в отдельном окне
+	Open script text editor	Открыть редактор текста сценария
+	PRESET STORAGE	ХРАНИЛИЩЕ ПРЕСЕТОВ
+	Page	Стр.
+	Paste / Edit script…	Вставить / Редактировать…
+	Paste copied text from clipboard	Вставить скопированный текст из буфера обмена
+	Paste from Clipboard	Вставить из буфера
+	Paste from Clipboard (Ctrl+V)	Вставить из буфера (Ctrl+V)
+	Paste script from clipboard (Ctrl+V)	Вставить текст сценария из буфера обмена (Ctrl+V)
+	Paste script text from clipboard (Ctrl+V)	Вставить текст сценария из буфера обмена (Ctrl+V)
+	Paste script text here (Ctrl+V) or write dialogues…	Вставьте сюда текст сценария (Ctrl+V) или напишите реплики…
+	Presets loaded from file	Пресеты загружены из файла
+	Presets saved	Пресеты сохранены
+	Previous line (↑)	Предыдущая строка (↑)
+	Previous page	Предыдущая страница
+	Read error	Ошибка чтения
+	Save now	Сохранить сейчас
+	Script	Сценарий
+	Script Editor	Ввод и редактирование сценария
+	Shifting the baseline down ensures precise visual vertical centering inside bubbles.	Сдвиг базовой линии вниз обеспечивает точное визуальное центрирование текста внутри баббла.
+	Show current page dialogues only	Показывать только реплики текущей страницы
+	Strip character names	Очищать имена персонажей
+	Strip character names at start of line ('HERO: Text')	Очищать имена персонажей в начале строки ('ГЕРОЙ: Текст')
+	Strip leading dashes	Очищать тире в начале реплик
+	Strip leading dashes ('- Text', '— Text')	Очищать тире в начале реплик ('- Текст', '— Текст')
+	Styles successfully exported	Стили успешно экспортированы
+	Sync line spacing	Синхронизация интерлиньяжа
+	Sync line spacing with font size	Синхронизация интерлиньяжа с кеглем шрифта
+	TYPESETTER BEHAVIOR	ПОВЕДЕНИЕ ТАЙПСЕТТЕРА
+	TypeR Styles	Стили TypeR
+	Write error	Ошибка записи
+	left	ост.
+	Choose presets folder	Выберите папку для пресетов
+	Storage folder set	Папка сохранения задана
+	Storage folder reset to default	Папка сохранения сброшена по умолчанию
+	Open presets folder in file manager	Открыть папку пресетов в проводнике
+	Choose a custom directory to store typesetter presets and state	Выбрать папку для хранения пресетов и настроек тайпсеттера
+	Reset folder	Сбросить папку
+	Reset presets storage to default AppData directory	Сбросить папку сохранения на стандартную папку AppData
+	Folder name	Имя папки
+	Folder duplicated	Папка продублирована
+	Duplicate this style	Создать копию этого стиля
+	Delete this style	Удалить этот стиль
+	Duplicate folder	Дублировать папку
+	Favorite font	Избранный шрифт
+	Pages	Страницы
+	Manga Workflow	Рабочий процесс манги
+	Chapter Pages…	Страницы главы…
+	Toggle Chapter Pages panel	Панель страниц главы
+	Split Left Dock (Pages + TypeR)…	Разделить левый док (Страницы + TypeR)…
+	Engine:	Движок:
+	GPU on large canvases, CPU on small	GPU на больших холстах, CPU на малых
+	Ultra-fast real-time rendering for giant files	Сверхбыстрый рендеринг на видеокарте для гигантских файлов
+	Exact reference CPU engine	Точный эталонный расчет на процессоре
+	+ New folder...	+ Новая папка...
+	New folder name	Имя новой папки
+	Faux bold	Псевдожирный
+	Faux italic	Псевдокурсив
+	Use standard font metrics and the baseline	Метрическая система: стандартные метрики шрифта и базовая линия
+	Use visual kerning and bubble centering	Оптическая система: визуальный оптический кернинг и центровка баббла
+	Leading is linked to size	Интерлиньяж связан с кеглем (меняется пропорционально)
+	Leading is not linked to size	Интерлиньяж не связан с кеглем (независим)
+	H-Scale (%)	H-Scale (%)
+	Edit preview text	Изменить текст предпросмотра
+	Leave empty for the automatic sample	Оставьте пустым для автоматического образца
+	Preview unavailable	Предпросмотр недоступен
+	Bubble Contour	Форма баббла
+	No contour variants	Нет вариантов контура
+	~ SCurve	~ SCurve
+	＋ Add tail	＋ Добавить хвост
+	＋ Create balloon on canvas	＋ Создать баллон на холсте
+	＋ Fit balloon	＋ Вписать баббл
+	⊘ None	⊘ Нет
+	⌒ Arc	⌒ Дуга
+	▽ Wedge	▽ Клин
+	◎ Double outline	◎ Двойной контур
+	◌ Thought	◌ Мысль
+	☁️ Cloud	☁️ Облако
+	✓ Text fits: {lines} lines, {size} pt	✓ Текст влезает: строк {lines}, кегль {size} pt
+	✴️ Burst	✴️ Взрыв
+	⑂ Double	⑂ Двойной
+	◽ Rect	◽ Прямоугольник
+	⚠ Text does not fit — enlarge the balloon or reduce the type size	⚠ Текст не влезает — увеличьте баллон или уменьшите кегль
+	⚡ Bake to SAI Linework	⚡ Запечь в лайнворк SAI
+	⚡ Lightning	⚡ Молния
+	⚪ Ellipse	⚪ Эллипс
+	Add a tail to the selected balloon	Добавить хвост к выбранному баллону
+	Background colour	Цвет фона
+	Balloon body:	Форма тела баллона:
+	Bubble radius:	Радиус пузыря:
+	Bumps:	Волны:
+	Bundle:	Пучки:
+	Corner radius:	Радиус углов:
+	Cusp bite:	Заход стыков:
+	Dialogue and fit:	Реплика и подгонка:
+	Dialogue text…	Текст реплики…
+	Fit the shape to the text: the balloon grows when the line does not fit	Подогнать форму под текст: баллон вырастет, если реплика не влезает
+	Hand-drawn noise:	Неряшливость контура:
+	Inner sharpness:	Острота внутрь:
+	Inward concavity:	Прогиб внутрь:
+	Jitter:	Асимметрия:
+	Lobe height:	Высота фестонов:
+	Mouth width:	Ширина устья:
+	Needle width:	Ширина иглы:
+	Needles:	Иглы:
+	Outer sharpness:	Острота наружу:
+	Outline gap:	Зазор контуров:
+	Random jitter variation	Случайная вариация асимметрии
+	Random ray variation	Случайная вариация лучей
+	Ray extension:	Вылет лучей:
+	Ray length:	Длина лучей:
+	Rays:	Лучи:
+	Round the tips	Скруглять вершины
+	Spikes:	Зубья:
+	Squircle:	Сквиркл:
+	Stroke and fill:	Контур и заливка:
+	Sub-harmonics:	Субгармоники:
+	Tail type:	Тип хвоста:
+	Text area:	Поле под текст:
+	Thought bubbles:	Хвосты-мысли:
+	Turn the balloon into an editable vector linework layer	Превратить баллон в редактируемый векторный слой лайнворка
+	Type size:	Кегль:
+	Valley depth:	Глубина впадин:
+	💥 Spiky	💥 Шипастый
+	🔄 Reset to the manga default	🔄 Сбросить на манга-стандарт
+	🦔 Uniflash	🦔 Унифлеш
+	Align:	Выравнивание:
+	Batch balloons from script (one line per balloon):	Пакет баллонов по сценарию (по строке на баллон):
+	Brush contrast:	Контраст кисти:
+	Brush preset:	Пресет кисти:
+	Chamfer size:	Размер фаски:
+	Corner scoop:	Вырез углов:
+	Dash duty:	Заполнение штриха:
+	Dashes:	Штрихи:
+	Deep contour warp:	Глубокое искажение:
+	Default (Style Engine)	По умолчанию (Style Engine)
+	Direction:	Направление:
+	Dot count:	Число точек:
+	Dot randomness:	Случайность точек:
+	Edge roughness:	Шероховатость края:
+	Enable underlay / shadow contour	Включить подложку / теневой контур
+	Fill interior (Gloom mode)	Заливать внутри (режим мрака)
+	Fit mode:	Режим вписывания:
+	Grain size:	Размер зерна:
+	Grow balloon	Увеличить баллон
+	Handwritten font	Рукописный шрифт
+	Haze spread:	Рассеивание дымки:
+	Import a VectorBrushPreset JSON or grayscale PNG ribbon texture	Импортировать JSON-пресет VectorBrushPreset или градационную PNG-текстуру ленты
+	Inward needles	Иглы внутрь
+	Line 1\nLine 2!!	Строка 1\nСтрока 2!!
+	Line style:	Стиль линии:
+	Noise scale:	Масштаб шума:
+	Pencil roughness:	Шероховатость карандаша:
+	Pencil strands:	Штрихи карандаша:
+	Pixel step:	Шаг пикселя:
+	Shrink text to shape	Уменьшать текст по контуру
+	Solid ring + spikes	Сплошное кольцо + зубья
+	Sparkle count:	Число блёсток:
+	Sparkle randomness:	Разброс блёсток:
+	Sparkle size:	Размер блёсток:
+	Underlay X offset:	Смещение подложки X:
+	Underlay Y offset:	Смещение подложки Y:
+	Underlay rectness:	Прямоугольность подложки:
+	Underlay scale:	Масштаб подложки:
+	Uniflash mode:	Режим унифлеша:
+	Vertical (Tategaki)	Вертикальный (Татэгаки)
+	Voice and intonation:	Голос и интонация:
+	Voice intensity:	Сила эффекта:
+	Workflow: Presets, Script & SVG	Рабочий процесс: пресеты, сценарий и SVG
+	━ Solid	━ Сплошная
+	◌ Whisper	◌ Шёпот
+	◎ Double	◎ Двойная
+	★ Save current style to favorites	★ Сохранить текущий стиль в избранное
+	⚠ Overflow by height (+{px} px needed)	⚠ Переполнение по высоте (нужно +{px} px)
+	⚠ Overflow by width (+{px} px needed)	⚠ Переполнение по ширине (нужно +{px} px)
+	⚫ Stipple dots	⚫ Точечная (пуантилизм)
+	✏ Pencil stroke	✏ Карандашный штрих
+	✨ Sparkle / glitter	✨ Блёстки / искры
+	⬆ Import SVG contour	⬆ Импорт SVG-контура
+	⬇ Export balloon SVG	⬇ Экспорт SVG баллона
+	＋ Create batch from script	＋ Создать пакет из сценария
+	＋ Import (.json/.png)	＋ Импорт (.json/.png)
+	👻 Eerie	👻 Жуткий
+	👾 1-bit pixel	👾 1-бит пиксель
+	💢 Irritated	💢 Раздражённый
+	💬 Neutral	💬 Нейтральный
+	📢 Shout	📢 Крик
+	📻 Broadcast	📻 Радио / экран
+	🖌 Ukiyo-e brush	🖌 Кисть укиё-э
+	🤫 Whisper	🤫 Шёпот
+	🪪 Chamfer rect	🪪 Срезанный прям.

@@ -616,6 +616,9 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
     if crate::camera_raw_ui::on_redevelop_event(app, &e) {
         return;
     }
+    if crate::timelapse_ui::on_job_event(app, &e) {
+        return;
+    }
     if app.jobs.place.as_ref().is_some_and(|p| p.job == e.id)
         && let Some(place) = app.jobs.place.take()
     {

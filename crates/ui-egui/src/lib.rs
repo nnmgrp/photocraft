@@ -43,6 +43,7 @@ pub mod jobs_ui;
 pub(crate) mod last_brush;
 pub mod levels_clipping;
 pub mod links;
+pub mod manga_seam;
 pub mod memory_warning;
 pub mod menu_catalog;
 pub mod menus;
@@ -158,6 +159,7 @@ pub use dialogs::fill_ui;
 pub use dialogs::filter_dialog;
 use dialogs::filter_preview_ui;
 pub use dialogs::gallery_ui;
+pub use dialogs::gigapixel_ui;
 use dialogs::guide_edit;
 pub use dialogs::guide_layout_ui;
 pub use dialogs::history_options_ui;
@@ -248,6 +250,7 @@ pub use panels::preset_panels;
 pub use panels::props_layout;
 pub use panels::smart_ui;
 pub use panels::swatches_ui;
+pub use panels::timelapse_ui;
 use panels::timeline_ui;
 use panels::titlebar;
 pub use panels::type_panels_ui;
@@ -299,6 +302,7 @@ pub use tools::crop_ui;
 pub use tools::direct_select;
 pub use tools::eraser_ui;
 pub use tools::eyedropper_ui;
+pub use tools::fill_tool_ui;
 pub use tools::frame_tool;
 pub use tools::gradient_ui;
 pub use tools::lasso_ui;
@@ -775,6 +779,16 @@ pub struct PhotocraftApp {
     last_frame_start_ms: f64,
     /// Background job bookkeeping: opening tabs, control replies waiting on a job.
     pub jobs: jobs_ui::JobsUi,
+    /// Interactive Fill Tool drag session and undo gap retry state.
+    pub(crate) fill_drag: Option<fill_tool_ui::DragFill>,
+    pub(crate) fill_gap_retry: Option<fill_tool_ui::GapRetry>,
+    /// Active Topaz Gigapixel AI round trip waiting for an export file.
+    pub(crate) gigapixel: Option<gigapixel_ui::Waiting>,
+    /// Timelapse recorder & library panel state.
+    pub(crate) timelapse: timelapse_ui::TimelapseUi,
+    /// Desktop suitcase manga UI panels, gizmos and typesetter bridge.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(crate) manga: manga_seam::MangaSeamState,
     #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
     live_tokens: theme::live::LiveTokens,
 }

@@ -182,6 +182,15 @@ pub fn detect_speech_bubble_bounds(state: &TypesetterState, doc: &Document, anch
     detect_speech_bubble_bounds_in_surface(&surface, anchor_x, anchor_y, radius)
 }
 
+/// Replaces the active document selection surface for typesetter auto-clean actions.
+pub fn replace_selection_for_typesetter(s: &mut crate::Session, selection: photocraft_raster::Surface) -> bool {
+    let Some(st) = s.active_mut() else {
+        return false;
+    };
+    std::sync::Arc::make_mut(&mut st.doc).selection = Some(selection);
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use craft_psd::descriptor::{Descriptor, Id, UnicodeString, Value};

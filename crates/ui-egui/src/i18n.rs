@@ -428,7 +428,17 @@ pub fn t(s: &str) -> &str {
 
 /// Translate an English UI string; unknown strings come back unchanged.
 pub fn tr(lang: Lang, s: &str) -> &str {
-    lang.i18n().t(lang.lang, s)
+    if let Some(translated) = lang.i18n().get(lang.lang, "", s) {
+        return translated;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        photocraft_manga_ui::i18n::tr_in(lang.code(), s)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        s
+    }
 }
 
 /// Like [`tr`], for an English string that needs a disambiguating `context`.

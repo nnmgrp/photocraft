@@ -31,6 +31,7 @@ pub enum Tool {
     MagicEraser,
     Gradient,
     PaintBucket,
+    Fill,
     Type,
     VerticalType,
     /// Horizontal Type Mask: types a selection in the shape of the glyphs, no type layer.
@@ -65,6 +66,7 @@ pub enum Tool {
     /// Converts an anchor between smooth and corner, and pulls handles out of a corner
     /// (Photoshop's Convert Point tool; also the Pen's ⌥ mode, `direct_select.rs`).
     ConvertPoint,
+    VectorCurve,
     PathSelection,
     DirectSelection,
     Rectangle,
@@ -75,13 +77,14 @@ pub enum Tool {
     Star,
     Line,
     CustomShape,
+    Balloon,
     Slice,
     SliceSelect,
     Frame,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 69] = [
+    pub const ALL: [Tool; 72] = [
         Tool::Move,
         Tool::Artboard,
         Tool::RectMarquee,
@@ -108,6 +111,7 @@ impl Tool {
         Tool::MagicEraser,
         Tool::Gradient,
         Tool::PaintBucket,
+        Tool::Fill,
         Tool::Type,
         Tool::VerticalType,
         Tool::HorizontalTypeMask,
@@ -139,6 +143,7 @@ impl Tool {
         Tool::AddAnchorPoint,
         Tool::DeleteAnchorPoint,
         Tool::ConvertPoint,
+        Tool::VectorCurve,
         Tool::PathSelection,
         Tool::DirectSelection,
         Tool::Rectangle,
@@ -148,6 +153,7 @@ impl Tool {
         Tool::Star,
         Tool::Line,
         Tool::CustomShape,
+        Tool::Balloon,
         Tool::Slice,
         Tool::SliceSelect,
         Tool::Frame,
@@ -184,6 +190,7 @@ impl Tool {
             Tool::Frame => "Frame Tool",
             Tool::Gradient => "Gradient Tool",
             Tool::PaintBucket => "Paint Bucket Tool",
+            Tool::Fill => "Fill Tool",
             Tool::Type => "Horizontal Type Tool",
             Tool::VerticalType => "Vertical Type Tool",
             Tool::HorizontalTypeMask => "Horizontal Type Mask Tool",
@@ -215,6 +222,7 @@ impl Tool {
             Tool::AddAnchorPoint => "Add Anchor Point Tool",
             Tool::DeleteAnchorPoint => "Delete Anchor Point Tool",
             Tool::ConvertPoint => "Convert Point Tool",
+            Tool::VectorCurve => "Vector Curve Tool",
             Tool::PathSelection => "Path Selection Tool",
             Tool::DirectSelection => "Direct Selection Tool",
             Tool::Rectangle => "Rectangle Tool",
@@ -224,6 +232,7 @@ impl Tool {
             Tool::Star => "Star Tool",
             Tool::Line => "Line Tool",
             Tool::CustomShape => "Custom Shape Tool",
+            Tool::Balloon => "Balloon Tool",
         }
     }
     pub fn is_type(self) -> bool {
@@ -275,7 +284,7 @@ impl Tool {
             Tool::MagicWand => 'W',
             Tool::Crop | Tool::PerspectiveCrop | Tool::Slice | Tool::SliceSelect => 'C',
             Tool::Frame => 'K',
-            Tool::Gradient | Tool::PaintBucket => 'G',
+            Tool::Gradient | Tool::PaintBucket | Tool::Fill => 'G',
             Tool::Type | Tool::VerticalType | Tool::HorizontalTypeMask | Tool::VerticalTypeMask => 'T',
             Tool::Hand => 'H',
             Tool::RotateView => 'R',
@@ -283,7 +292,7 @@ impl Tool {
             Tool::Remove | Tool::SpotHealing | Tool::Healing | Tool::Patch | Tool::ContentAwareMove | Tool::RedEye => 'J',
             Tool::CloneStamp | Tool::PatternStamp => 'S',
             Tool::HistoryBrush | Tool::ArtHistoryBrush => 'Y',
-            Tool::Blur | Tool::Sharpen | Tool::Smudge => '\0',
+            Tool::Blur | Tool::Sharpen | Tool::Smudge | Tool::VectorCurve => '\0',
             // In the Marquee flyout, but M cycles only the Rectangular and Elliptical Marquee.
             Tool::SingleRowMarquee | Tool::SingleColumnMarquee => '\0',
             Tool::Dodge | Tool::Burn | Tool::Sponge => 'O',
@@ -292,7 +301,7 @@ impl Tool {
             // In the Pen flyout, but P never reaches them.
             Tool::AddAnchorPoint | Tool::DeleteAnchorPoint | Tool::ConvertPoint => ' ',
             Tool::PathSelection | Tool::DirectSelection => 'A',
-            Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Star | Tool::Line | Tool::CustomShape => 'U',
+            Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Star | Tool::Line | Tool::CustomShape | Tool::Balloon => 'U',
         }
     }
     /// Glyph drawn in the toolbar (vector icons come later).

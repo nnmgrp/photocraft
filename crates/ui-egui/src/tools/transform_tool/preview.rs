@@ -56,9 +56,11 @@ pub(super) fn preview_image(
 fn preview_mask(l: &photocraft_doc::Layer, b: photocraft_geom::Rect) -> Option<crate::transform_tex::PreviewMask> {
     use crate::transform_tex::PreviewMask;
     let pixel = l.mask.as_ref().filter(|m| m.enabled);
+    let second = l.second_mask.as_ref().filter(|m| m.enabled);
     let vector = l.vector_mask.as_ref().filter(|v| v.enabled);
     let linked_pixel = pixel.filter(|m| m.linked);
     if pixel.is_none_or(|m| m.linked)
+        && second.is_none_or(|m| m.linked)
         && vector.is_none_or(|v| v.linked)
         && let Some(surface) = photocraft_compose::masks::combined_mask(l, b)
     {

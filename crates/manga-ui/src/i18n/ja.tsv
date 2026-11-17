@@ -1,0 +1,451 @@
+	File	ファイル
+	Left	左
+	Save	保存
+	Folder	フォルダー
+	Paste	貼り付け
+	Clear	消去
+	Search…	検索…
+	Scale	拡大・縮小
+	Delete	削除
+	Reverse	反転
+	Align	整列
+	All Layers	すべてのレイヤー
+	Horizontal	横書き
+	None	なし
+	Noise	ノイズ
+	Video	ビデオ
+	Square	正方形ピクセル
+	Extras	エクストラ
+	Color	カラー
+	Options	オプション
+	Screentones	スクリーントーン
+	Manga Balloons	フキダシ
+	Balloons	フキダシ
+	SAI Linework	SAI 線画
+	Linework	線画
+	Apply	適用
+	Auto	自動
+	All Caps	すべて大文字
+	Angle	角度
+	Anti-alias	アンチエイリアス
+	Background	背景
+	Bend:	曲げ:
+	Automatic	自動
+	Cancel	キャンセル
+	Center	中央
+	Contiguous	隣接
+	Custom	カスタム
+	Default	既定
+	Density	密度
+	Density:	密度:
+	Done	完了
+	Dots	ドット
+	Fill:	塗り:
+	Foreground	前景
+	Height	高さ
+	Leading	行送り
+	Metrics	メトリクス
+	Mode:	モード:
+	Name:	名前:
+	Normal	通常
+	OK	OK
+	Opacity	不透明度
+	Optical	オプティカル
+	Preset	プリセット
+	Preset:	プリセット:
+	Preview	プレビュー
+	Roundness	真円率
+	Shape:	シェイプ:
+	Size	サイズ
+	Size:	サイズ:
+	Small Caps	スモールキャップ
+	Strikethrough	取り消し線
+	Style	スタイル
+	Tolerance	許容値
+	Transparent	透明
+	Type:	種類:
+	Underline	下線
+	White	白
+	Width	幅
+	Width:	幅:
+	name	名前
+	Diamond	ダイヤモンド形
+	Linear	線形
+	Radial	円形
+	Lines	線
+	Angle:	角度:
+	Gradient	グラデーション
+cameraRaw	Color	カラー
+	Circle	円
+	Crosshatch	クロスハッチ
+	Hearts	ハート
+	Hexagon	六角形
+	High	高
+	Length	長さ
+	Low	低
+	New Layer	新規レイヤー
+	Pattern Type	パターンの種類
+	Random	ランダム
+	Seed	シード
+	Settings	設定
+	Smoothness	滑らかさ
+	Stars	星
+	Target	ターゲット
+	Choose…	選択…
+	Duplicate	複製
+	Justify	均等配置
+	Result	結果
+	Hanging Punctuation	ぶら下がり句読点
+	Subscript	下付き
+	Superscript	上付き
+	Round	丸型
+	No document open	ドキュメントが開かれていません
+	Button Mode	ボタンモード
+	Topaz Gigapixel AI…	Topaz Gigapixel AI…
+	Opened in Topaz Gigapixel AI: export the image there to bring it back	Topaz Gigapixel AI で開きました：そこで画像を書き出すとここに戻ります
+	Stopped waiting for Topaz Gigapixel AI	Topaz Gigapixel AI の待機を停止しました
+	Topaz Gigapixel AI's image could not be applied: {error}	Topaz Gigapixel AI の画像を適用できませんでした：{error}
+	Topaz Gigapixel AI: upscaled {scale}× to {w} × {h} px (new layer)	Topaz Gigapixel AI：{scale}× で {w} × {h} px に拡大しました（新規レイヤー）
+	Waiting for Topaz Gigapixel AI: export the upscaled image there to bring it back.	Topaz Gigapixel AI を待っています：拡大した画像をそこで書き出すとここに戻ります。
+	Model:	モデル:
+	There is no such Topaz Gigapixel preset	その Topaz Gigapixel プリセットはありません
+	Saved Topaz Gigapixel preset “{name}”	Topaz Gigapixel プリセット「{name}」を保存しました
+	New Preset	新規プリセット
+	Upscale:	アップスケール:
+	With these settings	この設定で
+	With two presets	2 つのプリセットで
+	Save two presets with their own settings first; then this one can run them together.	まず独自の設定を持つプリセットを 2 つ保存してください。このプリセットでそれらをまとめて実行できます。
+	First:	最初:
+	Then:	次に:
+	Results:	結果:
+	One after the other	順番に
+	Each on its own layer	それぞれ別のレイヤーに
+	Both presets upscale the image; each result becomes a layer, to compare or blend.	両方のプリセットで画像をアップスケールし、それぞれの結果をレイヤーにします (比較や合成用)。
+	The second preset upscales the first one's result.	2 つ目のプリセットで 1 つ目の結果をアップスケールします。
+	Run a saved preset from File › Automate › Topaz Gigapixel Presets.	保存したプリセットは ファイル › 自動処理 › Topaz Gigapixel プリセット から実行します。
+	Auto lets Gigapixel choose.	自動にすると Gigapixel が決めます。
+	Choose a folder for your timelapse recordings	タイムラプス録画の保存フォルダーを選択してください
+	Timelapse	タイムラプス
+	Auto record	自動録画
+	Recording	録画中
+	Click to pause	クリックで一時停止
+	Start recording	録画を開始
+	Reference layer	参照レイヤー
+	Recorded	録画対象
+	{count} of {total} not recorded	{total} 件中 {count} 件は録画対象外
+	Reference	参照
+	Play video	ビデオを再生
+	Show in folder	フォルダーに表示
+	Advanced settings	詳細設定
+	Flash before the final image	最終画像の前にフラッシュ
+	Slow down at the end	最後をスローにする
+	Remove flicker	ちらつきを除去
+	Remove frames with undo	取り消すとフレームも削除
+	Makes the MP4. Automatic looks next to PhotoCraft, then on PATH.	MP4 を作成します。自動の場合は PhotoCraft と同じ場所、次に PATH を探します。
+	Choose the ffmpeg program on this computer	このコンピューター上の ffmpeg プログラムを選択してください
+	Opening files isn't available here	ここではファイルを開けません
+@plural	{n} frame|{n} frames	{n} フレーム
+	Library	ライブラリ
+	Refresh	更新
+	Recordings will be listed here once you've chosen a folder.	フォルダーを選ぶと、ここに録画が表示されます。
+	No recordings yet.	録画はまだありません。
+	Open folder	フォルダーを開く
+	Delete frames	フレームを削除
+	Delete folder	フォルダーを削除
+	Pause the recording first	先に録画を一時停止してください
+	REC	REC
+	EXPORTED	書き出し済み
+	NOT EXPORTED	未書き出し
+	{time} work	作業 {time}
+	“{name}” hasn't been exported yet. If you delete its {frames}, you can't make a video of it anymore. This can't be undone.	「{name}」はまだ書き出されていません。フレーム（{frames}）を削除すると、ビデオを作れなくなります。この操作は取り消せません。
+	Delete the {frames} of “{name}”?	「{name}」のフレーム（{frames}）を削除しますか？
+	You've recorded more since the last export, and that part isn't in the video.	前回の書き出し以降にも録画しており、その部分はビデオに含まれていません。
+	Your videos and the work time are kept. This can't be undone.	ビデオと作業時間は残ります。この操作は取り消せません。
+	Delete “{name}” and its folder? It's removed from the library, along with its work time. Videos you exported stay where you saved them. This can't be undone.	「{name}」とそのフォルダーを削除しますか？作業時間とともにライブラリから削除されます。書き出したビデオは保存した場所に残ります。この操作は取り消せません。
+	Frames deleted.	フレームを削除しました。
+	Deleted “{name}”. Its folder holds other files, so it was kept.	「{name}」を削除しました。フォルダーに他のファイルがあるため、フォルダーは残しました。
+	Deleted “{name}”.	「{name}」を削除しました。
+@plural	{n} recording|{n} recordings	{n} 件の録画
+	No upscale has come back from Topaz Gigapixel AI yet	Topaz Gigapixel AI からアップスケール結果がまだ戻っていません
+	Topaz Gigapixel AI: upscaled {scale}× to {w} × {h} px (new layer). Keep these settings with Topaz Gigapixel Presets › Save Preset from Last Upscale	Topaz Gigapixel AI：{scale}× で {w} × {h} px に拡大しました（新規レイヤー）。この設定は Topaz Gigapixel プリセット › 最後のアップスケールからプリセットを保存 で保持できます
+	Saved {name} ({seconds} video).	{name} を保存しました（{seconds} のビデオ）。
+	Export failed: {error}	書き出しに失敗しました：{error}
+	Export cancelled.	書き出しをキャンセルしました。
+	just now	たった今
+	{n} min ago	{n} 分前
+	{n} h ago	{n} 時間前
+	yesterday	昨日
+	{n} days ago	{n} 日前
+	Smaller files and the quickest capturing. Fine for quick sketches and previews.	ファイルが小さく、最も速く記録できます。手早いスケッチやプレビュー向けです。
+	Sharper video for big screens. Uses about twice the disk space.	大画面向けのより鮮明なビデオ。ディスク容量は約 2 倍になります。
+	Full-HD video, good for social media. Recommended.	フル HD ビデオ。SNS に適しています。推奨。
+	idle	待機
+	Record	録画
+	Paused	一時停止中
+	Click to resume recording	クリックで録画を再開
+	Open a document to record it.	録画するドキュメントを開いてください。
+	You'll be asked where to save recordings.	録画の保存先を尋ねます。
+	Export again	もう一度書き出し
+	Export video	ビデオを書き出し
+	Show the export results	書き出し結果を表示
+	Hide the export results	書き出し結果を隠す
+	≈ {seconds} video from {frames}.	≈ {frames}から {seconds} のビデオ。
+	Confirm	確定
+	Cancel export	書き出しをキャンセル
+	Frames	フレーム
+	Timer	時間
+	On disk	ディスク上
+	Hide the live preview	ライブプレビューを隠す
+	Show the newest frame	最新のフレームを表示
+	No frames yet — just start drawing	まだフレームがありません — 描き始めてください
+	No frames yet	まだフレームがありません
+	No layer selected	レイヤーが選択されていません
+	{n} layers selected	{n} 個のレイヤーを選択
+	Not recorded	録画対象外
+	A reference layer works like a normal layer, but won't show up in the timelapse.	参照レイヤーは通常のレイヤーと同じように使えますが、タイムラプスには映りません。
+	Back	戻る
+	Export settings	書き出し設定
+	Make video with	ビデオの作成方法
+	Bars colour	帯の色
+	Bars fill the empty space when the canvas size changed during recording.	録画中にカンバスサイズが変わったとき、帯が空きを埋めます。
+	Show finished drawing first	最初に完成画を表示
+	Hold final image	最終画像を表示し続ける
+	Show work-time counter	作業時間カウンターを表示
+	Record something in this document to see how long the video will be.	このドキュメントで何か録画すると、ビデオの長さが表示されます。
+	≈ {seconds} video	≈ {seconds} のビデオ
+	{n} recorded frames	録画フレーム {n}
+	Auto shows every frame once (at least 5 s, at most 1 min).	自動ではすべてのフレームを 1 回ずつ表示します（最短 5 秒、最長 1 分）。
+	The canvas size changed during recording; earlier frames are fitted inside the final size.	録画中にカンバスサイズが変わりました。以前のフレームは最終サイズに収まるよう調整されます。
+	Remove flicker leaves out frames that flash in and out (a layer hidden for a moment, a stroke undone right away), so the video can be a bit shorter.	ちらつきの除去では一瞬だけ現れるフレーム（一時的に非表示にしたレイヤー、すぐ取り消したストロークなど）を省くため、ビデオが少し短くなることがあります。
+	Recordings folder	録画フォルダー
+	Not chosen yet — see Settings	未選択 — 設定を参照
+	recorded {when}	録画 {when}
+	Recorded more since the last export.	前回の書き出し以降に追加で録画されています。
+	Frames folder	フレームフォルダー
+	Not chosen yet	未選択
+	Where the recorded frames are kept. Videos are saved wherever you choose when you export.	録画したフレームの保存場所です。ビデオは書き出し時に選んだ場所に保存されます。
+	Choose folder…	フォルダーを選択…
+	Change folder…	フォルダーを変更…
+	Recording quality	録画品質
+	Undoing something removes those recorded frames.	取り消すと、その分の録画フレームも削除されます。
+	Reference layers	参照レイヤー
+	Name tag	名前タグ
+	Layers with this in their name are left out of the timelapse.	名前にこれを含むレイヤーはタイムラプスに含まれません。
+	Work timer	作業タイマー
+	Idle after	待機までの時間
+	The timer stops counting after this long without activity.	操作がないままこの時間が経つと、タイマーは止まります。
+	Timelapse Recorder · PhotoCraft	Timelapse Recorder · PhotoCraft
+	Run	実行
+	Fill Tool	塗りつぶしツール
+	Nothing to fill there	そこには塗りつぶす場所がありません
+	No enclosed area to fill there	そこには囲まれた領域がありません
+	Fill: click an area	塗りつぶし：領域をクリック
+	Enclose and Fill: draw round the areas to fill	囲って塗る：塗りつぶす領域を囲みます
+	Paint Unfilled Area: paint over the gaps a fill left	塗り残し部分に塗る：塗り残しの上をなぞります
+	Refer	参照
+	Editing Layer	編集中のレイヤー
+	Selected Layers	選択したレイヤー
+	Layers in Folder	フォルダー内のレイヤー
+	Reference Layers	参照レイヤー
+	Exclude	除外
+	Editing layer	編集中のレイヤー
+	Text layers	テキストレイヤー
+	Locked layers	ロックされたレイヤー
+	Layers the fill doesn't read	塗りつぶしが参照しないレイヤー
+	Close Gap	隙間閉じ
+	Area Scaling	領域拡縮
+	Grow the fill under the lines, or shrink it	塗りつぶしを線の下まで広げる、または縮める
+	To Darkest Pixel	最も濃いピクセルまで
+	Follow Adjacent Pixels	隣接ピクセルをたどる
+	White and Transparent	白と透明
+	Image Border	画像の端
+	The canvas edge closes gaps as a line does	キャンバスの端を線と同じように扱って隙間を閉じます
+	Fill Tool Options	塗りつぶしツールのオプション
+	Save as:	保存名：
+	Save Preset	プリセットを保存
+	Keep these two presets as one, listed with the others	この 2 つのプリセットを 1 つとして保存し、他と一緒に表示します
+	seconds	秒
+	Close gaps up to {px} px	{px} px までの隙間を閉じる
+	Grow the selection under the lines, or shrink it	選択範囲を線の下まで広げる、または縮める
+	Delete Second Mask	2 つ目のマスクを削除
+	Disable Second Mask	2 つ目のマスクを無効にする
+	Enable Second Mask	2 つ目のマスクを有効にする
+	Editing layer blocks the fill	編集中のレイヤーで塗りを止める
+	Paint on the layer being filled stops the fill at any tolerance, and the fill goes in behind it: draw over a gap to close it	塗りつぶすレイヤー上の描画が許容値に関係なく塗りを止め、塗りはその背面に入ります：隙間の上に描くと閉じられます
+	Undo widens Close Gap	取り消しで隙間閉じを広げる
+	Each Undo of a fill closes bigger gaps for the next click, until you pick another tool	塗りを取り消すたびに次のクリックでより大きな隙間を閉じます (別のツールを選ぶまで)
+	Close Gap widened to {px} px: click again to fill	隙間閉じを {px} px に広げました：もう一度クリックして塗りつぶします
+	Screentone…	スクリーントーン…
+	Satellites	サテライト
+	Enable	有効
+	Count:	個数:
+	Distance:	距離:
+	Stretch:	伸縮:
+	Distortion & Jitter	歪みとジッター
+	Aspect X:	アスペクト比 X:
+	Aspect Y:	アスペクト比 Y:
+	Row Offset:	行オフセット:
+	Merge:	つぶし:
+	Jitter Pos:	ジッター位置:
+	Jitter Size:	ジッターサイズ:
+	Midpoint:	中間点:
+	Start Size:	開始サイズ:
+	End Size:	終了サイズ:
+	Save as Pattern	パターンとして保存
+	Bake the live screentone layer into standard pixels while keeping its mask	マスクを保持したままライブスクリーントーンレイヤーを通常のピクセルに焼き込みます
+	Black Cutoff:	黒のカットオフ:
+	Brightness:	明るさ:
+	Contrast:	コントラスト:
+	Freeze Layer	レイヤーを固定
+	Line Thickness:	線の太さ:
+	Line Threshold:	線のしきい値:
+	Manga / Shading	マンガ / シェーディング
+	Opaque Paper	不透明な用紙
+	Pattern Name	パターン名
+	Preserve Lines	線を保持
+	Sheet / Pattern	シート / パターン
+	Tone Gamma:	トーンガンマ:
+	White Cutoff:	白のカットオフ:
+	Font Settings	フォント設定
+	No folder	フォルダーなし
+	+ New folder...	+ 新しいフォルダー...
+	Folder name	フォルダー名
+	New folder name	新しいフォルダー名
+	Favorite font	お気に入りフォント
+	Faux bold	疑似ボールド
+	Faux italic	疑似イタリック
+	Use standard font metrics and the baseline	メトリクスシステム：標準フォントメトリクスとベースライン
+	Use visual kerning and bubble centering	オプティカルシステム：視覚的カーニングと吹き出しの中央揃え
+	Leading is linked to size	行送りはサイズにリンクしています
+	Leading is not linked to size	行送りはサイズにリンクしていません
+	H-Scale (%)	横倍率 (%)
+	Edit preview text	プレビューテキストを編集
+	Leave empty for the automatic sample	空欄にすると自動サンプルになります
+	Preview unavailable	プレビューを利用できません
+	Duplicate this style	このスタイルを複製
+	Delete this style	このスタイルを削除
+	Bubble Contour	吹き出しの輪郭
+	No contour variants	輪郭バリエーションなし
+	~ SCurve	~ SCurve
+	＋ Add tail	＋ Add tail
+	＋ Create balloon on canvas	＋ Create balloon on canvas
+	＋ Fit balloon	＋ Fit balloon
+	⊘ None	⊘ None
+	⌒ Arc	⌒ Arc
+	▽ Wedge	▽ Wedge
+	◎ Double outline	◎ Double outline
+	◌ Thought	◌ Thought
+	☁️ Cloud	☁️ Cloud
+	✓ Text fits: {lines} lines, {size} pt	✓ Text fits: {lines} lines, {size} pt
+	✴️ Burst	✴️ Burst
+	⑂ Double	⑂ Double
+	◽ Rect	◽ Rect
+	⚠ Text does not fit — enlarge the balloon or reduce the type size	⚠ Text does not fit — enlarge the balloon or reduce the type size
+	⚡ Bake to SAI Linework	⚡ Bake to SAI Linework
+	⚡ Lightning	⚡ Lightning
+	⚪ Ellipse	⚪ Ellipse
+	Add a tail to the selected balloon	Add a tail to the selected balloon
+	Background colour	Background colour
+	Balloon body:	Balloon body:
+	Bubble radius:	Bubble radius:
+	Bumps:	Bumps:
+	Bundle:	Bundle:
+	Corner radius:	Corner radius:
+	Cusp bite:	Cusp bite:
+	Dialogue and fit:	Dialogue and fit:
+	Dialogue text…	Dialogue text…
+	Fit the shape to the text: the balloon grows when the line does not fit	Fit the shape to the text: the balloon grows when the line does not fit
+	Hand-drawn noise:	Hand-drawn noise:
+	Inner sharpness:	Inner sharpness:
+	Inward concavity:	Inward concavity:
+	Jitter:	Jitter:
+	Lobe height:	Lobe height:
+	Mouth width:	Mouth width:
+	Needle width:	Needle width:
+	Needles:	Needles:
+	Outer sharpness:	Outer sharpness:
+	Outline gap:	Outline gap:
+	Random jitter variation	Random jitter variation
+	Random ray variation	Random ray variation
+	Ray extension:	Ray extension:
+	Ray length:	Ray length:
+	Rays:	Rays:
+	Round the tips	Round the tips
+	Spikes:	Spikes:
+	Squircle:	Squircle:
+	Stroke and fill:	Stroke and fill:
+	Sub-harmonics:	Sub-harmonics:
+	Tail type:	Tail type:
+	Text area:	Text area:
+	Thought bubbles:	Thought bubbles:
+	Turn the balloon into an editable vector linework layer	Turn the balloon into an editable vector linework layer
+	Type size:	Type size:
+	Valley depth:	Valley depth:
+	💥 Spiky	💥 Spiky
+	🔄 Reset to the manga default	🔄 Reset to the manga default
+	🦔 Uniflash	🦔 Uniflash
+	Align:	配置:
+	Batch balloons from script (one line per balloon):	台本から一括作成 (1行につき1吹き出し):
+	Brush contrast:	ブラシコントラスト:
+	Brush preset:	ブラシプリセット:
+	Chamfer size:	面取りサイズ:
+	Corner scoop:	隅の凹み:
+	Dash duty:	破線の比率:
+	Dashes:	破線数:
+	Deep contour warp:	輪郭の深いゆがみ:
+	Default (Style Engine)	既定 (スタイルエンジン)
+	Direction:	文字組方向:
+	Dot count:	ドット数:
+	Dot randomness:	ドットの不規則さ:
+	Edge roughness:	縁の粗さ:
+	Enable underlay / shadow contour	下地・影輪郭を有効にする
+	Fill interior (Gloom mode)	内側を塗る (陰鬱モード)
+	Fit mode:	フィット方法:
+	Grain size:	粒子サイズ:
+	Grow balloon	吹き出しを拡大
+	Handwritten font	手書き風フォント
+	Haze spread:	ぼかし広がり:
+	Import a VectorBrushPreset JSON or grayscale PNG ribbon texture	VectorBrushPreset JSON またはグレースケール PNG リボンテクスチャをインポート
+	Inward needles	内向きのトゲ
+	Line 1\nLine 2!!	1行目\n2行目!!
+	Line style:	線のスタイル:
+	Noise scale:	ノイズ倍率:
+	Pencil roughness:	鉛筆の粗さ:
+	Pencil strands:	鉛筆の重ね線:
+	Pixel step:	ピクセル幅:
+	Shrink text to shape	枠に合わせて文字を縮小
+	Solid ring + spikes	実線リング＋トゲ
+	Sparkle count:	キラキラ数:
+	Sparkle randomness:	キラキラの不規則さ:
+	Sparkle size:	キラキラサイズ:
+	Underlay X offset:	下地 X オフセット:
+	Underlay Y offset:	下地 Y オフセット:
+	Underlay rectness:	下地の角張り:
+	Underlay scale:	下地スケール:
+	Uniflash mode:	ウニフラッシュ種別:
+	Vertical (Tategaki)	縦書き (Tategaki)
+	Voice and intonation:	声質と抑揚:
+	Voice intensity:	効果の強さ:
+	Workflow: Presets, Script & SVG	ワークフロー: プリセット・台本・SVG
+	━ Solid	━ 実線
+	◌ Whisper	◌ ささやき (破線)
+	◎ Double	◎ 二重線
+	★ Save current style to favorites	★ 現在のスタイルをお気に入りに保存
+	⚠ Overflow by height (+{px} px needed)	⚠ 高さがはみ出しています (+{px} px 必要)
+	⚠ Overflow by width (+{px} px needed)	⚠ 幅がはみ出しています (+{px} px 必要)
+	⚫ Stipple dots	⚫ 点描ドット
+	✏ Pencil stroke	✏ 鉛筆ストローク
+	✨ Sparkle / glitter	✨ キラキラ・グリッター
+	⬆ Import SVG contour	⬆ SVG輪郭をインポート
+	⬇ Export balloon SVG	⬇ 吹き出しSVGをエクスポート
+	＋ Create batch from script	＋ 台本から一括作成
+	＋ Import (.json/.png)	＋ インポート (.json/.png)
+	👻 Eerie	👻 不気味
+	👾 1-bit pixel	👾 1ビットピクセル
+	💢 Irritated	💢 イライラ
+	💬 Neutral	💬 通常
+	📢 Shout	📢 叫び
+	📻 Broadcast	📻 機械音・通信
+	🖌 Ukiyo-e brush	🖌 浮世絵ブラシ
+	🤫 Whisper	🤫 ささやき
+	🪪 Chamfer rect	🪪 面取り矩形

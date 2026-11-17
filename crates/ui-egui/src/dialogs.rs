@@ -344,6 +344,7 @@ fn command_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: 
 fn command_body_more(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: &mut Fields, id: egui::Id) -> Option<bool> {
     let mut outcome: Option<bool> = None;
     match d.kind {
+        _ if crate::gigapixel_ui::owns(fields) => crate::gigapixel_ui::body(app, ui, fields),
         _ if crate::variables_ui::owns(fields) => crate::variables_ui::body(app, ui, fields),
         _ if merge_channels_ui::owns(fields) => merge_channels_ui::body(ui, fields),
         _ if crate::file_ui::owns(fields) => crate::file_ui::body(app, ui, fields, d.id),
@@ -489,7 +490,10 @@ fn button_row(
     } else {
         let ok_label = ok_label(d);
         // Dialogs that need an input first (a preset name, a selection) grey OK out.
-        let can_ok = crate::crop_presets::can_confirm(app, fields) && crate::stack_dialog::can_confirm(fields) && merge_channels_ui::can_confirm(fields);
+        let can_ok = crate::crop_presets::can_confirm(app, fields)
+            && crate::stack_dialog::can_confirm(fields)
+            && merge_channels_ui::can_confirm(fields)
+            && crate::gigapixel_ui::can_confirm(fields);
         let ok = DialogButton::new(ButtonRole::Default, ok_label, 84.0).enabled(can_ok);
         // Photoshop: holding Alt turns Cancel into Reset (the dialog stays open).
         // Dialogs opt in via `dialog_alt_reset::supported` (per marker).
@@ -563,7 +567,9 @@ fn button_row(
 
 /// The default button's label: what OK means for this dialog.
 fn ok_label(d: &Dialog) -> &'static str {
-    if image_processor_ui::owns(&d.fields) {
+    if crate::gigapixel_ui::owns(&d.fields) {
+        crate::gigapixel_ui::ok_label(&d.fields)
+    } else if image_processor_ui::owns(&d.fields) {
         tl!("Run")
     } else if d.kind == DialogKind::NewDocument {
         tl!("Create")
@@ -952,6 +958,7 @@ const ROUTES: &[fn(&Fields) -> bool] = &[
     crate::stack_dialog::owns,
     crate::tool_reset::owns,
     crate::crop_presets::owns,
+    crate::gigapixel_ui::owns,
     crate::variables_ui::owns,
     crate::file_ui::owns,
     crate::new_guide_ui::owns,
@@ -1181,6 +1188,7 @@ fn confirm_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> 
 /// The rest of the command dialogs: files, colour, preferences and export, then any other command.
 fn confirm_command_more(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> {
     match d.kind {
+        _ if crate::gigapixel_ui::owns(&d.fields) => crate::gigapixel_ui::confirm(app, &d.fields),
         _ if merge_channels_ui::owns(&d.fields) => merge_channels_ui::confirm(app, &d.fields),
         _ if crate::analysis_ui::owns_delete_note(&d.fields) => crate::analysis_ui::confirm_delete_note(app, &d.fields),
         _ if crate::analysis_ui::owns_clear_notes(&d.fields) => crate::analysis_ui::confirm_clear_notes(app, &d.fields),
@@ -1355,6 +1363,7 @@ mod fit_image_range;
 #[cfg(test)]
 mod fit_image_range_tests;
 pub mod gallery_ui;
+pub mod gigapixel_ui;
 pub(crate) mod guide_edit;
 pub mod guide_layout_ui;
 pub mod history_options_ui;

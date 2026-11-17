@@ -1,0 +1,119 @@
+	File	फ़ाइल
+	Save	सहेजें
+	Paste	पेस्ट करें
+	Clear	साफ़ करें
+	Scale	आकार बदलें
+	Delete	हटाएँ
+	Apply	लागू करें
+	Enable	सक्षम करें
+	All Layers	सभी लेयर्स
+	Color	रंग
+	Options	विकल्प
+	OK	ठीक है
+	Cancel	रद्द करें
+	Done	संपन्न
+	Width:	चौड़ाई:
+	Size:	साइज़:
+	Angle:	एंगल:
+	Name:	नेम:
+	Auto	स्वचालित
+cameraRaw	Cancel	रद्द करें
+cameraRaw	Color	रंग
+cameraRaw	OK	ठीक है
+cameraRaw	Roundness	राउंडनेस
+	Roundness	राउंडनेस
+cameraRaw	Size	आकार
+	Size	आकार
+	New Layer	New Layer
+	Tolerance	Tolerance
+	Font Settings	फ़ॉन्ट सेटिंग्स
+	No folder	कोई फ़ोल्डर नहीं
+	+ New folder...	+ नया फ़ोल्डर...
+	Folder name	फ़ोल्डर का नाम
+	New folder name	नए फ़ोल्डर का नाम
+	Favorite font	पसंदीदा फ़ॉन्ट
+	Faux bold	नकली बोल्ड
+	Faux italic	नकली इटैलिक
+	Superscript	सुपरस्क्रिप्ट
+	Subscript	सबस्क्रिप्ट
+	Hanging Punctuation	लटकते विराम चिह्न
+	Use standard font metrics and the baseline	मीट्रिक सिस्टम: मानक फ़ॉन्ट मीट्रिक्स और बेसलाइन
+	Use visual kerning and bubble centering	ऑप्टिकल सिस्टम: दृश्य कर्निंग और बबल सेंटरिंग
+	Leading is linked to size	लीडिंग आकार से जुड़ी है
+	Leading is not linked to size	लीडिंग आकार से नहीं जुड़ी है
+	H-Scale (%)	H-स्केल (%)
+	Edit preview text	पूर्वावलोकन टेक्स्ट संपादित करें
+	Leave empty for the automatic sample	स्वचालित नमूने के लिए खाली छोड़ें
+	Preview unavailable	पूर्वावलोकन उपलब्ध नहीं
+	Duplicate this style	इस स्टाइल की प्रतिलिपि बनाएँ
+	Delete this style	यह स्टाइल हटाएँ
+	Folder	फ़ोल्डर
+	Style	स्टाइल
+	All Caps	सभी बड़े अक्षर
+	Small Caps	छोटे बड़े अक्षर
+	Underline	रेखांकित
+	Strikethrough	स्ट्राइकथ्रू
+	Anti-alias	एंटी-एलियास
+	None	कोई नहीं
+	Metrics	मेट्रिक्स
+	Optical	ऑप्टिकल
+	Leading	लीडिंग
+	Duplicate	प्रतिलिपि
+	~ SCurve	~ SCurve
+	＋ Add tail	＋ Add tail
+	＋ Create balloon on canvas	＋ Create balloon on canvas
+	＋ Fit balloon	＋ Fit balloon
+	⊘ None	⊘ None
+	⌒ Arc	⌒ Arc
+	▽ Wedge	▽ Wedge
+	◎ Double outline	◎ Double outline
+	◌ Thought	◌ Thought
+	☁️ Cloud	☁️ Cloud
+	✓ Text fits: {lines} lines, {size} pt	✓ Text fits: {lines} lines, {size} pt
+	✴️ Burst	✴️ Burst
+	⑂ Double	⑂ Double
+	◽ Rect	◽ Rect
+	⚠ Text does not fit — enlarge the balloon or reduce the type size	⚠ Text does not fit — enlarge the balloon or reduce the type size
+	⚡ Bake to SAI Linework	⚡ Bake to SAI Linework
+	⚡ Lightning	⚡ Lightning
+	⚪ Ellipse	⚪ Ellipse
+	Add a tail to the selected balloon	Add a tail to the selected balloon
+	Background colour	Background colour
+	Balloon body:	Balloon body:
+	Bubble radius:	Bubble radius:
+	Bumps:	Bumps:
+	Bundle:	Bundle:
+	Corner radius:	Corner radius:
+	Cusp bite:	Cusp bite:
+	Dialogue and fit:	Dialogue and fit:
+	Dialogue text…	Dialogue text…
+	Fit the shape to the text: the balloon grows when the line does not fit	Fit the shape to the text: the balloon grows when the line does not fit
+	Hand-drawn noise:	Hand-drawn noise:
+	Inner sharpness:	Inner sharpness:
+	Inward concavity:	Inward concavity:
+	Jitter:	Jitter:
+	Lobe height:	Lobe height:
+	Mouth width:	Mouth width:
+	Needle width:	Needle width:
+	Needles:	Needles:
+	Outer sharpness:	Outer sharpness:
+	Outline gap:	Outline gap:
+	Random jitter variation	Random jitter variation
+	Random ray variation	Random ray variation
+	Ray extension:	Ray extension:
+	Ray length:	Ray length:
+	Rays:	Rays:
+	Round the tips	Round the tips
+	Spikes:	Spikes:
+	Squircle:	Squircle:
+	Stroke and fill:	Stroke and fill:
+	Sub-harmonics:	Sub-harmonics:
+	Tail type:	Tail type:
+	Text area:	Text area:
+	Thought bubbles:	Thought bubbles:
+	Turn the balloon into an editable vector linework layer	Turn the balloon into an editable vector linework layer
+	Type size:	Type size:
+	Valley depth:	Valley depth:
+	💥 Spiky	💥 Spiky
+	🔄 Reset to the manga default	🔄 Reset to the manga default
+	🦔 Uniflash	🦔 Uniflash

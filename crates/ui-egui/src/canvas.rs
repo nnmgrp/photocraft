@@ -120,6 +120,8 @@ pub use tabs::{TabStrip, document_area, extra_windows};
 use tabs::{dots, paint_dots};
 #[cfg(test)]
 use tabs::{main_canvas_document, move_target_after_filter};
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use textures::canvas_texture_options;
 #[cfg(test)]
 pub(crate) use textures::detail_plan;
 pub(crate) use textures::visible_doc_rect;
@@ -1250,7 +1252,7 @@ fn handle_canvas_tool_stroke(
     // and a click (or a long press that never moved) just ends it.
     let physical_right = app.services.right_button_down.as_ref().is_some_and(|f| f());
     let right_down = ui.input(|i| i.pointer.secondary_down()) || physical_right;
-    if strokes_live(tool)
+    if (strokes_live(tool) || crate::fill_tool_ui::acts_on_press(app, tool))
         && !right_down
         && !input.menu_dismiss_press
         && app.drag.is_none()
@@ -1554,6 +1556,17 @@ fn handle_canvas_tool_clicks(
         let d = xf.to_doc(p);
         tool_event(app, ToolEvent::Move { x: d[0], y: d[1], pressure: 1.0 }, mods);
     }
+    // VectorCurve: track free pointer hover for rubber-band preview and Shift segment insertion.
+    if tool == Tool::VectorCurve
+        && !(buttons.started || buttons.dragged || buttons.stopped)
+        && response.hovered()
+        && app.drag.is_none()
+        && app.ui.vector_curve.as_ref().is_none_or(|vc| vc.layer_drag.is_none())
+        && let Some(p) = response.hover_pos().filter(|p| rect.contains(*p))
+    {
+        let d = xf.to_doc(p);
+        crate::vector_ui::vector_curve_hover(app, d[0], d[1]);
+    }
     if buttons.clicked
         && let Some(p) = response.interact_pointer_pos()
     {
@@ -1595,6 +1608,7 @@ fn handle_canvas_tool_clicks(
                 Tool::MagneticLasso if response.double_clicked() || response.triple_clicked() => crate::magnetic_lasso_ui::close(app, mods.alt),
                 // The first click placed (or grabbed) the point; the second toggles it.
                 Tool::CurvaturePen if response.double_clicked() => crate::vector_ui::curvature_toggle(app, d[0], d[1]),
+                Tool::VectorCurve if response.double_clicked() => crate::vector_ui::vector_curve_commit(app),
                 // Double-clicking a guide opens Preferences › Guides, Grid & Slices, as in Photoshop.
                 Tool::Move if response.double_clicked() && crate::rulers::guide_at(app, d[0], d[1]).is_some() => {
                     if let Err(e) = crate::menus::invoke(app, ctx, "edit.preferences.guidesGridAndSlices", json!({})) {
@@ -1731,6 +1745,7 @@ fn paint_primary_overlays(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut
     painter.extend(ants);
     // The pending crop frame shows on its own document only, not on the other tiles (#1918).
     let foreign_crop = if app.session.active_index() == Some(idx) { None } else { app.ui.crop_rect.take() };
+    crate::manga_seam::screentone_refresh_preview(app, ctx, xf, input.output);
     draw_drag_preview(app, painter, xf);
     if app.session.active_index() == Some(idx) {
         crate::move_box::draw(app, painter, xf);
@@ -1769,6 +1784,8 @@ fn paint_primary_overlays(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut
     crate::perspective_crop_ui::draw_overlay(app, painter, xf);
     crate::retouch_ui::draw_source_marker(app, painter, xf);
     crate::vector_ui::draw_overlay(app, painter, xf, doc);
+    crate::vector_ui::draw_vector_curve_overlay(app, painter, xf);
+    crate::manga_seam::draw_canvas_overlays(app, painter, xf);
     crate::symmetry_ui::draw(app, painter, xf);
     crate::analysis_ui::draw_overlay(app, painter, xf);
     crate::gradient_ui::draw_overlay(app, painter, xf);
@@ -1897,6 +1914,8 @@ fn draw_canvas_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &C
             let toward = xf.to_screen((d[0] + k[0] * 16.0) as f32, (d[1] + k[1] * 16.0) as f32) - p;
             crate::crop_ui::draw_turn_cursor(ctx, p, toward);
         }
+    } else if let Some(c) = response.hover_pos().and_then(|p| crate::manga_seam::canvas_hover_cursor(app, xf, p)) {
+        ui.ctx().set_cursor_icon(c);
     } else if let Some(p) = response.hover_pos()
         && let Some(zone) =
             crate::perspective_crop_ui::cursor(app, xf.to_doc(p)).filter(|z| tool == Tool::PerspectiveCrop && *z != crate::perspective_crop_ui::Zone::Outside)
@@ -2108,6 +2127,7 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
                 paint_bucket_cursor(app, painter, p)
             }
         }
+        Tool::Fill => crate::fill_tool_ui::cursor(app, ui.ctx(), painter, p, xf.zoom, precise_other_cursor(app)),
         // Over the first anchor, the close-path pointer (#4596), before the pens' own cursors.
         Tool::Pen | Tool::CurvaturePen
             if {
@@ -2363,6 +2383,7 @@ fn update_polygon_camera(app: &mut PhotocraftApp, ctx: &egui::Context, (idx, pri
 
 pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect: Rect, mut view: View, primary: bool) -> View {
     let ctx = ui.ctx().clone();
+    crate::manga_seam::screentone_escape(app, &ctx);
     // The Frame tool starts transforms from pointer events, which carry no context; the options
     // bar that also records it can be hidden.
     if primary {

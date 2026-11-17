@@ -138,7 +138,7 @@ pub fn tool_modes(tool: Tool) -> Option<Vec<Option<BlendMode>>> {
             modes.insert(at, None);
             modes
         }
-        Tool::Gradient | Tool::CloneStamp | Tool::PatternStamp | Tool::HistoryBrush => layer(),
+        Tool::Gradient | Tool::Fill | Tool::CloneStamp | Tool::PatternStamp | Tool::HistoryBrush => layer(),
         Tool::Healing => HEALING_MODES.iter().copied().map(Some).collect(),
         _ => return None,
     })
@@ -182,6 +182,7 @@ pub fn tool_mode(app: &mut PhotocraftApp) -> Option<BlendMode> {
         Tool::Pencil if o.pencil_clear => None,
         Tool::PaintBucket if o.bucket_clear => None,
         Tool::PaintBucket => Some(o.bucket_blend_mode),
+        Tool::Fill => Some(o.fill_tool.current().mode),
         Tool::Gradient => Some(o.gradient_blend_mode),
         _ => {
             crate::paint_mouse::sync_tool_brush(app);
@@ -203,6 +204,12 @@ fn set_tool_mode(app: &mut PhotocraftApp, mode: Option<BlendMode>) {
             app.ui.tool_options.bucket_clear = mode.is_none();
             if let Some(m) = mode {
                 app.ui.tool_options.bucket_blend_mode = m;
+            }
+            return;
+        }
+        Tool::Fill => {
+            if let Some(m) = mode {
+                app.ui.tool_options.fill_tool.current_mut().mode = m;
             }
             return;
         }

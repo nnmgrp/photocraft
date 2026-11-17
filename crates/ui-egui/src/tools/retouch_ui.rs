@@ -312,6 +312,27 @@ fn remove_params(o: &crate::state::ToolOptions, composite: bool) -> Value {
     json!({"sampleAllLayers": o.sample_all.remove, "newLayer": o.remove_new_layer && composite})
 }
 
+/// Remove what is currently selected via Content-Aware Fill (`edit.contentAwareFill`),
+/// invoked from the Canvas Capsule or Enter with a selection. Desktop-only (`cfg!(wasm32)` skips).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn remove_selection(app: &mut PhotocraftApp) -> bool {
+    if cfg!(target_arch = "wasm32") || app.session.active().is_none_or(|st| st.doc.selection.is_none()) {
+        return false;
+    }
+    let composite = crate::canvas::paint_target(app).as_str() == Some("pixels");
+    let p = remove_params(&app.ui.tool_options, composite);
+    let args = json!({
+        "sampleAllLayers": p["sampleAllLayers"],
+        "output": if p["newLayer"].as_bool() == Some(true) { "new" } else { "current" },
+    });
+    app.ui.status.clear();
+    if let Err(e) = app.run("edit.contentAwareFill", args) {
+        app.ui.status = e;
+        app.ui.status_error = true;
+    }
+    true
+}
+
 /// The selection a queued Remove stroke was drawn against. A later selection must not
 /// redirect the queued strokes to a different layer or colour component.
 #[derive(Clone, PartialEq)]

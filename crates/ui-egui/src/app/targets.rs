@@ -25,7 +25,7 @@ impl PhotocraftApp {
             // alone, whether it is linked or not (#12283).
             "vectorMask"
         } else if self.layer_mask_targeted() {
-            "mask"
+            self.pixel_mask_target_key()
         } else {
             return params;
         };
@@ -36,6 +36,15 @@ impl PhotocraftApp {
             }
             _ => serde_json::json!({ "target": target }),
         }
+    }
+
+    /// The `"target"` naming the targeted pixel mask: `"secondMask"` when the Layers panel
+    /// targets the active layer's second pixel mask (and it is not viewing the first mask alone).
+    pub(crate) fn pixel_mask_target_key(&self) -> &'static str {
+        let Some(st) = self.session.active() else { return "mask" };
+        let viewing = photocraft_engine::mask_view_cmds::current(st).is_some_and(|v| !v.filter);
+        let has_second = st.active_layer.and_then(|id| st.doc.layer(id)).is_some_and(|l| l.second_mask.is_some());
+        if self.ui.mask_target && self.ui.second_mask_target && !viewing && has_second { "secondMask" } else { "mask" }
     }
 
     /// The Layers panel targets the active smart object's filter mask (FILE-215-3), and no alpha
@@ -151,20 +160,24 @@ impl PhotocraftApp {
                 Some(v) if v.filter => {
                     self.ui.filter_mask_target = Some(v.layer.0);
                     self.ui.mask_target = false;
+                    self.ui.second_mask_target = false;
                     self.ui.vector_mask_target = false;
                 }
                 Some(_) => {
                     self.ui.mask_target = true;
+                    self.ui.second_mask_target = false;
                     self.ui.vector_mask_target = false;
                     self.ui.filter_mask_target = None;
                 }
                 None if channel == ChannelTarget::LayerMask => {
                     self.ui.mask_target = true;
+                    self.ui.second_mask_target = false;
                     self.ui.vector_mask_target = false;
                 }
                 None if channel == ChannelTarget::VectorMask => {
                     self.ui.vector_mask_target = true;
                     self.ui.mask_target = false;
+                    self.ui.second_mask_target = false;
                 }
                 None => {}
             }
@@ -176,6 +189,9 @@ impl PhotocraftApp {
             }
             if self.ui.mask_target && st.active_layer.and_then(|id| st.doc.layer(id)).is_none_or(|l| l.mask.is_none()) {
                 self.ui.mask_target = false;
+            }
+            if self.ui.second_mask_target && (!self.ui.mask_target || st.active_layer.and_then(|id| st.doc.layer(id)).is_none_or(|l| l.second_mask.is_none())) {
+                self.ui.second_mask_target = false;
             }
             if !self.ui.mask_target && st.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::LayerMask {
                 st.channel_view.target = photocraft_engine::channel_cmds::ChannelTarget::Composite;

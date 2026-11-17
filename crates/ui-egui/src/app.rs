@@ -231,6 +231,11 @@ impl PhotocraftApp {
             min_frame_ms: None,
             last_frame_start_ms: 0.0,
             jobs: Default::default(),
+            fill_drag: None,
+            fill_gap_retry: None,
+            gigapixel: None,
+            timelapse: Default::default(),
+            manga: Default::default(),
             #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
             live_tokens: theme::live::LiveTokens::from_env(),
         };

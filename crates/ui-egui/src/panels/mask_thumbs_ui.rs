@@ -23,11 +23,14 @@ pub const THUMB_LAYER: u8 = 0;
 pub const THUMB_MASK: u8 = 1;
 pub const THUMB_VECTOR: u8 = 2;
 pub const THUMB_SMART_MASK: u8 = 3;
+pub const THUMB_SECOND: u8 = 4;
 
 /// Which of a layer's masks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MaskKind {
     Pixel,
+    /// PhotoCraft's second pixel mask (`Layer::second_mask`).
+    Second,
     Vector,
 }
 
@@ -36,12 +39,14 @@ impl MaskKind {
     fn command(self) -> &'static str {
         match self {
             MaskKind::Pixel => "layer.layerMask",
+            MaskKind::Second => "layer.secondMask",
             MaskKind::Vector => "layer.vectorMask",
         }
     }
     fn label(self) -> &'static str {
         match self {
             MaskKind::Pixel => "layer mask",
+            MaskKind::Second => "second mask",
             MaskKind::Vector => "vector mask",
         }
     }
@@ -52,9 +57,12 @@ pub fn masks(l: &Layer) -> Vec<(MaskKind, bool, bool)> {
     if l.frame.is_some() {
         return Vec::new();
     }
-    let mut v = Vec::with_capacity(2);
+    let mut v = Vec::with_capacity(3);
     if let Some(m) = &l.mask {
         v.push((MaskKind::Pixel, m.enabled, m.linked));
+    }
+    if let Some(m) = &l.second_mask {
+        v.push((MaskKind::Second, m.enabled, m.linked));
     }
     if let Some(m) = &l.vector_mask {
         v.push((MaskKind::Vector, m.enabled, m.linked));
@@ -115,7 +123,7 @@ pub fn paint(
     for (kind, enabled, linked) in masks(l) {
         // The chain sits in the gap before the thumbnail, centred between the two.
         let chain = Rect::from_min_max(pos2(*x - 4.0, cy - ts / 2.0), pos2(*x - 4.0 + CHAIN_W, cy + ts / 2.0));
-        let resp = ui.interact(chain, ui.scope_id().with(("mask-chain", l.id.0, kind == MaskKind::Vector)), Sense::click());
+        let resp = ui.interact(chain, ui.scope_id().with(("mask-chain", l.id.0, kind as u8)), Sense::click());
         if linked {
             paint_chain(painter, chain.center(), if resp.hovered() { t.text } else { t.icon });
         } else if resp.hovered() {
@@ -137,6 +145,7 @@ pub fn paint(
         if ui.is_rect_visible(r) {
             let tex = match kind {
                 MaskKind::Pixel => l.mask.as_ref().map(|m| app.mask_thumb(ctx, doc, l.id, m)),
+                MaskKind::Second => l.second_mask.as_ref().map(|m| app.mask_thumb_kind(ctx, doc, l.id, m, THUMB_SECOND)),
                 MaskKind::Vector => l.vector_mask.as_ref().map(|m| app.vector_mask_thumb(ctx, doc, l.id, m)),
             };
             if let Some(tex) = tex {
@@ -219,6 +228,7 @@ pub fn click_command(l: &Layer, kind: MaskKind, m: egui::Modifiers) -> Option<(S
 pub fn load_params(l: &Layer, kind: MaskKind, m: egui::Modifiers) -> Value {
     let channel = match kind {
         MaskKind::Pixel => "mask",
+        MaskKind::Second => "secondMask",
         MaskKind::Vector => "vectorMask",
     };
     json!({"channel": channel, "layer": l.id.0, "operation": crate::channels_panel::load_operation(m)})

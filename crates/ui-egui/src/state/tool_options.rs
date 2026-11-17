@@ -36,6 +36,12 @@ pub struct ToolOptions {
     pub bucket_blend_mode: photocraft_color::BlendMode,
     /// Paint Bucket › Mode: Clear, which erases the filled area (see `brush_clear`).
     pub bucket_clear: bool,
+    /// Fill tool (PaintTool SAI / CSP): Click, Enclose & Fill, Paint Unfilled Area.
+    #[serde(default)]
+    pub fill_tool: crate::fill_tool_ui::FillToolOptions,
+    /// Magic Wand Close Gap, Area Scaling and Refer options (Fill tool parity).
+    #[serde(default)]
+    pub wand_fill: crate::fill_tool_ui::WandFill,
     /// Type tool: family, style name, size (pt), anti-aliasing and paragraph alignment.
     pub type_font: String,
     pub type_style: String,
@@ -144,6 +150,38 @@ pub struct ToolOptions {
     pub rect_ratio_height: f32,
     /// Rectangle tool › gear › From Center: every drag draws from its centre. Off to start.
     pub rect_from_center: bool,
+    #[serde(default = "default_balloon_mode")]
+    pub balloon_mode: String,
+    #[serde(default = "default_balloon_preset")]
+    pub balloon_preset: String,
+    #[serde(default = "default_balloon_mouth")]
+    pub balloon_mouth: f32,
+    #[serde(default = "default_balloon_bumps")]
+    pub balloon_bumps: u32,
+    #[serde(default = "default_balloon_amplitude")]
+    pub balloon_amplitude: f32,
+    #[serde(default = "default_balloon_jitter")]
+    pub balloon_jitter: f32,
+    #[serde(default = "default_balloon_spikes")]
+    pub balloon_spikes: u32,
+    #[serde(default = "default_balloon_length")]
+    pub balloon_length: f32,
+    #[serde(default)]
+    pub balloon_smooth: bool,
+    #[serde(default)]
+    pub balloon_inward: bool,
+    #[serde(default = "default_balloon_seed")]
+    pub balloon_seed: u32,
+    #[serde(default = "default_vector_curve_width")]
+    pub vector_curve_width: f32,
+    #[serde(default = "default_vector_curve_tapered")]
+    pub vector_curve_tapered: bool,
+    #[serde(default = "default_vector_curve_closed")]
+    pub vector_curve_closed: bool,
+    #[serde(default = "default_vector_curve_min_ratio")]
+    pub vector_curve_min_ratio: f32,
+    #[serde(default = "default_vector_curve_tension")]
+    pub vector_curve_tension: f32,
     /// Freeform Pen › Curve Fit: how far (px) the fitted path may stray from the pointer trace.
     #[serde(default = "default_curve_fit")]
     pub curve_fit: f32,
@@ -400,6 +438,62 @@ fn one_u32() -> u32 {
     1
 }
 
+fn default_balloon_mode() -> String {
+    "tail".into()
+}
+
+fn default_balloon_preset() -> String {
+    "wedge".into()
+}
+
+fn default_balloon_mouth() -> f32 {
+    20.0
+}
+
+fn default_balloon_bumps() -> u32 {
+    9
+}
+
+fn default_balloon_amplitude() -> f32 {
+    0.18
+}
+
+fn default_balloon_jitter() -> f32 {
+    0.35
+}
+
+fn default_balloon_spikes() -> u32 {
+    12
+}
+
+fn default_balloon_length() -> f32 {
+    0.45
+}
+
+fn default_balloon_seed() -> u32 {
+    1
+}
+
+fn default_vector_curve_width() -> f32 {
+    8.0
+}
+
+fn default_vector_curve_tapered() -> bool {
+    true
+}
+
+fn default_vector_curve_closed() -> bool {
+    false
+}
+
+fn default_vector_curve_min_ratio() -> f32 {
+    0.0
+}
+
+fn default_vector_curve_tension() -> f32 {
+    0.65
+}
+
 fn default_eyedropper_sample() -> String {
     "all".into()
 }
@@ -490,6 +584,8 @@ impl Default for ToolOptions {
             bucket_fill_pattern: false,
             bucket_blend_mode: photocraft_color::BlendMode::Normal,
             bucket_clear: false,
+            fill_tool: Default::default(),
+            wand_fill: Default::default(),
             type_font: "Inter".into(),
             type_style: "Regular".into(),
             type_size: 50.0,
@@ -547,6 +643,22 @@ impl Default for ToolOptions {
             rect_ratio_width: 1.0,
             rect_ratio_height: 1.0,
             rect_from_center: false,
+            balloon_mode: default_balloon_mode(),
+            balloon_preset: default_balloon_preset(),
+            balloon_mouth: default_balloon_mouth(),
+            balloon_bumps: default_balloon_bumps(),
+            balloon_amplitude: default_balloon_amplitude(),
+            balloon_jitter: default_balloon_jitter(),
+            balloon_spikes: default_balloon_spikes(),
+            balloon_length: default_balloon_length(),
+            balloon_smooth: false,
+            balloon_inward: false,
+            balloon_seed: default_balloon_seed(),
+            vector_curve_width: default_vector_curve_width(),
+            vector_curve_tapered: default_vector_curve_tapered(),
+            vector_curve_closed: default_vector_curve_closed(),
+            vector_curve_min_ratio: default_vector_curve_min_ratio(),
+            vector_curve_tension: default_vector_curve_tension(),
             curve_fit: default_curve_fit(),
             pen_auto_add_delete: true,
             pen_rubber_band: false,

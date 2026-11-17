@@ -839,7 +839,7 @@ pub fn paint_target(app: &PhotocraftApp) -> serde_json::Value {
     // Viewing the mask (⌥-click its thumbnail, #196) paints the mask.
     let viewing = photocraft_engine::mask_view_cmds::current(st).is_some_and(|v| !v.filter);
     let mask = app.ui.mask_target || viewing || crate::adjustment_layer_active(st);
-    json!(if mask && has_mask { "mask" } else { "pixels" })
+    json!(if mask && has_mask { app.pixel_mask_target_key() } else { "pixels" })
 }
 
 /// Colour rows can remain selected behind a viewed mask; restrictions follow what is edited.

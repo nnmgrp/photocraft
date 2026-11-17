@@ -1,0 +1,372 @@
+	File	Plik
+	Left	Lewa
+	Save	Zapisz
+	Folder	Folder
+	Paste	Wklej
+	Clear	Wyczyść
+	Search…	Szukaj…
+	Scale	Skaluj
+	Delete	Usuń
+	Reverse	Odwróć kolejność
+	Align	Wyrównaj
+	All Layers	Wszystkie warstwy
+	Horizontal	Poziomo
+	None	Brak
+	Noise	Szum
+	Video	Wideo
+	Square	Kwadratowe
+	Extras	Dodatki
+	Color	Kolor
+	Options	Opcje
+	Screentones	Rastry
+	Manga Balloons	Dymki mangowe
+	Balloons	Dymki
+	SAI Linework	Lineart SAI
+	Linework	Lineart
+	Apply	Zastosuj
+	Auto	Automatycznie
+	All Caps	Wszystkie wersaliki
+	Angle	Kąt
+	Anti-alias	Wygładzanie krawędzi
+	Background	Tło
+	Bend:	Zgięcie:
+	Automatic	Automatycznie
+	Cancel	Anuluj
+	Center	Środek
+	Contiguous	Sąsiadujące
+	Custom	Niestandardowy
+	Default	Domyślne
+	Density	Gęstość
+	Density:	Gęstość:
+	Done	Gotowe
+	Dots	Kropki
+	Fill:	Wypełnienie:
+	Foreground	Pierwszy plan
+	Height	Wysokość
+	Leading	Interlinia
+	Metrics	Metryczne
+	Mode:	Tryb:
+	Name:	Nazwa:
+	Normal	Normalny
+	OK	OK
+	Opacity	Krycie
+	Optical	Optyczne
+	Preset	Ustawienie wstępne
+	Preset:	Ustawienie wstępne:
+	Preview	Podgląd
+	Roundness	Zaokrąglenie
+	Shape:	Kształt:
+	Size	Rozmiar
+	Size:	Rozmiar:
+	Small Caps	Kapitaliki
+	Strikethrough	Przekreślenie
+	Style	Styl
+	Tolerance	Tolerancja
+	Transparent	Przezroczyste
+	Type:	Typ:
+	Underline	Podkreślenie
+	White	Biały
+	Width	Szerokość
+	Width:	Szerokość:
+	name	nazwa
+	Diamond	Romb
+	Linear	Liniowy
+	Radial	Promienisty
+	Lines	Linie
+	Angle:	Kąt:
+	Gradient	Gradient
+	Superscript	Indeks górny
+	Subscript	Indeks dolny
+	Hanging Punctuation	Wiszące znaki interpunkcyjne
+	Justify	Wyjustuj
+	High	Wysoka
+	Low	Niska
+	Choose…	Wybierz…
+	Settings	Ustawienia
+	Result	Wynik
+	Duplicate	Duplikuj
+cameraRaw	Color	Kolor
+	Length	Długość
+	Seed	Ziarno losowania
+	Smoothness	Gładkość
+	Pattern Type	Typ wzoru
+	New Layer	Nowa warstwa
+	Circle	Koło
+	Crosshatch	Kreskowanie krzyżowe
+	Hearts	Serca
+	Hexagon	Sześciokąt
+	Random	Losowy
+	Stars	Gwiazdy
+	Round	Okrągłe
+	No document open	Brak otwartego dokumentu
+	Button Mode	Tryb przycisku
+	Topaz Gigapixel AI…	Topaz Gigapixel AI…
+	Opened in Topaz Gigapixel AI: export the image there to bring it back	Otwarto w Topaz Gigapixel AI: wyeksportuj tam obraz, aby wrócił tutaj
+	Stopped waiting for Topaz Gigapixel AI	Przestano czekać na Topaz Gigapixel AI
+	Topaz Gigapixel AI's image could not be applied: {error}	Nie można zastosować obrazu z Topaz Gigapixel AI: {error}
+	Topaz Gigapixel AI: upscaled {scale}× to {w} × {h} px (new layer)	Topaz Gigapixel AI: powiększono {scale}× do {w} × {h} px (nowa warstwa)
+	Waiting for Topaz Gigapixel AI: export the upscaled image there to bring it back.	Oczekiwanie na Topaz Gigapixel AI: wyeksportuj tam powiększony obraz, aby wrócił tutaj.
+	Model:	Model:
+	There is no such Topaz Gigapixel preset	Nie ma takiego ustawienia Topaz Gigapixel
+	Saved Topaz Gigapixel preset “{name}”	Zapisano ustawienie Topaz Gigapixel „{name}”
+	New Preset	Nowe ustawienie
+	Upscale:	Powiększanie:
+	With these settings	Z tymi ustawieniami
+	With two presets	Dwoma ustawieniami
+	Save two presets with their own settings first; then this one can run them together.	Najpierw zapisz dwa ustawienia z własnymi parametrami; to ustawienie uruchomi je razem.
+	First:	Najpierw:
+	Then:	Następnie:
+	Results:	Wyniki:
+	One after the other	Jedno po drugim
+	Each on its own layer	Każdy na osobnej warstwie
+	Both presets upscale the image; each result becomes a layer, to compare or blend.	Oba ustawienia powiększają obraz; każdy wynik staje się warstwą do porównania lub zmieszania.
+	The second preset upscales the first one's result.	Drugie ustawienie powiększa wynik pierwszego.
+	Run a saved preset from File › Automate › Topaz Gigapixel Presets.	Zapisane ustawienie uruchomisz z menu Plik › Automatyzacja › Ustawienia Topaz Gigapixel.
+	Auto lets Gigapixel choose.	Automatycznie zostawia wybór Gigapixelowi.
+	Choose a folder for your timelapse recordings	Wybierz folder na nagrania timelapse
+	Timelapse	Timelapse
+	Auto record	Automatyczne nagrywanie
+	Recording	Nagrywanie
+	Click to pause	Kliknij, aby wstrzymać
+	Start recording	Rozpocznij nagrywanie
+	Reference layer	Warstwa referencyjna
+	Recorded	Nagrywana
+	{count} of {total} not recorded	{count} z {total} nienagrywane
+	Reference	Referencyjna
+	Play video	Odtwórz wideo
+	Show in folder	Pokaż w folderze
+	Advanced settings	Ustawienia zaawansowane
+	Flash before the final image	Błysk przed obrazem końcowym
+	Slow down at the end	Zwolnij na końcu
+	Remove flicker	Usuń migotanie
+	Remove frames with undo	Usuwaj klatki przy cofaniu
+	Makes the MP4. Automatic looks next to PhotoCraft, then on PATH.	Tworzy plik MP4. Automatycznie szuka obok PhotoCraft, potem w PATH.
+	Choose the ffmpeg program on this computer	Wybierz program ffmpeg na tym komputerze
+	Opening files isn't available here	Otwieranie plików nie jest tu dostępne
+@plural	{n} frame|{n} frames	{n} klatka|{n} klatki|{n} klatek
+	Library	Biblioteka
+	Refresh	Odśwież
+	Recordings will be listed here once you've chosen a folder.	Nagrania pojawią się tutaj po wybraniu folderu.
+	No recordings yet.	Brak nagrań.
+	Open folder	Otwórz folder
+	Delete frames	Usuń klatki
+	Delete folder	Usuń folder
+	Pause the recording first	Najpierw wstrzymaj nagrywanie
+	REC	REC
+	EXPORTED	WYEKSPORTOWANE
+	NOT EXPORTED	NIEWYEKSPORTOWANE
+	{time} work	{time} pracy
+	“{name}” hasn't been exported yet. If you delete its {frames}, you can't make a video of it anymore. This can't be undone.	Nagranie „{name}” nie zostało jeszcze wyeksportowane. Jeśli usuniesz jego klatki ({frames}), nie zrobisz już z niego wideo. Tej operacji nie można cofnąć.
+	Delete the {frames} of “{name}”?	Usunąć klatki nagrania „{name}” ({frames})?
+	You've recorded more since the last export, and that part isn't in the video.	Od ostatniego eksportu nagrano więcej i tej części nie ma w wideo.
+	Your videos and the work time are kept. This can't be undone.	Twoje wideo i czas pracy zostaną zachowane. Tej operacji nie można cofnąć.
+	Delete “{name}” and its folder? It's removed from the library, along with its work time. Videos you exported stay where you saved them. This can't be undone.	Usunąć nagranie „{name}” i jego folder? Zniknie z biblioteki razem z czasem pracy. Wyeksportowane wideo zostanie tam, gdzie je zapisano. Tej operacji nie można cofnąć.
+	Frames deleted.	Klatki usunięte.
+	Deleted “{name}”. Its folder holds other files, so it was kept.	Usunięto nagranie „{name}”. Folder zawiera inne pliki, więc został zachowany.
+	Deleted “{name}”.	Usunięto nagranie „{name}”.
+@plural	{n} recording|{n} recordings	{n} nagranie|{n} nagrania|{n} nagrań
+	No upscale has come back from Topaz Gigapixel AI yet	Z Topaz Gigapixel AI nie wróciło jeszcze żadne powiększenie
+	Topaz Gigapixel AI: upscaled {scale}× to {w} × {h} px (new layer). Keep these settings with Topaz Gigapixel Presets › Save Preset from Last Upscale	Topaz Gigapixel AI: powiększono {scale}× do {w} × {h} px (nowa warstwa). Zachowaj te ustawienia: Ustawienia Topaz Gigapixel › Zapisz ustawienie z ostatniego powiększenia
+	Saved {name} ({seconds} video).	Zapisano {name} (wideo {seconds}).
+	Export failed: {error}	Eksport nie powiódł się: {error}
+	Export cancelled.	Anulowano eksport.
+	just now	przed chwilą
+	{n} min ago	{n} min temu
+	{n} h ago	{n} godz. temu
+	yesterday	wczoraj
+	{n} days ago	{n} dni temu
+	Smaller files and the quickest capturing. Fine for quick sketches and previews.	Mniejsze pliki i najszybsze przechwytywanie. Wystarczy do szybkich szkiców i podglądów.
+	Sharper video for big screens. Uses about twice the disk space.	Ostrzejsze wideo na duże ekrany. Zajmuje około dwa razy więcej miejsca na dysku.
+	Full-HD video, good for social media. Recommended.	Wideo Full HD, dobre do mediów społecznościowych. Zalecane.
+	idle	bezczynny
+	Record	Nagrywanie
+	Paused	Wstrzymano
+	Click to resume recording	Kliknij, aby wznowić nagrywanie
+	Open a document to record it.	Otwórz dokument, aby go nagrywać.
+	You'll be asked where to save recordings.	Zostaniesz zapytany, gdzie zapisywać nagrania.
+	Export again	Eksportuj ponownie
+	Export video	Eksportuj wideo
+	Show the export results	Pokaż wyniki eksportu
+	Hide the export results	Ukryj wyniki eksportu
+	≈ {seconds} video from {frames}.	≈ {seconds} wideo z {frames}.
+	Confirm	Potwierdź
+	Cancel export	Anuluj eksport
+	Frames	Klatki
+	Timer	Czas
+	On disk	Na dysku
+	Hide the live preview	Ukryj podgląd na żywo
+	Show the newest frame	Pokaż najnowszą klatkę
+	No frames yet — just start drawing	Jeszcze brak klatek — po prostu zacznij rysować
+	No frames yet	Jeszcze brak klatek
+	No layer selected	Nie zaznaczono warstwy
+	{n} layers selected	Zaznaczone warstwy: {n}
+	Not recorded	Nienagrywana
+	A reference layer works like a normal layer, but won't show up in the timelapse.	Warstwa referencyjna działa jak zwykła warstwa, ale nie pojawia się w timelapse.
+	Back	Wstecz
+	Export settings	Ustawienia eksportu
+	Make video with	Utwórz wideo za pomocą
+	Bars colour	Kolor pasów
+	Bars fill the empty space when the canvas size changed during recording.	Pasy wypełniają puste miejsce, gdy rozmiar obszaru roboczego zmienił się podczas nagrywania.
+	Show finished drawing first	Najpierw gotowy rysunek
+	Hold final image	Przytrzymaj obraz końcowy
+	Show work-time counter	Pokaż licznik czasu pracy
+	Record something in this document to see how long the video will be.	Nagraj coś w tym dokumencie, aby zobaczyć długość wideo.
+	≈ {seconds} video	≈ {seconds} wideo
+	{n} recorded frames	Nagrane klatki: {n}
+	Auto shows every frame once (at least 5 s, at most 1 min).	Auto pokazuje każdą klatkę raz (co najmniej 5 s, najwyżej 1 min).
+	The canvas size changed during recording; earlier frames are fitted inside the final size.	Rozmiar obszaru roboczego zmienił się podczas nagrywania; wcześniejsze klatki są dopasowywane do rozmiaru końcowego.
+	Remove flicker leaves out frames that flash in and out (a layer hidden for a moment, a stroke undone right away), so the video can be a bit shorter.	Usuwanie migotania pomija klatki, które tylko mignęły (warstwę ukrytą na chwilę, pociągnięcie od razu cofnięte), więc wideo może być nieco krótsze.
+	Recordings folder	Folder nagrań
+	Not chosen yet — see Settings	Jeszcze nie wybrano — zobacz Ustawienia
+	recorded {when}	nagrano {when}
+	Recorded more since the last export.	Nagrano więcej od ostatniego eksportu.
+	Frames folder	Folder klatek
+	Not chosen yet	Jeszcze nie wybrano
+	Where the recorded frames are kept. Videos are saved wherever you choose when you export.	Miejsce przechowywania nagranych klatek. Wideo zapisuje się tam, gdzie wybierzesz podczas eksportu.
+	Choose folder…	Wybierz folder…
+	Change folder…	Zmień folder…
+	Recording quality	Jakość nagrywania
+	Undoing something removes those recorded frames.	Cofnięcie czynności usuwa nagrane klatki.
+	Reference layers	Warstwy referencyjne
+	Name tag	Znacznik w nazwie
+	Layers with this in their name are left out of the timelapse.	Warstwy z tym w nazwie są pomijane w timelapse.
+	Work timer	Licznik czasu pracy
+	Idle after	Bezczynność po
+	The timer stops counting after this long without activity.	Licznik przestaje liczyć po tak długim braku aktywności.
+	Timelapse Recorder · PhotoCraft	Timelapse Recorder · PhotoCraft
+	Run	Uruchom
+	Fill Tool	Narzędzie Wypełnienie
+	Nothing to fill there	Nie ma tu nic do wypełnienia
+	No enclosed area to fill there	Nie ma tu zamkniętego obszaru do wypełnienia
+	Fill: click an area	Wypełnienie: kliknij obszar
+	Enclose and Fill: draw round the areas to fill	Otocz i wypełnij: obrysuj obszary do wypełnienia
+	Paint Unfilled Area: paint over the gaps a fill left	Maluj niewypełnione: zamaluj luki pozostawione przez wypełnienie
+	Refer	Odniesienie
+	Editing Layer	Edytowana warstwa
+	Selected Layers	Zaznaczone warstwy
+	Layers in Folder	Warstwy w folderze
+	Reference Layers	Warstwy odniesienia
+	Exclude	Wyklucz
+	Editing layer	Edytowana warstwa
+	Text layers	Warstwy tekstowe
+	Locked layers	Zablokowane warstwy
+	Layers the fill doesn't read	Warstwy, których wypełnienie nie czyta
+	Close Gap	Zamknij luki
+	Area Scaling	Skalowanie obszaru
+	Grow the fill under the lines, or shrink it	Rozszerz wypełnienie pod linie lub je zmniejsz
+	To Darkest Pixel	Do najciemniejszego piksela
+	Follow Adjacent Pixels	Śledź sąsiednie piksele
+	Target	Cel
+	White and Transparent	Biały i przezroczysty
+	Image Border	Krawędź obrazu
+	The canvas edge closes gaps as a line does	Krawędź obszaru roboczego zamyka luki jak linia
+	Fill Tool Options	Opcje narzędzia Wypełnienie
+	Save as:	Zapisz jako:
+	Save Preset	Zapisz ustawienie
+	Keep these two presets as one, listed with the others	Zachowaj te dwa ustawienia jako jedno, na liście z pozostałymi
+	seconds	s
+	Close gaps up to {px} px	Zamykaj przerwy do {px} px
+	Grow the selection under the lines, or shrink it	Powiększ zaznaczenie pod liniami lub je zmniejsz
+	Delete Second Mask	Usuń drugą maskę
+	Disable Second Mask	Wyłącz drugą maskę
+	Enable Second Mask	Włącz drugą maskę
+	Editing layer blocks the fill	Edytowana warstwa zatrzymuje wypełnienie
+	Paint on the layer being filled stops the fill at any tolerance, and the fill goes in behind it: draw over a gap to close it	Farba na wypełnianej warstwie zatrzymuje wypełnienie przy dowolnej tolerancji, a wypełnienie wchodzi pod nią: zamaluj lukę, aby ją zamknąć
+	Undo widens Close Gap	Cofnij poszerza Zamknij luki
+	Each Undo of a fill closes bigger gaps for the next click, until you pick another tool	Każde cofnięcie wypełnienia zamyka większe luki przy następnym kliknięciu, dopóki nie wybierzesz innego narzędzia
+	Close Gap widened to {px} px: click again to fill	Zamknij luki poszerzono do {px} px: kliknij ponownie, aby wypełnić
+	Screentone…	Raster…
+	Satellites	Satelity
+	Enable	Włącz
+	Count:	Liczba:
+	Distance:	Odległość:
+	Stretch:	Rozciągnięcie:
+	Distortion & Jitter	Zniekształcenie i rozproszenie
+	Aspect X:	Proporcje X:
+	Aspect Y:	Proporcje Y:
+	Row Offset:	Przesunięcie wierszy:
+	Merge:	Sklejanie:
+	Jitter Pos:	Rozproszenie pozycji:
+	Jitter Size:	Rozproszenie rozmiaru:
+	Midpoint:	Punkt środkowy:
+	Start Size:	Rozmiar początkowy:
+	End Size:	Rozmiar końcowy:
+	Save as Pattern	Zapisz jako wzór
+	Font Settings	Ustawienia czcionki
+	No folder	Bez folderu
+	+ New folder...	+ Nowy folder...
+	Folder name	Nazwa folderu
+	New folder name	Nazwa nowego folderu
+	Favorite font	Ulubiona czcionka
+	Faux bold	Sztuczne pogrubienie
+	Faux italic	Sztuczna kursywa
+	Use standard font metrics and the baseline	System metryczny: standardowe metryki czcionki i linia bazowa
+	Use visual kerning and bubble centering	System optyczny: wizualny kerning i centrowanie dymków
+	Leading is linked to size	Interlinia jest powiązana z rozmiarem
+	Leading is not linked to size	Interlinia nie jest powiązana z rozmiarem
+	H-Scale (%)	Skala pozioma (%)
+	Edit preview text	Edytuj tekst podglądu
+	Leave empty for the automatic sample	Pozostaw puste, aby użyć automatycznej próbki
+	Preview unavailable	Podgląd niedostępny
+	Duplicate this style	Duplikuj ten styl
+	Delete this style	Usuń ten styl
+	Bubble Contour	Kształt dymka
+	No contour variants	Brak wariantów konturu
+	~ SCurve	~ SCurve
+	＋ Add tail	＋ Add tail
+	＋ Create balloon on canvas	＋ Create balloon on canvas
+	＋ Fit balloon	＋ Fit balloon
+	⊘ None	⊘ None
+	⌒ Arc	⌒ Arc
+	▽ Wedge	▽ Wedge
+	◎ Double outline	◎ Double outline
+	◌ Thought	◌ Thought
+	☁️ Cloud	☁️ Cloud
+	✓ Text fits: {lines} lines, {size} pt	✓ Text fits: {lines} lines, {size} pt
+	✴️ Burst	✴️ Burst
+	⑂ Double	⑂ Double
+	◽ Rect	◽ Rect
+	⚠ Text does not fit — enlarge the balloon or reduce the type size	⚠ Text does not fit — enlarge the balloon or reduce the type size
+	⚡ Bake to SAI Linework	⚡ Bake to SAI Linework
+	⚡ Lightning	⚡ Lightning
+	⚪ Ellipse	⚪ Ellipse
+	Add a tail to the selected balloon	Add a tail to the selected balloon
+	Background colour	Background colour
+	Balloon body:	Balloon body:
+	Bubble radius:	Bubble radius:
+	Bumps:	Bumps:
+	Bundle:	Bundle:
+	Corner radius:	Corner radius:
+	Cusp bite:	Cusp bite:
+	Dialogue and fit:	Dialogue and fit:
+	Dialogue text…	Dialogue text…
+	Fit the shape to the text: the balloon grows when the line does not fit	Fit the shape to the text: the balloon grows when the line does not fit
+	Hand-drawn noise:	Hand-drawn noise:
+	Inner sharpness:	Inner sharpness:
+	Inward concavity:	Inward concavity:
+	Jitter:	Jitter:
+	Lobe height:	Lobe height:
+	Mouth width:	Mouth width:
+	Needle width:	Needle width:
+	Needles:	Needles:
+	Outer sharpness:	Outer sharpness:
+	Outline gap:	Outline gap:
+	Random jitter variation	Random jitter variation
+	Random ray variation	Random ray variation
+	Ray extension:	Ray extension:
+	Ray length:	Ray length:
+	Rays:	Rays:
+	Round the tips	Round the tips
+	Spikes:	Spikes:
+	Squircle:	Squircle:
+	Stroke and fill:	Stroke and fill:
+	Sub-harmonics:	Sub-harmonics:
+	Tail type:	Tail type:
+	Text area:	Text area:
+	Thought bubbles:	Thought bubbles:
+	Turn the balloon into an editable vector linework layer	Turn the balloon into an editable vector linework layer
+	Type size:	Type size:
+	Valley depth:	Valley depth:
+	💥 Spiky	💥 Spiky
+	🔄 Reset to the manga default	🔄 Reset to the manga default
+	🦔 Uniflash	🦔 Uniflash

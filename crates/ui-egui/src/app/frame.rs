@@ -359,6 +359,7 @@ impl PhotocraftApp {
             analysis_ui::windows(self, &ctx);
             timeline_ui::windows(self, &ctx);
             workspace_ui::windows(self, &ctx);
+            crate::manga_seam::frame_overlays(self, &ctx);
         }
         palette::show(self, &ctx);
         dialogs::show(self, &ctx);
@@ -396,6 +397,9 @@ impl PhotocraftApp {
         // picker's view, in the frame loop, so the control channel can set it with the panels
         // closed; the engine's revision counter keeps an unchanged brush free.
         last_brush::persist(self, &ctx);
+        crate::gigapixel_ui::frame(self, &ctx);
+        crate::timelapse_ui::frame(self, &ctx);
+        crate::fill_tool_ui::tick(self);
         // Tool options are remembered between launches the same way (#2814).
         tool_memory::persist(self, &ctx);
         // So are View › Extras, Show and Snap To (#3762).

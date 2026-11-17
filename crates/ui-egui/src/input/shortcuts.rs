@@ -690,7 +690,7 @@ fn handle_keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
         return;
     }
     let focus = crate::shortcut_dispatch::Focus::of(ctx);
-    if handle_modal_canvas_keys(app, ctx, focus) || handle_pen_and_work_path_keys(app, ctx, focus) || handle_object_tool_keys(app, ctx) {
+    if handle_modal_canvas_keys(app, ctx, focus) || handle_pen_and_work_path_keys(app, ctx, focus) || handle_object_tool_keys(app, ctx, focus) {
         return;
     }
     if handle_registry_and_tool_keys(app, ctx, focus) {
@@ -786,10 +786,13 @@ fn handle_pen_and_work_path_keys(app: &mut PhotocraftApp, ctx: &egui::Context, f
 
 /// Magnetic Lasso, lasso vertices, guides, slices and smart-filter rows: each owns ⌫/Delete (and ↩/Esc)
 /// in its own context, so none of them reaches Edit › Clear. Returns true when one consumed the key.
-fn handle_object_tool_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
+fn handle_object_tool_keys(app: &mut PhotocraftApp, ctx: &egui::Context, focus: crate::shortcut_dispatch::Focus) -> bool {
     // Magnetic Lasso: ↩ closes, Esc cancels, ⌫ removes a fastening point (not Edit › Clear),
     // [ ] change the detection width (not the brush size).
     if crate::magnetic_lasso_ui::keys(app, ctx) || handle_lasso_vertex_keys(app, ctx) {
+        return true;
+    }
+    if vector_curve_keys(app, ctx, focus) || crate::manga_seam::balloon_tail_delete_key(app, ctx) {
         return true;
     }
     // A selected guide: ⌫/Delete removes it (`guide_select`), never Edit › Clear's pixels.
@@ -806,6 +809,38 @@ fn handle_object_tool_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool
     }
     // A selected smart filter row: ⌫/Delete removes the filter, not its smart object (#4751).
     crate::smart_ui::keys(app, ctx)
+}
+
+fn vector_curve_keys(app: &mut PhotocraftApp, ctx: &egui::Context, focus: crate::shortcut_dispatch::Focus) -> bool {
+    if app.ui.tool != Tool::VectorCurve || app.ui.vector_curve.as_ref().is_none_or(|vc| vc.points.is_empty()) {
+        return false;
+    }
+    let mods = ctx.input(|i| i.modifiers);
+    let command_undo = effective_shortcut(app, "edit.undo", default_shortcut("edit.undo").as_deref())
+        .and_then(|shortcut| parse(&shortcut))
+        .is_some_and(|shortcut| consume(ctx, &shortcut));
+    let Some(vc) = app.ui.vector_curve.as_mut() else {
+        return false;
+    };
+    if command_undo {
+        vc.pop_last_point();
+        return true;
+    }
+    if focus != crate::shortcut_dispatch::Focus::DeletingWidget
+        && !mods.command
+        && !mods.ctrl
+        && !mods.shift
+        && !mods.alt
+        && ctx.input_mut(|i| i.consume_key(mods, Key::Backspace) || i.consume_key(mods, Key::Delete))
+    {
+        if vc.mode == crate::vector_ui::VectorCurveMode::Draw || vc.selected_node.is_none() {
+            vc.clear();
+        } else {
+            vc.delete_active_node();
+        }
+        return true;
+    }
+    false
 }
 
 /// Registry shortcuts, inline type, and the crop-tool and single-key tool shortcuts. Returns true
@@ -862,6 +897,16 @@ fn handle_registry_and_tool_keys(app: &mut PhotocraftApp, ctx: &egui::Context, f
     if app.ui.frame_tool.drag.is_some() && pressed(Key::Escape) {
         crate::frame_tool::escape(app);
         return true;
+    }
+    if app.ui.tool == Tool::VectorCurve && app.ui.vector_curve.as_ref().is_some_and(|vc| !vc.points.is_empty()) && !egui::Popup::is_any_open(ctx) {
+        if pressed(Key::Enter) {
+            crate::vector_ui::vector_curve_commit(app);
+            return true;
+        }
+        if pressed(Key::Escape) {
+            crate::vector_ui::vector_curve_escape(app);
+            return true;
+        }
     }
     // Enter / Escape commit or cancel in-progress tool state (polygonal lasso, crop).
     if crate::lasso_ui::active(app) {

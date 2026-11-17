@@ -1,0 +1,373 @@
+	File	Soubor
+	Left	Vlevo
+	Save	Uložit
+	Paste	Vložit
+	Clear	Vymazat
+	Search…	Hledat…
+	Scale	Měřítko
+	Delete	Odstranit
+	Reverse	Obrátit pořadí
+	Align	Zarovnat
+	All Layers	Všechny vrstvy
+	Horizontal	Vodorovně
+	None	Žádné
+	Noise	Šum
+	Video	Video
+	Square	Čtvercový
+	Extras	Pomocné prvky
+	Color	Barva
+	Options	Možnosti
+	Screentones	Screentony
+	Manga Balloons	Manga bubliny
+	Balloons	Bubliny
+	SAI Linework	SAI linky
+	Linework	Linky
+	Apply	Použít
+	Auto	Automaticky
+	All Caps	Verzálky
+	Angle	Úhel
+	Anti-alias	Vyhlazování
+	Background	Pozadí
+	Bend:	Ohyb:
+	Automatic	Automaticky
+	Cancel	Zrušit
+	Center	Střed
+	Contiguous	Souvislé
+	Custom	Vlastní
+	Default	Výchozí
+	Density	Hustota
+	Density:	Hustota:
+	Done	Hotovo
+	Dots	Tečky
+	Fill:	Výplň:
+	Foreground	Popředí
+	Height	Výška
+	Leading	Proklad
+	Metrics	Metrické
+	Mode:	Režim:
+	Name:	Název:
+	Normal	Normální
+	OK	OK
+	Opacity	Krytí
+	Optical	Optické
+	Preset	Přednastavení
+	Preset:	Přednastavení:
+	Preview	Náhled
+	Roundness	Kulatost
+	Shape:	Tvar:
+	Size	Velikost
+	Size:	Velikost:
+	Small Caps	Kapitálky
+	Strikethrough	Přeškrtnutí
+	Style	Styl
+	Tolerance	Tolerance
+	Transparent	Průhledné
+	Type:	Typ:
+	Underline	Podtržení
+	White	Bílá
+	Width	Šířka
+	Width:	Šířka:
+	name	název
+	New Layer	Nová vrstva
+	Diamond	Kosočtverec
+	Linear	Lineární
+	Radial	Radiální
+	Lines	Čáry
+	Angle:	Úhel:
+	Gradient	Přechod
+cameraRaw	Color	Barvy
+	Round	Kulatý
+	High	Vysoká
+	Low	Nízká
+	Back	Zpět
+	Circle	Kruh
+	Confirm	Potvrdit
+	Crosshatch	Křížové šrafování
+	Duplicate	Duplikovat
+	Enable	Zapnout
+	Folder	Složka
+	Hearts	Srdce
+	Hexagon	Šestiúhelník
+	Justify	Do bloku
+	Length	Délka
+	Library	Knihovna
+	Pattern Type	Typ vzorku
+	Random	Náhodně
+	Result	Výsledek
+	Seed	Semínko
+	Settings	Nastavení
+	Smoothness	Hladkost
+	Stars	Hvězdy
+	Target	Cíl
+	No document open	Není otevřen žádný dokument
+	Button Mode	Režim tlačítka
+	Topaz Gigapixel AI…	Topaz Gigapixel AI…
+	Opened in Topaz Gigapixel AI: export the image there to bring it back	Otevřeno v aplikaci Topaz Gigapixel AI: obrázek tam exportujte a vrátí se sem
+	Stopped waiting for Topaz Gigapixel AI	Čekání na Topaz Gigapixel AI ukončeno
+	Topaz Gigapixel AI's image could not be applied: {error}	Obrázek z Topaz Gigapixel AI nelze použít: {error}
+	Topaz Gigapixel AI: upscaled {scale}× to {w} × {h} px (new layer)	Topaz Gigapixel AI: zvětšeno {scale}× na {w} × {h} px (nová vrstva)
+	Waiting for Topaz Gigapixel AI: export the upscaled image there to bring it back.	Čeká se na Topaz Gigapixel AI: zvětšený obrázek tam exportujte a vrátí se sem.
+	Model:	Model:
+	There is no such Topaz Gigapixel preset	Takové přednastavení Topaz Gigapixel neexistuje
+	Saved Topaz Gigapixel preset “{name}”	Přednastavení Topaz Gigapixel „{name}“ uloženo
+	New Preset	Nové přednastavení
+	Upscale:	Zvětšení:
+	With these settings	S tímto nastavením
+	With two presets	Dvěma přednastaveními
+	Save two presets with their own settings first; then this one can run them together.	Nejprve uložte dvě přednastavení s vlastním nastavením; toto je pak spustí společně.
+	First:	První:
+	Then:	Potom:
+	Results:	Výsledky:
+	One after the other	Jeden po druhém
+	Each on its own layer	Každý na vlastní vrstvě
+	Both presets upscale the image; each result becomes a layer, to compare or blend.	Obě přednastavení zvětší obraz; každý výsledek se stane vrstvou, kterou lze porovnat nebo prolnout.
+	The second preset upscales the first one's result.	Druhé přednastavení zvětší výsledek prvního.
+	Run a saved preset from File › Automate › Topaz Gigapixel Presets.	Uložené přednastavení spustíte z nabídky Soubor › Automatizace › Přednastavení Topaz Gigapixel.
+	Auto lets Gigapixel choose.	Automaticky nechává volbu na Gigapixelu.
+	Choose a folder for your timelapse recordings	Vyberte složku pro záznamy timelapse
+	Timelapse	Timelapse
+	Auto record	Automatické nahrávání
+	Recording	Nahrávání
+	Click to pause	Kliknutím pozastavíte
+	Start recording	Spustit nahrávání
+	Reference layer	Referenční vrstva
+	Recorded	Nahrává se
+	{count} of {total} not recorded	{count} z {total} se nenahrává
+	Reference	Referenční
+	Play video	Přehrát video
+	Show in folder	Zobrazit ve složce
+	Advanced settings	Pokročilá nastavení
+	Flash before the final image	Záblesk před konečným obrázkem
+	Slow down at the end	Zpomalit na konci
+	Remove flicker	Odstranit blikání
+	Choose…	Vybrat…
+	Remove frames with undo	Odstraňovat snímky při vrácení zpět
+	Makes the MP4. Automatic looks next to PhotoCraft, then on PATH.	Vytváří MP4. Automaticky hledá vedle PhotoCraftu, pak v PATH.
+	Choose the ffmpeg program on this computer	Vyberte program ffmpeg v tomto počítači
+	Opening files isn't available here	Otevírání souborů zde není k dispozici
+@plural	{n} frame|{n} frames	{n} snímek|{n} snímky|{n} snímků
+	Refresh	Obnovit
+	Recordings will be listed here once you've chosen a folder.	Záznamy se tu zobrazí, jakmile zvolíte složku.
+	No recordings yet.	Zatím žádné záznamy.
+	Open folder	Otevřít složku
+	Delete frames	Smazat snímky
+	Delete folder	Smazat složku
+	Pause the recording first	Nejprve nahrávání pozastavte
+	REC	REC
+	EXPORTED	EXPORTOVÁNO
+	NOT EXPORTED	NEEXPORTOVÁNO
+	{time} work	{time} práce
+	“{name}” hasn't been exported yet. If you delete its {frames}, you can't make a video of it anymore. This can't be undone.	Záznam „{name}“ ještě nebyl exportován. Pokud smažete jeho snímky ({frames}), už z něj nevytvoříte video. Tuto akci nelze vrátit.
+	Delete the {frames} of “{name}”?	Smazat snímky záznamu „{name}“ ({frames})?
+	You've recorded more since the last export, and that part isn't in the video.	Od posledního exportu jste nahráli víc a tato část ve videu není.
+	Your videos and the work time are kept. This can't be undone.	Vaše videa a čas práce zůstanou zachovány. Tuto akci nelze vrátit.
+	Delete “{name}” and its folder? It's removed from the library, along with its work time. Videos you exported stay where you saved them. This can't be undone.	Smazat záznam „{name}“ i jeho složku? Zmizí z knihovny i s časem práce. Exportovaná videa zůstanou tam, kam jste je uložili. Tuto akci nelze vrátit.
+	Frames deleted.	Snímky smazány.
+	Deleted “{name}”. Its folder holds other files, so it was kept.	Záznam „{name}“ smazán. Složka obsahuje jiné soubory, proto byla ponechána.
+	Deleted “{name}”.	Záznam „{name}“ smazán.
+@plural	{n} recording|{n} recordings	{n} záznam|{n} záznamy|{n} záznamů
+	No upscale has come back from Topaz Gigapixel AI yet	Z Topaz Gigapixel AI se zatím nevrátilo žádné zvětšení
+	Topaz Gigapixel AI: upscaled {scale}× to {w} × {h} px (new layer). Keep these settings with Topaz Gigapixel Presets › Save Preset from Last Upscale	Topaz Gigapixel AI: zvětšeno {scale}× na {w} × {h} px (nová vrstva). Tato nastavení si ponecháte přes Přednastavení Topaz Gigapixel › Uložit přednastavení z posledního zvětšení
+	Saved {name} ({seconds} video).	Uloženo {name} (video {seconds}).
+	Export failed: {error}	Export se nezdařil: {error}
+	Export cancelled.	Export byl zrušen.
+	just now	právě teď
+	{n} min ago	před {n} min
+	{n} h ago	před {n} h
+	yesterday	včera
+	{n} days ago	před {n} dny
+	Smaller files and the quickest capturing. Fine for quick sketches and previews.	Menší soubory a nejrychlejší zachytávání. Stačí pro rychlé skici a náhledy.
+	Sharper video for big screens. Uses about twice the disk space.	Ostřejší video pro velké obrazovky. Zabere asi dvojnásobek místa na disku.
+	Full-HD video, good for social media. Recommended.	Video ve Full HD, vhodné pro sociální sítě. Doporučeno.
+	idle	nečinné
+	Record	Nahrávat
+	Paused	Pozastaveno
+	Click to resume recording	Kliknutím obnovíte nahrávání
+	Open a document to record it.	Otevřete dokument, abyste ho mohli nahrávat.
+	You'll be asked where to save recordings.	Budete dotázáni, kam záznamy ukládat.
+	Export again	Exportovat znovu
+	Export video	Exportovat video
+	Show the export results	Zobrazit výsledky exportu
+	Hide the export results	Skrýt výsledky exportu
+	≈ {seconds} video from {frames}.	≈ {seconds} videa z {frames}.
+	Cancel export	Zrušit export
+	Frames	Snímky
+	Timer	Časovač
+	On disk	Na disku
+	Hide the live preview	Skrýt živý náhled
+	Show the newest frame	Zobrazit nejnovější snímek
+	No frames yet — just start drawing	Zatím žádné snímky — prostě začněte kreslit
+	No frames yet	Zatím žádné snímky
+	No layer selected	Není vybrána žádná vrstva
+	{n} layers selected	Vybrané vrstvy: {n}
+	Not recorded	Nenahrává se
+	A reference layer works like a normal layer, but won't show up in the timelapse.	Referenční vrstva funguje jako běžná vrstva, ale v timelapse se neobjeví.
+	Export settings	Nastavení exportu
+	Make video with	Vytvořit video pomocí
+	Bars colour	Barva pruhů
+	Bars fill the empty space when the canvas size changed during recording.	Pruhy vyplní prázdné místo, když se během nahrávání změnila velikost plátna.
+	Show finished drawing first	Nejprve ukázat hotovou kresbu
+	Hold final image	Podržet konečný obrázek
+	Show work-time counter	Zobrazit počítadlo pracovního času
+	Record something in this document to see how long the video will be.	Nahrajte v tomto dokumentu něco, abyste viděli, jak dlouhé bude video.
+	≈ {seconds} video	≈ {seconds} videa
+	{n} recorded frames	Nahrané snímky: {n}
+	Auto shows every frame once (at least 5 s, at most 1 min).	Automaticky ukáže každý snímek jednou (nejméně 5 s, nejvýše 1 min).
+	The canvas size changed during recording; earlier frames are fitted inside the final size.	Velikost plátna se během nahrávání změnila; dřívější snímky se vejdou do konečné velikosti.
+	Remove flicker leaves out frames that flash in and out (a layer hidden for a moment, a stroke undone right away), so the video can be a bit shorter.	Odstranění blikání vynechá snímky, které jen probliknou (vrstvu na chvíli skrytou, tah hned vrácený zpět), takže video může být o něco kratší.
+	Recordings folder	Složka záznamů
+	Not chosen yet — see Settings	Zatím nevybráno — viz Nastavení
+	recorded {when}	nahráno {when}
+	Recorded more since the last export.	Od posledního exportu bylo nahráno více.
+	Frames folder	Složka snímků
+	Not chosen yet	Zatím nevybráno
+	Where the recorded frames are kept. Videos are saved wherever you choose when you export.	Kde se uchovávají nahrané snímky. Videa se ukládají tam, kam zvolíte při exportu.
+	Choose folder…	Vybrat složku…
+	Change folder…	Změnit složku…
+	Recording quality	Kvalita záznamu
+	Undoing something removes those recorded frames.	Vrácení zpět odstraní příslušné nahrané snímky.
+	Reference layers	Referenční vrstvy
+	Name tag	Značka v názvu
+	Layers with this in their name are left out of the timelapse.	Vrstvy, které toto mají v názvu, se do timelapse nedostanou.
+	Work timer	Časovač práce
+	Idle after	Nečinnost po
+	The timer stops counting after this long without activity.	Časovač přestane počítat po této době bez činnosti.
+	Timelapse Recorder · PhotoCraft	Timelapse Recorder · PhotoCraft
+	Run	Spustit
+	Fill Tool	Nástroj Výplň
+	Nothing to fill there	Tam není co vyplnit
+	No enclosed area to fill there	Není tam žádná uzavřená oblast k vyplnění
+	Fill: click an area	Výplň: klepněte na oblast
+	Enclose and Fill: draw round the areas to fill	Ohraničit a vyplnit: obtáhněte oblasti k vyplnění
+	Paint Unfilled Area: paint over the gaps a fill left	Vybarvit nevyplněné: přetřete mezery, které výplň vynechala
+	Refer	Odkaz
+	Editing Layer	Upravovaná vrstva
+	Selected Layers	Vybrané vrstvy
+	Layers in Folder	Vrstvy ve složce
+	Reference Layers	Referenční vrstvy
+	Exclude	Vyloučit
+	Editing layer	Upravovaná vrstva
+	Text layers	Textové vrstvy
+	Locked layers	Zamčené vrstvy
+	Layers the fill doesn't read	Vrstvy, které výplň nečte
+	Close Gap	Uzavřít mezeru
+	Area Scaling	Změna velikosti oblasti
+	Grow the fill under the lines, or shrink it	Rozšířit výplň pod čáry, nebo ji zmenšit
+	To Darkest Pixel	K nejtmavšímu pixelu
+	Follow Adjacent Pixels	Sledovat sousední pixely
+	White and Transparent	Bílá a průhledná
+	Image Border	Okraj obrazu
+	The canvas edge closes gaps as a line does	Okraj plátna uzavírá mezery jako čára
+	Fill Tool Options	Možnosti nástroje Výplň
+	Save as:	Uložit jako:
+	Save Preset	Uložit přednastavení
+	Keep these two presets as one, listed with the others	Uložit tato dvě přednastavení jako jedno, uvedené s ostatními
+	seconds	s
+	Close gaps up to {px} px	Uzavřít mezery do {px} px
+	Grow the selection under the lines, or shrink it	Rozšířit výběr pod čáry, nebo ho zmenšit
+layers	Fill:	Krytí výplně:
+	Delete Second Mask	Odstranit druhou masku
+	Disable Second Mask	Vypnout druhou masku
+	Enable Second Mask	Zapnout druhou masku
+	Editing layer blocks the fill	Upravovaná vrstva zastaví výplň
+	Paint on the layer being filled stops the fill at any tolerance, and the fill goes in behind it: draw over a gap to close it	Malba na vyplňované vrstvě zastaví výplň při jakékoli toleranci a výplň se dostane pod ni: přetažením přes mezeru ji uzavřete
+	Undo widens Close Gap	Zpět rozšíří Uzavřít mezeru
+	Each Undo of a fill closes bigger gaps for the next click, until you pick another tool	Každé Zpět u výplně uzavře pro další kliknutí větší mezery, dokud nezvolíte jiný nástroj
+	Close Gap widened to {px} px: click again to fill	Uzavřít mezeru rozšířeno na {px} px: klikněte znovu pro vyplnění
+	Screentone…	Síťovina…
+	Satellites	Satelity
+	Count:	Počet:
+	Distance:	Vzdálenost:
+	Stretch:	Roztažení:
+	Distortion & Jitter	Zkreslení a rozptyl
+	Aspect X:	Poměr stran X:
+	Aspect Y:	Poměr stran Y:
+	Row Offset:	Posun řádků:
+	Merge:	Spojení:
+	Jitter Pos:	Rozptyl polohy:
+	Jitter Size:	Rozptyl velikosti:
+	Midpoint:	Střední bod:
+	Start Size:	Počáteční velikost:
+	End Size:	Konečná velikost:
+	Save as Pattern	Uložit jako vzorek
+	Font Settings	Nastavení písma
+	No folder	Bez složky
+	+ New folder...	+ Nová složka...
+	Folder name	Název složky
+	New folder name	Název nové složky
+	Favorite font	Oblíbené písmo
+	Faux bold	Umělé tučné
+	Faux italic	Umělá kurzíva
+	Superscript	Horní index
+	Subscript	Dolní index
+	Hanging Punctuation	Předsazená interpunkce
+	Use standard font metrics and the baseline	Metrický systém: standardní metriky písma a účaří
+	Use visual kerning and bubble centering	Optický systém: vizuální kerning a vycentrování bubliny
+	Leading is linked to size	Řádkování je svázáno s velikostí
+	Leading is not linked to size	Řádkování není svázáno s velikostí
+	H-Scale (%)	Vodorovné měřítko (%)
+	Edit preview text	Upravit text náhledu
+	Leave empty for the automatic sample	Ponechte prázdné pro automatický vzorek
+	Preview unavailable	Náhled není k dispozici
+	Duplicate this style	Duplikovat tento styl
+	Delete this style	Odstranit tento styl
+	Bubble Contour	Tvar bubliny
+	No contour variants	Žádné varianty obrysu
+	~ SCurve	~ SCurve
+	＋ Add tail	＋ Add tail
+	＋ Create balloon on canvas	＋ Create balloon on canvas
+	＋ Fit balloon	＋ Fit balloon
+	⊘ None	⊘ None
+	⌒ Arc	⌒ Arc
+	▽ Wedge	▽ Wedge
+	◎ Double outline	◎ Double outline
+	◌ Thought	◌ Thought
+	☁️ Cloud	☁️ Cloud
+	✓ Text fits: {lines} lines, {size} pt	✓ Text fits: {lines} lines, {size} pt
+	✴️ Burst	✴️ Burst
+	⑂ Double	⑂ Double
+	◽ Rect	◽ Rect
+	⚠ Text does not fit — enlarge the balloon or reduce the type size	⚠ Text does not fit — enlarge the balloon or reduce the type size
+	⚡ Bake to SAI Linework	⚡ Bake to SAI Linework
+	⚡ Lightning	⚡ Lightning
+	⚪ Ellipse	⚪ Ellipse
+	Add a tail to the selected balloon	Add a tail to the selected balloon
+	Background colour	Background colour
+	Balloon body:	Balloon body:
+	Bubble radius:	Bubble radius:
+	Bumps:	Bumps:
+	Bundle:	Bundle:
+	Corner radius:	Corner radius:
+	Cusp bite:	Cusp bite:
+	Dialogue and fit:	Dialogue and fit:
+	Dialogue text…	Dialogue text…
+	Fit the shape to the text: the balloon grows when the line does not fit	Fit the shape to the text: the balloon grows when the line does not fit
+	Hand-drawn noise:	Hand-drawn noise:
+	Inner sharpness:	Inner sharpness:
+	Inward concavity:	Inward concavity:
+	Jitter:	Jitter:
+	Lobe height:	Lobe height:
+	Mouth width:	Mouth width:
+	Needle width:	Needle width:
+	Needles:	Needles:
+	Outer sharpness:	Outer sharpness:
+	Outline gap:	Outline gap:
+	Random jitter variation	Random jitter variation
+	Random ray variation	Random ray variation
+	Ray extension:	Ray extension:
+	Ray length:	Ray length:
+	Rays:	Rays:
+	Round the tips	Round the tips
+	Spikes:	Spikes:
+	Squircle:	Squircle:
+	Stroke and fill:	Stroke and fill:
+	Sub-harmonics:	Sub-harmonics:
+	Tail type:	Tail type:
+	Text area:	Text area:
+	Thought bubbles:	Thought bubbles:
+	Turn the balloon into an editable vector linework layer	Turn the balloon into an editable vector linework layer
+	Type size:	Type size:
+	Valley depth:	Valley depth:
+	💥 Spiky	💥 Spiky
+	🔄 Reset to the manga default	🔄 Reset to the manga default
+	🦔 Uniflash	🦔 Uniflash

@@ -1,0 +1,372 @@
+	File	Fájl
+	Paste	Beillesztés
+	Save	Mentés
+	Scale	Méretarány
+	Search…	Keresés…
+	Align	Igazítás
+	Apply	Alkalmaz
+	Video	Videó
+	Extras	Segédelemek
+	Horizontal	Vízszintes
+	Options	Beállítósáv
+	Screentones	Rasztertónusok
+	Manga Balloons	Manga szövegbuborékok
+	Balloons	Szövegbuborékok
+	SAI Linework	SAI vonalrajz
+	Linework	Vonalrajz
+	Settings	Beállítások
+	Square	Négyzetes
+	All Caps	Csupa nagybetű
+	All Layers	Minden réteg
+	Angle:	Szög:
+	Anti-alias	Élsimítás
+	Bend:	Hajlás:
+	Center	Középen
+	Color	Szín
+	Contiguous	Összefüggő
+	Custom	Egyéni
+	Density:	Sűrűség:
+	Done	Kész
+	Dots	Pontok
+	Duplicate	Kettőzés
+	Gradient	Színátmenet
+	Height	Magasság
+	Justify	Sorkizárt
+	Leading	Sorköz
+	Library	Könyvtár
+	Lines	Vonalak
+	Metrics	Metrikus
+	Mode:	Mód:
+	Noise	Zaj
+	Optical	Optikai
+	Round	Lekerekített
+	Size	Méret
+	Small Caps	Kiskapitális
+	Strikethrough	Áthúzás
+	Transparent	Átlátszó
+	Type:	Típus:
+	Underline	Aláhúzás
+	Width	Szélesség
+	Width:	Szélesség:
+	Angle	Szög
+	Confirm	Megerősít
+	Diamond	Rombusz alakú
+	Linear	Lineáris
+	Normal	Normál
+	Opacity	Átlátszatlanság
+	Radial	Körkörös
+	Reverse	Megfordítás
+	Fill:	Kitöltés:
+	Folder	Mappa
+	Foreground	Előtérszín
+	Name:	Név:
+	Shape:	Alakzat:
+	Size:	Méret:
+	Style	Stílus
+	Tolerance	Tűrés
+	Auto	Automatikus
+	Crosshatch	Keresztsraffozás
+	Default	Alapértelmezett
+	Density	Sűrűség
+	Hearts	Szívek
+	No document open	Nincs megnyitott dokumentum
+	None	Nincs
+	Pattern Type	Mintázattípus
+	Preset:	Előbeállítás:
+	Preview	Előnézet
+	Smoothness	Simaság
+	Stars	Csillagok
+	Roundness	Kerekség
+cameraRaw	Color	Szín
+	Cancel	Mégse
+	Clear	Kiürít
+	Delete	Törlés
+	Left	Bal
+	OK	OK
+	Preset	Előbeállítás
+	Result	Eredmény
+	White	Fehér
+	Automatic	Automatikus
+	Back	Vissza
+	Background	Háttér
+	Circle	Kör
+	Enable	Bekapcsolás
+	Hexagon	Hatszög
+	High	Magas
+	Length	Hossz
+	Low	Alacsony
+	name	név
+	New Layer	Új réteg
+	Random	Véletlenszerű
+	Seed	Kezdőérték
+	Target	Cél
+	Choose…	Kiválasztás…
+	Hanging Punctuation	Függő írásjelek
+	Subscript	Alsó index
+	Superscript	Felső index
+	Button Mode	Gomb mód
+	Topaz Gigapixel AI…	Topaz Gigapixel AI…
+	Opened in Topaz Gigapixel AI: export the image there to bring it back	Megnyitva a Topaz Gigapixel AI-ban: exportálja ott a képet, hogy visszakerüljön ide
+	Stopped waiting for Topaz Gigapixel AI	A Topaz Gigapixel AI-ra való várakozás leállítva
+	Topaz Gigapixel AI's image could not be applied: {error}	A Topaz Gigapixel AI képét nem sikerült alkalmazni: {error}
+	Topaz Gigapixel AI: upscaled {scale}× to {w} × {h} px (new layer)	Topaz Gigapixel AI: {scale}× nagyítás {w} × {h} képpontra (új réteg)
+	Waiting for Topaz Gigapixel AI: export the upscaled image there to bring it back.	Várakozás a Topaz Gigapixel AI-ra: exportálja ott a nagyított képet, hogy visszakerüljön ide.
+	Model:	Modell:
+	There is no such Topaz Gigapixel preset	Nincs ilyen Topaz Gigapixel-készlet
+	Saved Topaz Gigapixel preset “{name}”	„{name}” Topaz Gigapixel-készlet mentve
+	New Preset	Új készlet
+	Upscale:	Felskálázás:
+	With these settings	Ezekkel a beállításokkal
+	With two presets	Két készlettel
+	Save two presets with their own settings first; then this one can run them together.	Előbb mentsen két saját beállítású készletet; ez aztán együtt futtatja őket.
+	First:	Először:
+	Then:	Majd:
+	Results:	Eredmények:
+	One after the other	Egymás után
+	Each on its own layer	Mindegyik külön rétegen
+	Both presets upscale the image; each result becomes a layer, to compare or blend.	Mindkét készlet felskálázza a képet; mindegyik eredmény egy réteg lesz, összehasonlításhoz vagy keveréshez.
+	The second preset upscales the first one's result.	A második készlet az első eredményét skálázza fel.
+	Run a saved preset from File › Automate › Topaz Gigapixel Presets.	Mentett készletet a Fájl › Automatizálás › Topaz Gigapixel-készletek menüből futtathat.
+	Auto lets Gigapixel choose.	Az Automatikus a Gigapixelre bízza a választást.
+	Choose a folder for your timelapse recordings	Válasszon mappát a timelapse-felvételeknek
+	Timelapse	Timelapse
+	Auto record	Automatikus felvétel
+	Recording	Felvétel
+	Click to pause	Kattintson a szüneteltetéshez
+	Start recording	Felvétel indítása
+	Reference layer	Referenciaréteg
+	Recorded	Felvételre kerül
+	{count} of {total} not recorded	{total} rétegből {count} nem kerül a felvételbe
+	Reference	Referencia
+	Play video	Videó lejátszása
+	Show in folder	Megjelenítés a mappában
+	Advanced settings	Speciális beállítások
+	Flash before the final image	Felvillanás a végső kép előtt
+	Slow down at the end	Lassítás a végén
+	Remove flicker	Villogás eltávolítása
+	Remove frames with undo	Képkockák eltávolítása visszavonáskor
+	Makes the MP4. Automatic looks next to PhotoCraft, then on PATH.	Ez készíti az MP4-et. Az Automatikus a PhotoCraft mellett, majd a PATH-ban keres.
+	Choose the ffmpeg program on this computer	Válassza ki az ffmpeg programot ezen a számítógépen
+	Opening files isn't available here	A fájlok megnyitása itt nem érhető el
+@plural	{n} frame|{n} frames	{n} képkocka
+	Refresh	Frissítés
+	Recordings will be listed here once you've chosen a folder.	A felvételek itt jelennek meg, miután kiválasztott egy mappát.
+	No recordings yet.	Még nincs felvétel.
+	Open folder	Mappa megnyitása
+	Delete frames	Képkockák törlése
+	Delete folder	Mappa törlése
+	Pause the recording first	Előbb szüneteltesse a felvételt
+	REC	REC
+	EXPORTED	EXPORTÁLVA
+	NOT EXPORTED	NINCS EXPORTÁLVA
+	{time} work	{time} munka
+	“{name}” hasn't been exported yet. If you delete its {frames}, you can't make a video of it anymore. This can't be undone.	A(z) „{name}” felvétel még nincs exportálva. Ha törli a képkockáit ({frames}), többé nem készíthet belőle videót. Ez nem vonható vissza.
+	Delete the {frames} of “{name}”?	Törli a(z) „{name}” felvétel képkockáit ({frames})?
+	You've recorded more since the last export, and that part isn't in the video.	Az utolsó exportálás óta többet rögzített, és ez a rész nincs benne a videóban.
+	Your videos and the work time are kept. This can't be undone.	A videói és a munkaidő megmaradnak. Ez nem vonható vissza.
+	Delete “{name}” and its folder? It's removed from the library, along with its work time. Videos you exported stay where you saved them. This can't be undone.	Törli a(z) „{name}” felvételt és a mappáját? A munkaidejével együtt kikerül a könyvtárból. Az exportált videók ott maradnak, ahová mentette őket. Ez nem vonható vissza.
+	Frames deleted.	Képkockák törölve.
+	Deleted “{name}”. Its folder holds other files, so it was kept.	A(z) „{name}” felvétel törölve. A mappája más fájlokat is tartalmaz, ezért megmaradt.
+	Deleted “{name}”.	A(z) „{name}” felvétel törölve.
+@plural	{n} recording|{n} recordings	{n} felvétel
+	No upscale has come back from Topaz Gigapixel AI yet	A Topaz Gigapixel AI-ból még nem jött vissza felskálázás
+	Topaz Gigapixel AI: upscaled {scale}× to {w} × {h} px (new layer). Keep these settings with Topaz Gigapixel Presets › Save Preset from Last Upscale	Topaz Gigapixel AI: {scale}× nagyítás {w} × {h} képpontra (új réteg). A beállítások megtartása: Topaz Gigapixel-készletek › Készlet mentése az utolsó felskálázásból
+	Saved {name} ({seconds} video).	{name} mentve ({seconds} videó).
+	Export failed: {error}	Az exportálás nem sikerült: {error}
+	Export cancelled.	Exportálás megszakítva.
+	just now	épp most
+	{n} min ago	{n} perce
+	{n} h ago	{n} órája
+	yesterday	tegnap
+	{n} days ago	{n} napja
+	Smaller files and the quickest capturing. Fine for quick sketches and previews.	Kisebb fájlok és a leggyorsabb rögzítés. Gyors vázlatokhoz és előnézetekhez elég.
+	Sharper video for big screens. Uses about twice the disk space.	Élesebb videó nagy képernyőkre. Körülbelül kétszer annyi lemezterületet foglal.
+	Full-HD video, good for social media. Recommended.	Full HD videó, közösségi médiához jó. Ajánlott.
+	idle	tétlen
+	Record	Felvétel
+	Paused	Szüneteltetve
+	Click to resume recording	Kattintson a felvétel folytatásához
+	Open a document to record it.	Nyisson meg egy dokumentumot a rögzítéséhez.
+	You'll be asked where to save recordings.	Megkérdezzük, hová mentse a felvételeket.
+	Export again	Újbóli exportálás
+	Export video	Videó exportálása
+	Show the export results	Az exportálás eredményének megjelenítése
+	Hide the export results	Az exportálás eredményének elrejtése
+	≈ {seconds} video from {frames}.	≈ {seconds} videó {frames} alapján.
+	Cancel export	Exportálás megszakítása
+	Frames	Képkockák
+	Timer	Idő
+	On disk	Lemezen
+	Hide the live preview	Élő előnézet elrejtése
+	Show the newest frame	A legújabb képkocka megjelenítése
+	No frames yet — just start drawing	Még nincsenek képkockák — kezdjen el rajzolni
+	No frames yet	Még nincsenek képkockák
+	No layer selected	Nincs kijelölt réteg
+	{n} layers selected	{n} réteg kijelölve
+	Not recorded	Nem kerül a felvételbe
+	A reference layer works like a normal layer, but won't show up in the timelapse.	A referenciaréteg normál rétegként működik, de nem jelenik meg a timelapse-ben.
+	Export settings	Exportálási beállítások
+	Make video with	Videó készítése ezzel
+	Bars colour	Sávok színe
+	Bars fill the empty space when the canvas size changed during recording.	A sávok kitöltik az üres helyet, ha a vászon mérete megváltozott a felvétel közben.
+	Show finished drawing first	Először a kész rajz
+	Hold final image	Végső kép kitartása
+	Show work-time counter	Munkaidő-számláló megjelenítése
+	Record something in this document to see how long the video will be.	Rögzítsen valamit ebben a dokumentumban, hogy lássa, milyen hosszú lesz a videó.
+	≈ {seconds} video	≈ {seconds} videó
+	{n} recorded frames	{n} rögzített képkocka
+	Auto shows every frame once (at least 5 s, at most 1 min).	Az Automatikus minden képkockát egyszer mutat (legalább 5 mp, legfeljebb 1 perc).
+	The canvas size changed during recording; earlier frames are fitted inside the final size.	A vászon mérete megváltozott a felvétel közben; a korábbi képkockák a végső méretbe illeszkednek.
+	Remove flicker leaves out frames that flash in and out (a layer hidden for a moment, a stroke undone right away), so the video can be a bit shorter.	A villogás eltávolítása kihagyja a felvillanó képkockákat (egy pillanatra elrejtett réteg, azonnal visszavont vonás), így a videó kicsit rövidebb lehet.
+	Recordings folder	Felvételek mappája
+	Not chosen yet — see Settings	Még nincs kiválasztva — lásd a Beállításokat
+	recorded {when}	rögzítve: {when}
+	Recorded more since the last export.	Az utolsó exportálás óta több készült.
+	Frames folder	Képkockák mappája
+	Not chosen yet	Még nincs kiválasztva
+	Where the recorded frames are kept. Videos are saved wherever you choose when you export.	Itt tárolódnak a rögzített képkockák. A videók oda kerülnek, ahová exportáláskor választja.
+	Choose folder…	Mappa kiválasztása…
+	Change folder…	Mappa módosítása…
+	Recording quality	Felvétel minősége
+	Undoing something removes those recorded frames.	A visszavonás eltávolítja az érintett rögzített képkockákat.
+	Reference layers	Referenciarétegek
+	Name tag	Névcímke
+	Layers with this in their name are left out of the timelapse.	Azok a rétegek, amelyek nevében ez szerepel, kimaradnak a timelapse-ből.
+	Work timer	Munkaidő-mérő
+	Idle after	Tétlen ennyi után
+	The timer stops counting after this long without activity.	A mérő ennyi tétlenség után leáll.
+	Timelapse Recorder · PhotoCraft	Timelapse Recorder · PhotoCraft
+	Run	Futtatás
+	Fill Tool	Kitöltés eszköz
+	Nothing to fill there	Ott nincs mit kitölteni
+	No enclosed area to fill there	Ott nincs kitölthető zárt terület
+	Fill: click an area	Kitöltés: kattintson egy területre
+	Enclose and Fill: draw round the areas to fill	Körülrajzolás és kitöltés: rajzolja körbe a kitöltendő területeket
+	Paint Unfilled Area: paint over the gaps a fill left	Kitöltetlen terület festése: fessen át a kitöltés hagyta réseken
+	Refer	Hivatkozás
+	Editing Layer	Szerkesztett réteg
+	Selected Layers	Kijelölt rétegek
+	Layers in Folder	Rétegek a mappában
+	Reference Layers	Referenciarétegek
+	Exclude	Kizárás
+	Editing layer	Szerkesztett réteg
+	Text layers	Szövegrétegek
+	Locked layers	Zárolt rétegek
+	Layers the fill doesn't read	Rétegek, amelyeket a kitöltés nem olvas
+	Close Gap	Rés bezárása
+	Area Scaling	Terület méretezése
+	Grow the fill under the lines, or shrink it	A kitöltés kiterjesztése a vonalak alá vagy szűkítése
+	To Darkest Pixel	A legsötétebb képpontig
+	Follow Adjacent Pixels	Szomszédos képpontok követése
+	White and Transparent	Fehér és átlátszó
+	Image Border	Képszegély
+	The canvas edge closes gaps as a line does	A vászon széle vonalként zárja a réseket
+	Fill Tool Options	Kitöltés eszköz beállításai
+	Save as:	Mentés másként:
+	Save Preset	Készlet mentése
+	Keep these two presets as one, listed with the others	A két készlet megtartása egyként, a többi között
+	seconds	másodperc
+	Close gaps up to {px} px	Hézagok bezárása {px} px-ig
+	Grow the selection under the lines, or shrink it	A kijelölés kiterjesztése a vonalak alá, vagy szűkítése
+	Delete Second Mask	Második maszk törlése
+	Disable Second Mask	Második maszk kikapcsolása
+	Enable Second Mask	Második maszk bekapcsolása
+	Editing layer blocks the fill	A szerkesztett réteg megállítja a kitöltést
+	Paint on the layer being filled stops the fill at any tolerance, and the fill goes in behind it: draw over a gap to close it	A kitöltött rétegen lévő festék bármilyen tűrésnél megállítja a kitöltést, és a kitöltés mögé kerül: fessen át egy résen a bezárásához
+	Undo widens Close Gap	A visszavonás bővíti a Rés bezárását
+	Each Undo of a fill closes bigger gaps for the next click, until you pick another tool	A kitöltés minden visszavonása nagyobb réseket zár be a következő kattintásnál, amíg másik eszközt nem választ
+	Close Gap widened to {px} px: click again to fill	Rés bezárása {px} px-re bővítve: kattintson újra a kitöltéshez
+	Screentone…	Raszter…
+	Satellites	Szatellitok
+	Count:	Darabszám:
+	Distance:	Távolság:
+	Stretch:	Nyújtás:
+	Distortion & Jitter	Torzítás és szórás
+	Aspect X:	Képarány X:
+	Aspect Y:	Képarány Y:
+	Row Offset:	Sorkitolás:
+	Merge:	Összeolvasás:
+	Jitter Pos:	Szórás pozíció:
+	Jitter Size:	Szórás méret:
+	Midpoint:	Középpont:
+	Start Size:	Kezdő méret:
+	End Size:	Záró méret:
+	Save as Pattern	Mentés mintázatként
+	Font Settings	Betűtípus-beállítások
+	No folder	Nincs mappa
+	+ New folder...	+ Új mappa...
+	Folder name	Mappa neve
+	New folder name	Új mappa neve
+	Favorite font	Kedvenc betűtípus
+	Faux bold	Álkövér
+	Faux italic	Áldőlt
+	Use standard font metrics and the baseline	Metrikus rendszer: szabványos betűmetrikák és alapvonal
+	Use visual kerning and bubble centering	Optikai rendszer: vizuális kern és buborékközépre igazítás
+	Leading is linked to size	A sortáv a mérethez van kötve
+	Leading is not linked to size	A sortáv nincs a mérethez kötve
+	H-Scale (%)	Vízszintes méretarány (%)
+	Edit preview text	Előnézet szövegének szerkesztése
+	Leave empty for the automatic sample	Hagyja üresen az automatikus mintához
+	Preview unavailable	Az előnézet nem érhető el
+	Duplicate this style	Stílus kettőzése
+	Delete this style	Stílus törlése
+	Bubble Contour	Buborékforma
+	No contour variants	Nincsenek kontúrváltozatok
+	~ SCurve	~ SCurve
+	＋ Add tail	＋ Add tail
+	＋ Create balloon on canvas	＋ Create balloon on canvas
+	＋ Fit balloon	＋ Fit balloon
+	⊘ None	⊘ None
+	⌒ Arc	⌒ Arc
+	▽ Wedge	▽ Wedge
+	◎ Double outline	◎ Double outline
+	◌ Thought	◌ Thought
+	☁️ Cloud	☁️ Cloud
+	✓ Text fits: {lines} lines, {size} pt	✓ Text fits: {lines} lines, {size} pt
+	✴️ Burst	✴️ Burst
+	⑂ Double	⑂ Double
+	◽ Rect	◽ Rect
+	⚠ Text does not fit — enlarge the balloon or reduce the type size	⚠ Text does not fit — enlarge the balloon or reduce the type size
+	⚡ Bake to SAI Linework	⚡ Bake to SAI Linework
+	⚡ Lightning	⚡ Lightning
+	⚪ Ellipse	⚪ Ellipse
+	Add a tail to the selected balloon	Add a tail to the selected balloon
+	Background colour	Background colour
+	Balloon body:	Balloon body:
+	Bubble radius:	Bubble radius:
+	Bumps:	Bumps:
+	Bundle:	Bundle:
+	Corner radius:	Corner radius:
+	Cusp bite:	Cusp bite:
+	Dialogue and fit:	Dialogue and fit:
+	Dialogue text…	Dialogue text…
+	Fit the shape to the text: the balloon grows when the line does not fit	Fit the shape to the text: the balloon grows when the line does not fit
+	Hand-drawn noise:	Hand-drawn noise:
+	Inner sharpness:	Inner sharpness:
+	Inward concavity:	Inward concavity:
+	Jitter:	Jitter:
+	Lobe height:	Lobe height:
+	Mouth width:	Mouth width:
+	Needle width:	Needle width:
+	Needles:	Needles:
+	Outer sharpness:	Outer sharpness:
+	Outline gap:	Outline gap:
+	Random jitter variation	Random jitter variation
+	Random ray variation	Random ray variation
+	Ray extension:	Ray extension:
+	Ray length:	Ray length:
+	Rays:	Rays:
+	Round the tips	Round the tips
+	Spikes:	Spikes:
+	Squircle:	Squircle:
+	Stroke and fill:	Stroke and fill:
+	Sub-harmonics:	Sub-harmonics:
+	Tail type:	Tail type:
+	Text area:	Text area:
+	Thought bubbles:	Thought bubbles:
+	Turn the balloon into an editable vector linework layer	Turn the balloon into an editable vector linework layer
+	Type size:	Type size:
+	Valley depth:	Valley depth:
+	💥 Spiky	💥 Spiky
+	🔄 Reset to the manga default	🔄 Reset to the manga default
+	🦔 Uniflash	🦔 Uniflash

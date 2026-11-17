@@ -91,6 +91,7 @@ pub fn entries(l: &Layer, multi: bool, has_selection: bool) -> Vec<Entry> {
                 v.push(Some(("Rasterize Layer", "layer.rasterize.smartObject")));
             }
             LayerContent::Fill(_) => v.push(Some(("Rasterize Layer", "layer.rasterize.fillContent"))),
+            LayerContent::Screentone(_) => v.push(Some(("Rasterize Layer", "layer.rasterize.layer"))),
             _ => v.push(Some(("Rasterize Layer", "layer.rasterize.layer"))),
         }
     }
@@ -104,6 +105,13 @@ pub fn entries(l: &Layer, multi: bool, has_selection: bool) -> Vec<Entry> {
         v.push(Some((tl!(mask_toggle_label(mask.enabled)), "layer.layerMask.enabled")));
         v.push(Some((tl!("Apply Layer Mask"), "layer.layerMask.apply")));
         v.push(Some((tl!("Delete Layer Mask"), "layer.layerMask.delete")));
+        if l.second_mask.is_none() {
+            v.push(Some((tl!("Add Second Layer Mask"), photocraft_engine::manga_cmds::second_mask::ADD)));
+        } else if let Some(m2) = &l.second_mask {
+            let m2_label = if m2.enabled { tl!("Disable Second Mask") } else { tl!("Enable Second Mask") };
+            v.push(Some((m2_label, photocraft_engine::manga_cmds::second_mask::ENABLED)));
+            v.push(Some((tl!("Delete Second Mask"), photocraft_engine::manga_cmds::second_mask::DELETE)));
+        }
     } else {
         v.push(Some((tl!("Add Layer Mask"), add_mask_command(has_selection, false))));
     }
@@ -115,6 +123,12 @@ pub fn entries(l: &Layer, multi: bool, has_selection: bool) -> Vec<Entry> {
     v.push(Some((tl!("Link Layers"), "layer.linkLayers")));
     v.push(Some((tl!("Select Linked Layers"), "layer.selectLinkedLayers")));
     v.push(None);
+    // Clip Studio Paint's reference layer: the line art the Fill tool reads.
+    if !multi {
+        let ref_label = if l.reference { tl!("Clear Reference Layer") } else { tl!("Set as Reference Layer") };
+        v.push(Some((ref_label, photocraft_engine::manga_cmds::fill_tool::REFERENCE_ID)));
+        v.push(None);
+    }
     v.push(Some((tl!("Copy Layer Style"), "layer.layerStyle.copyLayerStyle")));
     v.push(Some((tl!("Paste Layer Style"), "layer.layerStyle.pasteLayerStyle")));
     v.push(Some((tl!("Clear Layer Style"), "layer.layerStyle.clear")));
@@ -204,6 +218,29 @@ pub fn show_mask(app: &crate::PhotocraftApp, ui: &mut egui::Ui, l: &Layer, actio
             actions.push(("ui.maskTarget".into(), json!(true)));
             actions.push(("channel.options".into(), Value::Null));
             ui.close();
+        }
+    });
+}
+
+/// The menu of `l`'s second-mask thumbnail: turn it off or on, delete it, or make it the vector
+/// mask (traced from what it reveals). It acts on `l`, which it selects first.
+pub fn show_second_mask(ui: &mut egui::Ui, l: &Layer, actions: &mut Vec<(String, Value)>) {
+    use photocraft_engine::manga_cmds::second_mask as second;
+    let Some(mask) = &l.second_mask else { return };
+    crate::widgets::menu_scroll(ui, |ui| {
+        ui.set_min_width(220.0);
+        let toggle = if mask.enabled { tl!("Disable Second Mask") } else { tl!("Enable Second Mask") };
+        let items: [(&str, &str, Value, bool); 3] = [
+            (toggle, second::ENABLED, json!({"layer": l.id.0, "enabled": !mask.enabled}), true),
+            (tl!("Delete Second Mask"), second::DELETE, json!({"layer": l.id.0}), true),
+            (tl!("Convert to Vector Mask"), second::TO_VECTOR, json!({"layer": l.id.0}), l.vector_mask.is_none()),
+        ];
+        for (label, id, params, enabled) in items {
+            if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
+                actions.push(("layer.select".into(), json!({"layer": l.id.0})));
+                actions.push((id.into(), params));
+                ui.close();
+            }
         }
     });
 }

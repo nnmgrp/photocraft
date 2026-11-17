@@ -181,6 +181,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
         let st = app.session.active();
         if let Some(l) = st.and_then(|s| s.active_layer.and_then(|id| s.doc.layer(id)))
             && let LayerContent::Shape(sh) = &l.content
+            && !(tool == Tool::VectorCurve && photocraft_engine::manga_cmds::vector_curve::get_live_linework(l).is_some())
         {
             // Hide the stale shape path while its transform preview is active.
             let transforming_this_shape =

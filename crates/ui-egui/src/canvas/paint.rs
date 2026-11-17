@@ -595,6 +595,11 @@ pub(super) fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter
     if d.sel_move.is_some() {
         return;
     }
+    if d.tool == Tool::Fill {
+        let points = d.points.clone();
+        crate::fill_tool_ui::draw_drag(app, painter, xf, &points);
+        return;
+    }
     let last = d.points.last().map(|p| [p[0], p[1]]).unwrap_or(d.start);
     let marquee = marquee_preview_px(&app.ui.tool_options, d, app.point_zoom());
     if let Some(r) = marquee {
@@ -639,6 +644,7 @@ pub(super) fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter
             }
             trail.draw(painter, doc_rect, xf.flip, col);
         }
+        Tool::Balloon => crate::vector_ui::draw_balloon_preview(app, painter, xf, d.start, last),
         t if crate::vector_ui::is_shape_tool(t) => crate::vector_ui::draw_shape_preview(app, painter, xf, t, d.start, last, d.live),
         Tool::SingleRowMarquee | Tool::SingleColumnMarquee => {
             // Mapped corner by corner like the other marquees, so a rotated view shows the line

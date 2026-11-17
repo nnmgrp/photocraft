@@ -153,6 +153,10 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> (std::sync::Ar
     // Vanishing Point's strokes over the document as it is now (the Layers panel may have
     // changed it since the options bar synced them this frame).
     crate::vp_ui::sync_preview(app);
+    // Live screentone drag preview hides the target layer while dragging on canvas.
+    if let Some(shown) = crate::manga_seam::screentone_display_doc(app, idx) {
+        return shown;
+    }
     // Puppet / Perspective Warp previews hide the layer they draw on a mesh.
     if let Some(shown) = crate::distort_ui::display_doc(app, idx) {
         return shown;

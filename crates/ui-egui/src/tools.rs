@@ -21,6 +21,7 @@ pub mod crop_ui;
 pub mod direct_select;
 pub mod eraser_ui;
 pub mod eyedropper_ui;
+pub mod fill_tool_ui;
 pub mod frame_tool;
 pub mod gradient_ui;
 pub mod lasso_ui;

@@ -104,6 +104,9 @@ fn finish(app: &mut PhotocraftApp, mut d: Drag, click: Option<bool>) {
         return;
     }
     match d.tool {
+        Tool::Balloon => crate::vector_ui::finish_balloon(app, d.start, [end[0], end[1]]),
+        Tool::Fill => crate::fill_tool_ui::finish(app, &d.points),
+        Tool::MagicWand => app.fill_drag = None,
         Tool::ObjectSelection => crate::retouch_ui::finish_object_selection(app, d.start, [end[0], end[1]], d.modifiers),
         Tool::FreeformPen => {
             if let Some(owner) = d.pen_owner {

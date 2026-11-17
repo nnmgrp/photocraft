@@ -44,6 +44,8 @@ pub use editing::{cancel, commit, commit_with, edit_active, edit_at, end_if_left
 pub(crate) use editing::{commit_shortcut, copy_selection, cut_selection, request_paste, select_all};
 #[cfg(test)]
 use editing::{insert, insert_typed, smart_quotes};
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use fonts::family_picker;
 #[cfg(test)]
 pub(crate) use fonts::{Axis, axis_value, slider_axes};
 #[cfg(test)]
@@ -71,6 +73,8 @@ pub(crate) use options_bar::{kerning_label, parse_kerning};
 #[cfg(test)]
 use overlay::CARET_STROKES;
 pub use overlay::draw_overlay;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use panel::capsule_controls;
 #[cfg(test)]
 pub(crate) use panel::{OPENTYPE_BUTTONS, toggle_opentype};
 pub use panel::{character_panel, type_properties};

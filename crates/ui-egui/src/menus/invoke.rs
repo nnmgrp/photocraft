@@ -13,6 +13,13 @@ pub(crate) fn panel_alias(id: &str) -> Option<&'static str> {
         "contextualTaskBar" => "window.toggle.contextualTaskBar",
         "brushSettings" => "window.toggle.brushSettings",
         "brushes" => "window.toggle.brushes",
+        "screentone" => "window.toggle.screentone",
+        "balloon" => "window.toggle.balloon",
+        "linework" => "window.toggle.linework",
+        "timelapse" => "window.toggle.timelapse",
+        "pages" => "window.toggle.pages",
+        "typesetter" => "window.toggle.typesetter",
+        "canvasCapsule" => "window.toggle.canvasCapsule",
         _ => return None,
     })
 }
@@ -187,6 +194,14 @@ fn invoke_early_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str,
     }
     // History panel menu › History Options… (without params: its dialog).
     if let Some(r) = crate::history_options_ui::menu(app, id, params) {
+        return Some(r);
+    }
+    // File › Automate › Topaz Gigapixel Presets.
+    if let Some(r) = crate::gigapixel_ui::menu(app, id) {
+        return Some(r);
+    }
+    // File › Timelapse items that open the Timelapse panel or ask for a recordings folder.
+    if let Some(r) = crate::timelapse_ui::menu(app, id, params) {
         return Some(r);
     }
     None
@@ -425,6 +440,10 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
     match id {
         "edit.search" => {
             app.ui.palette_open = !app.ui.palette_open;
+            Ok(Value::Null)
+        }
+        "layer.search" => {
+            crate::manga_seam::open_layer_search(app);
             Ok(Value::Null)
         }
         "help.about" => Ok(json!({"dialog": app.ui.open_dialog(DialogKind::About, Default::default())})),
@@ -896,6 +915,13 @@ fn toggle_panel(app: &mut PhotocraftApp, id: &str) -> Result<Value, String> {
         "contextualTaskBar" => &mut panels.context_task_bar,
         "brushSettings" => &mut panels.brush_settings,
         "brushes" => &mut panels.brushes,
+        "screentone" => &mut panels.screentone,
+        "balloon" => &mut panels.balloon,
+        "linework" => &mut panels.linework,
+        "timelapse" => &mut panels.timelapse,
+        "pages" => &mut panels.pages,
+        "typesetter" => &mut panels.typesetter,
+        "canvasCapsule" => &mut panels.canvas_capsule,
         "dock" => &mut panels.dock,
         _ => return Err(format!("unknown panel in {id}")),
     };

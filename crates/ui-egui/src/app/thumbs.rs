@@ -18,6 +18,9 @@ impl PhotocraftApp {
                 if layer.mask.is_some() {
                     live.insert((layer.id, mask_thumbs_ui::THUMB_MASK));
                 }
+                if layer.second_mask.is_some() {
+                    live.insert((layer.id, mask_thumbs_ui::THUMB_SECOND));
+                }
                 if layer.vector_mask.is_some() {
                     live.insert((layer.id, mask_thumbs_ui::THUMB_VECTOR));
                 }

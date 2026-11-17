@@ -22,7 +22,15 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
     if !(is_shape_tool(tool)
         || matches!(
             tool,
-            Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen | Tool::AddAnchorPoint | Tool::DeleteAnchorPoint | Tool::PathSelection | Tool::DirectSelection
+            Tool::Pen
+                | Tool::FreeformPen
+                | Tool::CurvaturePen
+                | Tool::AddAnchorPoint
+                | Tool::DeleteAnchorPoint
+                | Tool::PathSelection
+                | Tool::DirectSelection
+                | Tool::Balloon
+                | Tool::VectorCurve
         ))
     {
         return false;
@@ -181,6 +189,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             crate::panels::options_bar::range_alert(&mut app.ui, CONCAVITY_RANGE_ALERT);
         }
     }
+    super::manga::tool_options_bar(app, ui, tool);
     true
 }
 

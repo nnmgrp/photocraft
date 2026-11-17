@@ -511,7 +511,8 @@ fn selection_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: 
             widgets::value_field(ui, &mut app.ui.tool_options.tolerance, 0.0..=255.0, "", 58.0);
             widgets::checkbox(ui, &mut app.ui.tool_options.anti_alias, tl!("Anti-alias"));
             widgets::checkbox(ui, &mut app.ui.tool_options.contiguous, tl!("Contiguous"));
-            widgets::checkbox(ui, &mut app.ui.tool_options.sample_all.magic_wand, tl!("Sample All Layers"));
+            widgets::vline(ui, 22.0);
+            crate::fill_tool_ui::wand_options(app, ui);
             widgets::vline(ui, 22.0);
             if widgets::secondary_button(ui, tl!("Select Subject"), 0.0).clicked() {
                 let r = app.run("select.subject", json!({}));
@@ -544,6 +545,7 @@ fn selection_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: 
             widgets::checkbox(ui, &mut app.ui.tool_options.contiguous, tl!("Contiguous"));
             widgets::checkbox(ui, &mut app.ui.tool_options.sample_all.paint_bucket, tl!("All Layers"));
         }
+        Tool::Fill => crate::fill_tool_ui::options_bar(app, ui),
         Tool::Gradient => {
             // Live "Gradient" (a Gradient Fill layer) or "Classic gradient" (pixels).
             // A gradient fill layer is always edited live: the choice reads "Gradient" and is greyed,
@@ -761,6 +763,7 @@ fn is_selection_options_tool(tool: Tool) -> bool {
             | Tool::MagneticLasso
             | Tool::MagicWand
             | Tool::PaintBucket
+            | Tool::Fill
             | Tool::Gradient
             | Tool::PerspectiveCrop
             | Tool::Crop

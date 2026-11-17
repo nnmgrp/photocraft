@@ -350,12 +350,11 @@ impl FontLibrary {
     }
 }
 
-/// Searchable font-family combo box, with the recent and favourite fonts of `app`. `Some` when a
-/// family was picked, holding the style when it was picked from the family's expanded styles.
-pub(super) fn font_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui, current: &mut String, width: f32) -> Option<Option<String>> {
+/// Shared font-family combo box under `salt`, with the recent and favourite fonts of `app`.
+pub(crate) fn family_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui, salt: &str, current: &mut String, width: f32) -> Option<Option<String>> {
     let preview = app.session.prefs().type_.font_preview;
     let mut library = FontLibrary { preview_text: preview_text(app), ..FontLibrary::of(app) };
-    let changed = family_picker_in(ui, "type-font", current, width, &families(), preview, &mut library);
+    let changed = family_picker_in(ui, salt, current, width, &families(), preview, &mut library);
     let style = library.picked_style.take();
     library.finish(app);
     if !changed {
@@ -364,6 +363,12 @@ pub(super) fn font_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui, current: &
     // Each family applied is recorded, an arrow step too, as `PhotocraftApp::note_recent_font` says.
     app.note_recent_font(current);
     Some(style)
+}
+
+/// Searchable font-family combo box, with the recent and favourite fonts of `app`. `Some` when a
+/// family was picked, holding the style when it was picked from the family's expanded styles.
+pub(super) fn font_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui, current: &mut String, width: f32) -> Option<Option<String>> {
+    family_picker(app, ui, "type-font", current, width)
 }
 
 /// The options bar's hover text on the [`font_picker`] just drawn in `ui`: its name field and its

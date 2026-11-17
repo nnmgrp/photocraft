@@ -1,0 +1,372 @@
+	File	Dosya
+	Left	Sol
+	Save	Kaydet
+	Paste	Yapıştır
+	Clear	Temizle
+	Search…	Ara…
+	Scale	Ölçekle
+	Delete	Sil
+	Reverse	Ters
+	Align	Hizala
+	All Layers	Tüm Katmanlar
+	Horizontal	Yatay
+	None	Yok
+	Noise	Gürültü
+	Video	Video
+	Square	Kare
+	Extras	Ekstralar
+	Color	Renk
+	Options	Seçenekler
+	Screentones	Tarama Tonları
+	Manga Balloons	Manga Konuşma Balonları
+	Balloons	Konuşma Balonları
+	SAI Linework	SAI Çizim
+	Linework	Çizim
+	Apply	Uygula
+	Auto	Otomatik
+	All Caps	Tamamı Büyük Harf
+	Angle	Açı
+	Anti-alias	Kenar yumuşatma
+	Background	Arka plan
+	Bend:	Bükülme:
+	Cancel	İptal
+	Center	Merkez
+	Contiguous	Bitişik
+	Custom	Özel
+	Default	Varsayılan
+	Density	Yoğunluk
+	Density:	Yoğunluk:
+	Done	Bitti
+	Dots	Noktalar
+	Fill:	Dolgu:
+	Foreground	Ön plan
+	Height	Yükseklik
+	Leading	Satır Aralığı
+	Metrics	Metrikler
+	Mode:	Mod:
+	Name:	Ad:
+	Normal	Normal
+	OK	Tamam
+	Opacity	Opaklık
+	Optical	Optik
+	Preset	Ön ayar
+	Preset:	Ön ayar:
+	Preview	Önizleme
+	Roundness	Yuvarlaklık
+	Shape:	Şekil:
+	Size	Boyut
+	Size:	Boyut:
+	Small Caps	Küçük Büyük Harfler
+	Strikethrough	Üstü çizili
+	Style	Stil
+	Tolerance	Tolerans
+	Transparent	Saydam
+	Type:	Tür:
+	Underline	Altı çizili
+	White	Beyaz
+	Width	Genişlik
+	Width:	Genişlik:
+	name	ad
+	Diamond	Elmas
+	Linear	Doğrusal
+	Radial	Radyal
+	Lines	Çizgiler
+	Angle:	Açı:
+	Gradient	Degrade
+cameraRaw	Color	Renk
+	Settings	Ayarlar
+	Duplicate	Çoğalt
+	Automatic	Otomatik
+	Enable	Etkinleştir
+	New Layer	Yeni Katman
+	No document open	Hiçbir belge açık değil
+	Confirm	Onayla
+	Back	Geri
+	Library	Kütüphane
+	Folder	Klasör
+	Superscript	Üst simge
+	Subscript	Alt simge
+	High	Yüksek
+	Low	Düşük
+	Choose…	Seç…
+	Result	Sonuç
+	Length	Uzunluk
+	Smoothness	Pürüzsüzlük
+	Circle	daire
+	Crosshatch	Çapraz tarama
+	Hearts	Kalpler
+	Hexagon	Altıgen
+	Random	Rastgele
+	Pattern Type	Desen Türü
+	Stars	Yıldızlar
+	Hanging Punctuation	Asılı Noktalama İşaretleri
+	Justify	İki Yana Yasla
+	Seed	Tohum
+	Target	Hedef
+	Round	Yuvarlak
+	Button Mode	Düğme modu
+	Topaz Gigapixel AI…	Topaz Gigapixel AI…
+	Opened in Topaz Gigapixel AI: export the image there to bring it back	Topaz Gigapixel AI'da açıldı: geri getirmek için görüntüyü orada dışa aktarın
+	Stopped waiting for Topaz Gigapixel AI	Topaz Gigapixel AI beklemesi durduruldu
+	Topaz Gigapixel AI's image could not be applied: {error}	Topaz Gigapixel AI görüntüsü uygulanamadı: {error}
+	Topaz Gigapixel AI: upscaled {scale}× to {w} × {h} px (new layer)	Topaz Gigapixel AI: {scale}× büyütülerek {w} × {h} px oldu (yeni katman)
+	Waiting for Topaz Gigapixel AI: export the upscaled image there to bring it back.	Topaz Gigapixel AI bekleniyor: geri getirmek için büyütülmüş görüntüyü orada dışa aktarın.
+	Model:	Model:
+	There is no such Topaz Gigapixel preset	Böyle bir Topaz Gigapixel hazır ayarı yok
+	Saved Topaz Gigapixel preset “{name}”	“{name}” Topaz Gigapixel hazır ayarı kaydedildi
+	New Preset	Yeni Hazır Ayar
+	Upscale:	Büyütme:
+	With these settings	Bu ayarlarla
+	With two presets	İki hazır ayarla
+	Save two presets with their own settings first; then this one can run them together.	Önce kendi ayarları olan iki hazır ayar kaydedin; bu hazır ayar ardından ikisini birlikte çalıştırabilir.
+	First:	Önce:
+	Then:	Sonra:
+	Results:	Sonuçlar:
+	One after the other	Art arda
+	Each on its own layer	Her biri kendi katmanında
+	Both presets upscale the image; each result becomes a layer, to compare or blend.	İki hazır ayar da görüntüyü büyütür; her sonuç karşılaştırmak veya karıştırmak için bir katman olur.
+	The second preset upscales the first one's result.	İkinci hazır ayar, ilkinin sonucunu büyütür.
+	Run a saved preset from File › Automate › Topaz Gigapixel Presets.	Kayıtlı bir hazır ayarı Dosya › Otomatikleştir › Topaz Gigapixel Hazır Ayarları menüsünden çalıştırın.
+	Auto lets Gigapixel choose.	Otomatik, seçimi Gigapixel'e bırakır.
+	Choose a folder for your timelapse recordings	Timelapse kayıtlarınız için bir klasör seçin
+	Timelapse	Timelapse
+	Auto record	Otomatik kayıt
+	Recording	Kaydediliyor
+	Click to pause	Duraklatmak için tıklayın
+	Start recording	Kaydı başlat
+	Reference layer	Referans katmanı
+	Recorded	Kaydediliyor
+	{count} of {total} not recorded	{total} katmandan {count} tanesi kaydedilmiyor
+	Reference	Referans
+	Play video	Videoyu oynat
+	Show in folder	Klasörde göster
+	Advanced settings	Gelişmiş ayarlar
+	Flash before the final image	Son görüntüden önce parlama
+	Slow down at the end	Sonda yavaşlat
+	Remove flicker	Titremeyi kaldır
+	Remove frames with undo	Geri alınca kareleri kaldır
+	Makes the MP4. Automatic looks next to PhotoCraft, then on PATH.	MP4'ü oluşturur. Otomatik, önce PhotoCraft'ın yanında, sonra PATH'te arar.
+	Choose the ffmpeg program on this computer	Bu bilgisayardaki ffmpeg programını seçin
+	Opening files isn't available here	Dosya açma burada kullanılamıyor
+@plural	{n} frame|{n} frames	{n} kare
+	Refresh	Yenile
+	Recordings will be listed here once you've chosen a folder.	Bir klasör seçtiğinizde kayıtlar burada listelenir.
+	No recordings yet.	Henüz kayıt yok.
+	Open folder	Klasörü aç
+	Delete frames	Kareleri sil
+	Delete folder	Klasörü sil
+	Pause the recording first	Önce kaydı duraklatın
+	REC	REC
+	EXPORTED	DIŞA AKTARILDI
+	NOT EXPORTED	DIŞA AKTARILMADI
+	{time} work	{time} çalışma
+	“{name}” hasn't been exported yet. If you delete its {frames}, you can't make a video of it anymore. This can't be undone.	“{name}” henüz dışa aktarılmadı. Karelerini ({frames}) silerseniz artık ondan video yapamazsınız. Bu işlem geri alınamaz.
+	Delete the {frames} of “{name}”?	“{name}” kareleri ({frames}) silinsin mi?
+	You've recorded more since the last export, and that part isn't in the video.	Son dışa aktarımdan bu yana daha fazla kayıt yaptınız; o kısım videoda yok.
+	Your videos and the work time are kept. This can't be undone.	Videolarınız ve çalışma süresi korunur. Bu işlem geri alınamaz.
+	Delete “{name}” and its folder? It's removed from the library, along with its work time. Videos you exported stay where you saved them. This can't be undone.	“{name}” ve klasörü silinsin mi? Kayıt, çalışma süresiyle birlikte kütüphaneden kaldırılır. Dışa aktardığınız videolar kaydettiğiniz yerde kalır. Bu işlem geri alınamaz.
+	Frames deleted.	Kareler silindi.
+	Deleted “{name}”. Its folder holds other files, so it was kept.	“{name}” silindi. Klasöründe başka dosyalar olduğu için klasör korundu.
+	Deleted “{name}”.	“{name}” silindi.
+@plural	{n} recording|{n} recordings	{n} kayıt
+	No upscale has come back from Topaz Gigapixel AI yet	Topaz Gigapixel AI'dan henüz bir büyütme dönmedi
+	Topaz Gigapixel AI: upscaled {scale}× to {w} × {h} px (new layer). Keep these settings with Topaz Gigapixel Presets › Save Preset from Last Upscale	Topaz Gigapixel AI: {scale}× büyütülerek {w} × {h} px oldu (yeni katman). Bu ayarları Topaz Gigapixel Hazır Ayarları › Son Büyütmeden Hazır Ayar Kaydet ile saklayın
+	Saved {name} ({seconds} video).	{name} kaydedildi ({seconds} video).
+	Export failed: {error}	Dışa aktarma başarısız: {error}
+	Export cancelled.	Dışa aktarma iptal edildi.
+	just now	az önce
+	{n} min ago	{n} dk önce
+	{n} h ago	{n} sa önce
+	yesterday	dün
+	{n} days ago	{n} gün önce
+	Smaller files and the quickest capturing. Fine for quick sketches and previews.	Daha küçük dosyalar ve en hızlı yakalama. Hızlı eskizler ve önizlemeler için yeterli.
+	Sharper video for big screens. Uses about twice the disk space.	Büyük ekranlar için daha keskin video. Yaklaşık iki kat disk alanı kullanır.
+	Full-HD video, good for social media. Recommended.	Full HD video, sosyal medya için uygun. Önerilir.
+	idle	boşta
+	Record	Kayıt
+	Paused	Duraklatıldı
+	Click to resume recording	Kayda devam etmek için tıklayın
+	Open a document to record it.	Kaydetmek için bir belge açın.
+	You'll be asked where to save recordings.	Kayıtların nereye kaydedileceği sorulacak.
+	Export again	Yeniden dışa aktar
+	Export video	Videoyu dışa aktar
+	Show the export results	Dışa aktarma sonuçlarını göster
+	Hide the export results	Dışa aktarma sonuçlarını gizle
+	≈ {seconds} video from {frames}.	≈ {frames} ile {seconds} video.
+	Cancel export	Dışa aktarmayı iptal et
+	Frames	Kareler
+	Timer	Süre
+	On disk	Diskte
+	Hide the live preview	Canlı önizlemeyi gizle
+	Show the newest frame	En yeni kareyi göster
+	No frames yet — just start drawing	Henüz kare yok — çizmeye başlayın
+	No frames yet	Henüz kare yok
+	No layer selected	Katman seçilmedi
+	{n} layers selected	{n} katman seçildi
+	Not recorded	Kaydedilmiyor
+	A reference layer works like a normal layer, but won't show up in the timelapse.	Referans katmanı normal bir katman gibi çalışır ama timelapse'te görünmez.
+	Export settings	Dışa aktarma ayarları
+	Make video with	Videoyu şununla oluştur
+	Bars colour	Şerit rengi
+	Bars fill the empty space when the canvas size changed during recording.	Kayıt sırasında tuval boyutu değiştiyse şeritler boş alanı doldurur.
+	Show finished drawing first	Önce bitmiş çizimi göster
+	Hold final image	Son görüntüyü beklet
+	Show work-time counter	Çalışma süresi sayacını göster
+	Record something in this document to see how long the video will be.	Videonun ne kadar süreceğini görmek için bu belgede bir şey kaydedin.
+	≈ {seconds} video	≈ {seconds} video
+	{n} recorded frames	{n} kaydedilmiş kare
+	Auto shows every frame once (at least 5 s, at most 1 min).	Otomatik her kareyi bir kez gösterir (en az 5 sn, en fazla 1 dk).
+	The canvas size changed during recording; earlier frames are fitted inside the final size.	Kayıt sırasında tuval boyutu değişti; önceki kareler son boyuta sığdırılır.
+	Remove flicker leaves out frames that flash in and out (a layer hidden for a moment, a stroke undone right away), so the video can be a bit shorter.	Titremeyi kaldır, bir anlığına görünüp kaybolan kareleri atlar (kısa süre gizlenen bir katman, hemen geri alınan bir fırça darbesi); bu yüzden video biraz kısalabilir.
+	Recordings folder	Kayıt klasörü
+	Not chosen yet — see Settings	Henüz seçilmedi — Ayarlar'a bakın
+	recorded {when}	kaydedildi: {when}
+	Recorded more since the last export.	Son dışa aktarımdan bu yana daha fazla kaydedildi.
+	Frames folder	Kare klasörü
+	Not chosen yet	Henüz seçilmedi
+	Where the recorded frames are kept. Videos are saved wherever you choose when you export.	Kaydedilen karelerin tutulduğu yer. Videolar dışa aktarırken seçtiğiniz yere kaydedilir.
+	Choose folder…	Klasör seç…
+	Change folder…	Klasörü değiştir…
+	Recording quality	Kayıt kalitesi
+	Undoing something removes those recorded frames.	Bir şeyi geri almak o kaydedilmiş kareleri kaldırır.
+	Reference layers	Referans katmanları
+	Name tag	Ad etiketi
+	Layers with this in their name are left out of the timelapse.	Adında bu bulunan katmanlar timelapse'e alınmaz.
+	Work timer	Çalışma sayacı
+	Idle after	Boşta sayılma
+	The timer stops counting after this long without activity.	Sayaç bu kadar süre etkinlik olmazsa durur.
+	Timelapse Recorder · PhotoCraft	Timelapse Recorder · PhotoCraft
+	Run	Çalıştır
+	Fill Tool	Doldurma Aracı
+	Nothing to fill there	Orada doldurulacak bir şey yok
+	No enclosed area to fill there	Orada doldurulacak kapalı alan yok
+	Fill: click an area	Doldurma: bir alana tıklayın
+	Enclose and Fill: draw round the areas to fill	Çevrele ve Doldur: doldurulacak alanların çevresini çizin
+	Paint Unfilled Area: paint over the gaps a fill left	Doldurulmamış Alanı Boya: dolgunun bıraktığı boşlukların üzerine boyayın
+	Refer	Başvuru
+	Editing Layer	Düzenlenen Katman
+	Selected Layers	Seçili Katmanlar
+	Layers in Folder	Klasördeki Katmanlar
+	Reference Layers	Başvuru Katmanları
+	Exclude	Hariç Tut
+	Editing layer	Düzenlenen katman
+	Text layers	Metin katmanları
+	Locked layers	Kilitli katmanlar
+	Layers the fill doesn't read	Dolgunun okumadığı katmanlar
+	Close Gap	Boşlukları Kapat
+	Area Scaling	Alan Ölçekleme
+	Grow the fill under the lines, or shrink it	Dolguyu çizgilerin altına genişlet veya daralt
+	To Darkest Pixel	En Koyu Piksele Kadar
+	Follow Adjacent Pixels	Bitişik Pikselleri İzle
+	White and Transparent	Beyaz ve Saydam
+	Image Border	Görüntü Kenarı
+	The canvas edge closes gaps as a line does	Tuval kenarı boşlukları bir çizgi gibi kapatır
+	Fill Tool Options	Doldurma Aracı Seçenekleri
+	Save as:	Farklı kaydet:
+	Save Preset	Hazır Ayarı Kaydet
+	Keep these two presets as one, listed with the others	Bu iki hazır ayarı tek ayar olarak diğerleriyle birlikte sakla
+	seconds	saniye
+	Close gaps up to {px} px	{px} px’e kadar boşlukları kapat
+	Grow the selection under the lines, or shrink it	Seçimi çizgilerin altına genişlet veya daralt
+	Delete Second Mask	İkinci Maskeyi Sil
+	Disable Second Mask	İkinci Maskeyi Devre Dışı Bırak
+	Enable Second Mask	İkinci Maskeyi Etkinleştir
+	Editing layer blocks the fill	Düzenlenen katman dolguyu durdurur
+	Paint on the layer being filled stops the fill at any tolerance, and the fill goes in behind it: draw over a gap to close it	Doldurulan katmandaki boya her toleransta dolguyu durdurur ve dolgu onun arkasına girer: kapatmak için bir boşluğun üzerine çizin
+	Undo widens Close Gap	Geri alma Boşlukları Kapat'ı genişletir
+	Each Undo of a fill closes bigger gaps for the next click, until you pick another tool	Bir dolgunun her geri alınışı, başka bir araç seçene kadar sonraki tıklamada daha büyük boşlukları kapatır
+	Close Gap widened to {px} px: click again to fill	Boşlukları Kapat {px} px'e genişletildi: doldurmak için yeniden tıklayın
+	Screentone…	Tarama…
+	Satellites	Uydular
+	Count:	Sayı:
+	Distance:	Mesafe:
+	Stretch:	Uzatma:
+	Distortion & Jitter	Bozulma ve titreme
+	Aspect X:	Oran X:
+	Aspect Y:	Oran Y:
+	Row Offset:	Satır kaydırma:
+	Merge:	Birleştirme:
+	Jitter Pos:	Titreme konumu:
+	Jitter Size:	Titreme boyutu:
+	Midpoint:	Orta nokta:
+	Start Size:	Başlangıç boyutu:
+	End Size:	Bitiş boyutu:
+	Save as Pattern	Desen Olarak Kaydet
+	Font Settings	Yazı Tipi Ayarları
+	No folder	Klasör yok
+	+ New folder...	+ Yeni klasör...
+	Folder name	Klasör adı
+	New folder name	Yeni klasör adı
+	Favorite font	Favori yazı tipi
+	Faux bold	Sahte kalın
+	Faux italic	Sahte italik
+	Use standard font metrics and the baseline	Metrik sistem: standart yazı tipi metrikleri ve taban çizgisi
+	Use visual kerning and bubble centering	Optik sistem: görsel kerning ve balon ortalama
+	Leading is linked to size	Satır aralığı boyuta bağlı
+	Leading is not linked to size	Satır aralığı boyuta bağlı değil
+	H-Scale (%)	Yatay ölçek (%)
+	Edit preview text	Önizleme metnini düzenle
+	Leave empty for the automatic sample	Otomatik örnek için boş bırakın
+	Preview unavailable	Önizleme kullanılamıyor
+	Duplicate this style	Bu stili çoğalt
+	Delete this style	Bu stili sil
+	Bubble Contour	Balon Şekli
+	No contour variants	Kontur varyasyonu yok
+	~ SCurve	~ SCurve
+	＋ Add tail	＋ Add tail
+	＋ Create balloon on canvas	＋ Create balloon on canvas
+	＋ Fit balloon	＋ Fit balloon
+	⊘ None	⊘ None
+	⌒ Arc	⌒ Arc
+	▽ Wedge	▽ Wedge
+	◎ Double outline	◎ Double outline
+	◌ Thought	◌ Thought
+	☁️ Cloud	☁️ Cloud
+	✓ Text fits: {lines} lines, {size} pt	✓ Text fits: {lines} lines, {size} pt
+	✴️ Burst	✴️ Burst
+	⑂ Double	⑂ Double
+	◽ Rect	◽ Rect
+	⚠ Text does not fit — enlarge the balloon or reduce the type size	⚠ Text does not fit — enlarge the balloon or reduce the type size
+	⚡ Bake to SAI Linework	⚡ Bake to SAI Linework
+	⚡ Lightning	⚡ Lightning
+	⚪ Ellipse	⚪ Ellipse
+	Add a tail to the selected balloon	Add a tail to the selected balloon
+	Background colour	Background colour
+	Balloon body:	Balloon body:
+	Bubble radius:	Bubble radius:
+	Bumps:	Bumps:
+	Bundle:	Bundle:
+	Corner radius:	Corner radius:
+	Cusp bite:	Cusp bite:
+	Dialogue and fit:	Dialogue and fit:
+	Dialogue text…	Dialogue text…
+	Fit the shape to the text: the balloon grows when the line does not fit	Fit the shape to the text: the balloon grows when the line does not fit
+	Hand-drawn noise:	Hand-drawn noise:
+	Inner sharpness:	Inner sharpness:
+	Inward concavity:	Inward concavity:
+	Jitter:	Jitter:
+	Lobe height:	Lobe height:
+	Mouth width:	Mouth width:
+	Needle width:	Needle width:
+	Needles:	Needles:
+	Outer sharpness:	Outer sharpness:
+	Outline gap:	Outline gap:
+	Random jitter variation	Random jitter variation
+	Random ray variation	Random ray variation
+	Ray extension:	Ray extension:
+	Ray length:	Ray length:
+	Rays:	Rays:
+	Round the tips	Round the tips
+	Spikes:	Spikes:
+	Squircle:	Squircle:
+	Stroke and fill:	Stroke and fill:
+	Sub-harmonics:	Sub-harmonics:
+	Tail type:	Tail type:
+	Text area:	Text area:
+	Thought bubbles:	Thought bubbles:
+	Turn the balloon into an editable vector linework layer	Turn the balloon into an editable vector linework layer
+	Type size:	Type size:
+	Valley depth:	Valley depth:
+	💥 Spiky	💥 Spiky
+	🔄 Reset to the manga default	🔄 Reset to the manga default
+	🦔 Uniflash	🦔 Uniflash

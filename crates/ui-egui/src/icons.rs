@@ -179,6 +179,7 @@ pub fn tool_icon(t: Tool) -> &'static str {
         Tool::Frame => "frame-placeholder",
         Tool::Gradient => "gradient",
         Tool::PaintBucket => "paint-bucket",
+        Tool::Fill => "fill-tool",
         Tool::Type | Tool::VerticalType => "type",
         Tool::HorizontalTypeMask => "type-mask",
         Tool::VerticalTypeMask => "type-mask-vertical",
@@ -208,6 +209,7 @@ pub fn tool_icon(t: Tool) -> &'static str {
         Tool::AddAnchorPoint => "pen-add-anchor",
         Tool::DeleteAnchorPoint => "pen-delete-anchor",
         Tool::ConvertPoint => "convert-point",
+        Tool::VectorCurve => "pen-curvature",
         Tool::PathSelection => "mouse-pointer-2",
         Tool::DirectSelection => "direct-select",
         Tool::Rectangle => "rectangle-horizontal",
@@ -217,6 +219,7 @@ pub fn tool_icon(t: Tool) -> &'static str {
         Tool::Star => "star",
         Tool::Line => "slash",
         Tool::CustomShape => "cloud",
+        Tool::Balloon => "message-square",
     }
 }
 

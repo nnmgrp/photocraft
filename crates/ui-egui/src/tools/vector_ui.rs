@@ -19,6 +19,7 @@ use crate::state::{Tool, ToolOptions};
 use crate::theme::Tokens;
 
 mod curvature;
+mod manga;
 mod options;
 mod overlay;
 mod path_ops;
@@ -29,6 +30,11 @@ mod shapes;
 
 pub(crate) use curvature::curvature_anchor_at;
 pub use curvature::{curvature_down, curvature_move, curvature_toggle, curvature_up};
+pub use manga::{
+    ActiveLayerDrag, LayerDragKind, NODE_HIT_RADIUS_PX, NodeDragKind, SEGMENT_INSERT_RADIUS_PX, SNAP_CLOSE_RADIUS_PX, VectorCurveMode, VectorCurveState,
+    apply_stroke_width, draw_balloon_preview, draw_vector_curve_overlay, finish_balloon, is_balloon_tool, picked_stroke_width, reconcile_vector_curve_layer,
+    selected_stroke_width, vector_curve_commit, vector_curve_down, vector_curve_escape, vector_curve_hover, vector_curve_move, vector_curve_up,
+};
 #[cfg(test)]
 use options::{corner_radii_patch, solid_paint};
 pub(crate) use options::{draws_path, enabled_stroke_width, paint_gesture};

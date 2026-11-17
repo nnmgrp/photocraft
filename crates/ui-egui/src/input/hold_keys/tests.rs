@@ -235,6 +235,10 @@ fn the_pen_path_being_drawn_stays_visible_while_space_pans() {
 #[test]
 fn space_while_editing_type_is_not_the_hand_tool() {
     let mut h = harness(Tool::Type);
+    if photocraft_text::craft_fonts::CRAFT_FONTS.is_empty() {
+        // Without bundled craft-fonts, pro_tabs cannot shape the layer's Arabic name on frame 1.
+        h.ctx.set_missing_glyph_policy(egui::MissingGlyphPolicy::Tofu);
+    }
     let id = h.state_mut().run("type.create", json!({"text": "ئا", "size": 20, "x": 100, "y": 100})).unwrap()["layer"].as_u64().unwrap();
     h.state_mut().ui.text_edit = Some(crate::state::TextEdit {
         layer: id,

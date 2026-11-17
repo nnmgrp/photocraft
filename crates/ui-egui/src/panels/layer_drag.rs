@@ -258,6 +258,7 @@ pub(super) fn starts_mask_drag(ctx: &egui::Context, l: &Layer, resp: &egui::Resp
     let kind = thumbs.iter().find(|(_, r)| r.contains(p))?.0;
     let present = match kind {
         MaskKind::Pixel => l.mask.is_some(),
+        MaskKind::Second => l.second_mask.is_some(),
         MaskKind::Vector => l.vector_mask.is_some(),
     };
     present.then_some(kind)
@@ -346,7 +347,8 @@ pub(super) fn effect_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, l: &Layer,
     for (i, (name, on, kind)) in rows.into_iter().enumerate() {
         let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::click_and_drag());
         // Drag the row onto another layer to move its effects there, ⌥-drag to copy them.
-        if resp.drag_started() {
+        let scrub = crate::manga_seam::effect_row_scrub(ui, l, i.checked_sub(1), rect, &resp, actions);
+        if scrub.trigger_dnd {
             start_fx_drag(ui.ctx(), l.id, i.checked_sub(1));
         }
         if !ui.is_rect_visible(rect) {
@@ -377,7 +379,8 @@ pub(super) fn effect_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, l: &Layer,
         if i == 0 {
             icons::paint(ui, Rect::from_center_size(pos2(x - 12.0, rect.center().y), vec2(14.0, 14.0)), "sparkles", 11.0, t.text_dim);
         }
-        let right = rect.right() - crate::layer_row_ui::RIGHT_PAD;
+        let val_text = crate::manga_seam::effect_row_value_text(l, i.checked_sub(1));
+        let right = rect.right() - crate::layer_row_ui::RIGHT_PAD - if val_text.is_some() { 30.0 } else { 0.0 };
         crate::layer_row_ui::label(
             ui.painter(),
             x,
@@ -387,14 +390,23 @@ pub(super) fn effect_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, l: &Layer,
             egui::FontId::proportional(11.5),
             if on { t.text_dim } else { t.text_faint },
         );
+        if let Some(val) = val_text {
+            let val_color = if scrub.is_scrubbing { t.accent } else { t.text_faint };
+            let val_pos = pos2(rect.right() - crate::layer_row_ui::RIGHT_PAD, rect.center().y);
+            ui.painter().text(val_pos, egui::Align2::RIGHT_CENTER, val, egui::FontId::monospace(10.0), val_color);
+        }
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, name.clone()));
-        if resp.double_clicked() {
+        if resp.double_clicked() && !ui.input(|inp| inp.modifiers.alt) {
             crate::layer_style::open_for_layer(app, l.id, kind);
         }
         // #2846: right-click opens the layer style menu (Create Layer, Copy Layer Style…), as in Photoshop.
         resp.context_menu(|ui| {
+            crate::manga_seam::effect_row_context_hud(ui, l, i.checked_sub(1), rect);
             crate::widgets::style_spectrum_popup_menu(ui);
             crate::layer_menu_ui::show_effects(app, ui, l, actions);
         });
+    }
+    if let Some(st) = app.session.active() {
+        crate::manga_seam::render_fx_hud(ui, &st.doc, actions);
     }
 }

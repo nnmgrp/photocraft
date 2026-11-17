@@ -39,7 +39,7 @@ fn target(tool: Tool) -> Target {
     match tool {
         Tool::Brush | Tool::Eraser | Tool::CloneStamp | Tool::HistoryBrush => Target::Brush { flow: true },
         Tool::Pencil => Target::Brush { flow: false },
-        Tool::Gradient | Tool::PaintBucket => Target::ToolOpacity,
+        Tool::Gradient | Tool::PaintBucket | Tool::Fill => Target::ToolOpacity,
         Tool::BackgroundEraser => Target::BgTolerance,
         // Their options-bar number is a strength, exposure or tolerance, not this opacity.
         t if t.is_brushlike() || t == Tool::MagicEraser => Target::None,
@@ -162,6 +162,7 @@ fn apply(app: &mut PhotocraftApp, percent: f32, shift: bool) {
         (Target::Brush { flow: true }, true) => {
             let _ = app.run("tools.setBrush", json!({ "brush": { "flow": v.max(0.01) } }));
         }
+        (Target::ToolOpacity, false) if app.ui.tool == crate::state::Tool::Fill => app.ui.tool_options.fill_tool.current_mut().opacity = percent,
         (Target::ToolOpacity, false) => app.ui.tool_options.fill_opacity = percent,
         // The Tolerance field starts at 1%; `00` (0%) keeps today's value rather than guessing.
         (Target::BgTolerance, false) if percent >= 1.0 => app.ui.tool_options.bg_tolerance = percent,

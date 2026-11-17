@@ -35,8 +35,15 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
     if crate::analysis_ui::handles(id) {
         return true;
     }
-    if crate::preset_panels::handles(id) || crate::type_panels_ui::handles(id) || crate::timeline_ui::handles(id) {
+    if crate::preset_panels::handles(id)
+        || crate::type_panels_ui::handles(id)
+        || crate::timeline_ui::handles(id)
+        || crate::manga_seam::panel_owns(id.strip_prefix("window.panel.").or_else(|| id.strip_prefix("window.toggle.")).unwrap_or(id))
+    {
         return true;
+    }
+    if let Some(e) = crate::gigapixel_ui::is_enabled(app, id) {
+        return e;
     }
     if let Some(e) = crate::view_cmds::is_enabled(app, id) {
         return e;
@@ -62,7 +69,7 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
         | "window.panel.closeOthers"
         | "window.panel.minimize"
         | "window.panel.iconic" => !app.session.prefs().workspace_locked,
-        "file.open" | "file.exit" | "file.clearRecent" | "file.removeRecent" | "help.about" | "help.systemInfo" | "edit.search" => true,
+        "file.open" | "file.exit" | "file.clearRecent" | "file.removeRecent" | "help.about" | "help.systemInfo" | "edit.search" | "layer.search" => true,
         i if i.starts_with("file.openRecent.") => true,
         i if i.starts_with(DOCUMENT_ITEM) => true,
         i if crate::links::url_for(i).is_some() => true,
@@ -144,6 +151,9 @@ pub(super) fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
     if let Some(c) = crate::type_panels_ui::checked(app, id) {
         return Some(c);
     }
+    if let Some(c) = crate::manga_seam::panel_checked(app, id) {
+        return Some(c);
+    }
     if let Some(alias) = panel_alias(id) {
         return checked(app, alias);
     }
@@ -209,6 +219,13 @@ pub(super) fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
         "window.toggle.contextualTaskBar" => p.context_task_bar,
         "window.toggle.brushSettings" => p.brush_settings,
         "window.toggle.brushes" => p.brushes,
+        "window.toggle.screentone" => p.screentone,
+        "window.toggle.balloon" => p.balloon,
+        "window.toggle.linework" => p.linework,
+        "window.toggle.timelapse" => p.timelapse,
+        "window.toggle.pages" => p.pages,
+        "window.toggle.typesetter" => p.typesetter,
+        "window.toggle.canvasCapsule" => p.canvas_capsule,
         _ => return None,
     })
 }

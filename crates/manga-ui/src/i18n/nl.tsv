@@ -1,0 +1,372 @@
+	File	Bestand
+	Left	Links
+	Save	Opslaan
+	Paste	Plakken
+	Clear	Wissen
+	Search…	Zoeken…
+	Scale	Schalen
+	Delete	Verwijderen
+	Reverse	Omkeren
+	Align	Uitlijnen
+	All Layers	Alle lagen
+	Horizontal	Horizontaal
+	None	Geen
+	Noise	Ruis
+	Video	Video
+	Square	Vierkant
+	Extras	Extra's
+	Color	Kleur
+	Options	Opties
+	Screentones	Rastertinten
+	Manga Balloons	Mangatekstballonnen
+	Balloons	Tekstballonnen
+	SAI Linework	SAI-lijnwerk
+	Linework	Lijnwerk
+	Apply	Toepassen
+	Auto	Automatisch
+	All Caps	Alleen hoofdletters
+	Angle	Hoek
+	Anti-alias	Anti-aliasing
+	Background	Achtergrond
+	Bend:	Buiging:
+	Cancel	Annuleren
+	Center	Midden
+	Contiguous	Aaneengesloten
+	Custom	Aangepast
+	Default	Standaard
+	Density	Dichtheid
+	Density:	Dichtheid:
+	Done	Gereed
+	Dots	Stippen
+	Fill:	Vulling:
+	Foreground	Voorgrond
+	Height	Hoogte
+	Leading	Interlinie
+	Metrics	Metrisch
+	Mode:	Modus:
+	Name:	Naam:
+	Normal	Normaal
+	OK	OK
+	Opacity	Dekking
+	Optical	Optisch
+	Preset	Voorinstelling
+	Preset:	Voorinstelling:
+	Preview	Voorvertoning
+	Roundness	Rondheid
+	Shape:	Vorm:
+	Size	Grootte
+	Size:	Grootte:
+	Small Caps	Kleinkapitalen
+	Strikethrough	Doorhalen
+	Style	Stijl
+	Tolerance	Tolerantie
+	Transparent	Transparant
+	Type:	Type:
+	Underline	Onderstrepen
+	White	Wit
+	Width	Breedte
+	Width:	Breedte:
+	name	naam
+	Diamond	Ruit
+	Linear	Lineair
+	Radial	Radiaal
+	Lines	Lijnen
+	Angle:	Hoek:
+	Gradient	Verloop
+cameraRaw	Color	Kleur
+	Settings	Instellingen
+	Duplicate	Dupliceren
+	Automatic	Automatisch
+	Enable	Inschakelen
+	New Layer	Nieuwe laag
+	No document open	Geen document geopend
+	Confirm	Bevestigen
+	Back	Terug
+	Library	Bibliotheek
+	Folder	Map
+	Superscript	Superscript
+	Subscript	Subscript
+	High	Hoog
+	Low	Laag
+	Choose…	Kiezen…
+	Result	Resultaat
+	Length	Lengte
+	Smoothness	Vloeiendheid
+	Circle	Cirkel
+	Crosshatch	Kruisarcering
+	Hearts	Harten
+	Hexagon	Zeshoek
+	Random	Willekeurig
+	Pattern Type	Patroontype
+	Stars	Sterren
+	Hanging Punctuation	Hangende interpunctie
+	Justify	Uitvullen
+	Seed	Startwaarde
+	Target	Doel
+	Round	Rond
+	Button Mode	Knopmodus
+	Topaz Gigapixel AI…	Topaz Gigapixel AI…
+	Opened in Topaz Gigapixel AI: export the image there to bring it back	Geopend in Topaz Gigapixel AI: exporteer de afbeelding daar om hem terug te halen
+	Stopped waiting for Topaz Gigapixel AI	Wachten op Topaz Gigapixel AI gestopt
+	Topaz Gigapixel AI's image could not be applied: {error}	De afbeelding van Topaz Gigapixel AI kan niet worden toegepast: {error}
+	Topaz Gigapixel AI: upscaled {scale}× to {w} × {h} px (new layer)	Topaz Gigapixel AI: {scale}× vergroot tot {w} × {h} px (nieuwe laag)
+	Waiting for Topaz Gigapixel AI: export the upscaled image there to bring it back.	Wachten op Topaz Gigapixel AI: exporteer daar de vergrote afbeelding om hem terug te halen.
+	Model:	Model:
+	There is no such Topaz Gigapixel preset	Deze Topaz Gigapixel-voorinstelling bestaat niet
+	Saved Topaz Gigapixel preset “{name}”	Topaz Gigapixel-voorinstelling ‘{name}’ opgeslagen
+	New Preset	Nieuwe voorinstelling
+	Upscale:	Opschalen:
+	With these settings	Met deze instellingen
+	With two presets	Met twee voorinstellingen
+	Save two presets with their own settings first; then this one can run them together.	Sla eerst twee voorinstellingen met eigen instellingen op; deze kan ze daarna samen uitvoeren.
+	First:	Eerst:
+	Then:	Daarna:
+	Results:	Resultaten:
+	One after the other	Na elkaar
+	Each on its own layer	Elk op een eigen laag
+	Both presets upscale the image; each result becomes a layer, to compare or blend.	Beide voorinstellingen schalen de afbeelding op; elk resultaat wordt een laag, om te vergelijken of te mengen.
+	The second preset upscales the first one's result.	De tweede voorinstelling schaalt het resultaat van de eerste op.
+	Run a saved preset from File › Automate › Topaz Gigapixel Presets.	Voer een opgeslagen voorinstelling uit via Bestand › Automatiseren › Topaz Gigapixel-voorinstellingen.
+	Auto lets Gigapixel choose.	Automatisch laat Gigapixel kiezen.
+	Choose a folder for your timelapse recordings	Kies een map voor je timelapse-opnamen
+	Timelapse	Timelapse
+	Auto record	Automatisch opnemen
+	Recording	Opnemen
+	Click to pause	Klik om te pauzeren
+	Start recording	Opname starten
+	Reference layer	Referentielaag
+	Recorded	Wordt opgenomen
+	{count} of {total} not recorded	{count} van {total} niet opgenomen
+	Reference	Referentie
+	Play video	Video afspelen
+	Show in folder	In map weergeven
+	Advanced settings	Geavanceerde instellingen
+	Flash before the final image	Flits voor het eindbeeld
+	Slow down at the end	Vertragen aan het eind
+	Remove flicker	Flikkering verwijderen
+	Remove frames with undo	Frames verwijderen bij ongedaan maken
+	Makes the MP4. Automatic looks next to PhotoCraft, then on PATH.	Maakt de MP4. Automatisch zoekt naast PhotoCraft, daarna in PATH.
+	Choose the ffmpeg program on this computer	Kies het programma ffmpeg op deze computer
+	Opening files isn't available here	Bestanden openen is hier niet beschikbaar
+@plural	{n} frame|{n} frames	{n} frame|{n} frames
+	Refresh	Vernieuwen
+	Recordings will be listed here once you've chosen a folder.	Opnamen verschijnen hier zodra je een map hebt gekozen.
+	No recordings yet.	Nog geen opnamen.
+	Open folder	Map openen
+	Delete frames	Frames verwijderen
+	Delete folder	Map verwijderen
+	Pause the recording first	Pauzeer eerst de opname
+	REC	REC
+	EXPORTED	GEËXPORTEERD
+	NOT EXPORTED	NIET GEËXPORTEERD
+	{time} work	{time} werk
+	“{name}” hasn't been exported yet. If you delete its {frames}, you can't make a video of it anymore. This can't be undone.	‘{name}’ is nog niet geëxporteerd. Als je de frames verwijdert ({frames}), kun je er geen video meer van maken. Dit kan niet ongedaan worden gemaakt.
+	Delete the {frames} of “{name}”?	Frames van ‘{name}’ verwijderen ({frames})?
+	You've recorded more since the last export, and that part isn't in the video.	Je hebt sinds de laatste export meer opgenomen; dat deel zit niet in de video.
+	Your videos and the work time are kept. This can't be undone.	Je video's en de werktijd blijven bewaard. Dit kan niet ongedaan worden gemaakt.
+	Delete “{name}” and its folder? It's removed from the library, along with its work time. Videos you exported stay where you saved them. This can't be undone.	‘{name}’ en de map verwijderen? De opname verdwijnt uit de bibliotheek, samen met de werktijd. Geëxporteerde video's blijven waar je ze hebt opgeslagen. Dit kan niet ongedaan worden gemaakt.
+	Frames deleted.	Frames verwijderd.
+	Deleted “{name}”. Its folder holds other files, so it was kept.	‘{name}’ verwijderd. De map bevat andere bestanden en is bewaard.
+	Deleted “{name}”.	‘{name}’ verwijderd.
+@plural	{n} recording|{n} recordings	{n} opname|{n} opnamen
+	No upscale has come back from Topaz Gigapixel AI yet	Er is nog geen opschaling teruggekomen uit Topaz Gigapixel AI
+	Topaz Gigapixel AI: upscaled {scale}× to {w} × {h} px (new layer). Keep these settings with Topaz Gigapixel Presets › Save Preset from Last Upscale	Topaz Gigapixel AI: {scale}× vergroot tot {w} × {h} px (nieuwe laag). Bewaar deze instellingen met Topaz Gigapixel-voorinstellingen › Voorinstelling opslaan van laatste opschaling
+	Saved {name} ({seconds} video).	{name} opgeslagen (video van {seconds}).
+	Export failed: {error}	Exporteren mislukt: {error}
+	Export cancelled.	Exporteren geannuleerd.
+	just now	zojuist
+	{n} min ago	{n} min geleden
+	{n} h ago	{n} uur geleden
+	yesterday	gisteren
+	{n} days ago	{n} dagen geleden
+	Smaller files and the quickest capturing. Fine for quick sketches and previews.	Kleinere bestanden en het snelste vastleggen. Prima voor snelle schetsen en voorvertoningen.
+	Sharper video for big screens. Uses about twice the disk space.	Scherpere video voor grote schermen. Gebruikt ongeveer twee keer zoveel schijfruimte.
+	Full-HD video, good for social media. Recommended.	Full-HD-video, goed voor sociale media. Aanbevolen.
+	idle	inactief
+	Record	Opnemen
+	Paused	Gepauzeerd
+	Click to resume recording	Klik om de opname te hervatten
+	Open a document to record it.	Open een document om het op te nemen.
+	You'll be asked where to save recordings.	Je wordt gevraagd waar opnamen worden opgeslagen.
+	Export again	Opnieuw exporteren
+	Export video	Video exporteren
+	Show the export results	Exportresultaten tonen
+	Hide the export results	Exportresultaten verbergen
+	≈ {seconds} video from {frames}.	≈ {seconds} video uit {frames}.
+	Cancel export	Exporteren annuleren
+	Frames	Frames
+	Timer	Tijd
+	On disk	Op schijf
+	Hide the live preview	Live-voorvertoning verbergen
+	Show the newest frame	Nieuwste frame tonen
+	No frames yet — just start drawing	Nog geen frames — begin gewoon te tekenen
+	No frames yet	Nog geen frames
+	No layer selected	Geen laag geselecteerd
+	{n} layers selected	{n} lagen geselecteerd
+	Not recorded	Niet opgenomen
+	A reference layer works like a normal layer, but won't show up in the timelapse.	Een referentielaag werkt als een gewone laag, maar verschijnt niet in de timelapse.
+	Export settings	Exportinstellingen
+	Make video with	Video maken met
+	Bars colour	Kleur van de balken
+	Bars fill the empty space when the canvas size changed during recording.	Balken vullen de lege ruimte als het canvasformaat tijdens de opname is veranderd.
+	Show finished drawing first	Eerst de afgemaakte tekening
+	Hold final image	Eindbeeld vasthouden
+	Show work-time counter	Werktijdteller tonen
+	Record something in this document to see how long the video will be.	Neem iets op in dit document om te zien hoe lang de video wordt.
+	≈ {seconds} video	≈ {seconds} video
+	{n} recorded frames	{n} opgenomen frames
+	Auto shows every frame once (at least 5 s, at most 1 min).	Auto toont elk frame één keer (minimaal 5 s, maximaal 1 min).
+	The canvas size changed during recording; earlier frames are fitted inside the final size.	Het canvasformaat is tijdens de opname veranderd; eerdere frames worden in het uiteindelijke formaat gepast.
+	Remove flicker leaves out frames that flash in and out (a layer hidden for a moment, a stroke undone right away), so the video can be a bit shorter.	Flikkering verwijderen laat frames weg die even opflitsen (een laag die even verborgen was, een streek die meteen ongedaan is gemaakt), dus de video kan iets korter worden.
+	Recordings folder	Map met opnamen
+	Not chosen yet — see Settings	Nog niet gekozen — zie Instellingen
+	recorded {when}	opgenomen {when}
+	Recorded more since the last export.	Meer opgenomen sinds de laatste export.
+	Frames folder	Map met frames
+	Not chosen yet	Nog niet gekozen
+	Where the recorded frames are kept. Videos are saved wherever you choose when you export.	Hier worden de opgenomen frames bewaard. Video's worden opgeslagen waar je kiest bij het exporteren.
+	Choose folder…	Map kiezen…
+	Change folder…	Map wijzigen…
+	Recording quality	Opnamekwaliteit
+	Undoing something removes those recorded frames.	Iets ongedaan maken verwijdert die opgenomen frames.
+	Reference layers	Referentielagen
+	Name tag	Naamlabel
+	Layers with this in their name are left out of the timelapse.	Lagen met dit in hun naam blijven buiten de timelapse.
+	Work timer	Werktimer
+	Idle after	Inactief na
+	The timer stops counting after this long without activity.	De timer stopt na zo lang zonder activiteit.
+	Timelapse Recorder · PhotoCraft	Timelapse Recorder · PhotoCraft
+	Run	Uitvoeren
+	Fill Tool	Vulgereedschap
+	Nothing to fill there	Daar valt niets te vullen
+	No enclosed area to fill there	Daar is geen ingesloten gebied om te vullen
+	Fill: click an area	Vullen: klik op een gebied
+	Enclose and Fill: draw round the areas to fill	Omsluiten en vullen: teken rond de te vullen gebieden
+	Paint Unfilled Area: paint over the gaps a fill left	Niet-gevuld gebied verven: verf over de gaten die een vulling liet
+	Refer	Verwijzing
+	Editing Layer	Bewerkte laag
+	Selected Layers	Geselecteerde lagen
+	Layers in Folder	Lagen in map
+	Reference Layers	Referentielagen
+	Exclude	Uitsluiten
+	Editing layer	Bewerkte laag
+	Text layers	Tekstlagen
+	Locked layers	Vergrendelde lagen
+	Layers the fill doesn't read	Lagen die de vulling niet leest
+	Close Gap	Openingen sluiten
+	Area Scaling	Gebied schalen
+	Grow the fill under the lines, or shrink it	De vulling onder de lijnen uitbreiden of verkleinen
+	To Darkest Pixel	Tot donkerste pixel
+	Follow Adjacent Pixels	Aangrenzende pixels volgen
+	White and Transparent	Wit en transparant
+	Image Border	Afbeeldingsrand
+	The canvas edge closes gaps as a line does	De canvasrand sluit gaten zoals een lijn
+	Fill Tool Options	Opties voor vulgereedschap
+	Save as:	Opslaan als:
+	Save Preset	Voorinstelling opslaan
+	Keep these two presets as one, listed with the others	Deze twee voorinstellingen als één bewaren, bij de andere vermeld
+	seconds	seconden
+	Close gaps up to {px} px	Openingen tot {px} px sluiten
+	Grow the selection under the lines, or shrink it	De selectie onder de lijnen uitbreiden of verkleinen
+	Delete Second Mask	Tweede masker verwijderen
+	Disable Second Mask	Tweede masker uitschakelen
+	Enable Second Mask	Tweede masker inschakelen
+	Editing layer blocks the fill	Bewerkte laag houdt de vulling tegen
+	Paint on the layer being filled stops the fill at any tolerance, and the fill goes in behind it: draw over a gap to close it	Verf op de laag die wordt gevuld houdt de vulling bij elke tolerantie tegen, en de vulling gaat erachter: teken over een opening om die te sluiten
+	Undo widens Close Gap	Ongedaan maken vergroot Openingen sluiten
+	Each Undo of a fill closes bigger gaps for the next click, until you pick another tool	Elke keer dat u een vulling ongedaan maakt, sluit de volgende klik grotere openingen, tot u een ander gereedschap kiest
+	Close Gap widened to {px} px: click again to fill	Openingen sluiten vergroot tot {px} px: klik opnieuw om te vullen
+	Screentone…	Raster…
+	Satellites	Satellieten
+	Count:	Aantal:
+	Distance:	Afstand:
+	Stretch:	Uitrekken:
+	Distortion & Jitter	Vervorming & jitter
+	Aspect X:	Verhouding X:
+	Aspect Y:	Verhouding Y:
+	Row Offset:	Verschoven rijen:
+	Merge:	Samensmelten:
+	Jitter Pos:	Jitter-positie:
+	Jitter Size:	Jitter-grootte:
+	Midpoint:	Middelpunt:
+	Start Size:	Startgrootte:
+	End Size:	Eindgrootte:
+	Save as Pattern	Opslaan als patroon
+	Font Settings	Lettertype-instellingen
+	No folder	Geen map
+	+ New folder...	+ Nieuwe map...
+	Folder name	Mapnaam
+	New folder name	Naam nieuwe map
+	Favorite font	Favoriet lettertype
+	Faux bold	Valse vet
+	Faux italic	Valse cursief
+	Use standard font metrics and the baseline	Metrisch systeem: standaard lettertypemetingen en basislijn
+	Use visual kerning and bubble centering	Optisch systeem: visuele kerning en balloncentrering
+	Leading is linked to size	Regelafstand is gekoppeld aan grootte
+	Leading is not linked to size	Regelafstand is niet gekoppeld aan grootte
+	H-Scale (%)	H-schaal (%)
+	Edit preview text	Voorbeeldtekst bewerken
+	Leave empty for the automatic sample	Leeg laten voor het automatische voorbeeld
+	Preview unavailable	Voorbeeld niet beschikbaar
+	Duplicate this style	Deze stijl dupliceren
+	Delete this style	Deze stijl verwijderen
+	Bubble Contour	Ballonvorm
+	No contour variants	Geen contourvarianten
+	~ SCurve	~ SCurve
+	＋ Add tail	＋ Add tail
+	＋ Create balloon on canvas	＋ Create balloon on canvas
+	＋ Fit balloon	＋ Fit balloon
+	⊘ None	⊘ None
+	⌒ Arc	⌒ Arc
+	▽ Wedge	▽ Wedge
+	◎ Double outline	◎ Double outline
+	◌ Thought	◌ Thought
+	☁️ Cloud	☁️ Cloud
+	✓ Text fits: {lines} lines, {size} pt	✓ Text fits: {lines} lines, {size} pt
+	✴️ Burst	✴️ Burst
+	⑂ Double	⑂ Double
+	◽ Rect	◽ Rect
+	⚠ Text does not fit — enlarge the balloon or reduce the type size	⚠ Text does not fit — enlarge the balloon or reduce the type size
+	⚡ Bake to SAI Linework	⚡ Bake to SAI Linework
+	⚡ Lightning	⚡ Lightning
+	⚪ Ellipse	⚪ Ellipse
+	Add a tail to the selected balloon	Add a tail to the selected balloon
+	Background colour	Background colour
+	Balloon body:	Balloon body:
+	Bubble radius:	Bubble radius:
+	Bumps:	Bumps:
+	Bundle:	Bundle:
+	Corner radius:	Corner radius:
+	Cusp bite:	Cusp bite:
+	Dialogue and fit:	Dialogue and fit:
+	Dialogue text…	Dialogue text…
+	Fit the shape to the text: the balloon grows when the line does not fit	Fit the shape to the text: the balloon grows when the line does not fit
+	Hand-drawn noise:	Hand-drawn noise:
+	Inner sharpness:	Inner sharpness:
+	Inward concavity:	Inward concavity:
+	Jitter:	Jitter:
+	Lobe height:	Lobe height:
+	Mouth width:	Mouth width:
+	Needle width:	Needle width:
+	Needles:	Needles:
+	Outer sharpness:	Outer sharpness:
+	Outline gap:	Outline gap:
+	Random jitter variation	Random jitter variation
+	Random ray variation	Random ray variation
+	Ray extension:	Ray extension:
+	Ray length:	Ray length:
+	Rays:	Rays:
+	Round the tips	Round the tips
+	Spikes:	Spikes:
+	Squircle:	Squircle:
+	Stroke and fill:	Stroke and fill:
+	Sub-harmonics:	Sub-harmonics:
+	Tail type:	Tail type:
+	Text area:	Text area:
+	Thought bubbles:	Thought bubbles:
+	Turn the balloon into an editable vector linework layer	Turn the balloon into an editable vector linework layer
+	Type size:	Type size:
+	Valley depth:	Valley depth:
+	💥 Spiky	💥 Spiky
+	🔄 Reset to the manga default	🔄 Reset to the manga default
+	🦔 Uniflash	🦔 Uniflash

@@ -294,7 +294,11 @@ fn docked(layout: &Layout<String>) -> Layout<String> {
 }
 
 pub(crate) fn normalize(raw: &str) -> Option<&'static str> {
-    PANELS.iter().find(|(id, label, _)| id.eq_ignore_ascii_case(raw.trim()) || label.eq_ignore_ascii_case(raw.trim())).map(|p| p.0)
+    PANELS
+        .iter()
+        .find(|(id, label, _)| id.eq_ignore_ascii_case(raw.trim()) || label.eq_ignore_ascii_case(raw.trim()))
+        .map(|p| p.0)
+        .or_else(|| crate::manga_seam::normalize_panel(raw))
 }
 
 fn registered(id: &str) -> bool {
@@ -359,6 +363,13 @@ fn legacy_layout(app: &PhotocraftApp, all: bool) -> Layout<String> {
         groups.push(craft_ui::docking::Group { height, ..craft_ui::docking::Group::new(panels, active) });
     }
     let (columns, width) = if groups.is_empty() { (Vec::new(), 0.0) } else { (vec![Column::new(groups, default_width(pro))], default_width(pro)) };
+    if !all {
+        for &(id, _, _) in crate::manga_seam::MANGA_PANELS {
+            if crate::manga_seam::panel_shown(&app.ui.panels, id) == Some(true) {
+                floating.push(Floating::single(vec![id.to_owned()], 0, crate::manga_seam::panel_default_rect(app, id)));
+            }
+        }
+    }
     Layout { root: Some(with_canvas(Node::Dock { side: Side::End, columns }, width)), floating }
 }
 
@@ -526,6 +537,9 @@ pub(crate) fn command(app: &mut PhotocraftApp, id: &str, params: &Value) -> Opti
         return Some(group_command(app, params));
     }
     if let Some(panel) = id.strip_prefix("window.panel.").or_else(|| id.strip_prefix("window.toggle.")).and_then(normalize) {
+        if app.ui.docking.is_none() && crate::manga_seam::panel_owns(panel) {
+            return crate::manga_seam::panel_command(app, id, params);
+        }
         if app.ui.docking.is_none() && panel != "brushes" {
             return None;
         }
@@ -841,7 +855,14 @@ fn show_layout(app: &mut PhotocraftApp, ui: &mut egui::Ui, dock_only: bool) {
         ui,
         &layout,
         &style,
-        |id| PANELS.iter().find(|p| p.0 == id).map(|p| tl!(p.1).to_string()).unwrap_or_else(|| id.clone()),
+        |id| {
+            PANELS
+                .iter()
+                .find(|p| p.0 == id)
+                .map(|p| tl!(p.1).to_string())
+                .or_else(|| crate::manga_seam::panel_title(id).map(|label| tl!(label).to_string()))
+                .unwrap_or_else(|| id.clone())
+        },
         permissions,
         |id| {
             if id == CANVAS {
@@ -850,7 +871,8 @@ fn show_layout(app: &mut PhotocraftApp, ui: &mut egui::Ui, dock_only: bool) {
                 craft_ui::docking::PanelLimits { min: egui::vec2(220.0, 0.0), max: egui::vec2(1_000_000.0, 0.0) }
             } else {
                 // The native group's smallest height, tab strip included.
-                let height = PANELS.iter().find(|p| p.0 == id).map_or(80.0, |p| p.2.min_height() - strip);
+                let group = PANELS.iter().find(|p| p.0 == id).map(|p| p.2).or_else(|| crate::manga_seam::panel_group(id));
+                let height = group.map_or(80.0, |g| g.min_height() - strip);
                 craft_ui::docking::PanelLimits { min: egui::vec2(220.0, height), ..Default::default() }
             }
         },
@@ -1128,6 +1150,9 @@ fn fillers(layout: &Layout<String>) -> std::collections::HashSet<String> {
 }
 
 fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: &str) {
+    if crate::manga_seam::render_panel(app, ui, id) {
+        return;
+    }
     let Some((_, label, group)) = PANELS.iter().find(|p| p.0 == id) else { return };
     let pro = crate::theme::Tokens::get(ui.ctx()).pro;
     let Some(tab) = group.tabs(pro).iter().position(|name| name == label) else { return };
@@ -1563,6 +1588,7 @@ fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, panel: &str) {
             crate::channels_panel::panel_menu(app, ui);
             ui.separator();
         }
+        _ if crate::manga_seam::panel_owns(panel) => crate::manga_seam::panel_menu(app, ui, panel),
         _ => {}
     }
 }
@@ -1589,7 +1615,7 @@ impl craft_ui::docking::DockContent<String> for PanelContent<'_> {
         }
     }
     fn dock_heights(&self, id: &String) -> Option<DockHeights> {
-        let group = PANELS.iter().find(|p| p.0 == id)?.2;
+        let group = PANELS.iter().find(|p| p.0 == id).map(|p| p.2).or_else(|| crate::manga_seam::panel_group(id))?;
         let body = |height: f32| (height - self.strip).max(0.0);
         let fill = if self.fillers.contains(id) { body(group.preferred_fill()).max(1.0) } else { 0.0 };
         Some(DockHeights::new(body(group.default_height())).compact(body(group.compact_height())).fill(fill))
@@ -1662,6 +1688,11 @@ pub(crate) fn sync_visibility(app: &mut PhotocraftApp) {
                 && let Some(selected) = group.tabs(pro).iter().position(|name| normalize(name).is_some_and(|id| panel_active(layout, id)))
             {
                 *group.tab_mut(&mut app.ui.dock_tabs) = selected;
+            }
+        }
+        for &(id, _, _) in crate::manga_seam::MANGA_PANELS {
+            if let Some(slot) = crate::manga_seam::panel_shown_mut(&mut app.ui.panels, id) {
+                *slot = layout.contains(&id.to_owned());
             }
         }
     }

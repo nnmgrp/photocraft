@@ -1,0 +1,372 @@
+	File	Αρχείο
+	Left	Αριστερά
+	Save	Αποθήκευση
+	Paste	Επικόλληση
+	Clear	Εκκαθάριση
+	Search…	Αναζήτηση…
+	Settings	Ρυθμίσεις
+	Auto	Αυτόματα
+	Cancel	Ακύρωση
+	OK	Εντάξει
+	Apply	Εφαρμογή
+	Delete	Διαγραφή
+	Duplicate	Δημιουργία αντιγράφου
+	Opacity	Αδιαφάνεια
+	Screentones	Ημίτονοι
+	Manga Balloons	Συννεφάκια Μάνγκα
+	Balloons	Συννεφάκια
+	SAI Linework	Γραμμικό σχέδιο SAI
+	Linework	Γραμμικό σχέδιο
+	Color	Χρώμα
+	Gradient	Ντεγκραντέ
+	Noise	Θόρυβος
+	All Layers	Όλα τα επίπεδα
+	Foreground	Προσκήνιο
+	Background	Φόντο
+	Angle	Γωνία
+	Scale	Κλίμακα
+	Size	Μέγεθος
+	Width	Πλάτος
+	Height	Ύψος
+	Normal	Κανονική
+	Preview	Προεπισκόπηση
+	Automatic	Αυτόματο
+	Default	Προεπιλογή
+	Custom	Προσαρμοσμένο
+	Enable	Ενεργοποίηση
+	None	Κανένα
+	Tolerance	Ανοχή
+	Contiguous	Συνεχόμενα
+	Anti-alias	Εξομάλυνση ακμών
+	Density	Πυκνότητα
+	Transparent	Διαφανές
+	Align	Στοίχιση
+	Center	Κέντρο
+	Horizontal	Οριζόντια
+	New Layer	Νέο επίπεδο
+	No document open	Δεν υπάρχει ανοιχτό έγγραφο
+	Confirm	Επιβεβαίωση
+	Done	Ολοκληρώθηκε
+	Back	Πίσω
+	White	Λευκό
+	Preset	Προεπιλογή
+	Library	Βιβλιοθήκη
+	Folder	Φάκελος
+	Superscript	Εκθέτης
+	Subscript	Δείκτης
+	High	Υψηλή
+	Low	Χαμηλή
+	Choose…	Επιλογή…
+	Result	Αποτέλεσμα
+	Length	Μήκος
+	Smoothness	Ομαλότητα
+	Circle	Κύκλος
+	Crosshatch	Διασταυρούμενη διαγράμμιση
+	Hearts	Καρδιές
+	Hexagon	Εξάγωνο
+	Random	Τυχαίο
+	Pattern Type	Τύπος μοτίβου
+	Stars	Αστέρια
+	Reverse	Αντιστροφή
+	Roundness	Στρογγυλότητα
+	All Caps	Όλα κεφαλαία
+	Angle:	Γωνία:
+	Bend:	Καμπυλότητα:
+	Density:	Πυκνότητα:
+	Diamond	Ρόμβος
+	Dots	Κουκκίδες
+	Extras	Πρόσθετα στοιχεία
+	Fill:	Γέμισμα:
+	Hanging Punctuation	Κρεμαστή στίξη
+	Justify	Πλήρης στοίχιση
+	Leading	Διάστιχο
+	Linear	Γραμμικό
+	Lines	Γραμμές
+	Metrics	Μετρικά στοιχεία
+	Mode:	Λειτουργία:
+	Name:	Όνομα:
+	Optical	Οπτική
+	Options	Επιλογές
+	Preset:	Προεπιλογή:
+	Radial	Ακτινικό
+	Seed	Αρχική τιμή τυχαιότητας
+	Shape:	Σχήμα:
+	Size:	Μέγεθος:
+	Small Caps	Μικρά κεφαλαία
+	Square	Τετράγωνο
+	Strikethrough	Διακριτή διαγραφή
+	Style	Στυλ
+	Type:	Τύπος:
+	Underline	Υπογράμμιση
+	Video	Βίντεο
+	Width:	Πλάτος:
+	name	όνομα
+cameraRaw	Color	Χρώμα
+	Round	Στρογγυλή
+	Button Mode	Λειτουργία κουμπιών
+	Topaz Gigapixel AI…	Topaz Gigapixel AI…
+	Opened in Topaz Gigapixel AI: export the image there to bring it back	Άνοιξε στο Topaz Gigapixel AI: εξαγάγετε εκεί την εικόνα για να επιστρέψει εδώ
+	Stopped waiting for Topaz Gigapixel AI	Η αναμονή για το Topaz Gigapixel AI σταμάτησε
+	Topaz Gigapixel AI's image could not be applied: {error}	Δεν ήταν δυνατή η εφαρμογή της εικόνας του Topaz Gigapixel AI: {error}
+	Topaz Gigapixel AI: upscaled {scale}× to {w} × {h} px (new layer)	Topaz Gigapixel AI: μεγέθυνση {scale}× σε {w} × {h} px (νέο επίπεδο)
+	Waiting for Topaz Gigapixel AI: export the upscaled image there to bring it back.	Αναμονή για το Topaz Gigapixel AI: εξαγάγετε εκεί τη μεγεθυμένη εικόνα για να επιστρέψει εδώ.
+	Model:	Μοντέλο:
+	There is no such Topaz Gigapixel preset	Δεν υπάρχει τέτοια προρύθμιση Topaz Gigapixel
+	Saved Topaz Gigapixel preset “{name}”	Η προρύθμιση Topaz Gigapixel «{name}» αποθηκεύτηκε
+	New Preset	Νέα προρύθμιση
+	Upscale:	Μεγέθυνση:
+	With these settings	Με αυτές τις ρυθμίσεις
+	With two presets	Με δύο προρυθμίσεις
+	Save two presets with their own settings first; then this one can run them together.	Αποθηκεύστε πρώτα δύο προρυθμίσεις με δικές τους ρυθμίσεις· έπειτα αυτή μπορεί να τις εκτελέσει μαζί.
+	First:	Πρώτα:
+	Then:	Έπειτα:
+	Results:	Αποτελέσματα:
+	One after the other	Το ένα μετά το άλλο
+	Each on its own layer	Το καθένα σε δική του στρώση
+	Both presets upscale the image; each result becomes a layer, to compare or blend.	Και οι δύο προρυθμίσεις μεγεθύνουν την εικόνα· κάθε αποτέλεσμα γίνεται στρώση, για σύγκριση ή ανάμειξη.
+	The second preset upscales the first one's result.	Η δεύτερη προρύθμιση μεγεθύνει το αποτέλεσμα της πρώτης.
+	Run a saved preset from File › Automate › Topaz Gigapixel Presets.	Εκτελέστε μια αποθηκευμένη προρύθμιση από Αρχείο › Αυτοματοποίηση › Προρυθμίσεις Topaz Gigapixel.
+	Auto lets Gigapixel choose.	Το Αυτόματα αφήνει την επιλογή στο Gigapixel.
+	Choose a folder for your timelapse recordings	Επιλέξτε φάκελο για τις εγγραφές timelapse
+	Timelapse	Timelapse
+	Auto record	Αυτόματη εγγραφή
+	Recording	Εγγραφή
+	Click to pause	Κάντε κλικ για παύση
+	Start recording	Έναρξη εγγραφής
+	Reference layer	Επίπεδο αναφοράς
+	Recorded	Καταγράφεται
+	{count} of {total} not recorded	{count} από {total} δεν καταγράφονται
+	Reference	Αναφορά
+	Play video	Αναπαραγωγή βίντεο
+	Show in folder	Εμφάνιση στον φάκελο
+	Advanced settings	Ρυθμίσεις για προχωρημένους
+	Flash before the final image	Λάμψη πριν από την τελική εικόνα
+	Slow down at the end	Επιβράδυνση στο τέλος
+	Remove flicker	Αφαίρεση τρεμοπαίγματος
+	Remove frames with undo	Αφαίρεση καρέ με την αναίρεση
+	Makes the MP4. Automatic looks next to PhotoCraft, then on PATH.	Δημιουργεί το MP4. Το Αυτόματα ψάχνει δίπλα στο PhotoCraft και μετά στο PATH.
+	Choose the ffmpeg program on this computer	Επιλέξτε το πρόγραμμα ffmpeg σε αυτόν τον υπολογιστή
+	Opening files isn't available here	Το άνοιγμα αρχείων δεν είναι διαθέσιμο εδώ
+@plural	{n} frame|{n} frames	{n} καρέ|{n} καρέ
+	Refresh	Ανανέωση
+	Recordings will be listed here once you've chosen a folder.	Οι εγγραφές θα εμφανιστούν εδώ μόλις επιλέξετε φάκελο.
+	No recordings yet.	Δεν υπάρχουν εγγραφές ακόμη.
+	Open folder	Άνοιγμα φακέλου
+	Delete frames	Διαγραφή καρέ
+	Delete folder	Διαγραφή φακέλου
+	Pause the recording first	Πρώτα θέστε την εγγραφή σε παύση
+	REC	REC
+	EXPORTED	ΕΞΑΧΘΗΚΕ
+	NOT EXPORTED	ΔΕΝ ΕΞΑΧΘΗΚΕ
+	{time} work	{time} εργασίας
+	“{name}” hasn't been exported yet. If you delete its {frames}, you can't make a video of it anymore. This can't be undone.	Η εγγραφή «{name}» δεν έχει εξαχθεί ακόμη. Αν διαγράψετε τα καρέ της ({frames}), δεν θα μπορείτε πια να φτιάξετε βίντεο από αυτήν. Η ενέργεια δεν αναιρείται.
+	Delete the {frames} of “{name}”?	Διαγραφή των καρέ της εγγραφής «{name}» ({frames});
+	You've recorded more since the last export, and that part isn't in the video.	Καταγράψατε κι άλλο μετά την τελευταία εξαγωγή και αυτό το τμήμα δεν υπάρχει στο βίντεο.
+	Your videos and the work time are kept. This can't be undone.	Τα βίντεό σας και ο χρόνος εργασίας διατηρούνται. Η ενέργεια δεν αναιρείται.
+	Delete “{name}” and its folder? It's removed from the library, along with its work time. Videos you exported stay where you saved them. This can't be undone.	Διαγραφή της εγγραφής «{name}» και του φακέλου της; Αφαιρείται από τη βιβλιοθήκη μαζί με τον χρόνο εργασίας. Τα βίντεο που εξαγάγατε μένουν εκεί που τα αποθηκεύσατε. Η ενέργεια δεν αναιρείται.
+	Frames deleted.	Τα καρέ διαγράφηκαν.
+	Deleted “{name}”. Its folder holds other files, so it was kept.	Η εγγραφή «{name}» διαγράφηκε. Ο φάκελός της περιέχει άλλα αρχεία, οπότε διατηρήθηκε.
+	Deleted “{name}”.	Η εγγραφή «{name}» διαγράφηκε.
+@plural	{n} recording|{n} recordings	{n} εγγραφή|{n} εγγραφές
+	No upscale has come back from Topaz Gigapixel AI yet	Δεν έχει επιστρέψει ακόμη καμία μεγέθυνση από το Topaz Gigapixel AI
+	Topaz Gigapixel AI: upscaled {scale}× to {w} × {h} px (new layer). Keep these settings with Topaz Gigapixel Presets › Save Preset from Last Upscale	Topaz Gigapixel AI: μεγέθυνση {scale}× σε {w} × {h} px (νέο επίπεδο). Κρατήστε αυτές τις ρυθμίσεις με Προρυθμίσεις Topaz Gigapixel › Αποθήκευση προρύθμισης από την τελευταία μεγέθυνση
+	Saved {name} ({seconds} video).	Αποθηκεύτηκε το {name} (βίντεο {seconds}).
+	Export failed: {error}	Η εξαγωγή απέτυχε: {error}
+	Export cancelled.	Η εξαγωγή ακυρώθηκε.
+	just now	μόλις τώρα
+	{n} min ago	πριν από {n} λεπ.
+	{n} h ago	πριν από {n} ώρ.
+	yesterday	χθες
+	{n} days ago	πριν από {n} ημέρες
+	Smaller files and the quickest capturing. Fine for quick sketches and previews.	Μικρότερα αρχεία και η πιο γρήγορη καταγραφή. Αρκεί για γρήγορα σκίτσα και προεπισκοπήσεις.
+	Sharper video for big screens. Uses about twice the disk space.	Πιο καθαρό βίντεο για μεγάλες οθόνες. Χρησιμοποιεί περίπου διπλάσιο χώρο στον δίσκο.
+	Full-HD video, good for social media. Recommended.	Βίντεο Full HD, κατάλληλο για τα μέσα κοινωνικής δικτύωσης. Συνιστάται.
+	idle	αδράνεια
+	Record	Εγγραφή
+	Paused	Σε παύση
+	Click to resume recording	Κάντε κλικ για συνέχιση της εγγραφής
+	Open a document to record it.	Ανοίξτε ένα έγγραφο για να το καταγράψετε.
+	You'll be asked where to save recordings.	Θα ερωτηθείτε πού να αποθηκεύονται οι εγγραφές.
+	Export again	Εξαγωγή ξανά
+	Export video	Εξαγωγή βίντεο
+	Show the export results	Εμφάνιση των αποτελεσμάτων εξαγωγής
+	Hide the export results	Απόκρυψη των αποτελεσμάτων εξαγωγής
+	≈ {seconds} video from {frames}.	≈ {seconds} βίντεο από {frames}.
+	Cancel export	Ακύρωση εξαγωγής
+	Frames	Καρέ
+	Timer	Χρόνος
+	On disk	Στον δίσκο
+	Hide the live preview	Απόκρυψη της ζωντανής προεπισκόπησης
+	Show the newest frame	Εμφάνιση του πιο πρόσφατου καρέ
+	No frames yet — just start drawing	Δεν υπάρχουν καρέ ακόμη — απλώς ξεκινήστε να σχεδιάζετε
+	No frames yet	Δεν υπάρχουν καρέ ακόμη
+	No layer selected	Δεν έχει επιλεγεί επίπεδο
+	{n} layers selected	{n} επίπεδα επιλεγμένα
+	Not recorded	Δεν καταγράφεται
+	A reference layer works like a normal layer, but won't show up in the timelapse.	Ένα επίπεδο αναφοράς λειτουργεί σαν κανονικό επίπεδο, αλλά δεν εμφανίζεται στο timelapse.
+	Export settings	Ρυθμίσεις εξαγωγής
+	Make video with	Δημιουργία βίντεο με
+	Bars colour	Χρώμα μπαρών
+	Bars fill the empty space when the canvas size changed during recording.	Οι μπάρες γεμίζουν τον κενό χώρο όταν το μέγεθος του καμβά άλλαξε κατά την εγγραφή.
+	Show finished drawing first	Πρώτα το ολοκληρωμένο σχέδιο
+	Hold final image	Διατήρηση τελικής εικόνας
+	Show work-time counter	Εμφάνιση μετρητή χρόνου εργασίας
+	Record something in this document to see how long the video will be.	Καταγράψτε κάτι σε αυτό το έγγραφο για να δείτε πόσο θα διαρκεί το βίντεο.
+	≈ {seconds} video	≈ {seconds} βίντεο
+	{n} recorded frames	{n} καταγεγραμμένα καρέ
+	Auto shows every frame once (at least 5 s, at most 1 min).	Το Αυτόματο δείχνει κάθε καρέ μία φορά (τουλάχιστον 5 δ, το πολύ 1 λεπ.).
+	The canvas size changed during recording; earlier frames are fitted inside the final size.	Το μέγεθος του καμβά άλλαξε κατά την εγγραφή· τα προηγούμενα καρέ προσαρμόζονται στο τελικό μέγεθος.
+	Remove flicker leaves out frames that flash in and out (a layer hidden for a moment, a stroke undone right away), so the video can be a bit shorter.	Η αφαίρεση τρεμοπαίγματος παραλείπει καρέ που εμφανίζονται και χάνονται (ένα επίπεδο κρυμμένο για λίγο, μια πινελιά που αναιρέθηκε αμέσως), οπότε το βίντεο μπορεί να βγει λίγο πιο σύντομο.
+	Recordings folder	Φάκελος εγγραφών
+	Not chosen yet — see Settings	Δεν έχει επιλεγεί ακόμη — δείτε τις Ρυθμίσεις
+	recorded {when}	καταγραφή {when}
+	Recorded more since the last export.	Έχουν καταγραφεί περισσότερα από την τελευταία εξαγωγή.
+	Frames folder	Φάκελος καρέ
+	Not chosen yet	Δεν έχει επιλεγεί ακόμη
+	Where the recorded frames are kept. Videos are saved wherever you choose when you export.	Εδώ φυλάσσονται τα καταγεγραμμένα καρέ. Τα βίντεο αποθηκεύονται όπου επιλέξετε κατά την εξαγωγή.
+	Choose folder…	Επιλογή φακέλου…
+	Change folder…	Αλλαγή φακέλου…
+	Recording quality	Ποιότητα εγγραφής
+	Undoing something removes those recorded frames.	Η αναίρεση αφαιρεί τα αντίστοιχα καταγεγραμμένα καρέ.
+	Reference layers	Επίπεδα αναφοράς
+	Name tag	Ετικέτα ονόματος
+	Layers with this in their name are left out of the timelapse.	Τα επίπεδα με αυτό στο όνομά τους μένουν έξω από το timelapse.
+	Work timer	Χρονομετρητής εργασίας
+	Idle after	Αδράνεια μετά από
+	The timer stops counting after this long without activity.	Ο χρονομετρητής σταματά να μετρά μετά από τόσο χρόνο χωρίς δραστηριότητα.
+	Timelapse Recorder · PhotoCraft	Timelapse Recorder · PhotoCraft
+	Run	Εκτέλεση
+	Fill Tool	Εργαλείο γεμίσματος
+	Nothing to fill there	Δεν υπάρχει τίποτα για γέμισμα εκεί
+	No enclosed area to fill there	Δεν υπάρχει κλειστή περιοχή για γέμισμα εκεί
+	Fill: click an area	Γέμισμα: κάντε κλικ σε μια περιοχή
+	Enclose and Fill: draw round the areas to fill	Περίκλειση και γέμισμα: σχεδιάστε γύρω από τις περιοχές
+	Paint Unfilled Area: paint over the gaps a fill left	Βάψιμο κενών: βάψτε πάνω από τα κενά που άφησε το γέμισμα
+	Refer	Αναφορά
+	Editing Layer	Επίπεδο επεξεργασίας
+	Selected Layers	Επιλεγμένα επίπεδα
+	Layers in Folder	Επίπεδα στον φάκελο
+	Reference Layers	Επίπεδα αναφοράς
+	Exclude	Εξαίρεση
+	Editing layer	Επίπεδο επεξεργασίας
+	Text layers	Επίπεδα κειμένου
+	Locked layers	Κλειδωμένα επίπεδα
+	Layers the fill doesn't read	Επίπεδα που δεν διαβάζει το γέμισμα
+	Close Gap	Κλείσιμο κενών
+	Area Scaling	Κλιμάκωση περιοχής
+	Grow the fill under the lines, or shrink it	Επέκταση του γεμίσματος κάτω από τις γραμμές ή σμίκρυνση
+	To Darkest Pixel	Έως το πιο σκούρο pixel
+	Follow Adjacent Pixels	Γειτονικά pixel
+	Target	Στόχος
+	White and Transparent	Λευκό και διαφανές
+	Image Border	Περίγραμμα εικόνας
+	The canvas edge closes gaps as a line does	Το άκρο του καμβά κλείνει κενά όπως μια γραμμή
+	Fill Tool Options	Επιλογές εργαλείου γεμίσματος
+	Save as:	Αποθήκευση ως:
+	Save Preset	Αποθήκευση προρύθμισης
+	Keep these two presets as one, listed with the others	Διατήρηση αυτών των δύο προρυθμίσεων ως μίας, μαζί με τις άλλες
+	seconds	δευτερόλεπτα
+	Close gaps up to {px} px	Κλείσιμο κενών έως {px} px
+	Grow the selection under the lines, or shrink it	Επέκταση της επιλογής κάτω από τις γραμμές ή σμίκρυνσή της
+	Delete Second Mask	Διαγραφή δεύτερης μάσκας
+	Disable Second Mask	Απενεργοποίηση δεύτερης μάσκας
+	Enable Second Mask	Ενεργοποίηση δεύτερης μάσκας
+	Editing layer blocks the fill	Το επίπεδο επεξεργασίας σταματά το γέμισμα
+	Paint on the layer being filled stops the fill at any tolerance, and the fill goes in behind it: draw over a gap to close it	Η βαφή στο επίπεδο που γεμίζει σταματά το γέμισμα σε κάθε ανοχή και το γέμισμα μπαίνει πίσω της: ζωγραφίστε πάνω από ένα κενό για να το κλείσετε
+	Undo widens Close Gap	Η αναίρεση διευρύνει το Κλείσιμο κενών
+	Each Undo of a fill closes bigger gaps for the next click, until you pick another tool	Κάθε αναίρεση γεμίσματος κλείνει μεγαλύτερα κενά στο επόμενο κλικ, μέχρι να επιλέξετε άλλο εργαλείο
+	Close Gap widened to {px} px: click again to fill	Το Κλείσιμο κενών διευρύνθηκε σε {px} px: κάντε ξανά κλικ για γέμισμα
+	Screentone…	Ράστερ…
+	Satellites	Δορυφόροι
+	Count:	Πλήθος:
+	Distance:	Απόσταση:
+	Stretch:	Τέντωμα:
+	Distortion & Jitter	Παραμόρφωση και τρέμουλο
+	Aspect X:	Αναλογία Χ:
+	Aspect Y:	Αναλογία Υ:
+	Row Offset:	Μετατόπιση σειράς:
+	Merge:	Συγχώνευση:
+	Jitter Pos:	Τρέμουλο θέσης:
+	Jitter Size:	Τρέμουλο μεγέθους:
+	Midpoint:	Μέσο σημείο:
+	Start Size:	Αρχικό μέγεθος:
+	End Size:	Τελικό μέγεθος:
+	Save as Pattern	Αποθήκευση ως μοτίβο
+	Font Settings	Ρυθμίσεις γραμματοσειράς
+	No folder	Χωρίς φάκελο
+	+ New folder...	+ Νέος φάκελος...
+	Folder name	Όνομα φακέλου
+	New folder name	Όνομα νέου φακέλου
+	Favorite font	Αγαπημένη γραμματοσειρά
+	Faux bold	Ψευδοέντονα
+	Faux italic	Ψευδοπλάγια
+	Use standard font metrics and the baseline	Μετρικό σύστημα: τυπικές μετρικές γραμματοσειράς και γραμμή βάσης
+	Use visual kerning and bubble centering	Οπτικό σύστημα: οπτικό κέρνινγκ και κεντράρισμα συννεφάκι
+	Leading is linked to size	Το διάστιχο είναι συνδεδεμένο με το μέγεθος
+	Leading is not linked to size	Το διάστιχο δεν είναι συνδεδεμένο με το μέγεθος
+	H-Scale (%)	Οριζόντια κλίμακα (%)
+	Edit preview text	Επεξεργασία κειμένου προεπισκόπησης
+	Leave empty for the automatic sample	Αφήστε κενό για το αυτόματο δείγμα
+	Preview unavailable	Η προεπισκόπηση δεν είναι διαθέσιμη
+	Duplicate this style	Διπλασιασμός αυτού του στυλ
+	Delete this style	Διαγραφή αυτού του στυλ
+	Bubble Contour	Σχήμα μπαλονιού
+	No contour variants	Δεν υπάρχουν παραλλαγές περιγράμματος
+	~ SCurve	~ SCurve
+	＋ Add tail	＋ Add tail
+	＋ Create balloon on canvas	＋ Create balloon on canvas
+	＋ Fit balloon	＋ Fit balloon
+	⊘ None	⊘ None
+	⌒ Arc	⌒ Arc
+	▽ Wedge	▽ Wedge
+	◎ Double outline	◎ Double outline
+	◌ Thought	◌ Thought
+	☁️ Cloud	☁️ Cloud
+	✓ Text fits: {lines} lines, {size} pt	✓ Text fits: {lines} lines, {size} pt
+	✴️ Burst	✴️ Burst
+	⑂ Double	⑂ Double
+	◽ Rect	◽ Rect
+	⚠ Text does not fit — enlarge the balloon or reduce the type size	⚠ Text does not fit — enlarge the balloon or reduce the type size
+	⚡ Bake to SAI Linework	⚡ Bake to SAI Linework
+	⚡ Lightning	⚡ Lightning
+	⚪ Ellipse	⚪ Ellipse
+	Add a tail to the selected balloon	Add a tail to the selected balloon
+	Background colour	Background colour
+	Balloon body:	Balloon body:
+	Bubble radius:	Bubble radius:
+	Bumps:	Bumps:
+	Bundle:	Bundle:
+	Corner radius:	Corner radius:
+	Cusp bite:	Cusp bite:
+	Dialogue and fit:	Dialogue and fit:
+	Dialogue text…	Dialogue text…
+	Fit the shape to the text: the balloon grows when the line does not fit	Fit the shape to the text: the balloon grows when the line does not fit
+	Hand-drawn noise:	Hand-drawn noise:
+	Inner sharpness:	Inner sharpness:
+	Inward concavity:	Inward concavity:
+	Jitter:	Jitter:
+	Lobe height:	Lobe height:
+	Mouth width:	Mouth width:
+	Needle width:	Needle width:
+	Needles:	Needles:
+	Outer sharpness:	Outer sharpness:
+	Outline gap:	Outline gap:
+	Random jitter variation	Random jitter variation
+	Random ray variation	Random ray variation
+	Ray extension:	Ray extension:
+	Ray length:	Ray length:
+	Rays:	Rays:
+	Round the tips	Round the tips
+	Spikes:	Spikes:
+	Squircle:	Squircle:
+	Stroke and fill:	Stroke and fill:
+	Sub-harmonics:	Sub-harmonics:
+	Tail type:	Tail type:
+	Text area:	Text area:
+	Thought bubbles:	Thought bubbles:
+	Turn the balloon into an editable vector linework layer	Turn the balloon into an editable vector linework layer
+	Type size:	Type size:
+	Valley depth:	Valley depth:
+	💥 Spiky	💥 Spiky
+	🔄 Reset to the manga default	🔄 Reset to the manga default
+	🦔 Uniflash	🦔 Uniflash

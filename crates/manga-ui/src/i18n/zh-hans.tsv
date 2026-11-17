@@ -1,0 +1,362 @@
+	File	文件
+	Left	左
+	Save	保存
+	Folder	文件夹
+	Paste	粘贴
+	Clear	清除
+	Search…	搜索…
+	Scale	缩放
+	Delete	删除
+	Reverse	反向
+	Align	对齐
+	All Layers	所有图层
+	Horizontal	水平
+	None	无
+	Noise	杂色
+	Video	视频
+	Square	正方形
+	Extras	辅助内容
+	Balloons	气球
+	Color	颜色
+	Linework	线稿
+	Manga Balloons	漫画气泡
+	Options	选项
+	SAI Linework	SAI 线稿
+	Screentones	网点
+	Apply	应用
+	Auto	自动
+	All Caps	全部大写
+	Angle	角度
+	Anti-alias	抗锯齿
+	Background	背景
+	Bend:	弯曲：
+	Automatic	自动
+	Cancel	取消
+	Center	居中
+	Contiguous	连续
+	Custom	自定义
+	Default	默认
+	Density	浓度
+	Density:	浓度：
+	Done	完成
+	Dots	点
+	Fill:	填充：
+	Foreground	前景色
+	Height	高度
+	Leading	行距
+	Result	结果
+	Metrics	度量
+	Mode:	模式：
+	Name:	名称：
+	Normal	正常
+	OK	确定
+	Opacity	不透明度
+	Optical	视觉
+	Preset	预设
+	Preset:	预设：
+	Preview	预览
+	Roundness	圆度
+	Shape:	形状：
+	Size	大小
+	Size:	大小：
+	Small Caps	小型大写字母
+	Strikethrough	删除线
+	Style	样式
+	Tolerance	容差
+	Transparent	透明
+	Type:	类型：
+	Underline	下划线
+	White	白色
+	Width	宽度
+	Width:	宽度：
+	name	名称
+	New Layer	新建图层
+	Diamond	菱形
+	Linear	线性
+	Radial	径向
+	Lines	线条
+	Angle:	角度：
+	Gradient	渐变
+	Round	圆角
+	High	高
+	Low	低
+	No document open	未打开任何文档
+	Button Mode	按钮模式
+	Random	随机
+	Topaz Gigapixel AI…	Topaz Gigapixel AI…
+	Opened in Topaz Gigapixel AI: export the image there to bring it back	已在 Topaz Gigapixel AI 中打开：在那里导出图像即可将其带回
+	Stopped waiting for Topaz Gigapixel AI	已停止等待 Topaz Gigapixel AI
+	Topaz Gigapixel AI's image could not be applied: {error}	无法应用 Topaz Gigapixel AI 的图像：{error}
+	Topaz Gigapixel AI: upscaled {scale}× to {w} × {h} px (new layer)	Topaz Gigapixel AI：已放大 {scale}× 至 {w} × {h} 像素（新图层）
+	Waiting for Topaz Gigapixel AI: export the upscaled image there to bring it back.	正在等待 Topaz Gigapixel AI：在那里导出放大后的图像即可将其带回。
+	Model:	模型：
+	There is no such Topaz Gigapixel preset	没有这个 Topaz Gigapixel 预设
+	Saved Topaz Gigapixel preset “{name}”	已存储 Topaz Gigapixel 预设“{name}”
+	New Preset	新建预设
+	Upscale:	放大:
+	With these settings	使用这些设置
+	With two presets	使用两个预设
+	Save two presets with their own settings first; then this one can run them together.	请先存储两个带有自身设置的预设；然后此预设即可将它们一起运行。
+	First:	首先:
+	Then:	然后:
+	Results:	结果:
+	One after the other	依次
+	Each on its own layer	各自位于单独图层
+	Both presets upscale the image; each result becomes a layer, to compare or blend.	两个预设都会放大图像；每个结果成为一个图层，便于比较或混合。
+	The second preset upscales the first one's result.	第二个预设放大第一个预设的结果。
+	Run a saved preset from File › Automate › Topaz Gigapixel Presets.	从“文件 › 自动化 › Topaz Gigapixel 预设”运行存储的预设。
+	Auto lets Gigapixel choose.	选择“自动”时由 Gigapixel 决定。
+	Choose a folder for your timelapse recordings	选择用于保存延时录制的文件夹
+	Timelapse	延时摄影
+	Auto record	自动录制
+	Recording	录制中
+	Click to pause	点击暂停
+	Start recording	开始录制
+	Reference layer	参考图层
+	Recorded	会录制
+	{count} of {total} not recorded	{total} 个中有 {count} 个不录制
+	Reference	参考
+	Play video	播放视频
+	Show in folder	在文件夹中显示
+	Advanced settings	高级设置
+	Flash before the final image	最终画面前闪白
+	Slow down at the end	结尾减速
+	Remove flicker	去除闪烁
+	Settings	设置
+	Choose…	选择…
+	Remove frames with undo	撤销时移除帧
+	Makes the MP4. Automatic looks next to PhotoCraft, then on PATH.	用于生成 MP4。自动会先在 PhotoCraft 旁查找，再在 PATH 中查找。
+	Choose the ffmpeg program on this computer	选择这台电脑上的 ffmpeg 程序
+	Opening files isn't available here	此处无法打开文件
+@plural	{n} frame|{n} frames	{n} 帧
+	Library	库
+	Refresh	刷新
+	Recordings will be listed here once you've chosen a folder.	选择文件夹后，录制内容会列在这里。
+	No recordings yet.	还没有录制。
+	Open folder	打开文件夹
+	Delete frames	删除帧
+	Delete folder	删除文件夹
+	Pause the recording first	请先暂停录制
+	REC	REC
+	EXPORTED	已导出
+	NOT EXPORTED	未导出
+	{time} work	工作 {time}
+	“{name}” hasn't been exported yet. If you delete its {frames}, you can't make a video of it anymore. This can't be undone.	“{name}”尚未导出。如果删除它的帧（{frames}），就无法再用它制作视频。此操作无法撤销。
+	Delete the {frames} of “{name}”?	要删除“{name}”的帧（{frames}）吗？
+	You've recorded more since the last export, and that part isn't in the video.	上次导出后你又录制了新内容，这部分不在视频中。
+	Your videos and the work time are kept. This can't be undone.	你的视频和工作时间会保留。此操作无法撤销。
+	Delete “{name}” and its folder? It's removed from the library, along with its work time. Videos you exported stay where you saved them. This can't be undone.	要删除“{name}”及其文件夹吗？它会连同工作时间一起从库中移除。导出的视频仍留在你保存的位置。此操作无法撤销。
+	Frames deleted.	已删除帧。
+	Deleted “{name}”. Its folder holds other files, so it was kept.	已删除“{name}”。它的文件夹中还有其他文件，因此保留了文件夹。
+	Deleted “{name}”.	已删除“{name}”。
+@plural	{n} recording|{n} recordings	{n} 个录制
+	No upscale has come back from Topaz Gigapixel AI yet	尚未从 Topaz Gigapixel AI 返回任何放大结果
+	Topaz Gigapixel AI: upscaled {scale}× to {w} × {h} px (new layer). Keep these settings with Topaz Gigapixel Presets › Save Preset from Last Upscale	Topaz Gigapixel AI：已放大 {scale}× 至 {w} × {h} 像素（新图层）。使用 Topaz Gigapixel 预设 › 从上次放大存储预设 保留这些设置
+	Saved {name} ({seconds} video).	已保存 {name}（{seconds} 视频）。
+	Export failed: {error}	导出失败：{error}
+	Export cancelled.	已取消导出。
+	just now	刚刚
+	{n} min ago	{n} 分钟前
+	{n} h ago	{n} 小时前
+	yesterday	昨天
+	{n} days ago	{n} 天前
+	Smaller files and the quickest capturing. Fine for quick sketches and previews.	文件更小，录制最快。适合快速草图和预览。
+	Sharper video for big screens. Uses about twice the disk space.	适合大屏幕的更清晰视频。占用约两倍的磁盘空间。
+	Full-HD video, good for social media. Recommended.	全高清视频，适合社交媒体。推荐。
+	idle	空闲
+	Record	录制
+	Paused	已暂停
+	Click to resume recording	点击继续录制
+	Open a document to record it.	打开文档以录制。
+	You'll be asked where to save recordings.	会询问录制内容的保存位置。
+	Export again	再次导出
+	Export video	导出视频
+	Show the export results	显示导出结果
+	Hide the export results	隐藏导出结果
+	≈ {seconds} video from {frames}.	≈ 由 {frames}生成 {seconds} 视频。
+	Confirm	确认
+	Cancel export	取消导出
+	Frames	帧数
+	Timer	计时
+	On disk	占用空间
+	Hide the live preview	隐藏实时预览
+	Show the newest frame	显示最新的帧
+	No frames yet — just start drawing	还没有帧——开始绘画吧
+	No frames yet	还没有帧
+	No layer selected	未选择图层
+	{n} layers selected	已选择 {n} 个图层
+	Not recorded	不录制
+	A reference layer works like a normal layer, but won't show up in the timelapse.	参考图层和普通图层一样使用，但不会出现在延时视频中。
+	Back	返回
+	Export settings	导出设置
+	Make video with	视频生成方式
+	Bars colour	边条颜色
+	Bars fill the empty space when the canvas size changed during recording.	录制期间画布尺寸有变化时，边条会填充空白。
+	Show finished drawing first	先显示完成的画作
+	Hold final image	停留在最终画面
+	Show work-time counter	显示工作时长计数
+	Record something in this document to see how long the video will be.	在此文档中录制一些内容，即可查看视频时长。
+	≈ {seconds} video	≈ {seconds} 视频
+	{n} recorded frames	{n} 个已录制帧
+	Auto shows every frame once (at least 5 s, at most 1 min).	自动会将每一帧显示一次（至少 5 秒，最多 1 分钟）。
+	The canvas size changed during recording; earlier frames are fitted inside the final size.	录制期间画布尺寸发生了变化；较早的帧会适应最终尺寸。
+	Remove flicker leaves out frames that flash in and out (a layer hidden for a moment, a stroke undone right away), so the video can be a bit shorter.	去除闪烁会略去一闪而过的帧（短暂隐藏的图层、立即撤销的笔画），因此视频可能会稍短一些。
+	Recordings folder	录制文件夹
+	Not chosen yet — see Settings	尚未选择——请看“设置”
+	recorded {when}	录制于{when}
+	Recorded more since the last export.	上次导出后又录制了新内容。
+	Frames folder	帧文件夹
+	Not chosen yet	尚未选择
+	Where the recorded frames are kept. Videos are saved wherever you choose when you export.	录制的帧保存在这里。视频会保存到导出时选择的位置。
+	Choose folder…	选择文件夹…
+	Change folder…	更改文件夹…
+	Recording quality	录制质量
+	Undoing something removes those recorded frames.	撤销操作会移除对应的已录制帧。
+	Reference layers	参考图层
+	Name tag	名称标记
+	Layers with this in their name are left out of the timelapse.	名称中含有此标记的图层不会出现在延时视频中。
+	Work timer	工作计时
+	Idle after	闲置判定
+	The timer stops counting after this long without activity.	无操作达到此时长后，计时停止。
+	Timelapse Recorder · PhotoCraft	Timelapse Recorder · PhotoCraft
+	Length	时长
+	Run	运行
+	Fill Tool	填充工具
+	Nothing to fill there	那里没有可填充的区域
+	No enclosed area to fill there	那里没有可填充的封闭区域
+	Fill: click an area	填充：单击一个区域
+	Enclose and Fill: draw round the areas to fill	围住填充：围绕要填充的区域绘制
+	Paint Unfilled Area: paint over the gaps a fill left	填充遗漏区域：在填充遗漏的空隙上涂抹
+	Refer	参照
+	Editing Layer	编辑中的图层
+	Selected Layers	选定的图层
+	Layers in Folder	文件夹中的图层
+	Reference Layers	参考图层
+	Exclude	排除
+	Editing layer	编辑中的图层
+	Text layers	文字图层
+	Locked layers	锁定的图层
+	Layers the fill doesn't read	填充不读取的图层
+	Close Gap	闭合间隙
+	Area Scaling	区域缩放
+	Grow the fill under the lines, or shrink it	将填充扩展到线条下方或收缩
+	To Darkest Pixel	到最暗像素
+	Follow Adjacent Pixels	仅限相邻像素
+	Target	目标
+	White and Transparent	白色和透明
+	Image Border	图像边缘
+	The canvas edge closes gaps as a line does	画布边缘像线条一样闭合间隙
+	Fill Tool Options	填充工具选项
+	Save as:	另存为：
+	Save Preset	存储预设
+	Keep these two presets as one, listed with the others	将这两个预设存为一个，与其他预设列在一起
+	Duplicate	复制
+	seconds	秒
+	Close gaps up to {px} px	封闭 {px} 像素以内的间隙
+	Grow the selection under the lines, or shrink it	将选区扩展到线条下方，或收缩选区
+	Delete Second Mask	删除第二个蒙版
+	Disable Second Mask	停用第二个蒙版
+	Enable Second Mask	启用第二个蒙版
+	Editing layer blocks the fill	编辑中的图层阻挡填充
+	Paint on the layer being filled stops the fill at any tolerance, and the fill goes in behind it: draw over a gap to close it	被填充图层上的绘画在任何容差下都会阻挡填充，填充会进入其后方：在间隙上画一笔即可闭合它
+	Undo widens Close Gap	撤销时扩大闭合间隙
+	Each Undo of a fill closes bigger gaps for the next click, until you pick another tool	每次撤销填充，下一次点按都会闭合更大的间隙，直到您选择其他工具
+	Close Gap widened to {px} px: click again to fill	闭合间隙已扩大到 {px} 像素：再次点按以填充
+	Screentone…	网点…
+	Satellites	卫星
+	Enable	启用
+	Count:	数量:
+	Distance:	距离:
+	Stretch:	拉伸:
+	Distortion & Jitter	变形与抖动
+	Aspect X:	长宽比 X:
+	Aspect Y:	长宽比 Y:
+	Row Offset:	行偏移:
+	Merge:	融合:
+	Jitter Pos:	抖动位置:
+	Jitter Size:	抖动大小:
+	Midpoint:	中点:
+	Start Size:	起始大小:
+	End Size:	结束大小:
+	Save as Pattern	存储为图案
+	Font Settings	字体设置
+	No folder	无文件夹
+	+ New folder...	+ 新建文件夹...
+	Folder name	文件夹名称
+	New folder name	新文件夹名称
+	Favorite font	收藏字体
+	Faux bold	仿粗体
+	Faux italic	仿斜体
+	Superscript	上标
+	Subscript	下标
+	Hanging Punctuation	悬挂标点
+	Use standard font metrics and the baseline	度量系统：标准字体度量和基线
+	Use visual kerning and bubble centering	视觉系统：视觉字偶距和气泡居中
+	Leading is linked to size	行距与字号联动
+	Leading is not linked to size	行距不与字号联动
+	H-Scale (%)	水平缩放 (%)
+	Edit preview text	编辑预览文本
+	Leave empty for the automatic sample	留空以使用自动示例
+	Preview unavailable	预览不可用
+	Duplicate this style	复制此样式
+	Delete this style	删除此样式
+	Bubble Contour	气泡轮廓
+	No contour variants	无轮廓变体
+	~ SCurve	~ SCurve
+	＋ Add tail	＋ Add tail
+	＋ Create balloon on canvas	＋ Create balloon on canvas
+	＋ Fit balloon	＋ Fit balloon
+	⊘ None	⊘ None
+	⌒ Arc	⌒ Arc
+	▽ Wedge	▽ Wedge
+	◎ Double outline	◎ Double outline
+	◌ Thought	◌ Thought
+	☁️ Cloud	☁️ Cloud
+	✓ Text fits: {lines} lines, {size} pt	✓ Text fits: {lines} lines, {size} pt
+	✴️ Burst	✴️ Burst
+	⑂ Double	⑂ Double
+	◽ Rect	◽ Rect
+	⚠ Text does not fit — enlarge the balloon or reduce the type size	⚠ Text does not fit — enlarge the balloon or reduce the type size
+	⚡ Bake to SAI Linework	⚡ Bake to SAI Linework
+	⚡ Lightning	⚡ Lightning
+	⚪ Ellipse	⚪ Ellipse
+	Add a tail to the selected balloon	Add a tail to the selected balloon
+	Background colour	Background colour
+	Balloon body:	Balloon body:
+	Bubble radius:	Bubble radius:
+	Bumps:	Bumps:
+	Bundle:	Bundle:
+	Corner radius:	Corner radius:
+	Cusp bite:	Cusp bite:
+	Dialogue and fit:	Dialogue and fit:
+	Dialogue text…	Dialogue text…
+	Fit the shape to the text: the balloon grows when the line does not fit	Fit the shape to the text: the balloon grows when the line does not fit
+	Hand-drawn noise:	Hand-drawn noise:
+	Inner sharpness:	Inner sharpness:
+	Inward concavity:	Inward concavity:
+	Jitter:	Jitter:
+	Lobe height:	Lobe height:
+	Mouth width:	Mouth width:
+	Needle width:	Needle width:
+	Needles:	Needles:
+	Outer sharpness:	Outer sharpness:
+	Outline gap:	Outline gap:
+	Random jitter variation	Random jitter variation
+	Random ray variation	Random ray variation
+	Ray extension:	Ray extension:
+	Ray length:	Ray length:
+	Rays:	Rays:
+	Round the tips	Round the tips
+	Spikes:	Spikes:
+	Squircle:	Squircle:
+	Stroke and fill:	Stroke and fill:
+	Sub-harmonics:	Sub-harmonics:
+	Tail type:	Tail type:
+	Text area:	Text area:
+	Thought bubbles:	Thought bubbles:
+	Turn the balloon into an editable vector linework layer	Turn the balloon into an editable vector linework layer
+	Type size:	Type size:
+	Valley depth:	Valley depth:
+	💥 Spiky	💥 Spiky
+	🔄 Reset to the manga default	🔄 Reset to the manga default
+	🦔 Uniflash	🦔 Uniflash

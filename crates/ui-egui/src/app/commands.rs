@@ -18,9 +18,14 @@ impl PhotocraftApp {
         if gate.is_some() {
             self.session.authorize = gate;
         }
+        let undone =
+            matches!(id, "edit.undo" | "edit.stepBackward").then(|| self.session.active().and_then(|st| st.history.undo_label().map(str::to_string))).flatten();
         let result = self.run_command(id, params);
         if gate.is_some() {
             self.session.authorize = None;
+        }
+        if result.is_ok() && undone.is_some() {
+            crate::fill_tool_ui::after_undo(self, undone.as_deref());
         }
         // An explicit channel target (⌘2, ⌘\, ⌘3…) decides what the Layers panel targets too:
         // ⌘2 after the mask was targeted goes back to the layer's pixels.
@@ -28,6 +33,7 @@ impl PhotocraftApp {
             if let Some(t) = self.session.active().map(|st| st.channel_view.target) {
                 use photocraft_engine::channel_cmds::ChannelTarget;
                 self.ui.mask_target = t == ChannelTarget::LayerMask;
+                self.ui.second_mask_target = false;
                 self.ui.vector_mask_target = t == ChannelTarget::VectorMask;
             }
             self.sync_mask_targets();
@@ -188,6 +194,11 @@ impl PhotocraftApp {
         } else {
             jobs_ui::run(self, id, params)
         };
+        if let Ok(v) = &r
+            && id == photocraft_engine::manga_cmds::gigapixel::ID
+        {
+            crate::gigapixel_ui::started(self, v);
+        }
         let creates_adjustment_or_fill = id.starts_with("layer.newAdjustmentLayer.") || id.starts_with("layer.newFillLayer.");
         self.sync_command_side_effects(id, &r, creates_active_mask, creates_active_vector_mask, creates_adjustment_or_fill, path_mask);
         self.perf.last_command = id.to_string();
@@ -202,6 +213,7 @@ impl PhotocraftApp {
                     self.ui.status_error = false;
                 }
                 self.sync_views();
+                crate::vector_ui::reconcile_vector_curve_layer(self);
                 let removed = self.session.take_samplers_removed();
                 if removed > 0 && !self.ui.status_error {
                     // A canvas-size change (crop, Canvas Size, Image Size, rotation) dropped Color
@@ -241,6 +253,7 @@ impl PhotocraftApp {
             let _ = self.session.execute("channel.target.composite", json!({}));
             self.ui.selected_path = Some("layer".into());
             self.ui.vector_mask_target = false;
+            self.ui.second_mask_target = false;
             self.ui.mask_target = false;
         }
     }
@@ -258,6 +271,7 @@ impl PhotocraftApp {
         if result.is_ok() && ADDS_LAYER_MASK.contains(&id) {
             // Adding an explicit mask targets it, as in Photoshop (#2166).
             self.ui.mask_target = true;
+            self.ui.second_mask_target = false;
             self.ui.vector_mask_target = false;
             self.ui.properties_layer = None;
         } else if result.is_ok() && creates_adjustment_or_fill {
@@ -270,6 +284,7 @@ impl PhotocraftApp {
                 .map(|layer| (layer.mask.is_some(), layer.vector_mask.is_some()))
                 .unwrap_or((false, false));
             self.ui.mask_target = masks.0;
+            self.ui.second_mask_target = false;
             self.ui.vector_mask_target = !masks.0 && masks.1;
             // Keep Properties on the new layer contents, as on main (#3369).
             self.ui.properties_layer = self.session.active().and_then(|st| st.active_layer).map(|l| l.0);
@@ -320,6 +335,7 @@ impl PhotocraftApp {
         if result.is_ok() && creates_active_mask {
             // Adding a mask selects its thumbnail: the next brush or footer Delete targets it.
             self.ui.mask_target = true;
+            self.ui.second_mask_target = false;
             self.ui.vector_mask_target = false;
             self.target_mask_over_colour_rows();
         }
@@ -328,6 +344,7 @@ impl PhotocraftApp {
             // mask made from a path becomes the active path.
             self.ui.vector_mask_target = true;
             self.ui.mask_target = false;
+            self.ui.second_mask_target = false;
             if matches!(id, "layer.vectorMask.currentPath" | "layer.vectorMask.fromPath") {
                 self.ui.selected_path = Some("layer".into());
             }

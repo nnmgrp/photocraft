@@ -118,6 +118,27 @@ pub struct Panels {
     /// Where that bar sits: following its frame, or dragged or pinned (`widgets::task_bar`).
     #[serde(default)]
     pub task_bar: TaskBarPlace,
+    /// Manga Screentone generator / editor floating panel.
+    #[serde(default)]
+    pub screentone: bool,
+    /// Manga Comic Balloon floating panel.
+    #[serde(default)]
+    pub balloon: bool,
+    /// PaintTool SAI v2 Linework / Vector layers floating panel.
+    #[serde(default)]
+    pub linework: bool,
+    /// Timelapse recorder / player floating panel.
+    #[serde(default)]
+    pub timelapse: bool,
+    /// Chapter pages overview panel.
+    #[serde(default)]
+    pub pages: bool,
+    /// Manga typesetter (TypeR) panel.
+    #[serde(default)]
+    pub typesetter: bool,
+    /// Canvas quick capsule overlay.
+    #[serde(default)]
+    pub canvas_capsule: bool,
 }
 
 /// Where the contextual task bar sits (#10890). Part of [`Panels`], so it is kept with the panel
@@ -157,6 +178,13 @@ impl Default for Panels {
             gradient_editor: false,
             context_task_bar: true,
             task_bar: TaskBarPlace::default(),
+            screentone: false,
+            balloon: false,
+            linework: false,
+            timelapse: false,
+            pages: false,
+            typesetter: false,
+            canvas_capsule: false,
         }
     }
 }
@@ -343,6 +371,9 @@ pub struct UiState {
     /// Painting targets the active layer's mask instead of its pixels.
     #[serde(default)]
     pub mask_target: bool,
+    /// PhotoCraft's second pixel mask thumbnail is targeted (`Layer::second_mask`).
+    #[serde(default)]
+    pub second_mask_target: bool,
     /// The active layer's vector mask is targeted (its Layers thumbnail is bracketed): the path
     /// tools edit it (#196). Never set together with `mask_target`.
     #[serde(default)]
@@ -585,6 +616,12 @@ pub struct UiState {
     /// Perspective Crop quad being edited: TL, TR, BR, BL (document coordinates).
     #[serde(default)]
     pub perspective_crop: Option<[[f64; 2]; 4]>,
+    /// PaintTool SAI Linework Curve tool state (`vector_ui`).
+    #[serde(default)]
+    pub vector_curve: Option<crate::vector_ui::VectorCurveState>,
+    /// Active manga chapter folder name (Pages panel).
+    #[serde(default)]
+    pub chapter_folder_name: Option<String>,
     pub next_id: u64,
     /// Last status message (errors from commands, hints).
     pub status: String,
@@ -637,6 +674,7 @@ impl Default for UiState {
             symmetry_transform: None,
             layer_picker: None,
             mask_target: false,
+            second_mask_target: false,
             vector_mask_target: false,
             filter_mask_target: None,
             properties_layer: None,
@@ -721,6 +759,8 @@ impl Default for UiState {
             crop_rect: None,
             crop_angle: 0.0,
             perspective_crop: None,
+            vector_curve: None,
+            chapter_folder_name: None,
             next_id: 1,
             status: String::new(),
             status_error: false,
@@ -865,7 +905,10 @@ mod tests {
         assert!(!Tool::RedEye.is_brushlike());
         assert_eq!(Tool::from_name("patternStamp"), Some(Tool::PatternStamp));
         assert_eq!(Tool::from_name("Pattern Stamp Tool"), Some(Tool::PatternStamp));
-        assert_eq!(Tool::ALL.len(), 69);
+        assert_eq!(Tool::from_name("Fill Tool"), Some(Tool::Fill));
+        assert_eq!(Tool::from_name("Vector Curve Tool"), Some(Tool::VectorCurve));
+        assert_eq!(Tool::from_name("Balloon Tool"), Some(Tool::Balloon));
+        assert_eq!(Tool::ALL.len(), 72);
     }
 
     fn vector_tool_names_parse() {

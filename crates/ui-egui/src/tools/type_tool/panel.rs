@@ -566,3 +566,159 @@ fn type_options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         app.ui.status_error = true;
     }
 }
+
+/// Apply vertical alignment to the active text layer (converting point text to box text if needed)
+/// and update default tool options.
+#[cfg(not(target_arch = "wasm32"))]
+fn apply_vertical_align(app: &mut PhotocraftApp, ctx: &egui::Context, key: &str) {
+    apply_defaults(app, &json!({"verticalAlign": key}));
+    if let Some((id, _)) = target(app) {
+        if super::pointer::box_shape(app, LayerId(id)).is_none()
+            && let Some((l, _, _)) = super::layout::layout(app, LayerId(id))
+            && let Some([x0, y0, x1, y1]) = l.bounds()
+        {
+            let pad = 10.0;
+            let w = ((x1 - x0) + pad * 2.0).max(60.0);
+            let h = ((y1 - y0) + pad * 2.0).max(40.0);
+            apply(app, ctx, json!({"box": [x0 - pad, y0 - pad, w, h], "verticalAlign": key}));
+        } else {
+            apply(app, ctx, json!({"verticalAlign": key}));
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn vertical_align_items() -> [(&'static str, &'static str, photocraft_doc::text::VerticalAlign); 4] {
+    use photocraft_doc::text::VerticalAlign as V;
+    [
+        ("top", "Top align text", V::Top),
+        ("center", "Center text vertically", V::Center),
+        ("bottom", "Bottom align text", V::Bottom),
+        ("justify", "Justify text vertically", V::Justify),
+    ]
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn vertical_align_glyph(p: &egui::Painter, r: egui::Rect, a: photocraft_doc::text::VerticalAlign, c: Color32) {
+    use photocraft_doc::text::VerticalAlign as V;
+    let frame_stroke = Stroke::new(1.2, c);
+    let line_stroke = Stroke::new(1.5, c);
+    let (left, right) = (r.left(), r.right());
+    match a {
+        V::Top => {
+            p.line_segment([egui::pos2(left, r.top()), egui::pos2(right, r.top())], frame_stroke);
+            for (i, w) in [0.85, 0.55].iter().enumerate() {
+                let y = r.top() + 3.5 + i as f32 * 3.0;
+                p.line_segment([egui::pos2(left + 1.0, y), egui::pos2(left + 1.0 + (r.width() - 2.0) * w, y)], line_stroke);
+            }
+        }
+        V::Center => {
+            let cy = r.center().y;
+            p.line_segment([egui::pos2(left, r.top()), egui::pos2(right, r.top())], frame_stroke);
+            p.line_segment([egui::pos2(left, r.bottom()), egui::pos2(right, r.bottom())], frame_stroke);
+            for (dy, w) in [(-1.5, 0.85), (1.5, 0.55)] {
+                let len = (r.width() - 2.0) * w;
+                let x0 = r.center().x - len * 0.5;
+                p.line_segment([egui::pos2(x0, cy + dy), egui::pos2(x0 + len, cy + dy)], line_stroke);
+            }
+        }
+        V::Bottom => {
+            p.line_segment([egui::pos2(left, r.bottom()), egui::pos2(right, r.bottom())], frame_stroke);
+            for (i, w) in [0.85, 0.55].iter().enumerate() {
+                let y = r.bottom() - 6.5 + i as f32 * 3.0;
+                p.line_segment([egui::pos2(left + 1.0, y), egui::pos2(left + 1.0 + (r.width() - 2.0) * w, y)], line_stroke);
+            }
+        }
+        V::Justify => {
+            for (i, w) in [1.0, 0.75, 1.0, 0.65].iter().enumerate() {
+                let y = r.top() + i as f32 * r.height() / 3.0;
+                p.line_segment([egui::pos2(left, y), egui::pos2(left + r.width() * w, y)], line_stroke);
+            }
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn vertical_align_button(ui: &mut egui::Ui, a: photocraft_doc::text::VerticalAlign, selected: bool, tip: &str, size: f32) -> egui::Response {
+    let (r, resp) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
+    let tint = crate::icons::button_chrome(ui, r, selected, resp.hovered());
+    let glyph_size = (size * 0.55).round().max(10.0);
+    vertical_align_glyph(ui.painter(), egui::Rect::from_center_size(r.center(), egui::vec2(glyph_size, glyph_size)), a, tint);
+    let tip = tip.to_string();
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, &tip));
+    resp.on_hover_text(tip)
+}
+
+/// Contextual toolbar controls for text editing in the Canvas Capsule.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn capsule_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    ui.push_id("capsule_type_controls_scope", |ui| {
+        let t = crate::theme::Tokens::get(ui.ctx());
+        let shown = target(app).and_then(|(id, _)| {
+            let st = app.session.active()?;
+            let tl = text_layer(&st.doc, LayerId(id))?;
+            let run = tl.char_runs().into_iter().next().map(|r| r.style);
+            let size = styles_at(app).map_or(tl.size_pt, |(c, _)| c.size_pt) * shown_scale(app);
+            Some((tl.font_family.clone(), run.as_ref().map(selected_style).unwrap_or_default(), size))
+        });
+        let o = app.ui.tool_options.clone();
+        let (mut fam, mut style, size) = match &shown {
+            Some((f, s, z)) => (f.clone(), if s.is_empty() { "Regular".into() } else { s.clone() }, *z),
+            None => (o.type_font.clone(), o.type_style.clone(), o.type_size),
+        };
+        ui.label(egui::RichText::new("T").strong().color(t.text));
+        if fonts_ready(ui, 120.0)
+            && let Some(picked) = super::fonts::family_picker(app, ui, "capsule-type-font", &mut fam, 120.0)
+        {
+            app.ui.tool_options.type_font = fam.clone();
+            let st = styles(&fam);
+            let picked = picked.filter(|s| st.contains(s));
+            style = match &picked {
+                Some(s) => s.clone(),
+                None if st.contains(&style) => style.clone(),
+                None => st.first().cloned().unwrap_or_else(|| "Regular".into()),
+            };
+            app.ui.tool_options.type_style = style.clone();
+            match picked {
+                Some(s) => apply(app, ui.ctx(), json!({"font": fam, "fontStyle": s})),
+                None => apply(app, ui.ctx(), json!({"font": fam})),
+            }
+        }
+        let (unit, label) = type_unit(app);
+        let mut display = size * unit;
+        if crate::widgets::value_field_named(ui, tl!("Font size"), &mut display, unit..=1296.0 * unit, label, 58.0).changed() {
+            let new_size = display / unit;
+            app.ui.tool_options.type_size = new_size;
+            apply(app, ui.ctx(), json!({"size": new_size, "metricsAsShown": true}));
+        }
+        ui.spacing_mut().item_spacing.x = 2.0;
+        for (align, icon, tip) in
+            [("left", "align-left", tl!("Left align text")), ("center", "align-center", tl!("Center text")), ("right", "align-right", tl!("Right align text"))]
+        {
+            if crate::icons::button(ui, icon, 18.0, o.type_align == align, tip).clicked() {
+                app.ui.tool_options.type_align = align.into();
+                apply(app, ui.ctx(), json!({"align": align}));
+            }
+        }
+        ui.spacing_mut().item_spacing.x = 6.0;
+        crate::widgets::vline(ui, 18.0);
+        ui.spacing_mut().item_spacing.x = 2.0;
+        let cur_valign = styles_at(app).map(|(_, p)| p.vertical_align).unwrap_or_else(|| default_styles(app).1.vertical_align);
+        for (key, tip, va) in vertical_align_items() {
+            if vertical_align_button(ui, va, cur_valign == va, tip, 18.0).clicked() {
+                apply_vertical_align(app, ui.ctx(), key);
+            }
+        }
+        ui.spacing_mut().item_spacing.x = 6.0;
+        if app.ui.text_edit.is_some() {
+            ui.separator();
+            let commit_tip = crate::i18n::fmt(tl!("Commit any current edits ({key})"), &[("key", &crate::shortcuts::pretty("Cmd+Enter"))]);
+            if crate::icons::button(ui, "check", 18.0, false, &commit_tip).clicked() {
+                super::editing::commit_with(app, ui.input(|i| i.modifiers));
+            }
+            if crate::icons::button(ui, "ban", 18.0, false, tl!("Cancel any current edits (Esc)")).clicked() {
+                super::editing::cancel(app);
+            }
+        }
+    });
+}

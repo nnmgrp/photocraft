@@ -443,6 +443,7 @@ fn eye_column(app: &mut PhotocraftApp, ui: &mut egui::Ui, l: &Layer, row: RowSel
 fn paint_target_brackets(app: &PhotocraftApp, painter: &egui::Painter, t: &Tokens, rc: &RowCtx<'_>) {
     let (l, thumb) = (rc.l, rc.thumb);
     let mask_rect = rc.masks.thumb(crate::mask_thumbs_ui::MaskKind::Pixel);
+    let second_rect = rc.masks.thumb(crate::mask_thumbs_ui::MaskKind::Second);
     let vector_rect = rc.masks.thumb(crate::mask_thumbs_ui::MaskKind::Vector);
     // Photoshop frames the targeted thumbnail (pixels, mask or vector mask) of the active layer
     // with corner brackets.
@@ -452,6 +453,8 @@ fn paint_target_brackets(app: &PhotocraftApp, painter: &egui::Painter, t: &Token
             None
         } else if app.ui.vector_mask_target && vector_rect.is_some() {
             vector_rect
+        } else if app.ui.mask_target && app.ui.second_mask_target && second_rect.is_some() {
+            second_rect
         } else if app.ui.mask_target {
             mask_rect.or(Some(thumb))
         } else {
@@ -513,8 +516,11 @@ fn select_row_on_click(app: &mut PhotocraftApp, ui: &egui::Ui, rc: &RowCtx<'_>, 
     crate::smart_ui::deselect(ctx, doc.id);
     // A thumbnail explicitly selects content or a mask. Selecting an adjustment/fill row
     // defaults to its mask, but clicking its content thumbnail must leave the mask target.
-    let on_mask = mask_rect.zip(pos).is_some_and(|(r, p)| r.expand(2.0).contains(p));
-    let on_vector = pos.and_then(|p| masks.hit(p)) == Some(crate::mask_thumbs_ui::MaskKind::Vector);
+    let hit = pos.and_then(|p| masks.hit(p));
+    let on_mask = hit == Some(crate::mask_thumbs_ui::MaskKind::Pixel);
+    let on_second = hit == Some(crate::mask_thumbs_ui::MaskKind::Second);
+    let on_vector = hit == Some(crate::mask_thumbs_ui::MaskKind::Vector);
+    let _ = mask_rect;
     // Clicking the layer thumbnail leaves mask view (#196).
     let viewing = app.session.active().and_then(photocraft_engine::mask_view_cmds::current).filter(|v| v.layer == l.id);
     if let Some(v) = viewing.filter(|_| on_thumb) {
@@ -527,6 +533,9 @@ fn select_row_on_click(app: &mut PhotocraftApp, ui: &egui::Ui, rc: &RowCtx<'_>, 
         // Paths panel selects the layer's path.
         app.ui.selected_path = Some("layer".into());
         actions.push(("ui.vectorMaskTarget".into(), json!(true)));
+    } else if on_second {
+        app.ui.properties_layer = None;
+        actions.push(("ui.secondMaskTarget".into(), json!(true)));
     } else if on_mask || (content_less && l.mask.is_some() && !on_thumb) {
         if on_mask {
             // The mask thumbnail also switches Properties to the mask (#3369).
@@ -567,6 +576,7 @@ fn handle_row_double_click(app: &mut PhotocraftApp, ctx: &egui::Context, rc: &Ro
         } else if let Some(kind) = pos.and_then(|p| masks.hit(p)) {
             match kind {
                 crate::mask_thumbs_ui::MaskKind::Pixel => actions.push(("ui.maskTarget".into(), json!(true))),
+                crate::mask_thumbs_ui::MaskKind::Second => actions.push(("ui.secondMaskTarget".into(), json!(true))),
                 crate::mask_thumbs_ui::MaskKind::Vector => actions.push(("ui.vectorMaskTarget".into(), json!(true))),
             }
             if let Some((cmd, val)) = crate::mask_thumbs_ui::double_click_command(app, kind) {
@@ -599,17 +609,21 @@ fn row_context_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, rc: &RowCtx<'_>,
     // The visibility icon has its own color menu, the layer-mask thumbnail its mask menu
     // (#4575) and a pixel layer's thumbnail its thumbnail menu; elsewhere the full layer menu.
     let on_mask_id = ui.scope_id().with(("mask-menu", l.id.0));
+    let on_second_id = ui.scope_id().with(("second-mask-menu", l.id.0));
     let on_thumb_id = ui.scope_id().with(("thumb-menu", l.id.0));
     if resp.secondary_clicked() {
         let pos = resp.interact_pointer_pos();
-        let on_mask = pos.and_then(|p| masks.hit(p)) == Some(crate::mask_thumbs_ui::MaskKind::Pixel);
+        let hit = pos.and_then(|p| masks.hit(p));
+        let on_mask = hit == Some(crate::mask_thumbs_ui::MaskKind::Pixel);
+        let on_second = hit == Some(crate::mask_thumbs_ui::MaskKind::Second);
         // A pixel layer's thumbnail; not the Background's, which has no transparency to load.
         // Type, shape, smart object, fill, adjustment and group thumbnails keep the layer menu
         // with their own items (Rasterize, Edit Contents…).
         let pixels = matches!(l.content, LayerContent::Raster(_)) && l.frame.is_none() && !rc.doc.is_background(l.id);
-        let on_thumb = !on_mask && pixels && rc.ts > 0.0 && pos.is_some_and(|p| masks.hit(p).is_none() && rc.thumb.expand(2.0).contains(p));
+        let on_thumb = !on_mask && !on_second && pixels && rc.ts > 0.0 && pos.is_some_and(|p| masks.hit(p).is_none() && rc.thumb.expand(2.0).contains(p));
         ctx.data_mut(|d| {
             d.insert_temp(on_mask_id, on_mask);
+            d.insert_temp(on_second_id, on_second);
             d.insert_temp(on_thumb_id, on_thumb);
         });
     }
@@ -618,6 +632,10 @@ fn row_context_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, rc: &RowCtx<'_>,
             crate::widgets::style_spectrum_popup_menu(ui);
             if ui.ctx().data(|d| d.get_temp::<bool>(on_mask_id)).unwrap_or(false) {
                 crate::layer_menu_ui::show_mask(app, ui, l, actions);
+                return;
+            }
+            if ui.ctx().data(|d| d.get_temp::<bool>(on_second_id)).unwrap_or(false) {
+                crate::layer_menu_ui::show_second_mask(ui, l, actions);
                 return;
             }
             if ui.ctx().data(|d| d.get_temp::<bool>(on_thumb_id)).unwrap_or(false) {

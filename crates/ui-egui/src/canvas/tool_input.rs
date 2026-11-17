@@ -29,6 +29,8 @@ fn tool_move(app: &mut PhotocraftApp, x: f64, y: f64, pressure: f32, mods: egui:
         crate::vector_ui::pen_move(app, x, y, mods.shift);
     } else if tool == Tool::CurvaturePen {
         crate::vector_ui::curvature_move(app, x, y);
+    } else if tool == Tool::VectorCurve {
+        crate::vector_ui::vector_curve_move(app, x, y);
     }
     let zoom = app.point_zoom();
     if let Some(d) = app.drag.as_mut().filter(|d| d.reposition) {
@@ -68,6 +70,9 @@ fn preflight_tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modi
         crate::crop_ui::end_drag(app);
     }
     if crate::symmetry_ui::pointer(app, ev, crate::workspace_ui::sticky_mods(app, mods)) {
+        return None;
+    }
+    if crate::manga_seam::canvas_pointer(app, ev, crate::workspace_ui::sticky_mods(app, mods)) {
         return None;
     }
     // An Alt+right-drag armed for this press (`paint_mouse`): taken before anything else can
@@ -596,68 +601,8 @@ pub(super) fn tool_event_with_view(app: &mut PhotocraftApp, ev: ToolEvent, mods:
                 app.drag = Some(d);
                 return;
             }
-            match tool {
-                Tool::PathSelection => {
-                    let tol = crate::path_components::press_tolerance(app);
-                    if let Some(st) = app.session.active()
-                        && let Some(id) = crate::vector_ui::pick_shape_at(&st.doc, [x, y], tol)
-                    {
-                        crate::path_components::untarget_saved_path_off(app, [x, y], tol);
-                        let _ = app.run("layer.select", json!({"layer": id.0}));
-                    }
-                    // The component pressed is selected, so the drag moves it (and the others selected).
-                    crate::path_components::press(app, [x, y], mods.shift);
-                }
-                Tool::Pen => {
-                    if !(mods.alt && crate::vector_ui::pen_grab_handle(app, x, y)) {
-                        crate::vector_ui::pen_down(app, x, y, mods.shift);
-                    }
-                    return;
-                }
-                Tool::CurvaturePen => {
-                    crate::vector_ui::curvature_down(app, x, y);
-                    return;
-                }
-                Tool::CloneStamp | Tool::Healing if mods.alt => {
-                    crate::retouch_ui::set_source(app, x, y);
-                    return;
-                }
-                Tool::MagicWand => {
-                    let o = app.ui.tool_options.clone();
-                    let mode = selection_mode(app, mods);
-                    if wand_pasteboard_click(app, x, y, mode) {
-                        return;
-                    }
-                    let _ = app.run("select.magicWand", json!({"x": x.floor(), "y": y.floor(), "tolerance": o.tolerance, "contiguous": o.contiguous, "antiAlias": o.anti_alias, "sampleAllLayers": o.sample_all.magic_wand, "mode": mode}));
-                    return;
-                }
-                Tool::MagicEraser => {
-                    crate::eraser_ui::click(app, tool, x, y);
-                    return;
-                }
-                Tool::PaintBucket => {
-                    bucket_click(app, x, y);
-                    return;
-                }
-                Tool::RedEye => {
-                    red_eye_click(app, x, y);
-                    return;
-                }
-                Tool::PolygonLasso => {
-                    polygon_click(app, x, y, mods);
-                    return;
-                }
-                // The Type tools pick the box handle or glyph under the press where the user
-                // clicked: the snapped press can land off an edge handle's grab area (#6819).
-                Tool::Type | Tool::VerticalType | Tool::HorizontalTypeMask | Tool::VerticalTypeMask
-                    if {
-                        let [px, py] = if let ToolEvent::Down { x, y, .. } = raw { [x, y] } else { [x, y] };
-                        crate::type_tool::pointer_down(app, px, py, mods)
-                    } =>
-                {
-                    return;
-                }
-                _ => {}
+            if down_special_tool(app, tool, raw, x, y, mods) {
+                return;
             }
             crate::paint_mouse::sync_tool_brush(app);
             clear_off_on_background(app, tool);
@@ -724,6 +669,9 @@ pub(super) fn tool_event_with_view(app: &mut PhotocraftApp, ev: ToolEvent, mods:
             note_left_press(app, raw);
             tool_move(app, x, y, pressure, mods);
             feed_live_stroke(app);
+            if app.fill_drag.is_some() && app.drag.as_ref().is_some_and(|d| matches!(d.tool, Tool::Fill | Tool::MagicWand)) {
+                crate::fill_tool_ui::drag_to(app, x, y);
+            }
         }
         ToolEvent::Up { x, y } => {
             // Before `resize` is cleared: a background box drag applies its box now.
@@ -739,6 +687,8 @@ pub(super) fn tool_event_with_view(app: &mut PhotocraftApp, ev: ToolEvent, mods:
                 crate::vector_ui::pen_up(app);
             } else if tool == Tool::CurvaturePen {
                 crate::vector_ui::curvature_up(app);
+            } else if tool == Tool::VectorCurve {
+                crate::vector_ui::vector_curve_up(app, mods.alt);
             }
             let zoom = app.point_zoom();
             let Some(mut d) = app.drag.take() else { return };
@@ -770,6 +720,84 @@ pub(super) fn tool_event_with_view(app: &mut PhotocraftApp, ev: ToolEvent, mods:
             crate::move_mods::finish(app);
         }
     }
+}
+
+/// Handles press-only or tool-owned pointer-down actions; returns `true` when the press is consumed.
+fn down_special_tool(app: &mut PhotocraftApp, tool: Tool, raw: ToolEvent, x: f64, y: f64, mods: egui::Modifiers) -> bool {
+    match tool {
+        Tool::PathSelection => {
+            let tol = crate::path_components::press_tolerance(app);
+            if let Some(st) = app.session.active()
+                && let Some(id) = crate::vector_ui::pick_shape_at(&st.doc, [x, y], tol)
+            {
+                crate::path_components::untarget_saved_path_off(app, [x, y], tol);
+                let _ = app.run("layer.select", json!({"layer": id.0}));
+            }
+            // The component pressed is selected, so the drag moves it (and the others selected).
+            crate::path_components::press(app, [x, y], mods.shift);
+        }
+        Tool::Pen => {
+            if !(mods.alt && crate::vector_ui::pen_grab_handle(app, x, y)) {
+                crate::vector_ui::pen_down(app, x, y, mods.shift);
+            }
+            return true;
+        }
+        Tool::CurvaturePen => {
+            crate::vector_ui::curvature_down(app, x, y);
+            return true;
+        }
+        Tool::VectorCurve => {
+            crate::vector_ui::vector_curve_down(app, [x, y], mods, false, f64::from(app.point_zoom()));
+            return true;
+        }
+        Tool::CloneStamp | Tool::Healing if mods.alt => {
+            crate::retouch_ui::set_source(app, x, y);
+            return true;
+        }
+        Tool::MagicWand => {
+            let mode = selection_mode(app, mods);
+            if wand_pasteboard_click(app, x, y, mode) {
+                return true;
+            }
+            crate::fill_tool_ui::wand_press(app, x, y, mode);
+            if app.fill_drag.is_some() {
+                app.drag = Some(Drag::new(tool, [x, y], vec![[x, y, 1.0]], mods, false));
+            }
+            return true;
+        }
+        Tool::MagicEraser => {
+            crate::eraser_ui::click(app, tool, x, y);
+            return true;
+        }
+        Tool::Fill if crate::fill_tool_ui::press(app, x, y) => {
+            app.drag = Some(Drag::new(tool, [x, y], vec![[x, y, 1.0]], mods, false));
+            return true;
+        }
+        Tool::PaintBucket => {
+            bucket_click(app, x, y);
+            return true;
+        }
+        Tool::RedEye => {
+            red_eye_click(app, x, y);
+            return true;
+        }
+        Tool::PolygonLasso => {
+            polygon_click(app, x, y, mods);
+            return true;
+        }
+        // The Type tools pick the box handle or glyph under the press where the user
+        // clicked: the snapped press can land off an edge handle's grab area (#6819).
+        Tool::Type | Tool::VerticalType | Tool::HorizontalTypeMask | Tool::VerticalTypeMask
+            if {
+                let [px, py] = if let ToolEvent::Down { x, y, .. } = raw { [x, y] } else { [x, y] };
+                crate::type_tool::pointer_down(app, px, py, mods)
+            } =>
+        {
+            return true;
+        }
+        _ => {}
+    }
+    false
 }
 
 /// Where pointer event `raw` (before snapping) was.

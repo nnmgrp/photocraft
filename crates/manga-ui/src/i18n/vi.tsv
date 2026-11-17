@@ -1,0 +1,375 @@
+	Folder	Thư mục
+	Clear	Xóa
+	File	Tệp
+	Paste	Dán
+	Save	Lưu
+	Scale	Tỷ lệ
+	Search…	Tìm…
+	Align	Căn chỉnh
+	All Layers	Mọi lớp
+	Apply	Áp dụng
+	Delete	Xóa
+	Reverse	Đảo thứ tự
+	Video	Video
+	Horizontal	Ngang
+	Noise	Nhiễu
+	Extras	Thành phần phụ
+	Square	Vuông
+	Options	Thanh tùy chọn
+	Screentones	Tông lưới
+	Manga Balloons	Bong bóng thoại Manga
+	Balloons	Bong bóng thoại
+	SAI Linework	Nét vẽ SAI
+	Linework	Nét vẽ
+	Opacity	Độ mờ
+	Tolerance	Dung sai
+	Contiguous	Liền kề
+	Anti-alias	Khử răng cưa
+	Mode:	Chế độ:
+	Width	Chiều rộng
+	Height	Chiều cao
+	Fill:	Tô:
+	Foreground	Nền trước
+	Background	Nền
+	Style	Kiểu
+	Normal	Bình thường
+	None	Không
+	Type:	Kiểu:
+	Auto	Tự động
+	Custom	Tùy chỉnh
+	Default	Mặc định
+	Density	Mật độ
+	Preset:	Thiết lập sẵn:
+	Leading	Giãn dòng
+	All Caps	Chữ hoa
+	Small Caps	Chữ hoa nhỏ
+	Underline	Gạch chân
+	Strikethrough	Gạch ngang
+	Left	Trái
+	Center	Giữa
+	Angle:	Góc:
+	Dots	Chấm
+	Gradient	Chuyển sắc
+	Linear	Tuyến tính
+	Radial	Xuyên tâm
+	Angle	Góc
+	Diamond	Hình thoi
+	Name:	Tên:
+	Cancel	Hủy
+	Color	Màu
+	OK	OK
+	Roundness	Độ tròn
+	Size	Kích thước
+	Lines	Đường liền
+	Done	Hoàn tất
+cameraRaw	Color	Màu
+cameraRaw	Roundness	Độ tròn
+cameraRaw	Size	Kích thước
+	White	Trắng
+	Transparent	Trong suốt
+	Size:	Kích thước:
+	Width:	Chiều rộng:
+	Preset	Thiết lập sẵn
+	Bend:	Độ uốn:
+	Density:	Mật độ:
+	Preview	Xem trước
+layers	Fill:	Độ tô:
+	name	tên
+	Shape:	Hình:
+	Automatic	Tự động
+	New Layer	Lớp mới
+	No document open	Không có tài liệu nào đang mở
+	Metrics	Số đo
+	Optical	Quang học
+	Round	Tròn
+	Circle	Tròn
+	Crosshatch	Chéo sọc
+	Duplicate	Nhân bản
+	Hearts	Trái tim
+	Hexagon	Lục giác
+	High	Cao
+	Justify	Căn đều
+	Length	Chiều dài
+	Low	Thấp
+	Pattern Type	Loại mẫu
+	Random	Ngẫu nhiên
+	Result	Kết quả
+	Seed	Hạt giống
+	Settings	Cài đặt
+	Smoothness	Độ mượt
+	Stars	Các ngôi sao
+	Target	Đích
+	Button Mode	Chế độ nút
+	Topaz Gigapixel AI…	Topaz Gigapixel AI…
+	Opened in Topaz Gigapixel AI: export the image there to bring it back	Đã mở trong Topaz Gigapixel AI: hãy xuất ảnh ở đó để đưa ảnh trở lại
+	Stopped waiting for Topaz Gigapixel AI	Đã ngừng chờ Topaz Gigapixel AI
+	Topaz Gigapixel AI's image could not be applied: {error}	Không thể áp dụng ảnh từ Topaz Gigapixel AI: {error}
+	Topaz Gigapixel AI: upscaled {scale}× to {w} × {h} px (new layer)	Topaz Gigapixel AI: đã phóng to {scale}× lên {w} × {h} px (lớp mới)
+	Waiting for Topaz Gigapixel AI: export the upscaled image there to bring it back.	Đang chờ Topaz Gigapixel AI: hãy xuất ảnh đã phóng to ở đó để đưa ảnh trở lại.
+	Model:	Mô hình:
+	There is no such Topaz Gigapixel preset	Không có thiết lập sẵn Topaz Gigapixel này
+	Saved Topaz Gigapixel preset “{name}”	Đã lưu thiết lập sẵn Topaz Gigapixel “{name}”
+	New Preset	Thiết lập sẵn mới
+	Upscale:	Phóng to:
+	With these settings	Với các thiết lập này
+	With two presets	Với hai thiết lập sẵn
+	Save two presets with their own settings first; then this one can run them together.	Hãy lưu trước hai thiết lập sẵn có thiết lập riêng; sau đó thiết lập sẵn này có thể chạy chúng cùng nhau.
+	First:	Trước:
+	Then:	Sau đó:
+	Results:	Kết quả:
+	One after the other	Lần lượt
+	Each on its own layer	Mỗi cái trên một lớp riêng
+	Both presets upscale the image; each result becomes a layer, to compare or blend.	Cả hai thiết lập sẵn đều phóng to ảnh; mỗi kết quả thành một lớp, để so sánh hoặc hòa trộn.
+	The second preset upscales the first one's result.	Thiết lập sẵn thứ hai phóng to kết quả của thiết lập thứ nhất.
+	Run a saved preset from File › Automate › Topaz Gigapixel Presets.	Chạy thiết lập sẵn đã lưu từ Tệp › Tự động hóa › Thiết lập sẵn Topaz Gigapixel.
+	Auto lets Gigapixel choose.	Tự động để Gigapixel tự chọn.
+	Choose a folder for your timelapse recordings	Chọn thư mục cho các bản ghi timelapse
+	Timelapse	Timelapse
+	Auto record	Tự động ghi
+	Recording	Đang ghi
+	Click to pause	Bấm để tạm dừng
+	Start recording	Bắt đầu ghi
+	Reference layer	Lớp tham chiếu
+	Recorded	Được ghi
+	{count} of {total} not recorded	{count}/{total} không được ghi
+	Reference	Tham chiếu
+	Play video	Phát video
+	Show in folder	Hiện trong thư mục
+	Advanced settings	Cài đặt nâng cao
+	Flash before the final image	Lóe sáng trước hình cuối
+	Slow down at the end	Chậm lại ở cuối
+	Remove flicker	Loại bỏ nhấp nháy
+	Choose…	Chọn…
+	Remove frames with undo	Xóa khung hình khi hoàn tác
+	Makes the MP4. Automatic looks next to PhotoCraft, then on PATH.	Tạo tệp MP4. Tự động tìm cạnh PhotoCraft, rồi trong PATH.
+	Choose the ffmpeg program on this computer	Chọn chương trình ffmpeg trên máy này
+	Opening files isn't available here	Không thể mở tệp ở đây
+@plural	{n} frame|{n} frames	{n} khung hình
+	Library	Thư viện
+	Refresh	Làm mới
+	Recordings will be listed here once you've chosen a folder.	Các bản ghi sẽ được liệt kê ở đây sau khi bạn chọn thư mục.
+	No recordings yet.	Chưa có bản ghi nào.
+	Open folder	Mở thư mục
+	Delete frames	Xóa khung hình
+	Delete folder	Xóa thư mục
+	Pause the recording first	Hãy tạm dừng ghi trước
+	REC	REC
+	EXPORTED	ĐÃ XUẤT
+	NOT EXPORTED	CHƯA XUẤT
+	{time} work	{time} làm việc
+	“{name}” hasn't been exported yet. If you delete its {frames}, you can't make a video of it anymore. This can't be undone.	“{name}” chưa được xuất. Nếu bạn xóa các khung hình ({frames}), bạn sẽ không thể làm video từ bản ghi này nữa. Không thể hoàn tác thao tác này.
+	Delete the {frames} of “{name}”?	Xóa các khung hình của “{name}” ({frames})?
+	You've recorded more since the last export, and that part isn't in the video.	Bạn đã ghi thêm kể từ lần xuất gần nhất, và phần đó không có trong video.
+	Your videos and the work time are kept. This can't be undone.	Video của bạn và thời gian làm việc được giữ lại. Không thể hoàn tác thao tác này.
+	Delete “{name}” and its folder? It's removed from the library, along with its work time. Videos you exported stay where you saved them. This can't be undone.	Xóa “{name}” và thư mục của nó? Bản ghi bị gỡ khỏi thư viện, cùng với thời gian làm việc. Các video bạn đã xuất vẫn ở nơi bạn đã lưu. Không thể hoàn tác thao tác này.
+	Frames deleted.	Đã xóa khung hình.
+	Deleted “{name}”. Its folder holds other files, so it was kept.	Đã xóa “{name}”. Thư mục còn chứa tệp khác nên được giữ lại.
+	Deleted “{name}”.	Đã xóa “{name}”.
+@plural	{n} recording|{n} recordings	{n} bản ghi
+	No upscale has come back from Topaz Gigapixel AI yet	Chưa có ảnh phóng to nào trở về từ Topaz Gigapixel AI
+	Topaz Gigapixel AI: upscaled {scale}× to {w} × {h} px (new layer). Keep these settings with Topaz Gigapixel Presets › Save Preset from Last Upscale	Topaz Gigapixel AI: đã phóng to {scale}× lên {w} × {h} px (lớp mới). Giữ các thiết lập này bằng Thiết lập sẵn Topaz Gigapixel › Lưu thiết lập sẵn từ lần phóng to gần nhất
+	Saved {name} ({seconds} video).	Đã lưu {name} (video {seconds}).
+	Export failed: {error}	Xuất thất bại: {error}
+	Export cancelled.	Đã hủy xuất.
+	just now	vừa xong
+	{n} min ago	{n} phút trước
+	{n} h ago	{n} giờ trước
+	yesterday	hôm qua
+	{n} days ago	{n} ngày trước
+	Smaller files and the quickest capturing. Fine for quick sketches and previews.	Tệp nhỏ hơn và ghi nhanh nhất. Đủ cho phác thảo nhanh và xem trước.
+	Sharper video for big screens. Uses about twice the disk space.	Video sắc nét hơn cho màn hình lớn. Dùng khoảng gấp đôi dung lượng đĩa.
+	Full-HD video, good for social media. Recommended.	Video Full HD, phù hợp mạng xã hội. Khuyến nghị.
+	idle	nghỉ
+	Record	Ghi
+	Paused	Đã tạm dừng
+	Click to resume recording	Bấm để tiếp tục ghi
+	Open a document to record it.	Mở một tài liệu để ghi nó.
+	You'll be asked where to save recordings.	Bạn sẽ được hỏi lưu bản ghi ở đâu.
+	Export again	Xuất lại
+	Export video	Xuất video
+	Show the export results	Hiện kết quả xuất
+	Hide the export results	Ẩn kết quả xuất
+	≈ {seconds} video from {frames}.	≈ video {seconds} từ {frames}.
+	Confirm	Xác nhận
+	Cancel export	Hủy xuất
+	Frames	Khung hình
+	Timer	Thời gian
+	On disk	Trên đĩa
+	Hide the live preview	Ẩn xem trước trực tiếp
+	Show the newest frame	Hiện khung hình mới nhất
+	No frames yet — just start drawing	Chưa có khung hình — cứ bắt đầu vẽ
+	No frames yet	Chưa có khung hình
+	No layer selected	Chưa chọn lớp
+	{n} layers selected	Đã chọn {n} lớp
+	Not recorded	Không được ghi
+	A reference layer works like a normal layer, but won't show up in the timelapse.	Lớp tham chiếu hoạt động như lớp thường nhưng không xuất hiện trong timelapse.
+	Back	Quay lại
+	Export settings	Cài đặt xuất
+	Make video with	Tạo video bằng
+	Bars colour	Màu dải viền
+	Bars fill the empty space when the canvas size changed during recording.	Dải viền lấp khoảng trống khi kích thước canvas thay đổi trong lúc ghi.
+	Show finished drawing first	Hiện bức vẽ hoàn chỉnh trước
+	Hold final image	Giữ hình cuối
+	Show work-time counter	Hiện bộ đếm thời gian làm việc
+	Record something in this document to see how long the video will be.	Ghi gì đó trong tài liệu này để xem video dài bao lâu.
+	≈ {seconds} video	≈ video {seconds}
+	{n} recorded frames	{n} khung hình đã ghi
+	Auto shows every frame once (at least 5 s, at most 1 min).	Tự động hiện mỗi khung hình một lần (ít nhất 5 giây, nhiều nhất 1 phút).
+	The canvas size changed during recording; earlier frames are fitted inside the final size.	Kích thước canvas đã thay đổi trong lúc ghi; các khung hình trước được đặt vừa kích thước cuối.
+	Remove flicker leaves out frames that flash in and out (a layer hidden for a moment, a stroke undone right away), so the video can be a bit shorter.	Loại bỏ nhấp nháy bỏ các khung hình chỉ lóe lên (lớp bị ẩn chốc lát, nét vẽ được hoàn tác ngay), nên video có thể ngắn hơn một chút.
+	Recordings folder	Thư mục bản ghi
+	Not chosen yet — see Settings	Chưa chọn — xem Cài đặt
+	recorded {when}	ghi {when}
+	Recorded more since the last export.	Đã ghi thêm từ lần xuất trước.
+	Frames folder	Thư mục khung hình
+	Not chosen yet	Chưa chọn
+	Where the recorded frames are kept. Videos are saved wherever you choose when you export.	Nơi lưu các khung hình đã ghi. Video được lưu ở nơi bạn chọn khi xuất.
+	Choose folder…	Chọn thư mục…
+	Change folder…	Đổi thư mục…
+	Recording quality	Chất lượng ghi
+	Undoing something removes those recorded frames.	Hoàn tác sẽ xóa các khung hình đã ghi đó.
+	Reference layers	Lớp tham chiếu
+	Name tag	Thẻ tên
+	Layers with this in their name are left out of the timelapse.	Các lớp có điều này trong tên sẽ bị loại khỏi timelapse.
+	Work timer	Bộ đếm thời gian làm việc
+	Idle after	Nghỉ sau
+	The timer stops counting after this long without activity.	Bộ đếm ngừng sau khoảng thời gian không hoạt động này.
+	Timelapse Recorder · PhotoCraft	Timelapse Recorder · PhotoCraft
+	Run	Chạy
+	Fill Tool	Công cụ Tô màu
+	Nothing to fill there	Không có gì để tô ở đó
+	No enclosed area to fill there	Không có vùng khép kín nào để tô ở đó
+	Fill: click an area	Tô màu: nhấp vào một vùng
+	Enclose and Fill: draw round the areas to fill	Bao quanh và tô: vẽ quanh các vùng cần tô
+	Paint Unfilled Area: paint over the gaps a fill left	Tô vùng chưa tô: tô lên các khe hở mà lần tô bỏ sót
+	Refer	Tham chiếu
+	Editing Layer	Lớp đang sửa
+	Selected Layers	Các lớp đã chọn
+	Layers in Folder	Các lớp trong thư mục
+	Reference Layers	Các lớp tham chiếu
+	Exclude	Loại trừ
+	Editing layer	Lớp đang sửa
+	Text layers	Lớp văn bản
+	Locked layers	Lớp bị khóa
+	Layers the fill doesn't read	Các lớp mà lần tô không đọc
+	Close Gap	Đóng khe hở
+	Area Scaling	Co giãn vùng
+	Grow the fill under the lines, or shrink it	Mở rộng vùng tô vào dưới nét, hoặc thu nhỏ
+	To Darkest Pixel	Đến điểm ảnh tối nhất
+	Follow Adjacent Pixels	Theo các điểm ảnh liền kề
+	White and Transparent	Trắng và trong suốt
+	Image Border	Viền ảnh
+	The canvas edge closes gaps as a line does	Mép canvas đóng khe hở như một nét
+	Fill Tool Options	Tùy chọn công cụ Tô màu
+	Save as:	Lưu thành:
+	Save Preset	Lưu thiết lập sẵn
+	Keep these two presets as one, listed with the others	Giữ hai thiết lập sẵn này thành một, liệt kê cùng các thiết lập khác
+	seconds	giây
+	Close gaps up to {px} px	Đóng khe hở đến {px} px
+	Grow the selection under the lines, or shrink it	Mở rộng vùng chọn dưới nét vẽ, hoặc thu nhỏ
+	Delete Second Mask	Xóa mặt nạ thứ hai
+	Disable Second Mask	Tắt mặt nạ thứ hai
+	Enable Second Mask	Bật mặt nạ thứ hai
+	Editing layer blocks the fill	Lớp đang sửa chặn vùng tô
+	Paint on the layer being filled stops the fill at any tolerance, and the fill goes in behind it: draw over a gap to close it	Nét vẽ trên lớp đang tô chặn vùng tô ở mọi dung sai, và vùng tô đi vào phía sau nó: vẽ qua khe hở để đóng lại
+	Undo widens Close Gap	Hoàn tác nới rộng Đóng khe hở
+	Each Undo of a fill closes bigger gaps for the next click, until you pick another tool	Mỗi lần hoàn tác một lần tô sẽ đóng khe hở lớn hơn ở lần nhấp tiếp theo, cho đến khi bạn chọn công cụ khác
+	Close Gap widened to {px} px: click again to fill	Đã nới Đóng khe hở lên {px} px: nhấp lại để tô
+	Screentone…	Lưới tông…
+	Satellites	Vệ tinh
+	Count:	Số lượng:
+	Distance:	Khoảng cách:
+	Stretch:	Kéo dãn:
+	Distortion & Jitter	Biến dạng và rung
+	Aspect X:	Tỷ lệ X:
+	Aspect Y:	Tỷ lệ Y:
+	Row Offset:	Dịch hàng:
+	Merge:	Hợp nhất:
+	Jitter Pos:	Rung vị trí:
+	Jitter Size:	Rung kích thước:
+	Midpoint:	Điểm giữa:
+	Start Size:	Kích thước đầu:
+	End Size:	Kích thước cuối:
+	Enable	Bật
+	Save as Pattern	Lưu dưới dạng họa tiết
+	Font Settings	Cài đặt phông chữ
+	No folder	Không có thư mục
+	+ New folder...	+ Thư mục mới...
+	Folder name	Tên thư mục
+	New folder name	Tên thư mục mới
+	Favorite font	Phông chữ yêu thích
+	Faux bold	Đậm giả
+	Faux italic	Nghiêng giả
+	Superscript	Chỉ số trên
+	Subscript	Chỉ số dưới
+	Hanging Punctuation	Dấu câu treo
+	Use standard font metrics and the baseline	Hệ mét: số đo phông chữ tiêu chuẩn và đường cơ sở
+	Use visual kerning and bubble centering	Hệ quang học: kerning trực quan và căn giữa bong bóng
+	Leading is linked to size	Giãn dòng được liên kết với cỡ chữ
+	Leading is not linked to size	Giãn dòng không liên kết với cỡ chữ
+	H-Scale (%)	Tỷ lệ ngang (%)
+	Edit preview text	Sửa văn bản xem trước
+	Leave empty for the automatic sample	Để trống để dùng mẫu tự động
+	Preview unavailable	Không thể xem trước
+	Duplicate this style	Nhân bản kiểu này
+	Delete this style	Xóa kiểu này
+	Bubble Contour	Hình dạng bong bóng
+	No contour variants	Không có biến thể đường viền
+	~ SCurve	~ SCurve
+	＋ Add tail	＋ Add tail
+	＋ Create balloon on canvas	＋ Create balloon on canvas
+	＋ Fit balloon	＋ Fit balloon
+	⊘ None	⊘ None
+	⌒ Arc	⌒ Arc
+	▽ Wedge	▽ Wedge
+	◎ Double outline	◎ Double outline
+	◌ Thought	◌ Thought
+	☁️ Cloud	☁️ Cloud
+	✓ Text fits: {lines} lines, {size} pt	✓ Text fits: {lines} lines, {size} pt
+	✴️ Burst	✴️ Burst
+	⑂ Double	⑂ Double
+	◽ Rect	◽ Rect
+	⚠ Text does not fit — enlarge the balloon or reduce the type size	⚠ Text does not fit — enlarge the balloon or reduce the type size
+	⚡ Bake to SAI Linework	⚡ Bake to SAI Linework
+	⚡ Lightning	⚡ Lightning
+	⚪ Ellipse	⚪ Ellipse
+	Add a tail to the selected balloon	Add a tail to the selected balloon
+	Background colour	Background colour
+	Balloon body:	Balloon body:
+	Bubble radius:	Bubble radius:
+	Bumps:	Bumps:
+	Bundle:	Bundle:
+	Corner radius:	Corner radius:
+	Cusp bite:	Cusp bite:
+	Dialogue and fit:	Dialogue and fit:
+	Dialogue text…	Dialogue text…
+	Fit the shape to the text: the balloon grows when the line does not fit	Fit the shape to the text: the balloon grows when the line does not fit
+	Hand-drawn noise:	Hand-drawn noise:
+	Inner sharpness:	Inner sharpness:
+	Inward concavity:	Inward concavity:
+	Jitter:	Jitter:
+	Lobe height:	Lobe height:
+	Mouth width:	Mouth width:
+	Needle width:	Needle width:
+	Needles:	Needles:
+	Outer sharpness:	Outer sharpness:
+	Outline gap:	Outline gap:
+	Random jitter variation	Random jitter variation
+	Random ray variation	Random ray variation
+	Ray extension:	Ray extension:
+	Ray length:	Ray length:
+	Rays:	Rays:
+	Round the tips	Round the tips
+	Spikes:	Spikes:
+	Squircle:	Squircle:
+	Stroke and fill:	Stroke and fill:
+	Sub-harmonics:	Sub-harmonics:
+	Tail type:	Tail type:
+	Text area:	Text area:
+	Thought bubbles:	Thought bubbles:
+	Turn the balloon into an editable vector linework layer	Turn the balloon into an editable vector linework layer
+	Type size:	Type size:
+	Valley depth:	Valley depth:
+	💥 Spiky	💥 Spiky
+	🔄 Reset to the manga default	🔄 Reset to the manga default
+	🦔 Uniflash	🦔 Uniflash

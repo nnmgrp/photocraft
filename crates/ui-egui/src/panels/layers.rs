@@ -380,7 +380,11 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if let Some((_, kind)) = mask_footer_drag
         && let Some(p) = ctx.input(|i| i.pointer.interact_pos())
     {
-        let label = if kind == MaskKind::Vector { tl!("Vector Mask") } else { tl!("Layer Mask") };
+        let label = match kind {
+            MaskKind::Pixel => tl!("Layer Mask"),
+            MaskKind::Second => tl!("Second Mask"),
+            MaskKind::Vector => tl!("Vector Mask"),
+        };
         crate::layer_transfer::ghost(&ctx, p, label);
     }
     // End any layer drag after every row has had a chance to accept the drop.
@@ -394,6 +398,8 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         let active_layer = active.and_then(|id| doc.layer(id));
         let (delete, label) = if app.ui.vector_mask_target && active_layer.is_some_and(|l| l.vector_mask.is_some()) {
             ("layer.vectorMask.delete", "Delete Vector Mask")
+        } else if app.ui.mask_target && app.ui.second_mask_target && active_layer.is_some_and(|l| l.second_mask.is_some()) {
+            (photocraft_engine::manga_cmds::second_mask::DELETE, "Delete Second Mask")
         } else if app.ui.mask_target && active_layer.is_some_and(|l| l.mask.is_some()) {
             ("layer.layerMask.delete", "Delete Layer Mask")
         } else {
@@ -521,6 +527,7 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 }
             }
         });
+        crate::manga_seam::layers_footer_linework_button(app, ui, &mut actions);
         // Photoshop's footer starts with Link Layers (enabled with two or more layers selected).
         let can_link = app.session.is_enabled("layer.linkLayers");
         if ui.add_enabled_ui(can_link, |ui| icons::button(ui, "link-2", 26.0, false, tl!("Link layers"))).inner.clicked() {
@@ -536,9 +543,22 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         if id == "ui.maskTarget" {
             app.end_filter_mask_view();
             app.ui.mask_target = p.as_bool().unwrap_or(false);
+            app.ui.second_mask_target = false;
             app.ui.vector_mask_target = false;
             app.ui.filter_mask_target = None;
             if app.ui.mask_target {
+                app.target_mask_over_colour_rows();
+            }
+            app.sync_mask_targets();
+            continue;
+        }
+        if id == "ui.secondMaskTarget" {
+            app.end_filter_mask_view();
+            let on = p.as_bool().unwrap_or(false);
+            (app.ui.mask_target, app.ui.second_mask_target) = (on, on);
+            app.ui.vector_mask_target = false;
+            app.ui.filter_mask_target = None;
+            if on {
                 app.target_mask_over_colour_rows();
             }
             app.sync_mask_targets();
@@ -548,6 +568,7 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             app.end_filter_mask_view();
             app.ui.vector_mask_target = p.as_bool().unwrap_or(false);
             app.ui.mask_target = false;
+            app.ui.second_mask_target = false;
             app.ui.filter_mask_target = None;
             app.sync_mask_targets();
             continue;

@@ -26,6 +26,7 @@ photocraft-plugins = { workspace = true }
 photocraft-algo = { workspace = true }
 photocraft-text = { workspace = true }
 photocraft-vector = { workspace = true }
+photocraft-manga-bridge = { workspace = true }
 # Only MAX_BRUSH_SIZE: `ui.set brushSize` validates against the Brush Settings range up front.
 photocraft-paint = { workspace = true }
 # Reading files to open them (bounded reads, a clear error for files larger than memory).
@@ -58,6 +59,8 @@ craft-update = { workspace = true }
 rayon = { workspace = true }
 # Safe native UI-language APIs (Windows/macOS); no subprocess or web dependency.
 sys-locale = "=0.3.2"
+photocraft-manga-core = { workspace = true }
+photocraft-manga-ui = { workspace = true }
 
 # Installed RAM for the GPU memory budget (`gpu_canvas::physical_memory`) and the user's decimal
 # symbol (`i18n::decimal_separator`, a registry read): the safe binding the desktop app already

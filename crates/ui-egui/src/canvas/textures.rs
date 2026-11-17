@@ -79,7 +79,7 @@ pub(crate) fn detail_plan(size: [u32; 2], side: u32, zoom: f32, visible: DRect) 
 /// document pixel as a crisp square, as the GPU canvas's sharp nearest filter and Photoshop do;
 /// zoomed out it is still filtered. A reduced texture (`factor` > 1) stays bilinear: its texels
 /// are averages of several pixels, and squares of them would be blocks the image doesn't have.
-pub(super) fn canvas_texture_options(factor: u32) -> TextureOptions {
+pub(crate) fn canvas_texture_options(factor: u32) -> TextureOptions {
     if factor > 1 { TextureOptions::LINEAR } else { TextureOptions { magnification: egui::TextureFilter::Nearest, ..TextureOptions::LINEAR } }
 }
 

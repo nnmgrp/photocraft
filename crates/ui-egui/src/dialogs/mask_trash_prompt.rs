@@ -30,7 +30,11 @@ pub fn is_vector(fields: &Map<String, Value>) -> bool {
 
 /// The action a mask thumbnail dropped on the Trash pushes; [`intercept`] turns it into the prompt.
 pub fn drop_action(layer: u64, kind: MaskKind) -> (String, Value) {
-    let command = if kind == MaskKind::Vector { VECTOR_MASK_DELETE } else { LAYER_MASK_DELETE };
+    let command = match kind {
+        MaskKind::Pixel => LAYER_MASK_DELETE,
+        MaskKind::Second => photocraft_engine::manga_cmds::second_mask::DELETE,
+        MaskKind::Vector => VECTOR_MASK_DELETE,
+    };
     (command.into(), json!({"layer": layer, MARK: true}))
 }
 

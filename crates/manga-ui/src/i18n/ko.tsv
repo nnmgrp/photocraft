@@ -1,0 +1,384 @@
+	File	파일
+	Left	왼쪽
+	Save	저장
+	Folder	폴더
+	Paste	붙여넣기
+	Clear	지우기
+	Search…	검색…
+	Scale	크기 조절
+	Delete	삭제
+	Reverse	순서 뒤집기
+	Align	정렬
+	All Layers	모든 레이어
+	Horizontal	가로
+	None	없음
+	Noise	노이즈
+	Video	비디오
+	Square	정사각형
+	Extras	추가 표시
+	Color	색상
+	Options	옵션
+	Screentones	스크린톤
+	Manga Balloons	만화 말풍선
+	Balloons	말풍선
+	SAI Linework	SAI 선화
+	Linework	선화
+	Apply	적용
+	Auto	자동
+	All Caps	모두 대문자
+	Angle	각도
+	Anti-alias	앤티 앨리어스
+	Background	배경
+	Bend:	구부림:
+	Automatic	자동
+	Cancel	취소
+	Center	중앙
+	Contiguous	인접
+	Custom	사용자 정의
+	Default	기본값
+	Density	밀도
+	Density:	밀도:
+	Done	완료
+	Dots	점
+	Fill:	채우기:
+	Foreground	전경
+	Height	높이
+	Leading	행간
+	Result	결과
+	Metrics	메트릭
+	Mode:	모드:
+	Name:	이름:
+	Normal	표준
+	OK	확인
+	Opacity	불투명도
+	Optical	광학
+	Preset	사전 설정
+	Preset:	사전 설정:
+	Preview	미리 보기
+	Roundness	원형률
+	Shape:	모양:
+	Size	크기
+	Size:	크기:
+	Small Caps	작은 대문자
+	Strikethrough	취소선
+	Style	스타일
+	Tolerance	허용치
+	Transparent	투명
+	Type:	유형:
+	Underline	밑줄
+	White	흰색
+	Width	너비
+	Width:	너비:
+	name	이름
+	Diamond	다이아몬드
+	Linear	선형
+	Radial	방사형
+	Lines	선
+	Angle:	각도:
+	Gradient	그레이디언트
+cameraRaw	Color	색상
+	Length	길이
+	Seed	난수 시드
+	Smoothness	매끄러움
+	Pattern Type	패턴 유형
+	New Layer	새 레이어
+	Settings	설정
+	Duplicate	복제
+	Circle	원
+	Crosshatch	그물눈
+	Hearts	하트
+	Hexagon	육각형
+	High	높음
+	Low	낮음
+	Random	임의
+	Stars	별
+	Round	원형
+	No document open	열린 문서 없음
+	Button Mode	단추 모드
+	Topaz Gigapixel AI…	Topaz Gigapixel AI…
+	Opened in Topaz Gigapixel AI: export the image there to bring it back	Topaz Gigapixel AI에서 열었습니다: 그곳에서 이미지를 내보내면 여기로 돌아옵니다
+	Stopped waiting for Topaz Gigapixel AI	Topaz Gigapixel AI 대기를 중지했습니다
+	Topaz Gigapixel AI's image could not be applied: {error}	Topaz Gigapixel AI 이미지를 적용할 수 없습니다: {error}
+	Topaz Gigapixel AI: upscaled {scale}× to {w} × {h} px (new layer)	Topaz Gigapixel AI: {scale}× 확대하여 {w} × {h} px (새 레이어)
+	Waiting for Topaz Gigapixel AI: export the upscaled image there to bring it back.	Topaz Gigapixel AI를 기다리는 중: 그곳에서 확대한 이미지를 내보내면 여기로 돌아옵니다.
+	Model:	모델:
+	There is no such Topaz Gigapixel preset	해당 Topaz Gigapixel 사전 설정이 없습니다
+	Saved Topaz Gigapixel preset “{name}”	Topaz Gigapixel 사전 설정 “{name}” 저장됨
+	New Preset	새 사전 설정
+	Upscale:	업스케일:
+	With these settings	이 설정으로
+	With two presets	두 사전 설정으로
+	Save two presets with their own settings first; then this one can run them together.	먼저 자체 설정이 있는 사전 설정 두 개를 저장하십시오. 그러면 이 사전 설정이 둘을 함께 실행합니다.
+	First:	먼저:
+	Then:	그다음:
+	Results:	결과:
+	One after the other	차례로
+	Each on its own layer	각각 별도 레이어에
+	Both presets upscale the image; each result becomes a layer, to compare or blend.	두 사전 설정이 모두 이미지를 업스케일하며 각 결과는 비교하거나 혼합할 수 있도록 레이어가 됩니다.
+	The second preset upscales the first one's result.	두 번째 사전 설정이 첫 번째 결과를 업스케일합니다.
+	Run a saved preset from File › Automate › Topaz Gigapixel Presets.	저장된 사전 설정은 파일 › 자동화 › Topaz Gigapixel 사전 설정에서 실행합니다.
+	Auto lets Gigapixel choose.	자동이면 Gigapixel이 정합니다.
+	Choose a folder for your timelapse recordings	타임랩스 녹화를 저장할 폴더를 선택하세요
+	Timelapse	타임랩스
+	Auto record	자동 녹화
+	Recording	녹화 중
+	Click to pause	클릭하여 일시 정지
+	Start recording	녹화 시작
+	Reference layer	참조 레이어
+	Recorded	녹화됨
+	{count} of {total} not recorded	{total}개 중 {count}개 녹화 안 됨
+	Reference	참조
+	Play video	비디오 재생
+	Show in folder	폴더에서 보기
+	Advanced settings	고급 설정
+	Flash before the final image	최종 이미지 전에 플래시
+	Slow down at the end	끝부분 느리게
+	Remove flicker	깜박임 제거
+	Choose…	선택…
+	Remove frames with undo	실행 취소 시 프레임 제거
+	Makes the MP4. Automatic looks next to PhotoCraft, then on PATH.	MP4를 만듭니다. 자동은 PhotoCraft 옆을 먼저, 그다음 PATH를 찾습니다.
+	Choose the ffmpeg program on this computer	이 컴퓨터의 ffmpeg 프로그램을 선택하세요
+	Opening files isn't available here	여기서는 파일을 열 수 없습니다
+@plural	{n} frame|{n} frames	프레임 {n}개
+	Library	라이브러리
+	Refresh	새로 고침
+	Recordings will be listed here once you've chosen a folder.	폴더를 선택하면 여기에 녹화가 표시됩니다.
+	No recordings yet.	아직 녹화가 없습니다.
+	Open folder	폴더 열기
+	Delete frames	프레임 삭제
+	Delete folder	폴더 삭제
+	Pause the recording first	먼저 녹화를 일시 정지하세요
+	REC	REC
+	EXPORTED	내보냄
+	NOT EXPORTED	내보내지 않음
+	{time} work	작업 {time}
+	“{name}” hasn't been exported yet. If you delete its {frames}, you can't make a video of it anymore. This can't be undone.	‘{name}’은(는) 아직 내보내지 않았습니다. 프레임({frames})을 삭제하면 더 이상 비디오를 만들 수 없습니다. 이 작업은 취소할 수 없습니다.
+	Delete the {frames} of “{name}”?	‘{name}’의 프레임({frames})을 삭제할까요?
+	You've recorded more since the last export, and that part isn't in the video.	마지막 내보내기 이후 더 녹화했으며, 그 부분은 비디오에 없습니다.
+	Your videos and the work time are kept. This can't be undone.	비디오와 작업 시간은 유지됩니다. 이 작업은 취소할 수 없습니다.
+	Delete “{name}” and its folder? It's removed from the library, along with its work time. Videos you exported stay where you saved them. This can't be undone.	‘{name}’과(와) 해당 폴더를 삭제할까요? 작업 시간과 함께 라이브러리에서 제거됩니다. 내보낸 비디오는 저장한 위치에 그대로 남습니다. 이 작업은 취소할 수 없습니다.
+	Frames deleted.	프레임을 삭제했습니다.
+	Deleted “{name}”. Its folder holds other files, so it was kept.	‘{name}’을(를) 삭제했습니다. 폴더에 다른 파일이 있어 폴더는 유지했습니다.
+	Deleted “{name}”.	‘{name}’을(를) 삭제했습니다.
+@plural	{n} recording|{n} recordings	녹화 {n}개
+	No upscale has come back from Topaz Gigapixel AI yet	Topaz Gigapixel AI에서 아직 돌아온 업스케일이 없습니다
+	Topaz Gigapixel AI: upscaled {scale}× to {w} × {h} px (new layer). Keep these settings with Topaz Gigapixel Presets › Save Preset from Last Upscale	Topaz Gigapixel AI: {scale}× 확대하여 {w} × {h} px (새 레이어). 이 설정은 Topaz Gigapixel 사전 설정 › 마지막 업스케일에서 사전 설정 저장으로 보관합니다
+	Saved {name} ({seconds} video).	{name} 저장됨({seconds} 비디오).
+	Export failed: {error}	내보내기 실패: {error}
+	Export cancelled.	내보내기가 취소되었습니다.
+	just now	방금
+	{n} min ago	{n}분 전
+	{n} h ago	{n}시간 전
+	yesterday	어제
+	{n} days ago	{n}일 전
+	Smaller files and the quickest capturing. Fine for quick sketches and previews.	파일이 작고 가장 빠르게 기록합니다. 빠른 스케치와 미리 보기에 적합합니다.
+	Sharper video for big screens. Uses about twice the disk space.	큰 화면용 더 선명한 비디오. 디스크 공간을 약 두 배 사용합니다.
+	Full-HD video, good for social media. Recommended.	풀 HD 비디오, 소셜 미디어에 적합합니다. 권장.
+	idle	유휴
+	Record	녹화
+	Paused	일시 정지됨
+	Click to resume recording	클릭하여 녹화 재개
+	Open a document to record it.	녹화하려면 문서를 여세요.
+	You'll be asked where to save recordings.	녹화를 저장할 위치를 묻습니다.
+	Export again	다시 내보내기
+	Export video	비디오 내보내기
+	Show the export results	내보내기 결과 표시
+	Hide the export results	내보내기 결과 숨기기
+	≈ {seconds} video from {frames}.	≈ {frames}로 {seconds} 비디오.
+	Confirm	확인
+	Cancel export	내보내기 취소
+	Frames	프레임
+	Timer	시간
+	On disk	디스크
+	Hide the live preview	실시간 미리 보기 숨기기
+	Show the newest frame	최신 프레임 표시
+	No frames yet — just start drawing	아직 프레임이 없습니다 — 그리기를 시작하세요
+	No frames yet	아직 프레임이 없습니다
+	No layer selected	선택된 레이어 없음
+	{n} layers selected	레이어 {n}개 선택됨
+	Not recorded	녹화 안 됨
+	A reference layer works like a normal layer, but won't show up in the timelapse.	참조 레이어는 일반 레이어처럼 작동하지만 타임랩스에는 나오지 않습니다.
+	Back	뒤로
+	Export settings	내보내기 설정
+	Make video with	비디오 만들기 도구
+	Bars colour	여백 막대 색
+	Bars fill the empty space when the canvas size changed during recording.	녹화 중 캔버스 크기가 바뀌면 막대가 빈 공간을 채웁니다.
+	Show finished drawing first	완성된 그림 먼저 표시
+	Hold final image	최종 이미지 유지
+	Show work-time counter	작업 시간 카운터 표시
+	Record something in this document to see how long the video will be.	이 문서에서 무언가를 녹화하면 비디오 길이를 볼 수 있습니다.
+	≈ {seconds} video	≈ {seconds} 비디오
+	{n} recorded frames	녹화된 프레임 {n}개
+	Auto shows every frame once (at least 5 s, at most 1 min).	자동은 모든 프레임을 한 번씩 표시합니다(최소 5초, 최대 1분).
+	The canvas size changed during recording; earlier frames are fitted inside the final size.	녹화 중 캔버스 크기가 바뀌었습니다. 이전 프레임은 최종 크기에 맞춰집니다.
+	Remove flicker leaves out frames that flash in and out (a layer hidden for a moment, a stroke undone right away), so the video can be a bit shorter.	깜박임 제거는 잠깐 나타났다 사라지는 프레임(잠시 숨긴 레이어, 바로 취소한 획 등)을 빼므로 비디오가 조금 짧아질 수 있습니다.
+	Recordings folder	녹화 폴더
+	Not chosen yet — see Settings	아직 선택 안 됨 — 설정 참고
+	recorded {when}	녹화 {when}
+	Recorded more since the last export.	마지막 내보내기 이후 더 녹화되었습니다.
+	Frames folder	프레임 폴더
+	Not chosen yet	아직 선택 안 됨
+	Where the recorded frames are kept. Videos are saved wherever you choose when you export.	녹화된 프레임을 보관하는 곳입니다. 비디오는 내보낼 때 선택한 곳에 저장됩니다.
+	Choose folder…	폴더 선택…
+	Change folder…	폴더 변경…
+	Recording quality	녹화 품질
+	Undoing something removes those recorded frames.	실행 취소하면 해당 녹화 프레임이 제거됩니다.
+	Reference layers	참조 레이어
+	Name tag	이름 태그
+	Layers with this in their name are left out of the timelapse.	이름에 이것이 들어간 레이어는 타임랩스에서 빠집니다.
+	Work timer	작업 타이머
+	Idle after	유휴 전환 시간
+	The timer stops counting after this long without activity.	이 시간 동안 활동이 없으면 타이머가 멈춥니다.
+	Timelapse Recorder · PhotoCraft	Timelapse Recorder · PhotoCraft
+	Run	실행
+	Fill Tool	채우기 도구
+	Nothing to fill there	그곳에는 채울 영역이 없습니다
+	No enclosed area to fill there	그곳에는 채울 닫힌 영역이 없습니다
+	Fill: click an area	채우기: 영역을 클릭
+	Enclose and Fill: draw round the areas to fill	둘러싸서 채우기: 채울 영역을 둘러 그리세요
+	Paint Unfilled Area: paint over the gaps a fill left	빈 영역 칠하기: 채우기가 남긴 빈틈 위에 칠하세요
+	Refer	참조
+	Editing Layer	편집 중인 레이어
+	Selected Layers	선택한 레이어
+	Layers in Folder	폴더 안의 레이어
+	Reference Layers	참조 레이어
+	Exclude	제외
+	Editing layer	편집 중인 레이어
+	Text layers	텍스트 레이어
+	Locked layers	잠긴 레이어
+	Layers the fill doesn't read	채우기가 읽지 않는 레이어
+	Close Gap	틈 닫기
+	Area Scaling	영역 크기 조정
+	Grow the fill under the lines, or shrink it	채우기를 선 아래로 넓히거나 줄입니다
+	To Darkest Pixel	가장 어두운 픽셀까지
+	Follow Adjacent Pixels	인접 픽셀 따라가기
+	Target	대상
+	White and Transparent	흰색 및 투명
+	Image Border	이미지 가장자리
+	The canvas edge closes gaps as a line does	캔버스 가장자리가 선처럼 틈을 닫습니다
+	Fill Tool Options	채우기 도구 옵션
+	Save as:	다른 이름으로 저장:
+	Save Preset	사전 설정 저장
+	Keep these two presets as one, listed with the others	이 두 사전 설정을 하나로 저장하여 다른 설정과 함께 표시합니다
+	seconds	초
+	Close gaps up to {px} px	{px}px까지의 틈 닫기
+	Grow the selection under the lines, or shrink it	선택 영역을 선 아래로 넓히거나 줄입니다
+	Delete Second Mask	두 번째 마스크 삭제
+	Disable Second Mask	두 번째 마스크 비활성화
+	Enable Second Mask	두 번째 마스크 활성화
+	Editing layer blocks the fill	편집 중인 레이어가 채우기를 막음
+	Paint on the layer being filled stops the fill at any tolerance, and the fill goes in behind it: draw over a gap to close it	채우는 레이어의 칠이 허용치와 상관없이 채우기를 막고, 채우기는 그 뒤로 들어갑니다: 틈 위에 그려서 닫으세요
+	Undo widens Close Gap	실행 취소로 틈 닫기 넓히기
+	Each Undo of a fill closes bigger gaps for the next click, until you pick another tool	채우기를 실행 취소할 때마다 다른 도구를 고를 때까지 다음 클릭에서 더 큰 틈을 닫습니다
+	Close Gap widened to {px} px: click again to fill	틈 닫기를 {px} px로 넓혔습니다: 다시 클릭하여 채우세요
+	Screentone…	스크린톤…
+	Dot Shape	점 모양
+	Dot Size	점 크기
+	Spacing X	가로 간격
+	Spacing Y	세로 간격
+	Line Width	선 너비
+	Cross Angle	교차 각도
+	Gaussian Noise	가우스 노이즈
+	Stipple	점묘
+	Hexgrid	육각 격자
+	Checker	체커
+	Concentric	동심원
+	Triangles	삼각형
+	Satellites	위성
+	Enable	활성화
+	Count:	개수:
+	Distance:	거리:
+	Stretch:	늘림:
+	Distortion & Jitter	왜곡 및 지터
+	Aspect X:	종횡비 X:
+	Aspect Y:	종횡비 Y:
+	Row Offset:	행 오프셋:
+	Merge:	겹침:
+	Jitter Pos:	지터 위치:
+	Jitter Size:	지터 크기:
+	Midpoint:	중간점:
+	Start Size:	시작 크기:
+	End Size:	끝 크기:
+	Save as Pattern	패턴으로 저장
+	Preserve Lines	선 유지
+	Font Settings	글꼴 설정
+	No folder	폴더 없음
+	+ New folder...	+ 새 폴더...
+	Folder name	폴더 이름
+	New folder name	새 폴더 이름
+	Favorite font	즐겨찾는 글꼴
+	Faux bold	가짜 굵게
+	Faux italic	가짜 기울임
+	Superscript	위 첨자
+	Subscript	아래 첨자
+	Hanging Punctuation	매달린 문장 부호
+	Use standard font metrics and the baseline	메트릭 시스템: 표준 글꼴 메트릭과 기준선
+	Use visual kerning and bubble centering	광학 시스템: 시각적 커닝과 말풍선 가운데 정렬
+	Leading is linked to size	줄 간격이 크기에 연결됨
+	Leading is not linked to size	줄 간격이 크기에 연결되지 않음
+	H-Scale (%)	가로 배율 (%)
+	Edit preview text	미리 보기 텍스트 편집
+	Leave empty for the automatic sample	자동 샘플을 사용하려면 비워 두세요
+	Preview unavailable	미리 보기를 사용할 수 없음
+	Duplicate this style	이 스타일 복제
+	Delete this style	이 스타일 삭제
+	Bubble Contour	말풍선 윤곽
+	No contour variants	윤곽 변형 없음
+	~ SCurve	~ SCurve
+	＋ Add tail	＋ Add tail
+	＋ Create balloon on canvas	＋ Create balloon on canvas
+	＋ Fit balloon	＋ Fit balloon
+	⊘ None	⊘ None
+	⌒ Arc	⌒ Arc
+	▽ Wedge	▽ Wedge
+	◎ Double outline	◎ Double outline
+	◌ Thought	◌ Thought
+	☁️ Cloud	☁️ Cloud
+	✓ Text fits: {lines} lines, {size} pt	✓ Text fits: {lines} lines, {size} pt
+	✴️ Burst	✴️ Burst
+	⑂ Double	⑂ Double
+	◽ Rect	◽ Rect
+	⚠ Text does not fit — enlarge the balloon or reduce the type size	⚠ Text does not fit — enlarge the balloon or reduce the type size
+	⚡ Bake to SAI Linework	⚡ Bake to SAI Linework
+	⚡ Lightning	⚡ Lightning
+	⚪ Ellipse	⚪ Ellipse
+	Add a tail to the selected balloon	Add a tail to the selected balloon
+	Background colour	Background colour
+	Balloon body:	Balloon body:
+	Bubble radius:	Bubble radius:
+	Bumps:	Bumps:
+	Bundle:	Bundle:
+	Corner radius:	Corner radius:
+	Cusp bite:	Cusp bite:
+	Dialogue and fit:	Dialogue and fit:
+	Dialogue text…	Dialogue text…
+	Fit the shape to the text: the balloon grows when the line does not fit	Fit the shape to the text: the balloon grows when the line does not fit
+	Hand-drawn noise:	Hand-drawn noise:
+	Inner sharpness:	Inner sharpness:
+	Inward concavity:	Inward concavity:
+	Jitter:	Jitter:
+	Lobe height:	Lobe height:
+	Mouth width:	Mouth width:
+	Needle width:	Needle width:
+	Needles:	Needles:
+	Outer sharpness:	Outer sharpness:
+	Outline gap:	Outline gap:
+	Random jitter variation	Random jitter variation
+	Random ray variation	Random ray variation
+	Ray extension:	Ray extension:
+	Ray length:	Ray length:
+	Rays:	Rays:
+	Round the tips	Round the tips
+	Spikes:	Spikes:
+	Squircle:	Squircle:
+	Stroke and fill:	Stroke and fill:
+	Sub-harmonics:	Sub-harmonics:
+	Tail type:	Tail type:
+	Text area:	Text area:
+	Thought bubbles:	Thought bubbles:
+	Turn the balloon into an editable vector linework layer	Turn the balloon into an editable vector linework layer
+	Type size:	Type size:
+	Valley depth:	Valley depth:
+	💥 Spiky	💥 Spiky
+	🔄 Reset to the manga default	🔄 Reset to the manga default
+	🦔 Uniflash	🦔 Uniflash

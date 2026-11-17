@@ -2,7 +2,7 @@ use super::content::{channel_weights, empty_in, render_content, restore_channels
 use super::ctx::Ctx;
 use super::extents::{effects_frame, mask_k, mask_vals, recycle_mask, shapeless_stroke_bounds};
 use super::fx_cache::effect_maps;
-use super::{BlendMode, Buffer, Fill, Layer, LayerContent, Rect, Surface, advanced, blend, effects, psblend, shape_split};
+use super::{BlendMode, Buffer, Fill, Layer, LayerContent, Rect, Surface, advanced, blend, effects, masks, psblend, shape_split};
 
 /// Composite an isolated group's sibling list (bottom→top) onto `backdrop` (its own buffer).
 pub(crate) fn composite_stack(layers: &[Layer], backdrop: &mut Buffer, cx: &Ctx) {
@@ -127,6 +127,7 @@ pub fn occludes_below(layer: &Layer, mode: photocraft_color::ColorMode) -> bool 
         && layer.fill_opacity >= 1.0
         && !layer.mask.as_ref().is_some_and(|m| m.enabled)
         && !layer.vector_mask.as_ref().is_some_and(|m| m.enabled)
+        && !masks::has_second_mask(layer)
         && !effects::has_effects(layer)
         && layer.excluded_channels == 0
         && !blend_if_active(layer, mode)
@@ -370,7 +371,7 @@ pub(crate) fn composite_layer_plain(layer: &Layer, clipped: &[Layer], backdrop: 
         && !clip_base_adjusts
         && !blend_if_active(layer, cx.mode)
     {
-        let needs_mix = opacity < 1.0 || layer.mask.is_some() || layer.vector_mask.is_some();
+        let needs_mix = opacity < 1.0 || layer.mask.is_some() || layer.vector_mask.is_some() || layer.second_mask.is_some();
         let has_clipped = clipped.iter().any(|c| c.visible);
         // Children can draw directly unless mixing or clipping needs the original backdrop.
         let before = (needs_mix || has_clipped).then(|| backdrop.clone());

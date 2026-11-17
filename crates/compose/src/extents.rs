@@ -32,6 +32,10 @@ pub fn layer_bounds(layer: &Layer, canvas: Rect) -> Rect {
             }
         }),
         LayerContent::Fill(_) => canvas,
+        LayerContent::Screentone(st) => {
+            let b = bounds::content_bounds(&st.surface);
+            if !b.is_empty() { b } else { canvas }
+        }
         _ => {
             let b = layer.surface().map_or(Rect::EMPTY, bounds::content_bounds);
             let b = match &layer.content {
@@ -293,8 +297,9 @@ pub fn shape_bounds(sh: &photocraft_doc::ShapeLayer) -> Option<Rect> {
 /// The layer's effective mask over `rect` (row-major), read once per tile: the pixel mask
 /// times the rasterized vector mask.
 pub(crate) fn mask_vals(layer: &Layer, rect: Rect, cx: &Ctx) -> Option<Vec<f32>> {
-    // Feathers blur across tiles: read the cached, canvas-wide combined mask.
-    if masks::has_feather(layer)
+    // Feathers blur across tiles: read the cached, canvas-wide combined mask (which also holds
+    // a second pixel mask).
+    if (masks::has_feather(layer) || masks::has_second_mask(layer))
         && let Some(s) = masks::combined_mask(layer, cx.canvas)
     {
         let mut v = photocraft_raster::scratch::take_cap(rect.width() as usize * rect.height() as usize);
@@ -338,6 +343,7 @@ pub(crate) fn shapeless_stroke_bounds(layer: &Layer) -> Option<Rect> {
         || !layer.blend_if.is_default()
         || layer.mask.as_ref().is_some_and(|m| m.enabled)
         || layer.vector_mask.as_ref().is_some_and(|m| m.enabled)
+        || masks::has_second_mask(layer)
         || !transparent_outside(layer)
         || !effects::maps_are_local(layer)
     {
@@ -352,7 +358,7 @@ pub(crate) fn shapeless_stroke_bounds(layer: &Layer) -> Option<Rect> {
     }
 
     match &layer.content {
-        LayerContent::Raster(_) | LayerContent::Text(_) | LayerContent::Shape(_) | LayerContent::Smart(_) => {
+        LayerContent::Raster(_) | LayerContent::Text(_) | LayerContent::Shape(_) | LayerContent::Smart(_) | LayerContent::Screentone(_) => {
             let b = layer.surface().map_or(Rect::EMPTY, bounds::content_bounds);
             // A filled shape's effects follow its outline, also where its fill is transparent (as
             // in `layer_bounds`).
@@ -619,7 +625,7 @@ pub fn transparent_outside(layer: &Layer) -> bool {
     match &layer.content {
         LayerContent::Group(g) => g.children.iter().filter(|c| c.visible).all(transparent_outside),
         // Fill layers cover the canvas (their bounds); adjustments draw nothing of their own.
-        LayerContent::Fill(_) | LayerContent::Adjustment(_) => true,
+        LayerContent::Fill(_) | LayerContent::Adjustment(_) | LayerContent::Screentone(_) => true,
         _ => layer.surface().is_none_or(|s| s.format().alpha && s.default_pixel().last().is_some_and(|a| *a <= 0.0)),
     }
 }

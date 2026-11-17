@@ -44,6 +44,12 @@ impl<'a> UniformAreas<'a> {
                 }
                 surfaces.push(&m.surface);
             }
+            if let Some(m) = &l.second_mask {
+                if m.feather != 0.0 {
+                    return None;
+                }
+                surfaces.push(&m.surface);
+            }
             match &l.content {
                 LayerContent::Raster(s) => surfaces.push(s),
                 LayerContent::Group(g) if g.artboard.is_none() => {}
@@ -105,5 +111,11 @@ impl<'a> UniformAreas<'a> {
 
 /// Whether adjustment `a` maps each pixel on its own (dithered ones vary with the position).
 fn per_pixel(a: &Adjustment) -> bool {
-    !matches!(a, Adjustment::GradientMap { dither: true, .. } | Adjustment::ColorLookup { dither: true, .. })
+    !matches!(
+        a,
+        Adjustment::GradientMap { dither: true, .. }
+            | Adjustment::ColorLookup { dither: true, .. }
+            // Grain varies with the document position, so an area is not one colour.
+            | Adjustment::Grain { .. }
+    )
 }

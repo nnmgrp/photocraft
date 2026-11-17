@@ -439,7 +439,7 @@ impl<'a> Planner<'a> {
         {
             let before = self.retain(backdrop);
             let mut after = self.stack(&g.children, backdrop)?;
-            if opacity < 1.0 || layer.mask.is_some() || layer.vector_mask.is_some() {
+            if opacity < 1.0 || layer.mask.is_some() || layer.vector_mask.is_some() || layer.second_mask.is_some() {
                 let mut p = Pass::new(Kernel::Lerp, 0);
                 p.a = Some(self.retain(before));
                 p.b = Some(after);
@@ -637,7 +637,7 @@ impl<'a> Planner<'a> {
             LayerContent::Group(g) => {
                 let empty = self.clear();
                 let mut s = self.stack(&g.children, empty)?;
-                if layer.mask.is_some() || layer.vector_mask.is_some() {
+                if layer.mask.is_some() || layer.vector_mask.is_some() || layer.second_mask.is_some() {
                     let mut p = Pass::new(Kernel::Mask, 0);
                     p.a = Some(s);
                     p.mask = self.mask_use(layer);
@@ -665,7 +665,7 @@ impl<'a> Planner<'a> {
                 let paint = Paint::Pattern(pat, placement(anchor, *link, *phase, *scale, *angle));
                 let canvas = self.cx.canvas;
                 let s = self.paint(empty, empty, Cov::One, &paint, BlendMode::Normal, 1.0, 0, canvas, canvas);
-                if layer.mask.is_some() || layer.vector_mask.is_some() {
+                if layer.mask.is_some() || layer.vector_mask.is_some() || layer.second_mask.is_some() {
                     let mut p = Pass::new(Kernel::Mask, 0);
                     p.a = Some(s);
                     p.mask = self.mask_use(layer);
@@ -689,6 +689,8 @@ impl<'a> Planner<'a> {
                 Some(c) if c.fill == *f => self.surface_tex(&mut p, layer.id, &c.surface),
                 _ => self.fill(&mut p, f, photocraft_compose::fill_frame(layer, self.cx.canvas))?,
             },
+            // Screentone GPU shader lands in S5; fall back to CPU compositing in S2.
+            LayerContent::Screentone(_) => return Err(Unsupported("screentone layer (composited on the CPU until S5)".into())),
             _ => {
                 if let Some(s) = layer.surface() {
                     self.surface_tex(&mut p, layer.id, s);

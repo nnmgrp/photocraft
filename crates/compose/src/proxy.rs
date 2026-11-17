@@ -65,6 +65,9 @@ fn shrink_layer(l: &mut Layer, k: u32) {
     if let Some(m) = &mut l.mask {
         m.surface = downsample(&m.surface, k);
     }
+    if let Some(m) = &mut l.second_mask {
+        m.surface = downsample(&m.surface, k);
+    }
     if let Some(fc) = &mut l.fill_cache {
         fc.surface = downsample(&fc.surface, k);
     }
@@ -87,6 +90,11 @@ fn shrink_layer(l: &mut Layer, k: u32) {
         LayerContent::Text(t) => t.cache = t.cache.as_ref().map(|s| downsample(s, k)),
         LayerContent::Shape(sh) => sh.cache = sh.cache.as_ref().map(|s| downsample(s, k)),
         LayerContent::Smart(so) => shrink_smart(so, k),
+        LayerContent::Screentone(s) => {
+            s.surface = downsample(&s.surface, k);
+            let k = k as f32;
+            s.origin = (s.origin.0 / k, s.origin.1 / k);
+        }
         LayerContent::Adjustment(_) | LayerContent::Fill(_) => {}
     }
 }

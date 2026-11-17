@@ -203,6 +203,8 @@ fn roundtrips() {
     let b = write(&inkl);
     assert_eq!(parse(&b[0].0, &b[0].1, None, Channels::Cmyk), inkl);
     rt(Adjustment::Unsupported { psd_key: "selc".into(), raw: vec![1, 2, 3].into() });
+    rt(Adjustment::Grain { amount: 32.0, size: 34.0, roughness: 50.0 });
+    rt(Adjustment::Grain { amount: 0.0, size: 100.0, roughness: 0.0 });
     rt(Adjustment::GradientMap {
         stops: vec![(0.0, [0.0, 0.0, 0.0]), (0.5, [1.0, 0.0, 0.0]), (1.0, [1.0, 1.0, 1.0])],
         reverse: true,
@@ -434,6 +436,20 @@ fn malformed_falls_back_to_unsupported() {
     malformed_channel_mixers_are_unsupported();
     malformed_photo_filters_are_unsupported();
     arbitrary_adjustment_bytes_do_not_panic();
+}
+
+/// Grain's private block: short, unknown versions and hostile values never panic; the label
+/// exists for messages.
+#[test]
+fn grain_private_block_never_panics() {
+    assert_eq!(label(b"PCgr"), "Grain");
+    assert!(matches!(parse(b"PCgr", &[0, 0, 0, 1, 0, 0], None, Channels::Rgb), Adjustment::Unsupported { .. }));
+    assert!(matches!(parse(b"PCgr", &[0, 0, 0, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], None, Channels::Rgb), Adjustment::Unsupported { .. }));
+    let mut hostile = GRAIN_VERSION.to_be_bytes().to_vec();
+    for v in [f32::NAN, 1e9, -5.0] {
+        hostile.extend_from_slice(&v.to_be_bytes());
+    }
+    assert_eq!(parse(b"PCgr", &hostile, None, Channels::Rgb), Adjustment::Grain { amount: 0.0, size: 100.0, roughness: 0.0 });
 }
 
 fn malformed_adjustments_are_unsupported() {

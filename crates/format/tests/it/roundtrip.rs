@@ -313,6 +313,20 @@ fn gradient_map_source_roundtrips_in_native_documents() {
     assert_eq!(load_from_bytes(&bytes).unwrap(), doc);
 }
 
+/// Photoshop 2026's Grain adjustment layer keeps its three settings in `.pcraft`.
+#[test]
+fn grain_adjustment_round_trips() {
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let mut doc = rich_doc(ColorMode::Rgb, depth);
+        doc.insert_above(
+            None,
+            Layer::new("Grain 1", LayerContent::Adjustment(photocraft_doc::Adjustment::Grain { amount: 32.0, size: 34.0, roughness: 50.0 })),
+        );
+        let back = load_from_bytes(&save_to_bytes(&doc, &SaveOptions::default()).unwrap()).unwrap();
+        assert_eq!(back, doc, "{depth:?}");
+    }
+}
+
 #[test]
 fn old_effect_snapshots_need_no_interpolation_record() {
     let effect = photocraft_doc::Effect::GradientOverlay {
@@ -1390,4 +1404,41 @@ fn file_encoding_source_images_roundtrips_and_defaults_when_absent() {
         let old: photocraft_format::manifest::DocM = serde_json::from_value(json).unwrap();
         assert_eq!(old.file_encoding, photocraft_doc::FileEncoding { jpeg_quality: Some(80), ..Default::default() });
     }
+}
+
+/// A live screentone layer (spec, lattice origin, rendered cache) and the second pixel mask keep
+/// their values in `.pcraft`; a manifest written before either field existed loads with none.
+#[test]
+fn screentone_layer_and_second_mask_roundtrip() {
+    let mut doc = rich_doc(ColorMode::Rgb, SampleType::U8);
+    let mut tone_surface = photocraft_doc::Surface::new(photocraft_color::PixelFormat::RGBA8);
+    scribble(&mut tone_surface, 21, false);
+    let spec = photocraft_doc::ScreentoneSpec { spacing_x: 21.0, angle: 15.0, ..photocraft_doc::ScreentoneSpec::default() };
+    let mut layer = Layer::new("Tone", LayerContent::Screentone(photocraft_doc::ScreentoneLayer::new(spec.clone(), (12.5, -3.25), tone_surface)));
+    layer.second_mask = Some(photocraft_doc::LayerMask::hide_all());
+    layer.reference = true;
+    doc.insert_above(None, layer);
+
+    let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+    let back = load_from_bytes(&bytes).unwrap();
+    assert_eq!(back, doc);
+    let tone_layer = back.layers.iter().find(|l| l.is_screentone()).expect("screentone layer survives");
+    assert!(tone_layer.second_mask.is_some());
+    assert!(tone_layer.reference);
+    let LayerContent::Screentone(tone) = &tone_layer.content else { panic!("not a screentone") };
+    assert_eq!(tone.spec, spec);
+    assert_eq!(tone.origin, (12.5, -3.25));
+    assert_eq!(tone.surface.format(), photocraft_color::PixelFormat::RGBA8);
+
+    // The same manifest without the new fields, as an older build wrote it.
+    let mut json = serde_json::to_value(read_manifest(&bytes).unwrap().document).unwrap();
+    let layers = json["layers"].as_array_mut().unwrap();
+    let stored = layers.iter_mut().find(|l| l["content"]["kind"] == "screentone").expect("screentone layer in the manifest");
+    let fields = stored.as_object_mut().unwrap();
+    assert!(fields.remove("second_mask").is_some(), "the mask is stored");
+    assert_eq!(fields.remove("reference"), Some(serde_json::json!(true)));
+    let old: photocraft_format::manifest::DocM = serde_json::from_value(json).unwrap();
+    let old_tone = old.layers.iter().find(|l| matches!(&l.content, photocraft_format::manifest::ContentM::Screentone { .. })).expect("screentone layer loads");
+    assert!(old_tone.second_mask.is_none());
+    assert!(!old_tone.reference);
 }

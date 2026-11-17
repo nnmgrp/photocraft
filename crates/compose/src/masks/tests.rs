@@ -10,10 +10,10 @@ fn pending(c: &Mutex<Cache>, k: u64) -> Arc<OnceLock<Surface>> {
 }
 
 /// A built mask (and no pixel-mask input), as `finish_mask`'s build returns it.
-fn test_surface() -> (Surface, Option<Surface>) {
+fn test_surface() -> (Surface, Vec<Surface>) {
     let mut surface = Surface::new(FORMAT);
     surface.fill_rect(Rect::new(0, 0, 2, 2), &[0.5]);
-    (surface, None)
+    (surface, Vec::new())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -204,11 +204,11 @@ fn charges_input_and_output_at_every_depth_including_off_canvas_tiles() {
         input.fill_rect(Rect::new(1024, 1024, 1025, 1025), &[0.0]);
         let tile_pixels = (photocraft_geom::TILE_SIZE * photocraft_geom::TILE_SIZE) as usize;
         let expected = tile_pixels * (SampleType::F32.bytes() + 2 * sample.bytes()) + SampleType::F32.bytes() + sample.bytes();
-        let bytes = entry_bytes(&result, Some(&input));
+        let bytes = entry_bytes(&result, std::slice::from_ref(&input));
         assert_eq!(bytes, expected, "{sample:?}");
         let mut cache = Cache::default();
-        cache.insert(1, result.clone(), None, bytes, bytes * 2, cache.generation);
-        cache.insert(2, result.clone(), None, bytes, bytes * 2, cache.generation);
+        cache.insert(1, result.clone(), Vec::new(), bytes, bytes * 2, cache.generation);
+        cache.insert(2, result.clone(), Vec::new(), bytes, bytes * 2, cache.generation);
         assert_eq!(cache.bytes, bytes * 2, "shared tiles are conservatively charged per entry");
     }
 }
@@ -216,12 +216,12 @@ fn charges_input_and_output_at_every_depth_including_off_canvas_tiles() {
 #[test]
 fn byte_budget_evicts_the_least_recently_used_entry() {
     let surface = one_tile(SampleType::F32);
-    let bytes = entry_bytes(&surface, None);
+    let bytes = entry_bytes(&surface, &[]);
     let mut cache = Cache::default();
-    cache.insert(1, surface.clone(), None, bytes, bytes * 2, cache.generation);
-    cache.insert(2, surface.clone(), None, bytes, bytes * 2, cache.generation);
+    cache.insert(1, surface.clone(), Vec::new(), bytes, bytes * 2, cache.generation);
+    cache.insert(2, surface.clone(), Vec::new(), bytes, bytes * 2, cache.generation);
     assert!(cache.get(1).is_some());
-    cache.insert(3, surface, None, bytes, bytes * 2, cache.generation);
+    cache.insert(3, surface, Vec::new(), bytes, bytes * 2, cache.generation);
     assert!(cache.get(2).is_none());
     assert!(cache.get(1).is_some());
     assert!(cache.get(3).is_some());
@@ -231,13 +231,13 @@ fn byte_budget_evicts_the_least_recently_used_entry() {
 #[test]
 fn entry_limit_also_bounds_masks_with_no_tiles() {
     let surface = Surface::new(FORMAT);
-    let bytes = entry_bytes(&surface, None);
+    let bytes = entry_bytes(&surface, &[]);
     let mut cache = Cache::default();
     for key in 0..CAPACITY as u64 {
-        cache.insert(key, surface.clone(), None, bytes, CACHE_BUDGET, cache.generation);
+        cache.insert(key, surface.clone(), Vec::new(), bytes, CACHE_BUDGET, cache.generation);
     }
     assert!(cache.get(0).is_some());
-    cache.insert(CAPACITY as u64, surface, None, bytes, CACHE_BUDGET, cache.generation);
+    cache.insert(CAPACITY as u64, surface, Vec::new(), bytes, CACHE_BUDGET, cache.generation);
     assert_eq!(cache.map.len(), CAPACITY);
     assert!(cache.get(1).is_none());
     assert!(cache.get(0).is_some());
@@ -247,14 +247,14 @@ fn entry_limit_also_bounds_masks_with_no_tiles() {
 #[test]
 fn oversized_results_are_usable_without_retention_or_other_eviction() {
     let surface = one_tile(SampleType::F32);
-    let bytes = entry_bytes(&surface, None);
+    let bytes = entry_bytes(&surface, &[]);
     let mut cache = Cache::default();
     let small = Surface::new(FORMAT);
-    let small_bytes = entry_bytes(&small, None);
-    cache.insert(1, small, None, small_bytes, bytes - 1, cache.generation);
+    let small_bytes = entry_bytes(&small, &[]);
+    cache.insert(1, small, Vec::new(), small_bytes, bytes - 1, cache.generation);
     let tile = surface.tiles().next().unwrap().1.clone();
     let owners = Arc::strong_count(&tile);
-    cache.insert(2, surface.clone(), None, bytes, bytes - 1, cache.generation);
+    cache.insert(2, surface.clone(), Vec::new(), bytes, bytes - 1, cache.generation);
     assert!(cache.get(2).is_none());
     assert!(cache.get(1).is_some());
     assert_eq!(cache.bytes, small_bytes);
@@ -266,14 +266,14 @@ fn oversized_results_are_usable_without_retention_or_other_eviction() {
 fn replacement_and_purge_release_accounted_bytes_and_tile_references() {
     let first = one_tile(SampleType::U8);
     let second = one_tile(SampleType::F32);
-    let first_bytes = entry_bytes(&first, None);
-    let second_bytes = entry_bytes(&second, None);
+    let first_bytes = entry_bytes(&first, &[]);
+    let second_bytes = entry_bytes(&second, &[]);
     let first_tile = first.tiles().next().unwrap().1.clone();
     let second_tile = second.tiles().next().unwrap().1.clone();
     let mut cache = Cache::default();
-    cache.insert(1, first.clone(), None, first_bytes, CACHE_BUDGET, cache.generation);
+    cache.insert(1, first.clone(), Vec::new(), first_bytes, CACHE_BUDGET, cache.generation);
     assert_eq!(Arc::strong_count(&first_tile), 3);
-    cache.insert(1, second.clone(), None, second_bytes, CACHE_BUDGET, cache.generation);
+    cache.insert(1, second.clone(), Vec::new(), second_bytes, CACHE_BUDGET, cache.generation);
     assert_eq!(cache.bytes, second_bytes);
     assert_eq!(cache.map.len(), 1);
     assert_eq!(Arc::strong_count(&first_tile), 2);
@@ -288,15 +288,15 @@ fn replacement_and_purge_release_accounted_bytes_and_tile_references() {
 #[test]
 fn a_build_started_before_purge_cannot_refill_the_cache() {
     let surface = one_tile(SampleType::F32);
-    let bytes = entry_bytes(&surface, None);
+    let bytes = entry_bytes(&surface, &[]);
     let mut cache = Cache::default();
     assert!(cache.get(1).is_none());
     let generation_before_purge = cache.generation;
     cache.clear();
-    cache.insert(1, surface.clone(), None, bytes, CACHE_BUDGET, generation_before_purge);
+    cache.insert(1, surface.clone(), Vec::new(), bytes, CACHE_BUDGET, generation_before_purge);
     assert!(cache.map.is_empty());
     assert_eq!(cache.bytes, 0);
-    cache.insert(1, surface, None, bytes, CACHE_BUDGET, cache.generation);
+    cache.insert(1, surface, Vec::new(), bytes, CACHE_BUDGET, cache.generation);
     assert!(cache.get(1).is_some());
 }
 
@@ -341,7 +341,7 @@ fn cache_budget_holds_five_50mp_u8_input_u16_result_masks() {
     let mut cache = Cache::default();
     let surface = Surface::new(FORMAT);
     for key in 0..5 {
-        cache.insert(key, surface.clone(), None, one_entry, CACHE_BUDGET, cache.generation);
+        cache.insert(key, surface.clone(), Vec::new(), one_entry, CACHE_BUDGET, cache.generation);
     }
     for key in 0..5 {
         assert!(cache.get(key).is_some(), "mask {key} was evicted before the next plan");
@@ -380,4 +380,32 @@ fn hostile_path_coordinates_do_not_overflow() {
     path.subpaths.push(Subpath { knots, closed: true, ..Default::default() });
     l.vector_mask = Some(VectorMask::new(path));
     let _ = combined_mask(&l, Rect::new(0, 0, 8, 8));
+}
+
+/// Two pixel masks: the tile-by-tile product (reusing unchanged tiles from the last build)
+/// equals the full build, also after one mask was painted.
+#[test]
+fn the_tile_by_tile_product_of_two_masks_matches_the_full_build() {
+    use photocraft_doc::Layer;
+    let canvas = Rect::new(0, 0, 700, 600);
+    let gray = |v: f32| LayerMask { surface: Surface::with_default(PixelFormat::GRAY8, &[v]), ..LayerMask::reveal_all() };
+    let mut l = Layer::raster("L", PixelFormat::RGBA8);
+    let mut a = gray(1.0);
+    a.surface.fill_rect(Rect::new(0, 0, 400, 300), &[0.25]);
+    let mut b = LayerMask { density: 0.5, ..gray(0.0) };
+    b.surface.fill_rect(Rect::new(200, 100, 700, 600), &[1.0]);
+    l.mask = Some(a);
+    l.second_mask = Some(b);
+    let check = |l: &Layer| {
+        let got = combined_mask(l, canvas).expect("two masks combine");
+        let want = build_mask(l, canvas);
+        for (x, y) in [(10, 10), (300, 200), (650, 550), (650, 10), (10, 550), (399, 299), (400, 300)] {
+            assert!((got.sample_channel(x, y, 0) - want.sample_channel(x, y, 0)).abs() < 1e-3, "({x}, {y})");
+        }
+    };
+    check(&l);
+    // Paint one tile of the second mask: only that tile is rebuilt, the rest reused.
+    l.second_mask.as_mut().unwrap().surface.fill_rect(Rect::new(520, 520, 600, 580), &[0.0]);
+    check(&l);
+    assert!(combined_mask(&l, canvas).unwrap().sample_channel(560, 550, 0) < 0.6);
 }

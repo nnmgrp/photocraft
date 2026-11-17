@@ -64,6 +64,9 @@ pub(crate) fn layer_identity(layer: &Layer, h: &mut std::collections::hash_map::
     if let Some(m) = &layer.mask {
         (surface_fp(&m.surface, pin), m.enabled, m.density.to_bits(), m.feather.to_bits()).hash(h);
     }
+    if let Some(m) = &layer.second_mask {
+        (2u8, surface_fp(&m.surface, pin), m.enabled, m.density.to_bits(), m.feather.to_bits()).hash(h);
+    }
     if let Some(vm) = &layer.vector_mask {
         format!("{vm:?}").hash(h);
     }
@@ -133,7 +136,7 @@ pub fn discard_unreadable_pixel_caches() {
     if SEEN.swap(generation, std::sync::atomic::Ordering::AcqRel) != generation && photocraft_raster::spill::any_failed() {
         purge_effect_cache();
         super::bounds::purge();
-        super::masks::purge();
+        super::masks::purge_cache();
         super::shape_split::purge();
     }
 }

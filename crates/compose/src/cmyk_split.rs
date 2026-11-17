@@ -256,6 +256,7 @@ fn stand_in_layer(l: &mut Layer, planes: Planes, depth: SampleType, canvas: Rect
             stand_in_fill(f, planes, depth);
         }
         LayerContent::Adjustment(a) => stand_in_adjustment(a, planes),
+        LayerContent::Screentone(s) => s.surface = stand_in_surface(&s.surface, planes),
         LayerContent::Group(g) => g.children.iter_mut().for_each(|c| stand_in_layer(c, planes, depth, canvas)),
     }
     l.effects.items.iter_mut().for_each(|e| stand_in_effect(e, planes));

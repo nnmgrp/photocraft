@@ -202,6 +202,9 @@ pub struct LayerM {
     pub mask: Option<MaskM>,
     #[serde(default)]
     pub vector_mask: Option<VectorMask>,
+    /// The second pixel mask (`Layer::second_mask`).
+    #[serde(default)]
+    pub second_mask: Option<MaskM>,
     pub effects: EffectsM,
     pub label: LabelColor,
     pub content: ContentM,
@@ -226,6 +229,9 @@ pub struct LayerM {
     pub advanced: photocraft_doc::AdvancedBlending,
     #[serde(default)]
     pub video: Option<VideoDataM>,
+    /// A reference layer for the Fill tool (missing in older files = not one).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub reference: bool,
     /// The layer's own XMP packet (missing in older files = none).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub xmp: Option<String>,
@@ -299,6 +305,13 @@ pub enum ContentM {
         #[serde(default)]
         feather: f32,
     },
+    Screentone {
+        spec: photocraft_doc::ScreentoneSpec,
+        /// Document-space lattice anchor.
+        origin: (f32, f32),
+        /// Rendered cache in document coordinates.
+        surface: SurfaceM,
+    },
     Smart {
         /// Shared source identity; older bundles did not record it.
         #[serde(default)]
@@ -337,6 +350,10 @@ fn full_density() -> f32 {
 
 fn yes() -> bool {
     true
+}
+
+fn is_false(v: &bool) -> bool {
+    !*v
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

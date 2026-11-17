@@ -326,6 +326,13 @@ pub enum Adjustment {
         relative: bool,
         adjustments: [[f32; 4]; 9],
     },
+    /// Photoshop 2026's Grain: film-style monochrome noise, the same for a document every time it
+    /// renders (it depends only on the pixel's position). Amount, Size and Roughness in 0..=100.
+    Grain {
+        amount: f32,
+        size: f32,
+        roughness: f32,
+    },
     /// A PSD adjustment we can't evaluate yet; preserved raw for round-trip, shared between
     /// document snapshots (#4535).
     Unsupported {
@@ -353,6 +360,7 @@ impl Adjustment {
             Adjustment::Threshold { .. } => "Threshold",
             Adjustment::GradientMap { .. } => "Gradient Map",
             Adjustment::SelectiveColor { .. } => "Selective Color",
+            Adjustment::Grain { .. } => "Grain",
             Adjustment::Unsupported { .. } => "Adjustment",
         }
     }
@@ -402,6 +410,15 @@ mod tests {
         assert!(matches!(c, Adjustment::Curves { space: ToneSpace::Rgb, pencil: false, .. }));
         let g: Adjustment = serde_json::from_str(r#"{"GradientMap":{"stops":[],"reverse":true}}"#).unwrap();
         assert!(matches!(g, Adjustment::GradientMap { dither: false, .. }));
+    }
+
+    #[test]
+    fn grain_adjustment_round_trips_through_json() {
+        let a = Adjustment::Grain { amount: 12.5, size: 30.0, roughness: 60.0 };
+        assert_eq!(a.label(), "Grain");
+        let json = serde_json::to_string(&a).unwrap();
+        let back: Adjustment = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, a);
     }
 
     #[test]

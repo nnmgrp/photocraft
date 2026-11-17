@@ -9,6 +9,10 @@
 //! than two stops as the equivalent two-stop gradient, so nothing is dropped on save. Blocks
 //! that cannot be read (noise gradients, profile lookups, CMYK channel mixers, unknown versions)
 //! stay [`Adjustment::Unsupported`] and are written back verbatim.
+//!
+//! Grain (Photoshop 2026) has no published block layout: PhotoCraft writes it as a private
+//! [`GRAIN_KEY`] block (version, then Amount, Size and Roughness as big-endian `f32`s), which it
+//! reads back; other readers see an empty layer.
 
 use craft_psd::descriptor::{Descriptor, Value, VersionedDescriptor};
 use photocraft_doc::Adjustment;
@@ -16,9 +20,14 @@ use photocraft_doc::adjust::{CURVE_MAP_LEN, CurvePoint, HueRange, LevelsChannel,
 
 mod encode;
 
+/// PhotoCraft's private block for a Grain adjustment layer (see the module docs).
+pub const GRAIN_KEY: [u8; 4] = *b"PCgr";
+const GRAIN_VERSION: u32 = 1;
+
 /// All PSD adjustment keys recognized as adjustment layers.
-pub const ADJUSTMENT_KEYS: [&[u8; 4]; 16] =
-    [b"levl", b"curv", b"hue2", b"brit", b"nvrt", b"thrs", b"post", b"expA", b"vibA", b"blnc", b"mixr", b"grdm", b"phfl", b"selc", b"blwh", b"clrL"];
+pub const ADJUSTMENT_KEYS: [&[u8; 4]; 17] = [
+    b"levl", b"curv", b"hue2", b"brit", b"nvrt", b"thrs", b"post", b"expA", b"vibA", b"blnc", b"mixr", b"grdm", b"phfl", b"selc", b"blwh", b"clrL", &GRAIN_KEY,
+];
 
 fn be16(d: &[u8], at: usize) -> Option<u16> {
     d.get(at..at + 2).map(|b| u16::from_be_bytes([b[0], b[1]]))
@@ -137,6 +146,7 @@ pub fn label(key: &[u8; 4]) -> &'static str {
         b"selc" => "Selective Color",
         b"blwh" => "Black & White",
         b"clrL" => "Color Lookup",
+        b"PCgr" => "Grain",
         _ => "adjustment",
     }
 }
@@ -217,6 +227,12 @@ pub fn parse(key: &[u8; 4], data: &[u8], cged: Option<&[u8]>, channels: Channels
 fn parse_any(key: &[u8; 4], data: &[u8], cged: Option<&[u8]>) -> Adjustment {
     let parsed = match key {
         b"nvrt" => Some(Adjustment::Invert),
+        b"PCgr" => {
+            let known = data.get(..4).is_some_and(|v| u32::from_be_bytes([v[0], v[1], v[2], v[3]]) == GRAIN_VERSION);
+            // Hostile values are clamped to the sliders' range (NaN becomes 0).
+            let pct = |at: usize| bef32(data, at).map(|v| if v.is_finite() { v.clamp(0.0, 100.0) } else { 0.0 });
+            known.then(|| Some(Adjustment::Grain { amount: pct(4)?, size: pct(8)?, roughness: pct(12)? })).flatten()
+        }
         b"thrs" => be16(data, 0).map(|v| Adjustment::Threshold { level: f32::from(v) / 255.0 }),
         b"post" => be16(data, 0).map(|v| Adjustment::Posterize { levels: u32::from(v) }),
         // Kept raw (with its `CgEd`, which the PSD writer keeps while the layer is unchanged).
@@ -731,6 +747,14 @@ pub fn write(adj: &Adjustment) -> Vec<([u8; 4], Vec<u8>)> {
         }
         Adjustment::ChannelMixer { matrix, monochrome } => {
             return block(b"mixr", encode::channel_mixer(matrix, *monochrome));
+        }
+        Adjustment::Grain { amount, size, roughness } => {
+            let mut v = Vec::with_capacity(16);
+            v.extend_from_slice(&GRAIN_VERSION.to_be_bytes());
+            for x in [amount, size, roughness] {
+                v.extend_from_slice(&x.to_be_bytes());
+            }
+            return vec![(GRAIN_KEY, v)];
         }
         Adjustment::Unsupported { psd_key, raw } => {
             let k = psd_key.as_bytes();

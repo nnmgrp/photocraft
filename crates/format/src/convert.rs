@@ -101,6 +101,10 @@ pub(crate) fn tile_len(format: &PixelFormat) -> usize {
 // Save
 // ---------------------------------------------------------------------------
 
+fn mask_m(m: &LayerMask, sink: &mut dyn Sink) -> MaskM {
+    MaskM { surface: surface_m(&m.surface, sink), enabled: m.enabled, linked: m.linked, density: m.density, feather: m.feather }
+}
+
 fn surface_m(s: &Surface, sink: &mut dyn Sink) -> SurfaceM {
     let f = s.format();
     let mut dp = vec![0u8; f.bytes_per_pixel()];
@@ -173,6 +177,7 @@ fn layer_m(l: &Layer, sink: &mut dyn Sink) -> LayerM {
             density: s.density,
             feather: s.feather,
         },
+        LayerContent::Screentone(s) => ContentM::Screentone { spec: s.spec.clone(), origin: s.origin, surface: surface_m(&s.surface, sink) },
         LayerContent::Smart(s) => ContentM::Smart {
             contents_id: Some(s.contents_id.0),
             source: match &s.source {
@@ -206,14 +211,9 @@ fn layer_m(l: &Layer, sink: &mut dyn Sink) -> LayerM {
         opacity: l.opacity,
         fill_opacity: l.fill_opacity,
         clipped: l.clipped,
-        mask: l.mask.as_ref().map(|m| MaskM {
-            surface: surface_m(&m.surface, sink),
-            enabled: m.enabled,
-            linked: m.linked,
-            density: m.density,
-            feather: m.feather,
-        }),
+        mask: l.mask.as_ref().map(|m| mask_m(m, sink)),
         vector_mask: l.vector_mask.clone(),
+        second_mask: l.second_mask.as_ref().map(|m| mask_m(m, sink)),
         frame: l.frame.as_deref().cloned(),
         effects: EffectsM {
             enabled: l.effects.enabled,
@@ -231,6 +231,7 @@ fn layer_m(l: &Layer, sink: &mut dyn Sink) -> LayerM {
         blend_if: l.blend_if.clone(),
         advanced: l.advanced,
         video: l.video.as_ref().map(|v| video_m(v, sink)),
+        reference: l.reference,
         xmp: l.xmp.as_deref().map(str::to_string),
     }
 }
@@ -350,6 +351,10 @@ impl Loader<'_> {
         }
         let original_frames = m.original_frames.as_ref().map(|source| source.iter().map(|f| self.surface(f)).collect::<Result<Vec<_>>>()).transpose()?;
         Ok(photocraft_doc::VideoData { frames, original_frames, source: m.source.clone(), fps: m.fps, show_altered: m.show_altered })
+    }
+
+    fn mask(&mut self, mm: &MaskM) -> Result<LayerMask> {
+        Ok(LayerMask { surface: self.surface(&mm.surface)?, enabled: mm.enabled, linked: mm.linked, density: mm.density, feather: mm.feather })
     }
 
     fn surface(&mut self, m: &SurfaceM) -> Result<Surface> {
@@ -513,6 +518,9 @@ impl Loader<'_> {
                 density: *density,
                 feather: *feather,
             }),
+            ContentM::Screentone { spec, origin, surface } => {
+                LayerContent::Screentone(photocraft_doc::ScreentoneLayer { spec: spec.clone(), origin: *origin, surface: self.surface(surface)? })
+            }
             ContentM::Smart {
                 contents_id,
                 source,
@@ -561,9 +569,11 @@ impl Loader<'_> {
             }),
         };
         let mask = match &m.mask {
-            Some(mm) => {
-                Some(LayerMask { surface: self.surface(&mm.surface)?, enabled: mm.enabled, linked: mm.linked, density: mm.density, feather: mm.feather })
-            }
+            Some(mm) => Some(self.mask(mm)?),
+            None => None,
+        };
+        let second_mask = match &m.second_mask {
+            Some(mm) => Some(self.mask(mm)?),
             None => None,
         };
         let fill_cache = match &m.fill_cache {
@@ -585,6 +595,7 @@ impl Loader<'_> {
             clipped: m.clipped,
             mask,
             vector_mask: m.vector_mask.clone(),
+            second_mask,
             frame: frame.map(Box::new),
             effects: Effects {
                 enabled: m.effects.enabled,
@@ -602,6 +613,7 @@ impl Loader<'_> {
             blend_if: m.blend_if.clone(),
             advanced: m.advanced,
             video: m.video.as_ref().map(|v| self.video(v)).transpose()?,
+            reference: m.reference,
             xmp: m.xmp.as_deref().map(Arc::from),
         })
     }

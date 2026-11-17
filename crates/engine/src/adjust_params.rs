@@ -22,6 +22,10 @@ pub const HUE_RANGES: [&str; 6] = ["reds", "yellows", "greens", "cyans", "blues"
 /// Black & White default weights (percent) for [`HUE_RANGES`].
 pub const BW_DEFAULTS: [f32; 6] = [40.0, 60.0, 40.0, 60.0, 20.0, 80.0];
 
+/// A new Grain adjustment layer's Amount, Size and Roughness. Like Photoshop 2026's, a new Grain
+/// layer adds none (Amount 0; Size and Roughness only apply from Amount 1).
+pub const GRAIN_DEFAULTS: (f32, f32, f32) = (0.0, 34.0, 50.0);
+
 /// Photo Filter presets `(id, label, colour)`: common photographic filter colours.
 pub const PHOTO_FILTERS: &[(&str, &str, [u8; 3])] = &[
     ("warming85", "Warming Filter (85)", [236, 138, 0]),
@@ -235,6 +239,13 @@ pub fn from_params(kind: &str, p: &Value, base: Option<&Adjustment>, mode: Color
         }
         "selectiveColor" => crate::adjust_cmds::selective_from_params(p, base.filter(|b| matches!(b, Adjustment::SelectiveColor { .. })))?,
         "colorLookup" => crate::adjust_cmds::lookup_from_params(p, base.filter(|b| matches!(b, Adjustment::ColorLookup { .. })))?,
+        "grain" => {
+            let (a, s, ro) = match base {
+                Some(Adjustment::Grain { amount, size, roughness }) => (*amount, *size, *roughness),
+                _ => GRAIN_DEFAULTS,
+            };
+            Adjustment::Grain { amount: r.num("amount", a, 0.0, 100.0)?, size: r.num("size", s, 0.0, 100.0)?, roughness: r.num("roughness", ro, 0.0, 100.0)? }
+        }
         other => return Err(bad("adjustment", format!("unknown adjustment kind `{other}`"))),
     })
 }
@@ -352,6 +363,7 @@ pub fn to_params(adj: &Adjustment) -> Value {
         Adjustment::ColorLookup { tetrahedral, dither, .. } => {
             json!({"interpolation": if *tetrahedral { "tetrahedral" } else { "trilinear" }, "dither": dither})
         }
+        Adjustment::Grain { amount, size, roughness } => json!({"amount": amount, "size": size, "roughness": roughness}),
     }
 }
 

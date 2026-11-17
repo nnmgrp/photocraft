@@ -119,6 +119,8 @@ fn layer_supported(l: &Layer, clipped: &[Layer], depth: u32) -> bool {
         LayerContent::Raster(_) | LayerContent::Text(_) | LayerContent::Shape(_) | LayerContent::Smart(_) | LayerContent::Fill(_) => {
             cmyk_pixels(l) && separable(l.blend)
         }
+        // The rendered screentone is display RGB; this path leaves it to the generic compositor.
+        LayerContent::Screentone(_) => false,
         LayerContent::Group(g) => {
             g.artboard.is_none()
                 && (separable(l.blend) || l.blend == BlendMode::PassThrough)
@@ -539,7 +541,7 @@ fn composite_layer(l: &Layer, clipped: &[Layer], backdrop: &mut CmykBuffer, cx: 
     let opacity = l.opacity * l.fill_opacity;
     if let LayerContent::Group(g) = &l.content {
         if passes_through(l) {
-            let needs_mix = opacity < 1.0 || l.mask.is_some() || l.vector_mask.is_some();
+            let needs_mix = opacity < 1.0 || l.mask.is_some() || l.vector_mask.is_some() || l.second_mask.is_some();
             let before = needs_mix.then(|| backdrop.clone());
             composite_stack(&g.children, backdrop, cx);
             if let Some(before) = &before {

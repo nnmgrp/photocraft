@@ -559,7 +559,7 @@ impl Ex<'_> {
             // Photoshop's) reopen the layer as that kind and discard the pixels. A shape stroke
             // (`vstk`) beside a vector mask makes a shape too; without one, Photoshop keeps it on
             // pixel layers, so it stays. A vector mask (`vmsk`/`vsms`, `vogk`) stays.
-            LayerContent::Raster(_) => {
+            LayerContent::Raster(_) | LayerContent::Screentone(_) => {
                 let masked = l.vector_mask.is_some();
                 raw.retain(|(k, _)| !(RASTER_STALE_KEYS.contains(&k) || adjust_map::ADJUSTMENT_KEYS.contains(&k) || k == b"CgEd" || (k == b"vstk" && masked)));
             }
@@ -1075,6 +1075,20 @@ impl Ex<'_> {
                 }
                 LayerContent::Raster(s) => {
                     let r = self.record(l, extra, Some(s));
+                    self.records.push(r);
+                }
+                LayerContent::Screentone(s) => {
+                    // PSD has no procedural screentone object: export its rendered pixels.
+                    let px;
+                    let surface_ref = if s.surface.tile_count() == 0 {
+                        let mut surf = Surface::new(self.fmt);
+                        let _ = photocraft_algo::screentone::render_screentone_to_surface(&mut surf, self.canvas, &s.spec, s.origin);
+                        px = surf;
+                        &px
+                    } else {
+                        &s.surface
+                    };
+                    let r = self.record(l, extra, Some(surface_ref));
                     self.records.push(r);
                 }
                 LayerContent::Adjustment(_) => {

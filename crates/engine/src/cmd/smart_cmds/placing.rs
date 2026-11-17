@@ -144,7 +144,7 @@ pub(super) fn shift_layer(l: &mut Layer, dx: i32, dy: i32) {
     }
     let a = Affine::translate(dx as f64, dy as f64);
     let mv = |s: &Surface| translate_surface(s, dx, dy);
-    if let Some(m) = &mut l.mask {
+    for m in l.pixel_masks_mut() {
         m.surface = mv(&m.surface);
     }
     if let Some(vm) = &mut l.vector_mask {
@@ -168,6 +168,10 @@ pub(super) fn shift_layer(l: &mut Layer, dx: i32, dy: i32) {
             }
         }
         LayerContent::Smart(sm) => shift_smart(sm, dx, dy),
+        LayerContent::Screentone(s) => {
+            s.surface = mv(&s.surface);
+            s.origin = (s.origin.0 + dx as f32, s.origin.1 + dy as f32);
+        }
         LayerContent::Group(g) => g.children.iter_mut().for_each(|c| shift_layer(c, dx, dy)),
         LayerContent::Adjustment(_) | LayerContent::Fill(_) => {}
     }

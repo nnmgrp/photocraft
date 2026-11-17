@@ -5468,6 +5468,7 @@ dependencies = [
  "photocraft-geom",
  "photocraft-raster",
  "photocraft-testkit",
+ "photocraft-tone",
  "rayon",
  "rustfft",
  "serde",
@@ -5566,6 +5567,7 @@ dependencies = [
  "photocraft-color",
  "photocraft-geom",
  "photocraft-raster",
+ "photocraft-tone",
  "serde",
  "serde_json",
 ]

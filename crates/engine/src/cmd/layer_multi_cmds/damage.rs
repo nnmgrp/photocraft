@@ -157,6 +157,7 @@ fn layer_pixels_cmp(a: &Layer, b: &Layer, surf: SurfaceCmp) -> bool {
         clipped,
         mask,
         vector_mask,
+        second_mask,
         frame,
         effects,
         label: _,
@@ -169,6 +170,7 @@ fn layer_pixels_cmp(a: &Layer, b: &Layer, surf: SurfaceCmp) -> bool {
         blend_if,
         advanced,
         video: _,
+        reference: _,
         xmp: _,
     } = a;
     *id == b.id
@@ -197,14 +199,17 @@ fn layer_pixels_cmp(a: &Layer, b: &Layer, surf: SurfaceCmp) -> bool {
             (LayerContent::Text(x), LayerContent::Text(y)) => texts_cmp(x, y, &mut |_, _, _| true),
             (LayerContent::Shape(x), LayerContent::Shape(y)) => x == y,
             (LayerContent::Smart(x), LayerContent::Smart(y)) => smarts_cmp(x, y, &mut |_, _, _| true),
+            (LayerContent::Screentone(x), LayerContent::Screentone(y)) => x.spec == y.spec && x.origin == y.origin,
             _ => false,
         }
         // Every scalar is equal: now the surfaces.
         && masks_cmp(mask, &b.mask, surf)
+        && masks_cmp(second_mask, &b.second_mask, surf)
         && match (content, &b.content) {
             (LayerContent::Raster(x), LayerContent::Raster(y)) => surf(x, y, 0.0),
             (LayerContent::Text(x), LayerContent::Text(y)) => texts_cmp(x, y, surf),
             (LayerContent::Smart(x), LayerContent::Smart(y)) => smarts_cmp(x, y, surf),
+            (LayerContent::Screentone(x), LayerContent::Screentone(y)) => surf(&x.surface, &y.surface, 0.0),
             _ => true,
         }
         && match (fill_cache, &b.fill_cache) {
@@ -311,7 +316,12 @@ fn patterns_pixels_equal(a: &Document, b: &Document) -> bool {
                 LayerContent::Fill(f) => fill(f),
                 LayerContent::Shape(s) => s.fill.as_ref().is_some_and(fill) || s.stroke.as_ref().is_some_and(|st| fill(&st.paint)),
                 // A smart object draws its cache; its own document holds its own patterns.
-                LayerContent::Raster(_) | LayerContent::Group(_) | LayerContent::Adjustment(_) | LayerContent::Text(_) | LayerContent::Smart(_) => false,
+                LayerContent::Raster(_)
+                | LayerContent::Group(_)
+                | LayerContent::Adjustment(_)
+                | LayerContent::Text(_)
+                | LayerContent::Smart(_)
+                | LayerContent::Screentone(_) => false,
             }
     };
     !any_layer(&b.layers, 0, &refers)

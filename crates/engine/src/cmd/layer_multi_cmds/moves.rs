@@ -370,7 +370,7 @@ fn shift_shown(doc: &Document, l: &mut Layer, dx: i32, dy: i32, wrap: Option<pho
         *r = (r.0 + f64::from(dx), r.1 + f64::from(dy));
     }
     let mask_wrap = wrap.filter(|_| wraps_linked_masks(&l.content));
-    if let Some(m) = l.mask.as_mut().filter(|m| m.linked) {
+    for m in l.pixel_masks_mut().filter(|m| m.linked) {
         m.surface = move_surface(&m.surface, dx, dy, mask_wrap);
     }
     if let Some(vm) = l.vector_mask.as_mut().filter(|v| v.linked) {
@@ -389,6 +389,10 @@ fn shift_shown(doc: &Document, l: &mut Layer, dx: i32, dy: i32, wrap: Option<pho
         }
         LayerContent::Shape(sh) => crate::vector_cmds::shift_shape(doc, sh, f64::from(dx), f64::from(dy)),
         LayerContent::Smart(sm) => crate::smart_cmds::shift_smart(sm, dx, dy),
+        LayerContent::Screentone(s) => {
+            s.surface = move_surface(&s.surface, dx, dy, wrap);
+            s.origin = (s.origin.0 + dx as f32, s.origin.1 + dy as f32);
+        }
         LayerContent::Group(g) => {
             if let Some(ab) = &mut g.artboard {
                 ab.rect = ab.rect.translate(dx, dy);
@@ -422,7 +426,7 @@ fn subtree_wraps_only(l: &Layer, depth: usize) -> bool {
     match &l.content {
         LayerContent::Raster(_) | LayerContent::Adjustment(_) | LayerContent::Fill(_) => true,
         LayerContent::Group(g) => g.artboard.is_none() && g.children.iter().all(|c| subtree_wraps_only(c, depth + 1)),
-        LayerContent::Text(_) | LayerContent::Shape(_) | LayerContent::Smart(_) => false,
+        LayerContent::Text(_) | LayerContent::Shape(_) | LayerContent::Smart(_) | LayerContent::Screentone(_) => false,
     }
 }
 

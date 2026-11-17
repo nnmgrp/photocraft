@@ -44,6 +44,7 @@ pub use pattern::Pattern;
 pub use photocraft_color::{BlendMode, Color, ColorMode, PixelFormat, SampleType};
 pub use photocraft_geom::{Affine, Rect, Size};
 pub use photocraft_raster::Surface;
+pub use photocraft_tone::{DotShape, PatternType, ScreentoneBackend, ScreentoneGradientType, ScreentoneMode, ScreentoneSpec};
 use serde::{Deserialize, Serialize};
 pub use slices::{Slice, SliceKind, SliceOrigin, Slices};
 pub use text_styles::TextStyles;
@@ -621,6 +622,27 @@ pub struct FillCache {
     pub surface: Surface,
 }
 
+/// A live procedural screentone.
+///
+/// `spec` is the editable pattern, `origin` is the lattice anchor in document coordinates (not
+/// relative to the canvas or a render tile, so resizing the document never slides the tone), and
+/// `surface` is the rendered cache the compositor reads. Editing commands replace the cache and
+/// the spec together; a plain pixel edit is refused by [`Layer::surface_mut`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct ScreentoneLayer {
+    pub spec: ScreentoneSpec,
+    /// Document-space anchor of the lattice origin.
+    pub origin: (f32, f32),
+    /// Rendered appearance in document coordinates.
+    pub surface: Surface,
+}
+
+impl ScreentoneLayer {
+    pub fn new(spec: ScreentoneSpec, origin: (f32, f32), surface: Surface) -> Self {
+        Self { spec, origin, surface }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum LayerContent {
     Raster(Surface),
@@ -630,6 +652,7 @@ pub enum LayerContent {
     Text(TextLayer),
     Shape(ShapeLayer),
     Smart(SmartObject),
+    Screentone(ScreentoneLayer),
 }
 
 impl LayerContent {
@@ -642,7 +665,13 @@ impl LayerContent {
             LayerContent::Text(_) => "Type",
             LayerContent::Shape(_) => "Shape",
             LayerContent::Smart(_) => "Smart Object",
+            LayerContent::Screentone(_) => "Screentone",
         }
+    }
+
+    /// Whether the content is rendered from parameters rather than direct pixels.
+    pub fn is_procedural(&self) -> bool {
+        matches!(self, LayerContent::Screentone(_))
     }
 
     /// English indefinite article for this layer kind ("an" for Adjustment, "a" for all others).
@@ -671,6 +700,11 @@ pub struct Layer {
     /// Vector mask (Layer › Vector Mask), applied together with `mask`. Shape layers keep their
     /// outline in [`ShapeLayer::path`] instead.
     pub vector_mask: Option<VectorMask>,
+    /// PhotoCraft's second layer mask (Add Mask on a layer that has one): a pixel mask applied
+    /// together with `mask` and `vector_mask`, edited when targeted like the first. Photoshop has
+    /// one pixel mask a layer: a PSD stores the two multiplied as its layer mask, and each in a
+    /// private block PhotoCraft reads back (`io`).
+    pub second_mask: Option<LayerMask>,
     pub effects: Effects,
     pub label: LabelColor,
     pub content: LayerContent,
@@ -705,6 +739,9 @@ pub struct Layer {
     pub advanced: AdvancedBlending,
     /// Layer › Video Layers frame stack (None for a normal layer).
     pub video: Option<VideoData>,
+    /// A reference layer, as in Clip Studio Paint: the line art the Fill tool reads when its
+    /// Reference is Reference Layers. Saved in `.pcraft`; PSD has no place for it.
+    pub reference: bool,
     /// The layer's own XMP packet (Photoshop's `layer.xmpMetadata.rawData`), where scripts and
     /// embedding apps keep data about the layer under their own namespaces. Copied by
     /// [`Layer::duplicate`], as in Photoshop. PSD `shmd` › `cust` › `layerXMP`.
@@ -719,6 +756,22 @@ impl Layer {
         self.locks.transparency && self.locks.position && !self.clipped && matches!(self.content, LayerContent::Raster(_))
     }
 
+    /// The layer mask, or with `second` the second pixel mask.
+    pub fn pixel_mask(&self, second: bool) -> Option<&LayerMask> {
+        if second { self.second_mask.as_ref() } else { self.mask.as_ref() }
+    }
+
+    /// The layer's pixel masks (the layer mask, then the second one): what moves, resizes and
+    /// turns with it.
+    pub fn pixel_masks_mut(&mut self) -> impl Iterator<Item = &mut LayerMask> {
+        self.mask.iter_mut().chain(self.second_mask.iter_mut())
+    }
+
+    /// [`Layer::pixel_mask`], mutably.
+    pub fn pixel_mask_mut(&mut self, second: bool) -> Option<&mut LayerMask> {
+        if second { self.second_mask.as_mut() } else { self.mask.as_mut() }
+    }
+
     pub fn new(name: impl Into<String>, content: LayerContent) -> Self {
         Layer {
             id: LayerId::fresh(),
@@ -731,6 +784,7 @@ impl Layer {
             clipped: false,
             mask: None,
             vector_mask: None,
+            second_mask: None,
             effects: Effects { enabled: true, ..Default::default() },
             label: LabelColor::None,
             content,
@@ -743,6 +797,7 @@ impl Layer {
             blend_if: BlendIf::default(),
             advanced: AdvancedBlending::default(),
             video: None,
+            reference: false,
             xmp: None,
         }
     }
@@ -775,14 +830,21 @@ impl Layer {
             LayerContent::Text(t) => t.cache.as_ref(),
             LayerContent::Shape(s) => s.cache.as_ref(),
             LayerContent::Smart(s) => s.cache.as_ref(),
+            LayerContent::Screentone(s) => Some(&s.surface),
             _ => None,
         }
     }
     pub fn surface_mut(&mut self) -> Option<&mut Surface> {
         match &mut self.content {
             LayerContent::Raster(s) => Some(s),
+            // A screentone's pixels are a cache of `spec`; direct edits would desynchronise it.
+            LayerContent::Screentone(_) => None,
             _ => None,
         }
+    }
+    /// Whether the layer is a live screentone (its pixels are rendered from `spec`).
+    pub fn is_screentone(&self) -> bool {
+        matches!(self.content, LayerContent::Screentone(_))
     }
     /// Deep copy with fresh ids (for Duplicate Layer).
     pub fn duplicate(&self) -> Layer {
@@ -1664,6 +1726,53 @@ mod tests {
         assert_eq!(LayerContent::Adjustment(Adjustment::Invert).kind_name(), "Adjustment");
         assert_eq!(LayerContent::Raster(Surface::new(PixelFormat::RGBA8)).article(), "a");
         assert_eq!(LayerContent::Group(Group { children: Vec::new(), expanded: true, artboard: None, frame_stroke: None }).article(), "a");
+    }
+
+    #[test]
+    fn screentone_layer_is_procedural_and_read_only_pixels() {
+        let tone = ScreentoneLayer::new(ScreentoneSpec::default(), (4.0, 8.0), Surface::new(PixelFormat::RGBA8));
+        assert_eq!(tone.origin, (4.0, 8.0));
+        assert_eq!(tone.surface.format(), PixelFormat::RGBA8);
+
+        let content = LayerContent::Screentone(tone);
+        assert_eq!(content.kind_name(), "Screentone");
+        assert_eq!(content.article(), "a");
+        assert!(content.is_procedural());
+        assert!(!LayerContent::Raster(Surface::new(PixelFormat::RGBA8)).is_procedural());
+
+        let mut layer = Layer::new("Tone", content);
+        assert!(layer.is_screentone());
+        assert!(layer.surface().is_some());
+        // The rendered surface is a cache of the spec: direct pixel edits are refused.
+        assert!(layer.surface_mut().is_none());
+    }
+
+    #[test]
+    fn second_mask_helpers_see_both_pixel_masks() {
+        let mut layer = Layer::raster("x", PixelFormat::RGBA8);
+        assert!(layer.pixel_mask(false).is_none());
+        assert!(layer.pixel_mask(true).is_none());
+        assert_eq!(layer.pixel_masks_mut().count(), 0);
+
+        let mask = LayerMask::reveal_all();
+        let second = LayerMask::hide_all();
+        layer.mask = Some(mask.clone());
+        layer.second_mask = Some(second.clone());
+        assert_eq!(layer.pixel_mask(false), Some(&mask));
+        assert_eq!(layer.pixel_mask(true), Some(&second));
+        assert_eq!(layer.pixel_masks_mut().count(), 2);
+        assert!(layer.pixel_mask_mut(true).is_some());
+        assert_eq!(layer.pixel_mask_mut(false).map(|m| m.surface.format()), Some(PixelFormat::GRAY8));
+    }
+
+    #[test]
+    fn reference_layers_default_off_and_are_plain_flags() {
+        let mut layer = Layer::raster("line art", PixelFormat::RGBA8);
+        assert!(!layer.reference);
+        layer.reference = true;
+        let dup = layer.duplicate();
+        assert!(dup.reference, "duplicating keeps the reference flag");
+        assert_ne!(dup.id, layer.id);
     }
 }
 

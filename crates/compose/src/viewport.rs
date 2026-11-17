@@ -55,6 +55,9 @@ pub fn preview_page(doc: &Document, source: Rect, factor: u32, interrupt: Interr
         if let Some(m) = &mut l.mask {
             m.surface = shrink(&m.surface, r, k, last, i)?;
         }
+        if let Some(m) = &mut l.second_mask {
+            m.surface = shrink(&m.surface, r, k, last, i)?;
+        }
         if let Some(c) = &mut l.fill_cache {
             c.surface = shrink(&c.surface, r, k, last, i)?;
         }
@@ -89,6 +92,11 @@ pub fn preview_page(doc: &Document, source: Rect, factor: u32, interrupt: Interr
                 if let Some(s) = &mut t.cache {
                     *s = shrink(s, r, k, last, i)?;
                 }
+            }
+            LayerContent::Screentone(s) => {
+                s.surface = shrink(&s.surface, r, k, last, i)?;
+                let k = k as f32;
+                s.origin = (s.origin.0 / k, s.origin.1 / k);
             }
             _ => {}
         }

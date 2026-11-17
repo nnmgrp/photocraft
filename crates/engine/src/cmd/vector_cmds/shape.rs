@@ -82,6 +82,7 @@ fn live_kind(l: &LiveShape) -> &'static str {
         LiveShape::Polygon { .. } => "polygon",
         LiveShape::Triangle { .. } => "triangle",
         LiveShape::Line { .. } | LiveShape::ArrowLine { .. } => "line",
+        LiveShape::BalloonGroup { .. } => "balloon",
     }
 }
 
@@ -262,6 +263,23 @@ pub fn transform_shape(sh: &mut ShapeLayer, a: &Affine) {
                     let new_length = (dx * m0).hypot(dy * m3);
                     let width_scale = if old_length > 0.0 && new_length > 0.0 { m0 * m3 * old_length / new_length } else { m0.min(m3) };
                     LiveShape::Line { from: pt(from), to: pt(to), weight: weight * width_scale }
+                }
+                LiveShape::BalloonGroup { group } => {
+                    // A balloon stays parametric: its body, its tails and its stroke scale with it.
+                    let mut group = group;
+                    for b in &mut group.items {
+                        let rect = b.body.rect();
+                        b.body.set_rect(r(rect));
+                        for t in &mut b.tails {
+                            t.tip = pt(t.tip);
+                            t.mouth_width *= m0.min(m3);
+                        }
+                        for v in &mut b.vertex_overrides {
+                            v.offset = pt(v.offset);
+                        }
+                        b.stroke_width *= m0.min(m3);
+                    }
+                    LiveShape::BalloonGroup { group }
                 }
             })
         }

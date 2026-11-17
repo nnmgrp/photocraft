@@ -193,6 +193,8 @@ fn target(layer: u64, live: &LiveShape) -> Option<Target> {
             polygon_target(layer, live, &sharp, corner_radius, |_| true)
         }
         LiveShape::Ellipse { .. } | LiveShape::Line { .. } | LiveShape::ArrowLine { .. } => None,
+        // A balloon's contour is generated from its group; it has no corner radius here.
+        LiveShape::BalloonGroup { .. } => None,
     }
 }
 

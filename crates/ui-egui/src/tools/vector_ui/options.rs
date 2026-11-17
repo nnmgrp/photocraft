@@ -435,6 +435,8 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
                 });
             }
             photocraft_doc::vector::LiveShape::Line { .. } | photocraft_doc::vector::LiveShape::ArrowLine { .. } => {}
+            // A balloon group's size is each balloon's own body rect, edited by the balloon panel.
+            photocraft_doc::vector::LiveShape::BalloonGroup { .. } => {}
         }
         ui.vertical(|ui| match live {
             photocraft_doc::vector::LiveShape::Rect { radii, .. } => {

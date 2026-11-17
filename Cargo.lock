@@ -5719,6 +5719,14 @@ name = "photocraft-ipp"
 version = "0.23.1"
 
 [[package]]
+name = "photocraft-manga-bridge"
+version = "0.23.1"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "photocraft-ops"
 version = "0.23.1"
 dependencies = [

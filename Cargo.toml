@@ -19,6 +19,7 @@ craft-flags = { git = "https://github.com/storytold/craft-libs", rev = "ad8faa1c
 craft-ai-agents = { git = "https://github.com/storytold/craft-ai-integrations", rev = "35e0352666a117407d62230a6c6c2366f3e21a3b" }
 # internal
 photocraft-geom = { path = "crates/geom" }
+photocraft-manga-bridge = { path = "crates/manga-bridge" }
 photocraft-color = { path = "crates/color" }
 photocraft-raster = { path = "crates/raster" }
 photocraft-doc = { path = "crates/doc" }

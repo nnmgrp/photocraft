@@ -961,6 +961,18 @@ impl TypesetterState {
         Ok(count)
     }
 
+    /// Appends imported presets, selects the first newly imported preset, and refreshes script matches.
+    pub fn push_imported_presets(&mut self, imported: Vec<TextStylePreset>) -> usize {
+        let count = imported.len();
+        if count > 0 {
+            let first_imported = self.presets.len();
+            self.presets.extend(imported);
+            self.selected_preset_idx = first_imported;
+            self.recompute_script_style_matches();
+        }
+        count
+    }
+
     /// Экспортирует стили в JSON-строку формата TypeR (совместимо с Photoshop TypeR).
     pub fn export_styles_json(&self, folder_filter: Option<&str>) -> Result<String, String> {
         let mut folders_map = std::collections::HashMap::new();

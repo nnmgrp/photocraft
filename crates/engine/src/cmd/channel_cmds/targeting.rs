@@ -24,7 +24,7 @@ pub(crate) enum Target {
 pub(crate) fn target_of(p: &Value) -> Target {
     match p.get("target") {
         Some(Value::String(s)) => match s.as_str() {
-            "mask" => Target::Mask,
+            "mask" | "secondMask" => Target::Mask,
             "filterMask" => Target::FilterMask,
             "quickMask" => Target::QuickMask,
             _ => Target::Pixels,
@@ -94,7 +94,10 @@ pub fn read_target_surface<'a>(doc: &'a Document, layer: Option<LayerId>, p: &Va
         }
         Target::Mask => {
             let id = layer.ok_or_else(|| EngineError::Other("no active layer".into()))?;
-            doc.layer(id).and_then(|l| l.mask.as_ref()).map(|m| &m.surface).ok_or(EngineError::NoLayer(id))
+            doc.layer(id)
+                .and_then(|l| l.pixel_mask(crate::commands::is_second_mask_target(p)))
+                .map(|m| &m.surface)
+                .ok_or_else(|| EngineError::Other("layer has no mask".into()))
         }
         Target::FilterMask => {
             let id = layer.ok_or_else(|| EngineError::Other("no active layer".into()))?;

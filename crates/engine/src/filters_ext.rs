@@ -237,7 +237,7 @@ const PARAMS: &[(&str, Build)] = &[
 pub fn params_for(id: &str, p: &Value) -> Option<FilterParams> {
     match PARAMS.iter().find(|(k, _)| *k == id) {
         Some((_, build)) => Some(build(p)),
-        None => crate::gallery_cmds::params_for(id, p),
+        None => crate::cmd::manga_cmds::comic_screentone::params_for(id, p).or_else(|| crate::gallery_cmds::params_for(id, p)),
     }
 }
 

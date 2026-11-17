@@ -197,7 +197,7 @@ pub fn lone_target<'a>(doc: &'a Document, layer: Option<LayerId>, p: &Value) -> 
         Target::Mask => {
             let id = layer.ok_or_else(|| EngineError::Other("no active layer".into()))?;
             let l = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
-            let m = l.mask.as_ref().ok_or_else(|| EngineError::Other("layer has no mask".into()))?;
+            let m = l.pixel_mask(crate::commands::is_second_mask_target(p)).ok_or_else(|| EngineError::Other("layer has no mask".into()))?;
             Ok((!m.linked).then_some(&m.surface))
         }
         // A filter mask is not transformed on its own: the smart object transforms, as in Photoshop.
@@ -436,9 +436,7 @@ fn check_layer_budget(doc_sel: Option<&Surface>, l: &Layer, h: &Homography) -> R
                 }
             }
         }
-        if let Some(m) = &l.mask
-            && m.linked
-        {
+        for m in [&l.mask, &l.second_mask].into_iter().flatten().filter(|m| m.linked) {
             // With a selection only its region of the mask moves (`warp_gray_selected`).
             let src = match sel.filter(|_| !moves_whole(l)) {
                 Some(sel) => sel.content_bounds(),
@@ -507,6 +505,7 @@ fn apply_transform(
             return Err(bad("invalid frame transform"));
         }
     }
+    let mut baked_screentone = None;
     match &mut l.content {
         LayerContent::Group(g) => {
             for c in g.children.iter_mut() {
@@ -541,6 +540,33 @@ fn apply_transform(
                 m.surface = warp_gray(&m.surface, h, interp)?;
             }
         }
+        // A transform the tone's parameters cannot describe: bake the rendered sheet exactly like
+        // a pixel layer, so the transformed pixels stay what the user saw.
+        LayerContent::Screentone(s) => {
+            if s.surface.tile_count() == 0 {
+                let bounds = if let Some(m) = &l.mask {
+                    let mb = m.surface.content_bounds();
+                    if !mb.is_empty() { mb } else { Rect::new(0, 0, 1024, 1024) }
+                } else {
+                    Rect::new(0, 0, 1024, 1024)
+                };
+                let _ = photocraft_algo::screentone::render_screentone_to_surface(&mut s.surface, bounds, &s.spec, s.origin);
+            }
+            let surf = &mut s.surface;
+            baked_screentone = Some(match doc_sel {
+                Some(sel) => {
+                    let (lifted, mut rest) = split_selected(surf, sel)?;
+                    let moved = warp_surface_with(&lifted, lifted.content_bounds(), h, interp, ctl)?.ok_or(EngineError::Cancelled)?;
+                    composite_over(&mut rest, &moved);
+                    rest.prune();
+                    rest
+                }
+                None => {
+                    let src = surf.content_bounds();
+                    warp_surface_with(surf, src, h, interp, ctl)?.ok_or(EngineError::Cancelled)?
+                }
+            });
+        }
         _ => {
             if let Some(surf) = l.surface_mut() {
                 *surf = match doc_sel {
@@ -561,9 +587,10 @@ fn apply_transform(
             }
         }
     }
-    if let Some(m) = l.mask.as_mut()
-        && m.linked
-    {
+    if let Some(surface) = baked_screentone {
+        l.content = LayerContent::Raster(surface);
+    }
+    for m in l.pixel_masks_mut().filter(|m| m.linked) {
         m.surface = match mask_sel {
             Some(sel) => warp_gray_selected(&m.surface, sel, h, interp)?,
             None => warp_gray(&m.surface, h, interp)?,

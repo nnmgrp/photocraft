@@ -24,8 +24,10 @@ fn has_doc(s: &Session) -> std::result::Result<(), String> {
 /// and (if `masks`) masks.
 pub(crate) fn for_each_surface(layers: &mut [Layer], masks: bool, f: &mut dyn FnMut(&mut Surface, bool)) {
     for l in layers {
-        if masks && let Some(m) = &mut l.mask {
-            f(&mut m.surface, true);
+        if masks {
+            for m in l.pixel_masks_mut() {
+                f(&mut m.surface, true);
+            }
         }
         if let Some(fc) = &mut l.fill_cache {
             f(&mut fc.surface, false);
@@ -60,8 +62,39 @@ pub(crate) fn for_each_surface(layers: &mut [Layer], masks: bool, f: &mut dyn Fn
                     f(&mut mask.surface, true);
                 }
             }
+            LayerContent::Screentone(s) => f(&mut s.surface, false),
             LayerContent::Group(g) => for_each_surface(&mut g.children, masks, f),
             _ => {}
+        }
+    }
+}
+
+/// Bakes live procedural content to pixels before an operation that cannot keep its parameters
+/// (resampling, canvas turns, colour conversion, 32-bit boundary crossings).
+pub(crate) fn bake_procedural_layers(layers: &mut [Layer]) {
+    for l in layers {
+        let baked = match &mut l.content {
+            LayerContent::Screentone(s) => {
+                let format = s.surface.format();
+                if s.surface.tile_count() == 0 {
+                    let bounds = if let Some(m) = &l.mask {
+                        let mb = m.surface.content_bounds();
+                        if !mb.is_empty() { mb } else { Rect::new(0, 0, 1024, 1024) }
+                    } else {
+                        Rect::new(0, 0, 1024, 1024)
+                    };
+                    let _ = photocraft_algo::screentone::render_screentone_to_surface(&mut s.surface, bounds, &s.spec, s.origin);
+                }
+                Some(std::mem::replace(&mut s.surface, Surface::new(format)))
+            }
+            LayerContent::Group(g) => {
+                bake_procedural_layers(&mut g.children);
+                None
+            }
+            _ => None,
+        };
+        if let Some(surface) = baked {
+            l.content = LayerContent::Raster(surface);
         }
     }
 }
@@ -372,6 +405,8 @@ fn resample_doc_with_styles(doc: &mut Document, cmd: &str, nw: u32, nh: u32, fil
     if (sx - 1.0).abs() < 1e-12 && (sy - 1.0).abs() < 1e-12 {
         return Ok(());
     }
+    crate::manga_cmds::comic_screentone::ensure_doc_screentones_baked(doc);
+    bake_procedural_layers(&mut doc.layers);
     check_hidden_resample_budget(cmd, doc, sx, sy, filter)?;
     // Content that reaches the canvas edge keeps it: a Background stays opaque to the border.
     let canvas = Rect::from_xywh(0, 0, ow, oh);
@@ -1168,6 +1203,10 @@ pub(crate) fn change_depth(doc: &mut Document, depth: SampleType) {
     let crosses = (current == SampleType::F32) != (depth == SampleType::F32) && matches!(doc.mode, ColorMode::Rgb | ColorMode::Grayscale);
     let to_linear = depth == SampleType::F32;
     let transfer = photocraft_compose::adjust::Transfer::for_document(doc.mode, if to_linear { current } else { depth });
+    if crosses {
+        crate::manga_cmds::comic_screentone::ensure_doc_screentones_baked(doc);
+        bake_procedural_layers(&mut doc.layers);
+    }
     if crosses && !to_linear {
         for_each_surface(&mut doc.layers, false, &mut |surf, _| surf.map_color(|v| transfer.encode(v).clamp(0.0, 1.0)));
     }

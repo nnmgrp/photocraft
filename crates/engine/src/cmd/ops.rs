@@ -176,9 +176,7 @@ pub(crate) fn translate_layer_wrapped(doc: &Document, l: &mut Layer, dx: i32, dy
         *r = (r.0 + f64::from(dx), r.1 + f64::from(dy));
     }
     let mask_wrap = wrap.filter(|_| crate::layer_multi_cmds::wraps_linked_masks(&l.content));
-    if let Some(m) = &mut l.mask
-        && m.linked
-    {
+    for m in l.pixel_masks_mut().filter(|m| m.linked) {
         m.surface = move_px(&m.surface, mask_wrap);
     }
     match &mut l.content {
@@ -208,6 +206,10 @@ pub(crate) fn translate_layer_wrapped(doc: &Document, l: &mut Layer, dx: i32, dy
             }
         }
         LayerContent::Smart(sm) => crate::smart_cmds::shift_smart(sm, dx, dy),
+        LayerContent::Screentone(s) => {
+            s.surface = move_px(&s.surface, wrap);
+            s.origin = (s.origin.0 + dx as f32, s.origin.1 + dy as f32);
+        }
         _ => {}
     }
 }

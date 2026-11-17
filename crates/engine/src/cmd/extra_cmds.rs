@@ -744,6 +744,7 @@ pub(crate) fn kind_of(s: &Session, id: LayerId) -> Option<&'static str> {
         LayerContent::Shape(_) => "shape",
         LayerContent::Fill(_) => "fill",
         LayerContent::Smart(_) => "smart",
+        LayerContent::Screentone(_) => "screentone",
         _ => return None,
     })
 }
@@ -798,6 +799,25 @@ fn rasterize_content(s: &mut Session, id: LayerId, only: Option<&str>, key: &str
                 let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
                 l.content = LayerContent::Raster(surface);
                 l.psd_blocks.retain(|(k, _)| k != b"SoLd" && k != b"SoLE" && k != b"PlLd");
+                Ok(())
+            });
+            s.coalesce_request = None;
+            r?;
+        }
+        "screentone" => {
+            s.coalesce_request = Some(key.to_string());
+            let r = s.edit("Rasterize Screentone", |doc, _| {
+                if !doc.layer(id).is_some_and(photocraft_doc::Layer::is_screentone) {
+                    return Err(EngineError::Other(format!("layer {} is not a screentone layer", id.0)));
+                }
+                crate::manga_cmds::comic_screentone::ensure_screentone_layer_baked_by_id(doc, id);
+                let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
+                let LayerContent::Screentone(st) = &mut l.content else {
+                    return Err(EngineError::Other(format!("layer {} is not a screentone layer", id.0)));
+                };
+                let format = st.surface.format();
+                let surface = std::mem::replace(&mut st.surface, photocraft_raster::Surface::new(format));
+                l.content = LayerContent::Raster(surface);
                 Ok(())
             });
             s.coalesce_request = None;

@@ -291,9 +291,7 @@ fn warp_layer(
             }
         }
     }
-    if let Some(m) = l.mask.as_mut()
-        && m.linked
-    {
+    for m in l.pixel_masks_mut().filter(|m| m.linked) {
         // The mask follows the pixels, the part on top of a fold included.
         let whole = |m: &Surface| Ok(warp_mesh_gray_with(m, &map, Fold::IN_PLACE, interp));
         m.surface = match mask_sel {

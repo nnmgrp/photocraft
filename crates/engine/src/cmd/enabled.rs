@@ -36,7 +36,7 @@ pub(crate) fn has_paintable(s: &Session) -> std::result::Result<(), String> {
         return Ok(());
     }
     let l = crate::active_layer_of(s)?;
-    if matches!(l.content, LayerContent::Raster(_)) || l.mask.is_some() {
+    if matches!(l.content, LayerContent::Raster(_)) || l.mask.is_some() || l.second_mask.is_some() {
         Ok(())
     } else {
         Err(format!("active layer is {} {} layer without a mask", l.content.article(), l.content.kind_name()))
@@ -56,7 +56,7 @@ pub(crate) fn paint_surface<'a>(doc: &'a mut Document, id: LayerId, p: &Value) -
     }
     let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
     if is_mask_target(p) {
-        l.mask.as_mut().map(|m| &mut m.surface).ok_or_else(|| EngineError::Other("layer has no mask".into()))
+        l.pixel_mask_mut(is_second_mask_target(p)).map(|m| &mut m.surface).ok_or_else(|| EngineError::Other("layer has no mask".into()))
     } else {
         l.surface_mut().ok_or_else(|| EngineError::Other("not a pixel layer".into()))
     }
@@ -81,10 +81,15 @@ pub(crate) fn check_pixels_unlocked(doc: &Document, id: LayerId) -> Result<()> {
     Ok(())
 }
 
-/// The params target a grayscale mask of the layer: its layer mask (`"mask"`) or, on a smart
-/// object, its filter mask (`"filterMask"`).
+/// The params target a grayscale mask of the layer: its layer mask (`"mask"`), its second pixel
+/// mask (`"secondMask"`), or, on a smart object, its filter mask (`"filterMask"`).
 pub(crate) fn is_mask_target(p: &Value) -> bool {
-    matches!(p.get("target").and_then(Value::as_str), Some("mask" | "filterMask"))
+    matches!(p.get("target").and_then(Value::as_str), Some("mask" | "secondMask" | "filterMask"))
+}
+
+/// The params target the layer's second pixel mask (`"target":"secondMask"`).
+pub(crate) fn is_second_mask_target(p: &Value) -> bool {
+    p.get("target").and_then(Value::as_str) == Some("secondMask")
 }
 
 pub(super) fn can_undo(s: &Session) -> std::result::Result<(), String> {

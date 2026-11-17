@@ -137,19 +137,39 @@ pub(crate) fn sample_rgba8(s: &Session, all_layers: bool) -> Result<(Rect, Vec<[
 
 fn magic_wand(s: &mut Session, p: &Value) -> Result<Value> {
     let (x, y) = (f(p, "x", 0.0).floor() as i32, f(p, "y", 0.0).floor() as i32);
-    let (area, img) = match shown_gray(s) {
-        Some(plane) => plane,
-        None => sample_rgba8(s, b(p, "sampleAllLayers", false))?,
-    };
+    let gray = shown_gray(s);
+    // With the Fill tool's options (Close Gap, Area Scaling, Refer, a drag's gesture) the wand
+    // selects what that fill would fill, as Clip Studio's Auto Select does.
+    let fill_like = ["closeGap", "areaScaling", "reference", "gesture"].iter().any(|k| p.get(*k).is_some_and(|v| !v.is_null()));
     let m = mode(p);
-    // Subtract and Intersect grow the region from the seed through the selection only (#11779).
-    // A global match (Contiguous off) ignores the limit, so it skips the full-area mask.
-    let contiguous = b(p, "contiguous", true);
-    let within = (contiguous && matches!(m, SelectionMode::Subtract | SelectionMode::Intersect))
-        .then(|| s.active().and_then(|st| st.doc.selection.as_ref()).map(|sel| sel::mask_from_surface(Some(sel), area)))
-        .flatten();
-    let region = sel::wand_region_within(&img, area, (x, y), f(p, "tolerance", 32.0), contiguous, b(p, "antiAlias", true), within.as_deref());
-    drop(img);
+    let region = if fill_like && gray.is_none() {
+        let mut fp = p.clone();
+        if let Some(o) = fp.as_object_mut() {
+            // The wand's tolerance is in levels (0-255), the fill's in percent.
+            o.insert("tolerance".into(), json!((f(p, "tolerance", 32.0) / 2.55).clamp(0.0, 100.0)));
+            if !o.contains_key("reference") {
+                o.insert("reference".into(), json!(if b(p, "sampleAllLayers", false) { "all" } else { "layer" }));
+            }
+            o.remove("mode");
+        }
+        crate::cmd::manga_cmds::fill_tool::region(s, &fp)?
+    } else {
+        let (area, img) = match gray {
+            Some(plane) => plane,
+            None => sample_rgba8(s, b(p, "sampleAllLayers", false))?,
+        };
+        // Subtract and Intersect grow the region from the seed through the selection only (#11779).
+        // A global match (Contiguous off) ignores the limit, so it skips the full-area mask.
+        let contiguous = b(p, "contiguous", true);
+        let within = (contiguous && matches!(m, SelectionMode::Subtract | SelectionMode::Intersect))
+            .then(|| s.active().and_then(|st| st.doc.selection.as_ref()).map(|sel| sel::mask_from_surface(Some(sel), area)))
+            .flatten();
+        sel::wand_region_within(&img, area, (x, y), f(p, "tolerance", 32.0), contiguous, b(p, "antiAlias", true), within.as_deref())
+    };
+    if region.is_none() && p.get("gesture").is_some_and(|g| !g.is_null()) {
+        // A drag reaching an area it already selected (or one unlike the first): no step.
+        return Ok(json!({ "selected": s.active().is_some_and(|d| d.doc.selection.is_some()), "added": false }));
+    }
     let selected = s.edit("Magic Wand", |doc, _| {
         doc.selection = sel::combine_region(doc.selection.as_ref(), region.as_ref(), m);
         Ok(doc.selection.is_some())

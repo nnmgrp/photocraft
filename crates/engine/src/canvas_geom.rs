@@ -221,6 +221,10 @@ pub(crate) fn transform_layer_geometry(l: &mut Layer, a: &Affine, content: bool,
             retag_text(dpi, t);
         }
         LayerContent::Smart(sm) if content => crate::smart_cmds::transform_placement(sm, a),
+        LayerContent::Screentone(s) if content => {
+            let p = map_pt(a, [f64::from(s.origin.0), f64::from(s.origin.1)]);
+            s.origin = (p[0] as f32, p[1] as f32);
+        }
         LayerContent::Group(g) => {
             if let Some(ab) = &mut g.artboard {
                 ab.rect = map_rect(a, ab.rect);
@@ -424,7 +428,7 @@ fn remap_pixels(doc: &mut Document, map: &dyn Fn(i32, i32) -> (i32, i32)) {
     fn rec(layers: &mut [Layer], map: &dyn Fn(i32, i32) -> (i32, i32)) {
         let re = |s: &mut Surface| *s = remap_surface(s, map);
         for l in layers {
-            if let Some(m) = &mut l.mask {
+            for m in l.pixel_masks_mut() {
                 re(&mut m.surface);
             }
             if let Some(fc) = &mut l.fill_cache {
@@ -444,6 +448,7 @@ fn remap_pixels(doc: &mut Document, map: &dyn Fn(i32, i32) -> (i32, i32)) {
                         re(&mut m.surface);
                     }
                 }
+                LayerContent::Screentone(s) => re(&mut s.surface),
                 LayerContent::Group(g) => rec(&mut g.children, map),
                 _ => {}
             }
@@ -461,6 +466,8 @@ fn remap_pixels(doc: &mut Document, map: &dyn Fn(i32, i32) -> (i32, i32)) {
 /// Turns or flips the whole canvas. Pixels (and rendered caches) are remapped exactly, so nothing
 /// is re-rendered; vector geometry follows through the matching affine map.
 pub(crate) fn turn_canvas(doc: &mut Document, turn: Turn) {
+    crate::manga_cmds::comic_screentone::ensure_doc_screentones_baked(doc);
+    crate::image_cmds::bake_procedural_layers(&mut doc.layers);
     let (w, h) = (doc.size.width as i32, doc.size.height as i32);
     let map = turn.pixel_map(w, h);
     remap_pixels(doc, &map);

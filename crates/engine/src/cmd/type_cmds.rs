@@ -11,7 +11,7 @@ use std::sync::Arc;
 use photocraft_color::{Color, ColorMode, PixelFormat};
 use photocraft_doc::text::{
     AntiAlias, Caps, CharStyle, FontBaseline, FontFeature, FontVariation, Kerning, Orientation, ParagraphRun, ParagraphStyle, TextAlign, TextDirection,
-    TextRun, TextShape,
+    TextRun, TextShape, VerticalAlign,
 };
 use photocraft_doc::{Affine, Document, Layer, LayerContent, LayerId, TextLayer};
 use serde_json::{Value, json};
@@ -140,6 +140,11 @@ pub fn check_size_tracking(p: &Value) -> std::result::Result<(), String> {
         && !matches!(v.as_str(), Some("normal" | "superscript" | "subscript"))
     {
         return Err("baseline must be \"normal\", \"superscript\" or \"subscript\"".into());
+    }
+    if let Some(v) = p.get("verticalAlign")
+        && v.as_str().and_then(VerticalAlign::from_id).is_none()
+    {
+        return Err("verticalAlign must be \"top\", \"center\", \"bottom\" or \"justify\"".into());
     }
     for key in ["horizontalScale", "verticalScale"] {
         if let Some(v) = p.get(key) {
@@ -474,6 +479,14 @@ pub fn apply_para_props(s: &mut ParagraphStyle, p: &Value) -> bool {
     }
     if let Some(v) = p.get("hyphenate").and_then(Value::as_bool) {
         s.hyphenate = v;
+        any = true;
+    }
+    if let Some(v) = p.get("hangingRoman").and_then(Value::as_bool) {
+        s.hanging_roman = v;
+        any = true;
+    }
+    if let Some(v) = p.get("verticalAlign").and_then(Value::as_str).and_then(VerticalAlign::from_id) {
+        s.vertical_align = v;
         any = true;
     }
     any
@@ -893,6 +906,7 @@ fn info(s: &Session, p: &Value) -> Result<Value> {
         "transform": t.transform.m,
         "antialias": t.antialias,
         "orientation": t.orientation,
+        "verticalAlign": t.vertical_align(),
         "warp": t.warp,
         "runs": runs,
         "paragraphs": paragraphs,
@@ -1174,7 +1188,7 @@ pub fn specs() -> Vec<CommandSpec> {
             menu: &[],
             shortcut: None,
             params: Box::leak(
-                format!(r##"{{"layer":id? or "layers":[id,…]? (default selected Type layers),"range":[startChar,endChar]? (single layer; default all),"metricsAsShown":bool=false (size/leading/leadingBy include each layer's transform scale), {CHAR_PARAMS}, relative steps from each character's own value: "leadingBy":pt (auto leading starts from its laid-out value; result 0.01..=5000),"baselineShiftBy":pt (result -5000..=5000),"trackingBy":1/1000 em (result -1000..=10000), paragraph keys: "align":"left|center|right|justify|justifyCenter|justifyRight|justifyAll","firstLineIndent":pt,"startIndent":pt,"endIndent":pt,"spaceBefore":pt,"spaceAfter":pt,"autoLeading":%,"direction":"auto|ltr|rtl","hyphenate":bool}}"##)
+                format!(r##"{{"layer":id? or "layers":[id,…]? (default selected Type layers),"range":[startChar,endChar]? (single layer; default all),"metricsAsShown":bool=false (size/leading/leadingBy include each layer's transform scale), {CHAR_PARAMS}, relative steps from each character's own value: "leadingBy":pt (auto leading starts from its laid-out value; result 0.01..=5000),"baselineShiftBy":pt (result -5000..=5000),"trackingBy":1/1000 em (result -1000..=10000), paragraph keys: "align":"left|center|right|justify|justifyCenter|justifyRight|justifyAll","verticalAlign":"top|center|bottom|justify","firstLineIndent":pt,"startIndent":pt,"endIndent":pt,"spaceBefore":pt,"spaceAfter":pt,"autoLeading":%,"direction":"auto|ltr|rtl","hyphenate":bool,"hangingRoman":bool}}"##)
                     .into_boxed_str(),
             ),
             enabled: has_doc,
@@ -1197,6 +1211,11 @@ pub fn specs() -> Vec<CommandSpec> {
                         style_paragraphs(t, a, b, &|st| {
                             apply_para_props(st, p);
                         });
+                        if let Some(va) = p.get("verticalAlign").and_then(Value::as_str).and_then(VerticalAlign::from_id) {
+                            for pr in &mut t.paragraphs {
+                                pr.style.vertical_align = va;
+                            }
+                        }
                     }
                     Ok(())
                 })?;

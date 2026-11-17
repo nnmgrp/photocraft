@@ -64,9 +64,9 @@ macro_rules! spec {
     };
 }
 
-mod params;
+pub(crate) mod params;
 mod paths;
-mod shape;
+pub(crate) mod shape;
 mod vector_mask;
 
 pub(crate) use params::{layer_id, nums, op_from, pt};

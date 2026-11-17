@@ -6,7 +6,7 @@ use super::{Adjustment, ColorMode, EngineError, Layer, LayerContent, Result, Ses
 
 /// Add an adjustment layer above the active one; it takes the mask `mask_new_layer` builds from `p` (a path, the selection, or the default white mask).
 /// Optional opacity is a 0..1 fraction, validated before the creation edit.
-pub(super) fn new_adjustment(s: &mut Session, adj: Adjustment, p: &Value, cmd: &str) -> Result<Value> {
+pub(crate) fn new_adjustment(s: &mut Session, adj: Adjustment, p: &Value, cmd: &str) -> Result<Value> {
     let opacity = match p.get("opacity") {
         None => 1.0,
         Some(value) => value
@@ -142,6 +142,7 @@ pub fn adjustment_kind(a: &Adjustment) -> &'static str {
         Adjustment::GradientMap { .. } => "gradientMap",
         Adjustment::SelectiveColor { .. } => "selectiveColor",
         Adjustment::ColorLookup { .. } => "colorLookup",
+        Adjustment::Grain { .. } => "grain",
         Adjustment::Unsupported { .. } => "unsupported",
         _ => "invert",
     }

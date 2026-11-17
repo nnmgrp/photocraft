@@ -126,7 +126,7 @@ pub(crate) fn rotate_arbitrary_with(s: &mut Session, p: &Value, keep_counts: boo
                 crate::transform_cmds::composite_over(&mut base, &rotated);
                 base.prune();
                 *surf = base;
-                if let Some(m) = l.mask.as_mut() {
+                for m in l.pixel_masks_mut() {
                     m.surface = crate::transform_cmds::warp_gray(&m.surface, &h, interp)?;
                 }
             } else {
@@ -163,9 +163,7 @@ pub(crate) fn rotate_arbitrary_with(s: &mut Session, p: &Value, keep_counts: boo
 ///
 /// [`transform_layer`]: crate::transform_cmds::transform_layer
 fn warp_unlinked_masks(l: &mut Layer, h: &Homography, interp: Interp) -> Result<()> {
-    if let Some(m) = l.mask.as_mut()
-        && !m.linked
-    {
+    for m in l.pixel_masks_mut().filter(|m| !m.linked) {
         m.surface = crate::transform_cmds::warp_gray(&m.surface, h, interp)?;
     }
     if let LayerContent::Group(g) = &mut l.content {

@@ -93,6 +93,10 @@ pub struct PresetState {
     pub swatches: Vec<Group<swatches::Swatch>>,
     /// The user contour library of the Layer Style dialog (`layer.layerStyle.contours.*`).
     pub contours: Vec<photocraft_doc::Contour>,
+    /// File › Automate › Topaz Gigapixel AI: saved CLI upscaler settings.
+    pub gigapixel_presets: Vec<crate::cmd::manga_cmds::gigapixel::presets::GigapixelPreset>,
+    /// Last Topaz Gigapixel CLI run settings (`Save Preset from Last Upscale`).
+    pub gigapixel_last: Option<Value>,
     /// Bumped on every preset change (UIs key thumbnail caches on it).
     pub rev: u64,
 }
@@ -114,6 +118,8 @@ impl Default for PresetState {
             layer_defaults: BTreeMap::new(),
             swatches: swatches::builtin(),
             contours: Vec::new(),
+            gigapixel_presets: Vec::new(),
+            gigapixel_last: None,
             rev: 0,
         }
     }
@@ -150,6 +156,8 @@ struct Persisted {
     // Read entry by entry: a bad contour must not discard the other presets.
     #[serde(default)]
     contours: Option<Value>,
+    #[serde(default)]
+    gigapixel_presets: Option<Value>,
 }
 
 impl PresetState {
@@ -169,6 +177,7 @@ impl PresetState {
             layer_defaults: Some(self.layer_defaults.clone()),
             swatches: Some(self.swatches.clone()),
             contours: Some(crate::contour_lib_cmds::to_json(&self.contours)),
+            gigapixel_presets: Some(json!(self.gigapixel_presets)),
         };
         serde_json::to_value(p).unwrap_or(Value::Null)
     }
@@ -198,6 +207,7 @@ impl Session {
             layer_defaults: take(&mut m, "layer_defaults"),
             swatches: take(&mut m, "swatches"),
             contours: take(&mut m, "contours"),
+            gigapixel_presets: take(&mut m, "gigapixel_presets"),
         };
         let st = &mut self.presets;
         if let Some(g) = p.gradient {
@@ -253,6 +263,9 @@ impl Session {
         }
         if let Some(e) = p.export_presets {
             st.export_presets = crate::export_preset_cmds::load(e);
+        }
+        if let Some(g) = p.gigapixel_presets {
+            st.gigapixel_presets = crate::cmd::manga_cmds::gigapixel::presets::load(g);
         }
         if let Some(c) = p.custom_shapes {
             self.edit_state.custom_shapes = c;

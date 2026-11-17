@@ -158,7 +158,7 @@ const MAX_GRADIENT_STOPS: usize = 1024;
 /// `"#rrggbb"` / `[r,g,b,a]` / `{"gradient":{"stops":[[t,"#hex"|[r,g,b,a]],…],"angle","scale","style","reverse",
 /// "opacityStops":[[t,0..1],…],"midpoints":[0..1,…],"offset":[x,y],"dither","align"}}` / `{"pattern":name,"scale"}`.
 /// `null` → `Ok(None)` (no fill).
-pub(super) fn parse_fill(v: &Value) -> std::result::Result<Option<Fill>, String> {
+pub(crate) fn parse_fill(v: &Value) -> std::result::Result<Option<Fill>, String> {
     if v.is_null() {
         return Ok(None);
     }

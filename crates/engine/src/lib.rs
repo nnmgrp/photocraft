@@ -120,6 +120,7 @@ pub use cmd::layer_nav_cmds;
 pub use cmd::layer_xmp_cmds;
 pub use cmd::lens_cmds;
 pub use cmd::magnetic_cmds;
+pub use cmd::manga_cmds;
 pub use cmd::mask_view_cmds;
 use cmd::migrate_cmds;
 pub use cmd::mode_cmds;
@@ -347,6 +348,8 @@ pub struct Session {
     /// Commands that left the whole document to redraw (`last_damage` None) while changing under
     /// 25 % of it ([`Session::dispatch`]). Counted in debug and test builds only; tests read it.
     pub whole_redraws: usize,
+    /// Manga-specific session state (typesetter, screentone/fill/timelapse helpers).
+    pub manga: cmd::manga_cmds::MangaSessionState,
 }
 
 #[cfg(test)]

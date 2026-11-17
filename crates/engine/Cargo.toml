@@ -21,6 +21,7 @@ photocraft-ops = { workspace = true }
 photocraft-compose = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+log = { workspace = true }
 thiserror = { workspace = true }
 rayon = { workspace = true }
 chrono = { workspace = true }
@@ -30,6 +31,7 @@ photocraft-algo = { workspace = true }
 photocraft-text = { workspace = true }
 photocraft-vector = { workspace = true }
 photocraft-io = { workspace = true }
+photocraft-manga-core = { workspace = true }
 craft-xml = { workspace = true }
 craft-psd = { workspace = true }
 photocraft-format = { workspace = true }

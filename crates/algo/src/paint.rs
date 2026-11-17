@@ -5,12 +5,14 @@ use photocraft_geom::Rect;
 use photocraft_raster::{Surface, from_rgba_into};
 use serde::{Deserialize, Serialize};
 
-/// How a fill lays down its colour: blended with a mode, or Clear, which erases what it covers
-/// (the Paint Bucket's Mode › Clear).
+/// How a fill lays down its colour: blended with a mode, Clear (erases what it covers, the Paint
+/// Bucket's Mode › Clear), or Behind (lays colour under the pixels already there, leaving their
+/// opaque core untouched and filling their soft edges).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FillMode {
     Blend(BlendMode),
     Clear,
+    Behind,
 }
 
 /// Gradient tool shape.
@@ -63,10 +65,22 @@ pub fn sample_stops(stops: &[(f32, [f32; 4])], t: f32) -> [f32; 4] {
     }
 }
 
+/// `c` with coverage `k` composited behind `d` (straight RGBA).
+fn behind(d: [f32; 4], c: [f32; 4], k: f32) -> [f32; 4] {
+    let a = (c[3] * k).clamp(0.0, 1.0);
+    let da = d[3].clamp(0.0, 1.0);
+    let out = da + a * (1.0 - da);
+    if out <= 0.0 {
+        return [0.0; 4];
+    }
+    let ch = |i: usize| (d[i] * da + c[i] * a * (1.0 - da)) / out;
+    [ch(0), ch(1), ch(2), out]
+}
+
 /// Composites `color(i)` over `area` of the surface with per-pixel coverage. Where the coverage is
 /// zero, `rim(x, y)` (when given) is the strength of a bucket's transparent-seed fringe there: the
 /// pixel takes the fill at coverage `rim × (1 − α)`, its own transparency (#11354 review; see
-/// [`bucket_fill_inks`]). Lock Transparent Pixels and Clear ignore it.
+/// [`bucket_fill_inks`]). Lock Transparent Pixels and Clear/Behind ignore it.
 #[allow(clippy::too_many_arguments)]
 fn composite_area(
     s: &mut Surface,
@@ -116,9 +130,11 @@ fn composite_area(
                 let o = match mode {
                     FillMode::Blend(m) if lock_transparency => blend::composite_atop(m, d, color(x, y), k),
                     FillMode::Blend(m) => blend::composite(m, d, color(x, y), k),
-                    // Locked transparency keeps the alpha, so Clear leaves the pixel as it is.
+                    // Locked transparency keeps the alpha, so Clear and Behind leave the pixel as it is.
                     FillMode::Clear if lock_transparency => d,
                     FillMode::Clear => [d[0], d[1], d[2], d[3] * (1.0 - k.min(1.0))],
+                    FillMode::Behind if lock_transparency => d,
+                    FillMode::Behind => behind(d, color(x, y), k),
                 };
                 from_rgba_into(&fmt, o, &mut enc);
                 // A colour picked as CMYK inks replaces fully covered pixels of a CMYK target as it is.
@@ -610,5 +626,14 @@ mod tests {
             assert!(bucket_fill_inks(&mut s, a, (0, 0), 0.0, true, false, 1.0, None, true, red, None, FillMode::Clear));
             assert!((s.rgba(1, 0)[3] - 0.5).abs() < 0.01, "{fmt:?} locked");
         }
+    }
+
+    #[test]
+    fn behind_fills_under_the_pixels_already_there() {
+        assert_eq!(behind([1.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0], 1.0), [1.0, 0.0, 0.0, 1.0]);
+        let edge = behind([1.0, 0.0, 0.0, 0.25], [0.0, 0.0, 1.0, 1.0], 1.0);
+        assert!((edge[3] - 1.0).abs() < 1e-6 && (edge[0] - 0.25).abs() < 1e-6 && (edge[2] - 0.75).abs() < 1e-6, "{edge:?}");
+        assert_eq!(behind([0.0; 4], [0.0, 1.0, 0.0, 1.0], 0.5), [0.0, 1.0, 0.0, 0.5]);
+        assert_eq!(behind([0.0; 4], [0.0, 1.0, 0.0, 1.0], 0.0), [0.0; 4]);
     }
 }

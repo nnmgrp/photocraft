@@ -396,7 +396,7 @@ pub(crate) fn map_shape(sh: &mut ShapeLayer, h: Option<&photocraft_algo::transfo
     Ok(())
 }
 
-pub(super) fn shape_info(s: &Session, id: LayerId) -> Result<Value> {
+pub(crate) fn shape_info(s: &Session, id: LayerId) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let l = d.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
     let LayerContent::Shape(sh) = &l.content else {
@@ -410,6 +410,8 @@ pub(super) fn shape_info(s: &Session, id: LayerId) -> Result<Value> {
         "fill": sh.fill.as_ref().map(fill_json),
         "stroke": sh.stroke.as_ref().map(stroke_json),
         "live": sh.live.as_ref().map(live_json),
+        "liveVectorStroke": crate::cmd::manga_cmds::vector_curve::get_live_vector_stroke(l)
+            .map(|live| crate::cmd::manga_cmds::vector_curve::live_stroke_to_json(id.0, &l.name, &live)),
         "kind": sh.live.as_ref().map_or("path", live_kind),
         "bounds": bounds,
     }))

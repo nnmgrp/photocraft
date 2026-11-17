@@ -101,7 +101,7 @@ pub fn move_auto_select_target(doc: &Document, x: i32, y: i32, group: bool) -> O
 fn pick_target(doc: &Document, x: i32, y: i32, group: bool, move_auto_select: bool) -> Option<LayerId> {
     let hit = layers_hit(doc, x, y, true).into_iter().find(|id| {
         let locks = doc.effective_locks(*id);
-        !locks.all && (!move_auto_select || !locks.position)
+        !locks.unpickable() && (!move_auto_select || !locks.position)
     })?;
     Some(if group { top_group(doc, hit) } else { hit })
 }
@@ -153,7 +153,7 @@ fn layers_in_rect_with_locks(doc: &Document, r: Rect, group: bool, skip_position
             || doc.is_background(l.id)
             || {
                 let locks = doc.effective_locks(l.id);
-                locks.all || (skip_position_locked && locks.position)
+                locks.unpickable() || (skip_position_locked && locks.position)
             }
             || !(1..=path.len()).all(|n| doc.layer_at(&path[..n]).is_some_and(|a| a.visible))
         {

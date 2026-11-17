@@ -46,8 +46,11 @@ fn has_raster(s: &Session) -> Enabled {
 }
 
 fn has_raster_with_mask(s: &Session) -> Enabled {
-    has_raster(s)?;
-    if active_layer(s)?.mask.is_some() { Ok(()) } else { Err("the layer has no layer mask".into()) }
+    let l = active_layer(s)?;
+    if !matches!(l.content, LayerContent::Raster(_) | LayerContent::Screentone(_)) {
+        return Err(format!("active layer is {} {} layer, not a pixel layer", l.content.article(), l.content.kind_name()));
+    }
+    if l.mask.is_some() { Ok(()) } else { Err("the layer has no layer mask".into()) }
 }
 
 fn has_selection_layer(s: &Session) -> Enabled {
@@ -127,6 +130,7 @@ fn edit_rgba(s: &mut Session, label: &str, grow: i32, f: impl FnOnce(&mut Vec<[f
 fn apply_mask(s: &mut Session, p: &Value) -> Result<Value> {
     let id = layer_param(s, p)?;
     s.edit("Apply Layer Mask", |doc, _| {
+        crate::manga_cmds::comic_screentone::ensure_screentone_layer_baked_by_id(doc, id);
         // Applying a feathered mask must bake the same softened coverage the compositor
         // displays. LayerMask::values_into accounts for density but not feather (#3044).
         let feathered = {
@@ -154,7 +158,13 @@ fn apply_mask(s: &mut Session, p: &Value) -> Result<Value> {
                 None
             }
         };
-        let mask = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.mask.take().ok_or_else(|| other("the layer has no layer mask"))?;
+        let l_mut = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
+        let mask = l_mut.mask.take().ok_or_else(|| other("the layer has no layer mask"))?;
+        if let LayerContent::Screentone(st) = &mut l_mut.content {
+            let fmt = st.surface.format();
+            let surface = std::mem::replace(&mut st.surface, Surface::new(fmt));
+            l_mut.content = LayerContent::Raster(surface);
+        }
         let surf = crate::commands::paint_surface(doc, id, &Value::Null)?;
         let r = surf.content_bounds();
         if !r.is_empty() {

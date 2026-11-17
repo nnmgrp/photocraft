@@ -16,6 +16,8 @@ pub enum ChanRef {
     Selection,
     Transparency,
     LayerMask,
+    /// The layer's second pixel mask (`Layer::second_mask`).
+    SecondMask,
     /// The layer's vector mask, rasterized (⌘-click its thumbnail, #196).
     VectorMask,
 }
@@ -49,6 +51,7 @@ pub fn parse_ref(v: &Value, doc: &Document) -> Option<ChanRef> {
                 "selection" => return Some(ChanRef::Selection),
                 "transparency" => return Some(ChanRef::Transparency),
                 "mask" | "layermask" => return Some(ChanRef::LayerMask),
+                "secondmask" | "second mask" => return Some(ChanRef::SecondMask),
                 "vectormask" | "vector mask" => return Some(ChanRef::VectorMask),
                 _ => {}
             }
@@ -212,6 +215,12 @@ fn ref_planes(doc: &Document, layer: Option<LayerId>, active: Option<LayerId>, r
             let id = layer.or(active).ok_or_else(|| EngineError::Other("layer mask needs a layer".into()))?;
             let l = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
             let m = l.mask.as_ref().ok_or_else(|| EngineError::Other(format!("layer \"{}\" has no mask", l.name)))?;
+            vec![read_plane(&m.surface, area)]
+        }
+        ChanRef::SecondMask => {
+            let id = layer.or(active).ok_or_else(|| EngineError::Other("second mask needs a layer".into()))?;
+            let l = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+            let m = l.second_mask.as_ref().ok_or_else(|| EngineError::Other(format!("layer \"{}\" has no second mask", l.name)))?;
             vec![read_plane(&m.surface, area)]
         }
         ChanRef::VectorMask => {

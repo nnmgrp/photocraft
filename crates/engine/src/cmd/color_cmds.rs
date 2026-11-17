@@ -842,6 +842,8 @@ fn paint_colors(p: &mut FxPaint, cc: &mut dyn FnMut(&mut Color)) {
 /// ([`ink_duotone`]). The document is tagged with `dst`.
 pub fn convert_document(doc: &mut Document, dst: &Profile, intent: Intent, bpc: bool) -> Result<()> {
     let to_mode = space_mode(dst.color_space).ok_or_else(|| EngineError::Other(format!("cannot convert to a {:?} profile", dst.color_space)))?;
+    crate::manga_cmds::comic_screentone::ensure_doc_screentones_baked(doc);
+    crate::image_cmds::bake_procedural_layers(&mut doc.layers);
     if to_mode != ColorMode::Grayscale {
         ink_duotone(doc);
     }

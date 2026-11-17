@@ -6,6 +6,8 @@ pub enum Kernel {
     /// Transparent fill (no draw).
     Clear,
     Content,
+    /// Procedural comic screentone sheet generator (`fs_screentone`).
+    Screentone,
     Mask,
     Blend,
     /// `Content` then `Blend` in one pass: a plain layer's pixels blended straight onto A.
@@ -53,6 +55,7 @@ impl Kernel {
         Some(match self {
             Kernel::Clear | Kernel::CopyRect | Kernel::CopyFull => return None,
             Kernel::Content => "fs_content",
+            Kernel::Screentone => "fs_screentone",
             Kernel::Mask => "fs_mask",
             Kernel::Blend => "fs_blend",
             Kernel::LayerBlend => "fs_layerblend",
@@ -96,8 +99,9 @@ impl Kernel {
     }
 
     /// Every kernel with a pipeline.
-    pub const DRAWN: [Kernel; 24] = [
+    pub const DRAWN: [Kernel; 25] = [
         Kernel::Content,
+        Kernel::Screentone,
         Kernel::Mask,
         Kernel::Blend,
         Kernel::LayerBlend,

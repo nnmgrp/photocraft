@@ -29,7 +29,10 @@ mod types;
 
 #[cfg(test)]
 use lower::check_gradient_stops;
-pub use lower::{adjustment_on_gpu, adjustment_program, mode_index, stroke_widths};
+pub use lower::{
+    adjustment_on_gpu, adjustment_program, mode_index, pack_screentone_pass, screentone_grad_index, screentone_pattern_index, screentone_shape_index,
+    stroke_widths,
+};
 use planner::Planner;
 #[cfg(test)]
 use planner::blend_if_params;

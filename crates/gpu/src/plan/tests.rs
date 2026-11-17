@@ -547,3 +547,72 @@ fn planning_reads_cached_rows_instead_of_rebuilding_them() {
         assert!(rows.as_ref() == Some(&planted), "{}: the plan rebuilt rows the cache held", a.label());
     }
 }
+
+#[test]
+fn grain_plans_on_gpu() {
+    let grain = Adjustment::Grain { amount: 60.0, size: 34.0, roughness: 50.0 };
+    assert!(adjustment_on_gpu(&grain, ColorMode::Rgb));
+    assert!(adjustment_on_gpu(&grain, ColorMode::Grayscale));
+    let (kind, params, lut) = adjustment_program(&grain, Transfer::Srgb, SampleType::U8, ColorMode::Rgb);
+    assert_eq!(kind, 18);
+    assert!(params[0][0] > 0.0);
+    assert!(lut.is_none());
+
+    let mut d = Document::with_background("t", Size::new(8, 8), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+    d.layers.push(Layer::new("gr", LayerContent::Adjustment(grain)));
+    let p = plan(&d).expect("grain plans on GPU");
+    assert!(p.passes.iter().any(|pass| pass.kernel == Kernel::Adjust && pass.adjust_kind == 18));
+}
+
+#[test]
+fn screentone_plans_on_gpu_and_falls_back_by_backend() {
+    use photocraft_doc::{DotShape, PatternType, ScreentoneBackend, ScreentoneLayer, ScreentoneMode, ScreentoneSpec};
+
+    let make_doc = |w: u32, h: u32, mode: ColorMode, backend: ScreentoneBackend, st_mode: ScreentoneMode, use_lum: bool| {
+        let mut d = Document::with_background("t", Size::new(w, h), mode, SampleType::U8, Color::WHITE);
+        let spec = ScreentoneSpec {
+            pattern_type: PatternType::Lines,
+            dot_shape: DotShape::Square,
+            backend,
+            mode: st_mode,
+            use_source_luminance: use_lum,
+            ..Default::default()
+        };
+        let surface = photocraft_raster::Surface::new(d.pixel_format());
+        let layer = Layer::new("tone", LayerContent::Screentone(ScreentoneLayer::new(spec, (0.0, 0.0), surface)));
+        d.layers.push(layer);
+        d
+    };
+
+    // Explicit GPU backend plans Kernel::Screentone with LUT row 0 populated.
+    let gpu_doc = make_doc(64, 64, ColorMode::Rgb, ScreentoneBackend::Gpu, ScreentoneMode::Sheet, false);
+    let p = plan(&gpu_doc).expect("explicit GPU screentone plans");
+    let st_pass = p.passes.iter().find(|pass| pass.kernel == Kernel::Screentone).expect("Kernel::Screentone pass");
+    assert_eq!(st_pass.adjust_kind, screentone_pattern_index(PatternType::Lines));
+    assert!(st_pass.a.is_none(), "sheet mode does not retain backdrop");
+    let lut = st_pass.lut.as_ref().expect("LUT row 0 packed");
+    assert_eq!(lut[0][18], 1.0);
+    assert_eq!(lut[0][19], 0.0);
+
+    // Shading mode with use_source_luminance retains backdrop in pass.a.
+    let shade_doc = make_doc(64, 64, ColorMode::Rgb, ScreentoneBackend::Gpu, ScreentoneMode::Shading, true);
+    let p = plan(&shade_doc).expect("shading screentone plans");
+    let st_pass = p.passes.iter().find(|pass| pass.kernel == Kernel::Screentone).expect("Kernel::Screentone pass");
+    assert!(st_pass.a.is_some(), "shading mode binds backdrop slot to tex_a");
+    assert_eq!(st_pass.lut.as_ref().unwrap()[0][19], 1.0);
+
+    // Explicit Cpu backend and Lab mode fall back to Kernel::Content surface upload.
+    let cpu_doc = make_doc(64, 64, ColorMode::Rgb, ScreentoneBackend::Cpu, ScreentoneMode::Sheet, false);
+    let p = plan(&cpu_doc).expect("CPU screentone plans as Content");
+    assert!(p.passes.iter().all(|pass| pass.kernel != Kernel::Screentone));
+
+    let lab_doc = make_doc(64, 64, ColorMode::Lab, ScreentoneBackend::Gpu, ScreentoneMode::Sheet, false);
+    let p = plan(&lab_doc).expect("Lab screentone falls back to Content");
+    assert!(p.passes.iter().all(|pass| pass.kernel != Kernel::Screentone));
+
+    // Auto backend activates GPU at >= 512x512 and CPU below that threshold.
+    let small_auto = make_doc(128, 128, ColorMode::Rgb, ScreentoneBackend::Auto, ScreentoneMode::Sheet, false);
+    assert!(plan(&small_auto).unwrap().passes.iter().all(|pass| pass.kernel != Kernel::Screentone));
+    let large_auto = make_doc(512, 512, ColorMode::Rgb, ScreentoneBackend::Auto, ScreentoneMode::Sheet, false);
+    assert!(plan(&large_auto).unwrap().passes.iter().any(|pass| pass.kernel == Kernel::Screentone));
+}

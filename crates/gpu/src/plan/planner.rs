@@ -1,8 +1,10 @@
 use super::lower::{
-    Paint, adjustment_on_gpu, adjustment_program, check_gradient_stops, gradient_rows, placement, single_content_pass, stroke_widths, style_index,
+    Paint, adjustment_on_gpu, adjustment_program, check_gradient_stops, gradient_rows, pack_screentone_pass, placement, single_content_pass, stroke_widths,
+    style_index,
 };
 use super::types::{Checkpoint, DocCtx, FxLayer, Kernel, MapRef, MaskUse, Pass, Role, SurfaceRef, TexUse, Unsupported};
 use super::{Adjustment, BlendMode, Effect, Fill, FxPaint, Glow, Layer, LayerContent, LayerId, Plan, Rect, Slot, Surface, bounds, has_effects};
+use photocraft_doc::{ScreentoneBackend, ScreentoneLayer, ScreentoneMode};
 
 pub(super) struct Planner<'a> {
     passes: Vec<Pass<'a>>,
@@ -558,6 +560,19 @@ impl<'a> Planner<'a> {
         } else {
             let start = self.passes.len();
             let mut content = self.content(layer)?;
+            if let LayerContent::Screentone(tone) = &layer.content
+                && tone.spec.mode == ScreentoneMode::Shading
+                && tone.spec.use_source_luminance
+            {
+                let retained = self.retain(backdrop);
+                if let Some(pass) = self.passes.get_mut(start)
+                    && pass.kernel == Kernel::Screentone
+                {
+                    pass.a = Some(retained);
+                } else {
+                    self.release(retained);
+                }
+            }
             for c in visible_clipped {
                 content = self.atop(c, content)?;
             }
@@ -690,7 +705,14 @@ impl<'a> Planner<'a> {
                 _ => self.fill(&mut p, f, photocraft_compose::fill_frame(layer, self.cx.canvas))?,
             },
             // Screentone GPU shader lands in S5; fall back to CPU compositing in S2.
-            LayerContent::Screentone(_) => return Err(Unsupported("screentone layer (composited on the CPU until S5)".into())),
+            LayerContent::Screentone(tone) => {
+                if self.screentone_on_gpu(tone) {
+                    let frame = self.screentone_frame(layer, tone);
+                    pack_screentone_pass(&mut p, &tone.spec, frame, tone.origin);
+                } else {
+                    self.surface_tex(&mut p, layer.id, &tone.surface);
+                }
+            }
             _ => {
                 if let Some(s) = layer.surface() {
                     self.surface_tex(&mut p, layer.id, s);
@@ -706,6 +728,30 @@ impl<'a> Planner<'a> {
         if s.tile_count() > 0 {
             p.tex = Some(TexUse { layer: id, role: Role::Content, surface: SurfaceRef::Doc(s) });
         }
+    }
+
+    /// Whether `tone` should be evaluated procedurally via `Kernel::Screentone` on the GPU.
+    fn screentone_on_gpu(&self, tone: &ScreentoneLayer) -> bool {
+        if self.cx.mode == photocraft_color::ColorMode::Cmyk || self.cx.mode == photocraft_color::ColorMode::Lab {
+            return false;
+        }
+        match tone.spec.backend {
+            ScreentoneBackend::Cpu => false,
+            ScreentoneBackend::Gpu => true,
+            ScreentoneBackend::Auto => {
+                let area = u64::from(self.cx.canvas.width()) * u64::from(self.cx.canvas.height());
+                area >= 512 * 512
+            }
+        }
+    }
+
+    /// Reference bounds over which a live `ScreentoneLayer` anchors its lattice and gradient.
+    fn screentone_frame(&self, layer: &Layer, tone: &ScreentoneLayer) -> Rect {
+        let tb = tone.surface.content_bounds().intersect(&self.cx.canvas);
+        if !tb.is_empty() {
+            return tb;
+        }
+        photocraft_compose::fill_frame(layer, self.cx.canvas)
     }
 
     fn fill(&self, p: &mut Pass<'a>, f: &Fill, frame: photocraft_geom::Rect) -> Result<(), Unsupported> {

@@ -750,6 +750,9 @@ fn adjustments() -> Vec<Adjustment> {
         Adjustment::ColorBalance { shadows: [10.0, 0.0, 0.0], midtones: [0.0, 0.0, 0.0], highlights: [0.0, 0.0, 10.0], preserve_luminosity: false },
         Adjustment::SelectiveColor { relative: true, adjustments: selective() },
         Adjustment::SelectiveColor { relative: false, adjustments: selective() },
+        Adjustment::Grain { amount: 60.0, size: 34.0, roughness: 50.0 },
+        Adjustment::Grain { amount: 100.0, size: 0.0, roughness: 0.0 },
+        Adjustment::Grain { amount: 40.0, size: 100.0, roughness: 100.0 },
         lookup(17, false, false),
         lookup(5, true, false),
         lookup(33, false, true),
@@ -827,6 +830,9 @@ fn adjustment_layers() {
         // Threshold: whole 16-bit samples against the level in 16 bits, or the float luminosity.
         d.layers.push(Layer::new("th", LayerContent::Adjustment(Adjustment::Threshold { level: 0.5 })));
         check(&mut g, &d, &format!("threshold {depth:?}"));
+        // Grain: the same position hash as the CPU's, float values over white kept in 32-bit.
+        d.layers.push(Layer::new("gr", LayerContent::Adjustment(Adjustment::Grain { amount: 70.0, size: 50.0, roughness: 60.0 })));
+        check(&mut g, &d, &format!("grain {depth:?}"));
     }
     for adj in adjustments() {
         for (mode, opacity, masked) in [(BlendMode::Normal, 1.0, false), (BlendMode::Multiply, 0.7, true)] {
@@ -3467,4 +3473,196 @@ fn sibling_compositors_have_independent_residency_and_configuration() {
     assert!(worst_diff(&photocraft_compose::render(&d, d.bounds()).px, &out).0 <= TOL);
     assert!(g.comp.resident_bytes() > 0);
     assert_ne!(g.comp.resident_budget(), sibling.resident_budget());
+}
+
+#[test]
+fn screentone_layers() {
+    use photocraft_doc::{DotShape, PatternType, ScreentoneBackend, ScreentoneGradientType, ScreentoneLayer, ScreentoneMode, ScreentoneSpec};
+
+    let Some(mut g) = gpu() else { return };
+    let bounds = Rect::from_xywh(0, 0, 64, 48);
+
+    // Sheet mode across representative patterns, dot shapes, smoothness modes, gradients and masks.
+    let specs = [
+        (
+            "dots_circle_hard",
+            ScreentoneSpec {
+                pattern_type: PatternType::Dots,
+                dot_shape: DotShape::Circle,
+                spacing_x: 10.0,
+                spacing_y: 10.0,
+                dot_size: 3.2,
+                angle: 45.0,
+                smoothness: 0.0,
+                mode: ScreentoneMode::Sheet,
+                use_source_luminance: false,
+                backend: ScreentoneBackend::Gpu,
+                ..Default::default()
+            },
+        ),
+        (
+            "dots_square_aa",
+            ScreentoneSpec {
+                pattern_type: PatternType::Dots,
+                dot_shape: DotShape::Square,
+                spacing_x: 12.0,
+                spacing_y: 12.0,
+                dot_size: 4.0,
+                roundness: 0.35,
+                smoothness: 0.5,
+                aspect_x: 1.3,
+                aspect_y: 0.8,
+                mode: ScreentoneMode::Sheet,
+                use_source_luminance: false,
+                backend: ScreentoneBackend::Gpu,
+                ..Default::default()
+            },
+        ),
+        (
+            "lines_linear_grad",
+            ScreentoneSpec {
+                pattern_type: PatternType::Lines,
+                spacing_y: 8.0,
+                line_width: 2.0,
+                angle: 30.0,
+                smoothness: 0.5,
+                grad_type: ScreentoneGradientType::Linear,
+                grad_angle: 15.0,
+                grad_size_start: 1.4,
+                grad_size_end: 0.3,
+                mode: ScreentoneMode::Sheet,
+                use_source_luminance: false,
+                backend: ScreentoneBackend::Gpu,
+                ..Default::default()
+            },
+        ),
+        (
+            "crosshatch_radial_grad",
+            ScreentoneSpec {
+                pattern_type: PatternType::Crosshatch,
+                spacing_y: 9.0,
+                line_width: 1.5,
+                angle: 20.0,
+                cross_angle: 75.0,
+                smoothness: 0.4,
+                grad_type: ScreentoneGradientType::Radial,
+                grad_size_start: 1.2,
+                grad_size_end: 0.4,
+                mode: ScreentoneMode::Sheet,
+                use_source_luminance: false,
+                backend: ScreentoneBackend::Gpu,
+                ..Default::default()
+            },
+        ),
+        (
+            "hexgrid",
+            ScreentoneSpec {
+                pattern_type: PatternType::Hexgrid,
+                spacing_x: 10.0,
+                spacing_y: 10.0,
+                dot_size: 3.0,
+                smoothness: 0.5,
+                mode: ScreentoneMode::Sheet,
+                use_source_luminance: false,
+                backend: ScreentoneBackend::Gpu,
+                ..Default::default()
+            },
+        ),
+        (
+            "stars_diamond_satellites",
+            ScreentoneSpec {
+                pattern_type: PatternType::Dots,
+                dot_shape: DotShape::Diamond,
+                spacing_x: 16.0,
+                spacing_y: 16.0,
+                dot_size: 3.5,
+                satellite_enabled: true,
+                satellite_count: 2,
+                satellite_size: 1.5,
+                satellite_distance: 6.0,
+                smoothness: 0.5,
+                mode: ScreentoneMode::Sheet,
+                use_source_luminance: false,
+                backend: ScreentoneBackend::Gpu,
+                ..Default::default()
+            },
+        ),
+        (
+            "checker",
+            ScreentoneSpec {
+                pattern_type: PatternType::Checker,
+                spacing_x: 12.0,
+                spacing_y: 12.0,
+                smoothness: 0.0,
+                mode: ScreentoneMode::Sheet,
+                use_source_luminance: false,
+                backend: ScreentoneBackend::Gpu,
+                ..Default::default()
+            },
+        ),
+        (
+            "stars",
+            ScreentoneSpec {
+                pattern_type: PatternType::Stars,
+                spacing_x: 18.0,
+                spacing_y: 18.0,
+                dot_size: 6.0,
+                smoothness: 0.5,
+                mode: ScreentoneMode::Sheet,
+                use_source_luminance: false,
+                backend: ScreentoneBackend::Gpu,
+                ..Default::default()
+            },
+        ),
+    ];
+
+    for (name, spec) in specs {
+        let mut d = base_doc(64, 48);
+        let origin = (32.0, 24.0);
+        let mut surface = photocraft_raster::Surface::new(d.pixel_format());
+        let _ = photocraft_algo::comic_screentone::render_screentone_to_surface(&mut surface, bounds, &spec, origin);
+        let tone = ScreentoneLayer::new(spec, origin, surface);
+        let mut l = Layer::new(name, LayerContent::Screentone(tone));
+        l.opacity = 0.85;
+        l.mask = Some(mask(Rect::from_xywh(8, 6, 48, 36), 42, 0.2));
+        d.layers.push(l);
+        check(&mut g, &d, &format!("screentone {name}"));
+    }
+
+    // Shading mode (`use_source_luminance = true`) reads backdrop `tex_a` on GPU.
+    let mut d = Document::new("shade", Size::new(64, 48), ColorMode::Rgb, SampleType::U8);
+    let mut bg = Layer::raster("bg", PixelFormat::RGBA8);
+    let mut px = vec![0.0f32; 64 * 48 * 4];
+    for y in 0..48 {
+        for x in 0..64 {
+            let v = (x as f32 / 63.0 * 0.8 + 0.1).clamp(0.0, 1.0);
+            let i = (y * 64 + x) * 4;
+            px[i] = v;
+            px[i + 1] = v;
+            px[i + 2] = v;
+            px[i + 3] = 1.0;
+        }
+    }
+    bg.surface_mut().unwrap().write_region(bounds, &px);
+    d.layers.push(bg.clone());
+
+    let shade_spec = ScreentoneSpec {
+        pattern_type: PatternType::Dots,
+        dot_shape: DotShape::Circle,
+        spacing_x: 10.0,
+        spacing_y: 10.0,
+        dot_size: 4.0,
+        smoothness: 0.5,
+        mode: ScreentoneMode::Shading,
+        use_source_luminance: true,
+        preserve_lines: false,
+        backend: ScreentoneBackend::Gpu,
+        ..Default::default()
+    };
+    let origin = (32.0, 24.0);
+    let mut surface = bg.surface().unwrap().clone();
+    let _ = photocraft_algo::comic_screentone::render_screentone_to_surface(&mut surface, bounds, &shade_spec, origin);
+    let tone = ScreentoneLayer::new(shade_spec, origin, surface);
+    d.layers.push(Layer::new("shade_tone", LayerContent::Screentone(tone)));
+    check(&mut g, &d, "screentone shading mode");
 }

@@ -1,0 +1,14 @@
+[package]
+name = "photocraft-manga-core"
+description = "Wasm-pure manga logic: hyphenation, Knuth-Plass wrapping, balloon fitting, typesetter layout and screentone geometry/presets"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+photocraft-geom = { workspace = true }
+photocraft-tone = { workspace = true }

@@ -54,6 +54,8 @@ pub const TABLE: &[(&str, Class)] = &[
     ("algo", Class::Layer(2)),
     ("text", Class::Layer(2)),
     ("vector", Class::Layer(2)),
+    // Manga fork: wasm-pure typesetter, wrapping, hyphenation and screentone math/presets.
+    ("manga-core", Class::Layer(3)),
     ("compose", Class::Layer(3)),
     ("gpu", Class::Layer(3)),
     ("format", Class::Layer(3)),

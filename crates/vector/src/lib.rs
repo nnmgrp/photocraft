@@ -679,10 +679,12 @@ impl CompiledShape {
             let has_ink = !passes.ink_from_stroke_path.subpaths.is_empty();
             // Legacy stylized Uniflash layers were saved with `fill = black, stroke = null`. Their
             // ink passes were therefore skipped and the closed envelope became one black blob.
-            // Substitute a white interior and black ink for that flagged combination only; new
-            // documents arrive with the correct fill/stroke and are rendered unchanged.
+            // Substitute a white interior and black ink for that flagged combination only. An
+            // intentionally inverted stylized Uniflash (`fill = black, stroke = white`) has a
+            // stroke and keeps its black fill, so the `stroke.is_none()` guard is essential.
             let legacy_black_fill = passes.uniflash_stylized
                 && has_ink
+                && shape.stroke.is_none()
                 && shape
                     .fill
                     .as_ref()

@@ -858,13 +858,20 @@ fn balloon_to_linework(s: &mut Session, p: &Value) -> Result<Value> {
             let fill_layer = if all_uniflash_solid {
                 None
             } else {
-                let render = balloon::rebuild_group_render_paths(group);
-                let body_fill_path = if render.fill_only_path.subpaths.is_empty() { sh.path.clone() } else { render.fill_only_path };
-                sh.fill.as_ref().map(|fill| {
-                    (
-                        format!("{source_name} fill"),
-                        ShapeLayer { path: body_fill_path, fill: Some(fill.clone()), stroke: None, live: None, ..ShapeLayer::default() },
-                    )
+                // The on-screen stipple pass hides the body fill in Gloom mode, so rebuild the
+                // clean interior explicitly instead of reusing the particle-heavy render path.
+                let mut body_fill_path = balloon::rebuild_group_fill_paths(group);
+                if body_fill_path.subpaths.is_empty() {
+                    let render = balloon::rebuild_group_render_paths(group);
+                    body_fill_path = if render.fill_only_path.subpaths.is_empty() { sh.path.clone() } else { render.fill_only_path };
+                }
+                // In Gloom mode the visible body colour is the ink paint (white on a black ink
+                // balloon), not the shape's possibly stale white fill.
+                let gloom = group.items.iter().any(|b| b.stipple_fill_interior);
+                let ink_paint = sh.stroke.as_ref().map(|s| s.paint.clone()).or_else(|| sh.fill.clone());
+                let backing_fill = if gloom { ink_paint } else { sh.fill.clone() };
+                backing_fill.map(|fill| {
+                    (format!("{source_name} fill"), ShapeLayer { path: body_fill_path, fill: Some(fill), stroke: None, live: None, ..ShapeLayer::default() })
                 })
             };
             let lw = LiveLinework::new(strokes);
@@ -874,7 +881,10 @@ fn balloon_to_linework(s: &mut Session, p: &Value) -> Result<Value> {
             }
             vector::flatten::validate_shape(&path, None).map_err(|e| bad(CMD, e))?;
             sh.path = path;
-            sh.fill = Some(Fill::Solid(fgc));
+            // Keep the ink colour: white ink dots on a black balloon must stay white after the
+            // bake instead of being repainted with the foreground colour.
+            let ink_fill = sh.stroke.as_ref().map(|s| s.paint.clone()).or_else(|| sh.fill.clone()).unwrap_or(Fill::Solid(fgc));
+            sh.fill = Some(ink_fill);
             sh.stroke = None;
             // The balloon is now clean linework, so the live balloon no longer describes it.
             sh.live = None;

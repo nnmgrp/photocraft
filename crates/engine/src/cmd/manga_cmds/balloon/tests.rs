@@ -413,3 +413,84 @@ fn dual_balloon_add_merge_split_and_stories_reflow_undo_cleanly() {
     let new_layer = split["newLayer"].as_u64().unwrap();
     assert_eq!(balloon_group(&s, new_layer).items[0].linked_text_layer, Some(LayerId(t2)));
 }
+
+fn fill_rgba(fill: &Fill) -> Option<[f32; 4]> {
+    match fill {
+        Fill::Solid(c) => Some([c.c[0], c.c[1], c.c[2], c.alpha]),
+        _ => None,
+    }
+}
+
+/// A black stylized balloon with white ink, ready to be baked to SAI linework.
+fn inverted_stipple_balloon(gloom: bool) -> serde_json::Value {
+    let mut balloon = live_balloon(json!({"bodyKind": "ellipse", "rect": [40.0, 40.0, 200.0, 140.0], "squircle": 0.2}));
+    balloon["lineStyle"] = json!("stippleDots");
+    balloon["stippleCount"] = json!(120);
+    balloon["stippleDensity"] = json!(100.0);
+    balloon["stippleFillInterior"] = json!(gloom);
+    balloon
+}
+
+fn backing_fill_layer(s: &Session, source_name: &str) -> Option<ShapeLayer> {
+    let name = format!("{source_name} fill");
+    let layer = doc(s).walk().into_iter().find(|(_, _, l)| l.name == name).map(|(_, _, l)| l)?;
+    match &doc(s).layer(layer.id).unwrap().content {
+        LayerContent::Shape(sh) => Some(sh.clone()),
+        _ => None,
+    }
+}
+
+#[test]
+fn convert_to_linework_preserves_white_ink_on_a_black_balloon() {
+    let mut s = session(400, 400);
+    let created = s
+        .execute("shape.balloon.create", json!({"balloon": inverted_stipple_balloon(false), "fill": "#000000", "stroke": {"width": 3.0, "color": "#ffffff"}}))
+        .unwrap();
+    let id = created["layer"].as_u64().unwrap();
+    let baked = s.execute("shape.balloon.convertToLinework", json!({"layer": id})).unwrap();
+    assert!(baked["convertedStrokes"].as_u64().unwrap() >= 120, "every dot is baked");
+
+    let sh = shape(&s, id);
+    assert!(sh.live.is_none(), "the balloon is clean linework now");
+    assert!(sh.stroke.is_none());
+    let ink = fill_rgba(sh.fill.as_ref().unwrap()).unwrap();
+    assert!(ink[0] > 0.98 && ink[1] > 0.98 && ink[2] > 0.98 && ink[3] > 0.98, "white ink stays white: {ink:?}");
+}
+
+#[test]
+fn convert_to_linework_preserves_black_fill_in_gloom_mode() {
+    let mut s = session(400, 400);
+    // In Gloom mode the shape's `fill` stays white (`#ffffff`) while the solid interior is
+    // drawn in the ink pass (`stroke = #000000`). Baking must copy that black ink onto the
+    // backing fill layer instead of keeping the stale white fill.
+    let created = s
+        .execute("shape.balloon.create", json!({"balloon": inverted_stipple_balloon(true), "fill": "#ffffff", "stroke": {"width": 3.0, "color": "#000000"}}))
+        .unwrap();
+    let id = created["layer"].as_u64().unwrap();
+    let name = created["name"].as_str().unwrap();
+    s.execute("shape.balloon.convertToLinework", json!({"layer": id})).unwrap();
+
+    let backing = backing_fill_layer(&s, name).expect("a backing fill layer was created");
+    assert!(!backing.path.subpaths.is_empty(), "the clean body fill survives the bake");
+    let fill = fill_rgba(backing.fill.as_ref().unwrap()).unwrap();
+    assert!(fill[0] < 0.02 && fill[1] < 0.02 && fill[2] < 0.02 && fill[3] > 0.98, "Gloom black fill stays black: {fill:?}");
+
+    let ink = fill_rgba(shape(&s, id).fill.as_ref().unwrap()).unwrap();
+    assert!(ink[0] < 0.02 && ink[1] < 0.02 && ink[2] < 0.02, "the Gloom ink dots stay black: {ink:?}");
+}
+
+#[test]
+fn convert_to_linework_preserves_black_paper_fill() {
+    let mut s = session(400, 400);
+    let created = s
+        .execute("shape.balloon.create", json!({"balloon": inverted_stipple_balloon(false), "fill": "#000000", "stroke": {"width": 3.0, "color": "#ffffff"}}))
+        .unwrap();
+    let id = created["layer"].as_u64().unwrap();
+    let name = created["name"].as_str().unwrap();
+    s.execute("shape.balloon.convertToLinework", json!({"layer": id})).unwrap();
+
+    let backing = backing_fill_layer(&s, name).expect("a backing fill layer was created");
+    assert!(!backing.path.subpaths.is_empty());
+    let fill = fill_rgba(backing.fill.as_ref().unwrap()).unwrap();
+    assert!(fill[0] < 0.02 && fill[1] < 0.02 && fill[2] < 0.02 && fill[3] > 0.98, "black Paper fill stays black: {fill:?}");
+}

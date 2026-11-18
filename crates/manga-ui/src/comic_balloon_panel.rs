@@ -12,7 +12,8 @@
 
 use egui::{Color32, RichText, Ui, vec2};
 use photocraft_doc::vector::{
-    BalloonLineStyle, BalloonTextAlign, BalloonUnderlay, BalloonVoice, LiveBalloon, LiveBalloonBody, LiveBalloonTail, TailPreset, TextDirection, UniflashMode,
+    BalloonLineStyle, BalloonTextAlign, BalloonUnderlay, BalloonVoice, BokehShape, LiveBalloon, LiveBalloonBody, LiveBalloonTail, TailPreset, TextDirection,
+    UniflashMode,
 };
 use photocraft_manga_core::balloon_fit;
 use photocraft_vector::balloon::LiveBalloonGeom;
@@ -49,8 +50,10 @@ pub enum BalloonBodyKindChoice {
 pub enum BalloonFillMode {
     #[default]
     White,
+    Black,
     Transparent,
     Background,
+    Custom,
 }
 
 /// A user-saved favorite balloon preset (`TZ 4.3`).
@@ -129,7 +132,17 @@ pub struct BalloonPanelUi {
     pub stipple_fill_interior: bool,
     pub sparkle_count: u32,
     pub sparkle_size: f64,
+    /// Star size jitter (`0..=100`): `0` = uniform, `100` = tiny glints and rare hero stars.
+    pub sparkle_size_jitter: f64,
     pub sparkle_randomness: f64,
+    /// Symmetric spawn sectors (`1 | 2 | 4`) shared by stipple dots, stars and Bokeh particles.
+    #[serde(default = "default_particle_spawns")]
+    pub particle_spawns: u8,
+    pub bokeh_count: u32,
+    pub bokeh_size: f64,
+    pub bokeh_size_randomness: f64,
+    #[serde(default)]
+    pub bokeh_shape: BokehShape,
     pub brush_preset_id: Option<String>,
     // Tail
     pub tail_preset: TailPreset,
@@ -146,6 +159,7 @@ pub struct BalloonPanelUi {
     pub fit_mode_shrink: bool,
     // Style & Two-Tier Hand-Drawn Noise
     pub stroke_width: f64,
+    #[serde(default)]
     pub fill_mode: BalloonFillMode,
     /// Hand-drawn contour wobble: 0.0 = a clean contour, 1.0 = the roughest.
     pub hand_drawn_noise: f64,
@@ -180,6 +194,10 @@ pub struct BalloonPanelUi {
     /// Automatically keep linked TypeR text layer boxes / Stories synced when the balloon resizes.
     #[serde(default = "default_true")]
     pub auto_follow_text: bool,
+}
+
+fn default_particle_spawns() -> u8 {
+    4
 }
 
 impl Default for BalloonPanelUi {
@@ -233,7 +251,13 @@ impl Default for BalloonPanelUi {
             stipple_fill_interior: false,
             sparkle_count: 28,
             sparkle_size: 1.0,
+            sparkle_size_jitter: 60.0,
             sparkle_randomness: 50.0,
+            particle_spawns: 4,
+            bokeh_count: 45,
+            bokeh_size: 10.0,
+            bokeh_size_randomness: 65.0,
+            bokeh_shape: BokehShape::Circle,
             brush_preset_id: None,
             tail_preset: TailPreset::Arc,
             tail_mouth_width: 28.0,
@@ -454,11 +478,25 @@ fn hex_color(c: [f32; 4]) -> String {
     format!("#{:02x}{:02x}{:02x}", byte(c[0]), byte(c[1]), byte(c[2]))
 }
 
-fn balloon_fill_value(mode: BalloonFillMode, bg_color: [f32; 4]) -> Value {
+/// Classifies an edited `Paper:` colour so later geometry edits never overwrite it with a stale
+/// white/background fill. Near-black is its own mode so inverted balloons keep a black interior.
+fn fill_mode_for_color(c: [f32; 4]) -> BalloonFillMode {
+    if c[0] > 0.98 && c[1] > 0.98 && c[2] > 0.98 {
+        BalloonFillMode::White
+    } else if c[0] <= 0.02 && c[1] <= 0.02 && c[2] <= 0.02 {
+        BalloonFillMode::Black
+    } else {
+        BalloonFillMode::Custom
+    }
+}
+
+fn balloon_fill_value(mode: BalloonFillMode, fill_color: [f32; 4], bg_color: [f32; 4]) -> Value {
     match mode {
         BalloonFillMode::White => json!("#ffffff"),
+        BalloonFillMode::Black => json!("#000000"),
         BalloonFillMode::Transparent => json!(null),
         BalloonFillMode::Background => json!(hex_color(bg_color)),
+        BalloonFillMode::Custom => json!(hex_color(fill_color)),
     }
 }
 
@@ -531,14 +569,24 @@ pub fn hydrate_geometry_from_balloon(state: &mut BalloonPanelUi, balloon: &LiveB
     state.ukiyo_contrast = balloon.ukiyo_contrast.clamp(0.0, 1.0);
     state.haze_spread = balloon.haze_spread.clamp(0.0, 100.0);
     state.stipple_density = balloon.stipple_density.clamp(0.0, 100.0);
-    state.stipple_count = balloon.stipple_count.clamp(24, 600);
+    state.stipple_count = balloon.stipple_count.clamp(24, 2000);
     state.stipple_randomness = balloon.stipple_randomness.clamp(0.0, 100.0);
     state.grain_size = balloon.grain_size.clamp(5.0, 100.0);
     state.edge_roughness = balloon.edge_roughness.clamp(0.0, 100.0);
     state.stipple_fill_interior = balloon.stipple_fill_interior;
-    state.sparkle_count = balloon.sparkle_count.clamp(0, 96);
+    state.sparkle_count = balloon.sparkle_count.clamp(0, 400);
     state.sparkle_size = balloon.sparkle_size.clamp(0.2, 2.5);
+    state.sparkle_size_jitter = balloon.sparkle_size_jitter.clamp(0.0, 100.0);
     state.sparkle_randomness = balloon.sparkle_randomness.clamp(0.0, 100.0);
+    state.particle_spawns = match balloon.particle_spawns {
+        1 => 1,
+        2 => 2,
+        _ => 4,
+    };
+    state.bokeh_count = balloon.bokeh_count.clamp(0, 400);
+    state.bokeh_size = balloon.bokeh_size.clamp(2.0, 36.0);
+    state.bokeh_size_randomness = balloon.bokeh_size_randomness.clamp(0.0, 100.0);
+    state.bokeh_shape = balloon.bokeh_shape;
     state.brush_preset_id = balloon.brush_preset_id.clone();
     if let Some(t) = balloon.tails.first() {
         state.tail_preset = t.preset;
@@ -574,7 +622,8 @@ fn hydrate_state_from_balloon(state: &mut BalloonPanelUi, target: &ActiveBalloon
     state.fill_mode = match &target.fill {
         None => BalloonFillMode::Transparent,
         Some(photocraft_doc::Fill::Solid(c)) if c.c[0] > 0.98 && c.c[1] > 0.98 && c.c[2] > 0.98 => BalloonFillMode::White,
-        Some(_) => BalloonFillMode::Background,
+        Some(photocraft_doc::Fill::Solid(c)) if c.c[0] < 0.02 && c.c[1] < 0.02 && c.c[2] < 0.02 => BalloonFillMode::Black,
+        Some(_) => BalloonFillMode::Custom,
     };
     state.fill_opacity = (f64::from(target.fill_opacity.clamp(0.0, 1.0)) * 100.0).round();
     if let Some(photocraft_doc::Fill::Solid(c)) = &target.fill {
@@ -673,7 +722,7 @@ fn apply_panel_to_active_layer(state: &BalloonPanelUi, prev: &BalloonPanelUi, ho
             edit["stroke"] = json!(null);
         } else {
             if fill_changed || body_became_uniflash || body_left_uniflash || uniflash_paint_changed {
-                edit["fill"] = balloon_fill_value(state.fill_mode, host.bg_color);
+                edit["fill"] = balloon_fill_value(state.fill_mode, state.fill_color, host.bg_color);
             }
             if stroke_changed || body_became_uniflash || body_left_uniflash || uniflash_paint_changed {
                 edit["stroke"] = json!({ "width": state.stroke_width, "color": hex_color(state.stroke_color) });
@@ -696,14 +745,24 @@ fn apply_geometry_to_balloon(state: &BalloonPanelUi, balloon: &mut LiveBalloon) 
     balloon.ukiyo_contrast = state.ukiyo_contrast.clamp(0.0, 1.0);
     balloon.haze_spread = state.haze_spread.clamp(0.0, 100.0);
     balloon.stipple_density = state.stipple_density.clamp(0.0, 100.0);
-    balloon.stipple_count = state.stipple_count.clamp(24, 600);
+    balloon.stipple_count = state.stipple_count.clamp(24, 2000);
     balloon.stipple_randomness = state.stipple_randomness.clamp(0.0, 100.0);
     balloon.grain_size = state.grain_size.clamp(5.0, 100.0);
     balloon.edge_roughness = state.edge_roughness.clamp(0.0, 100.0);
     balloon.stipple_fill_interior = state.stipple_fill_interior;
-    balloon.sparkle_count = state.sparkle_count.clamp(0, 96);
+    balloon.sparkle_count = state.sparkle_count.clamp(0, 400);
     balloon.sparkle_size = state.sparkle_size.clamp(0.2, 2.5);
+    balloon.sparkle_size_jitter = state.sparkle_size_jitter.clamp(0.0, 100.0);
     balloon.sparkle_randomness = state.sparkle_randomness.clamp(0.0, 100.0);
+    balloon.particle_spawns = match state.particle_spawns {
+        1 => 1,
+        2 => 2,
+        _ => 4,
+    };
+    balloon.bokeh_count = state.bokeh_count.clamp(0, 400);
+    balloon.bokeh_size = state.bokeh_size.clamp(2.0, 36.0);
+    balloon.bokeh_size_randomness = state.bokeh_size_randomness.clamp(0.0, 100.0);
+    balloon.bokeh_shape = state.bokeh_shape;
     balloon.brush_preset_id = state.brush_preset_id.clone();
     balloon.stroke_width = state.stroke_width;
     balloon.hand_drawn_noise = state.hand_drawn_noise.clamp(0.0, 1.0);
@@ -890,15 +949,25 @@ pub fn create_live_balloon_in_rect_commands(
         ukiyo_contrast: st.ukiyo_contrast.clamp(0.0, 1.0),
         haze_spread: st.haze_spread.clamp(0.0, 100.0),
         stipple_density: st.stipple_density.clamp(0.0, 100.0),
-        stipple_count: st.stipple_count.clamp(24, 600),
+        stipple_count: st.stipple_count.clamp(24, 2000),
         stipple_randomness: st.stipple_randomness.clamp(0.0, 100.0),
         grain_size: st.grain_size.clamp(5.0, 100.0),
         edge_roughness: st.edge_roughness.clamp(0.0, 100.0),
         stipple_fill_interior: st.stipple_fill_interior,
         stipple_overrides: Vec::new(),
-        sparkle_count: st.sparkle_count.clamp(0, 96),
+        sparkle_count: st.sparkle_count.clamp(0, 400),
         sparkle_size: st.sparkle_size.clamp(0.2, 2.5),
+        sparkle_size_jitter: st.sparkle_size_jitter.clamp(0.0, 100.0),
         sparkle_randomness: st.sparkle_randomness.clamp(0.0, 100.0),
+        particle_spawns: match st.particle_spawns {
+            1 => 1,
+            2 => 2,
+            _ => 4,
+        },
+        bokeh_count: st.bokeh_count.clamp(0, 400),
+        bokeh_size: st.bokeh_size.clamp(2.0, 36.0),
+        bokeh_size_randomness: st.bokeh_size_randomness.clamp(0.0, 100.0),
+        bokeh_shape: st.bokeh_shape,
         tails,
         next_tail_id: 2,
         vertex_overrides: Vec::new(),
@@ -922,13 +991,7 @@ pub fn create_live_balloon_in_rect_commands(
     // Uniflash + Solid draws the needles themselves in the fill colour; stylized line styles
     // need the ordinary white (or chosen) balloon interior and a black stroke for their ink.
     let is_uniflash_solid = is_uniflash && st.line_style == BalloonLineStyle::Solid;
-    let fill_val = if is_uniflash_solid {
-        json!("#000000")
-    } else if st.fill_mode == BalloonFillMode::White {
-        json!(hex_color(st.fill_color))
-    } else {
-        balloon_fill_value(st.fill_mode, bg_color)
-    };
+    let fill_val = if is_uniflash_solid { json!("#000000") } else { balloon_fill_value(st.fill_mode, st.fill_color, bg_color) };
     let ink_color = if st.stroke_color == [0.0, 0.0, 0.0, 1.0] { fg_color } else { st.stroke_color };
     let stroke_val = if is_uniflash_solid { json!(null) } else { json!({ "width": st.stroke_width, "color": hex_color(ink_color) }) };
     vec![OutCommand::new("shape.balloon.create", json!({ "balloon": balloon, "fill": fill_val, "stroke": stroke_val }))]
@@ -1003,15 +1066,25 @@ fn draw_dual_chambers_row(ui: &mut Ui, state: &BalloonPanelUi, host: &BalloonHos
                     ukiyo_contrast: state.ukiyo_contrast.clamp(0.0, 1.0),
                     haze_spread: state.haze_spread.clamp(0.0, 100.0),
                     stipple_density: state.stipple_density.clamp(0.0, 100.0),
-                    stipple_count: state.stipple_count.clamp(24, 600),
+                    stipple_count: state.stipple_count.clamp(24, 2000),
                     stipple_randomness: state.stipple_randomness.clamp(0.0, 100.0),
                     grain_size: state.grain_size.clamp(5.0, 100.0),
                     edge_roughness: state.edge_roughness.clamp(0.0, 100.0),
                     stipple_fill_interior: state.stipple_fill_interior,
                     stipple_overrides: Vec::new(),
-                    sparkle_count: state.sparkle_count.clamp(0, 96),
+                    sparkle_count: state.sparkle_count.clamp(0, 400),
                     sparkle_size: state.sparkle_size.clamp(0.2, 2.5),
+                    sparkle_size_jitter: state.sparkle_size_jitter.clamp(0.0, 100.0),
                     sparkle_randomness: state.sparkle_randomness.clamp(0.0, 100.0),
+                    particle_spawns: match state.particle_spawns {
+                        1 => 1,
+                        2 => 2,
+                        _ => 4,
+                    },
+                    bokeh_count: state.bokeh_count.clamp(0, 400),
+                    bokeh_size: state.bokeh_size.clamp(2.0, 36.0),
+                    bokeh_size_randomness: state.bokeh_size_randomness.clamp(0.0, 100.0),
+                    bokeh_shape: state.bokeh_shape,
                     tails: Vec::new(),
                     next_tail_id: 2,
                     vertex_overrides: Vec::new(),
@@ -1225,6 +1298,18 @@ fn draw_line_style_section(ui: &mut Ui, state: &mut BalloonPanelUi, host: &Ballo
     draw_line_style_params(ui, state);
 }
 
+/// The `1 | 2 | 4` spawn-origin toggle shared by stipple dots, sparkle stars and Bokeh particles.
+fn draw_spawn_origins_row(ui: &mut Ui, state: &mut BalloonPanelUi) {
+    ui.horizontal_wrapped(|ui| {
+        ui.label(tl!("Spawn origins:"));
+        for n in [1u8, 2, 4] {
+            if ui.selectable_label(state.particle_spawns == n, format!("[ {n} ]")).clicked() {
+                state.particle_spawns = n;
+            }
+        }
+    });
+}
+
 fn draw_line_style_params(ui: &mut Ui, state: &mut BalloonPanelUi) {
     match state.line_style {
         BalloonLineStyle::Solid => {}
@@ -1247,7 +1332,8 @@ fn draw_line_style_params(ui: &mut Ui, state: &mut BalloonPanelUi) {
             adaptive_slider(ui, tl!("Brush contrast:"), &mut state.ukiyo_contrast, 0.0..=1.0, "", false);
         }
         BalloonLineStyle::StippleDots => {
-            adaptive_slider(ui, tl!("Dot count:"), &mut state.stipple_count, 24..=600, "", false);
+            draw_spawn_origins_row(ui, state);
+            adaptive_slider(ui, tl!("Dot count:"), &mut state.stipple_count, 24..=2000, "", false);
             adaptive_slider(ui, tl!("Density:"), &mut state.stipple_density, 0.0..=100.0, "", false);
             adaptive_slider(ui, tl!("Dot randomness:"), &mut state.stipple_randomness, 0.0..=100.0, "%", false);
             adaptive_slider(ui, tl!("Haze spread:"), &mut state.haze_spread, 0.0..=100.0, "", false);
@@ -1256,9 +1342,22 @@ fn draw_line_style_params(ui: &mut Ui, state: &mut BalloonPanelUi) {
             ui.checkbox(&mut state.stipple_fill_interior, tl!("Fill interior (Gloom mode)"));
         }
         BalloonLineStyle::SparkleGlitter => {
-            adaptive_slider(ui, tl!("Sparkle count:"), &mut state.sparkle_count, 4..=64, "", false);
-            adaptive_slider(ui, tl!("Sparkle size:"), &mut state.sparkle_size, 0.3..=2.5, "×", false);
+            draw_spawn_origins_row(ui, state);
+            adaptive_slider(ui, tl!("Sparkle count:"), &mut state.sparkle_count, 0..=400, "", false);
+            adaptive_slider(ui, tl!("Sparkle size:"), &mut state.sparkle_size, 0.2..=2.5, "×", false);
+            adaptive_slider(ui, tl!("Size randomness:"), &mut state.sparkle_size_jitter, 0.0..=100.0, "%", false);
             adaptive_slider(ui, tl!("Sparkle randomness:"), &mut state.sparkle_randomness, 0.0..=100.0, "%", false);
+            adaptive_slider(ui, tl!("Bokeh count:"), &mut state.bokeh_count, 0..=400, "", false);
+            adaptive_slider(ui, tl!("Bokeh size:"), &mut state.bokeh_size, 2.0..=36.0, " px", false);
+            adaptive_slider(ui, tl!("Bokeh size rand:"), &mut state.bokeh_size_randomness, 0.0..=100.0, "%", false);
+            ui.horizontal_wrapped(|ui| {
+                ui.label(tl!("Bokeh shape:"));
+                for (shape, label) in [(BokehShape::Circle, tl!("Circle")), (BokehShape::Hexagon, tl!("Hexagon")), (BokehShape::Ring, tl!("Ring"))] {
+                    if ui.selectable_label(state.bokeh_shape == shape, label).clicked() {
+                        state.bokeh_shape = shape;
+                    }
+                }
+            });
         }
     }
 }
@@ -1300,6 +1399,9 @@ fn draw_stroke_fill_section(ui: &mut Ui, state: &mut BalloonPanelUi, host: &Ball
         if ui.radio_value(&mut state.fill_mode, BalloonFillMode::White, tl!("White")).clicked() {
             state.fill_color = [1.0, 1.0, 1.0, 1.0];
         }
+        if ui.radio_value(&mut state.fill_mode, BalloonFillMode::Black, tl!("Black")).clicked() {
+            state.fill_color = [0.0, 0.0, 0.0, 1.0];
+        }
         ui.radio_value(&mut state.fill_mode, BalloonFillMode::Transparent, tl!("Transparent"));
         if ui.radio_value(&mut state.fill_mode, BalloonFillMode::Background, tl!("Background colour")).clicked() {
             state.fill_color = host.bg_color;
@@ -1336,6 +1438,9 @@ fn draw_stroke_fill_section(ui: &mut Ui, state: &mut BalloonPanelUi, host: &Ball
         let mut c = to_c32(state.fill_color);
         if ui.color_edit_button_srgba(&mut c).changed() {
             state.fill_color = from_c32(c);
+            // Keep the mode in sync with the edited colour: a black or coloured paper must not be
+            // silently reset to white/background by a later geometry edit.
+            state.fill_mode = fill_mode_for_color(state.fill_color);
             if let Some(id) = host.active_layer {
                 output.commands.push(OutCommand::new("shape.edit", json!({"layer": id.0, "fill": hex(c), "coalesce": "balloon-color-edit"})));
             }
@@ -1343,6 +1448,7 @@ fn draw_stroke_fill_section(ui: &mut Ui, state: &mut BalloonPanelUi, host: &Ball
     });
     if ui.button(tl!("↔ Invert B/W")).clicked() {
         std::mem::swap(&mut state.stroke_color, &mut state.fill_color);
+        state.fill_mode = fill_mode_for_color(state.fill_color);
         if let Some(id) = host.active_layer {
             output.commands.push(OutCommand::new(
                 "shape.edit",
@@ -1782,5 +1888,79 @@ mod tests {
         assert!(!st.auto_follow_text);
         assert!((st.stroke_color[0] - 0.2).abs() < 1e-6);
         assert!((st.fill_color[1] - 0.8).abs() < 1e-6);
+    }
+
+    #[test]
+    fn black_and_custom_fill_persist_across_edits_and_bokeh_round_trips() {
+        use photocraft_doc::{Color, ColorMode, Document, Fill, Layer, LayerContent, LayerId, LiveShape, SampleType, ShapeLayer, ShapeStroke, Size};
+        use photocraft_vector::balloon::LiveBalloonGroupGeom;
+
+        let mut st = BalloonPanelUi {
+            fill_mode: BalloonFillMode::Black,
+            fill_color: [0.0, 0.0, 0.0, 1.0],
+            stroke_color: [1.0, 1.0, 1.0, 1.0],
+            line_style: BalloonLineStyle::SparkleGlitter,
+            particle_spawns: 2,
+            sparkle_count: 180,
+            sparkle_size_jitter: 85.0,
+            bokeh_count: 90,
+            bokeh_size: 14.0,
+            bokeh_size_randomness: 75.0,
+            bokeh_shape: photocraft_doc::vector::BokehShape::Ring,
+            ..BalloonPanelUi::default()
+        };
+        let cmds = create_live_balloon_in_rect_commands(&st, None, [20.0, 20.0, 220.0, 140.0], [0.0, 0.0, 0.0, 1.0], [1.0, 1.0, 1.0, 1.0]);
+        assert_eq!(cmds[0].params["fill"].as_str(), Some("#000000"));
+        assert_eq!(cmds[0].params["stroke"]["color"].as_str(), Some("#ffffff"));
+
+        let b: LiveBalloon = serde_json::from_value(cmds[0].params["balloon"].clone()).unwrap();
+        assert_eq!(b.particle_spawns, 2);
+        assert_eq!(b.sparkle_count, 180);
+        assert_eq!(b.bokeh_count, 90);
+        assert_eq!(b.bokeh_shape, photocraft_doc::vector::BokehShape::Ring);
+
+        let mut hydrated = BalloonPanelUi::default();
+        hydrate_geometry_from_balloon(&mut hydrated, &b);
+        assert_eq!(hydrated.particle_spawns, 2);
+        assert_eq!(hydrated.sparkle_count, 180);
+        assert_eq!(hydrated.bokeh_count, 90);
+        assert_eq!(hydrated.bokeh_shape, photocraft_doc::vector::BokehShape::Ring);
+
+        // Switching from Uniflash back to Ellipse keeps Black fill instead of overwriting with bg_color.
+        let mut doc = Document::new("BlackPersist", Size { width: 400, height: 300 }, ColorMode::Rgb, SampleType::U8);
+        let group = photocraft_doc::vector::LiveBalloonGroup::new(vec![b]);
+        let path = group.rebuild_group_path();
+        let sh = ShapeLayer {
+            path,
+            fill: Some(Fill::Solid(Color::rgba(0.0, 0.0, 0.0, 1.0))),
+            stroke: Some(ShapeStroke { width: 2.5, paint: Fill::Solid(Color::rgba(1.0, 1.0, 1.0, 1.0)), ..Default::default() }),
+            live: Some(LiveShape::BalloonGroup { group }),
+            ..Default::default()
+        };
+        let mut layer = Layer::new("BlackBalloon", LayerContent::Shape(sh));
+        layer.id = LayerId(12);
+        doc.layers.push(layer);
+        let host = super::BalloonHostContext {
+            doc: Some(&doc),
+            doc_id: None,
+            active_layer: Some(LayerId(12)),
+            selected_layers: &[LayerId(12)],
+            active_balloon_id: Some(1),
+            doc_dpi: 72.0,
+            fg_color: [0.0, 0.0, 0.0, 1.0],
+            bg_color: [1.0, 1.0, 1.0, 1.0],
+            vector_brush_presets: &[],
+            tool_is_balloon: true,
+        };
+        let target = super::active_balloon_target(&host).expect("target");
+        super::hydrate_state_from_balloon(&mut st, &target);
+        assert_eq!(st.fill_mode, BalloonFillMode::Black);
+
+        let prev = BalloonPanelUi { body_choice: BalloonBodyKindChoice::Uniflash, ..st.clone() };
+        st.body_choice = BalloonBodyKindChoice::Ellipse;
+        let mut out_cmds = Vec::new();
+        assert!(super::apply_panel_to_active_layer(&st, &prev, &host, &mut out_cmds));
+        let edit_cmd = out_cmds.iter().find(|c| c.id == "shape.edit").expect("shape.edit");
+        assert_eq!(edit_cmd.params["fill"].as_str(), Some("#000000"));
     }
 }

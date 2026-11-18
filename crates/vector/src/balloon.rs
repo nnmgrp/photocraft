@@ -19,7 +19,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::f64::consts::TAU;
 
 use photocraft_doc::vector::{
-    BalloonLineStyle, BalloonUnderlay, BalloonVoice, LiveBalloon, LiveBalloonBody, LiveBalloonGroup, LiveBalloonTail, TailPreset, UniflashMode,
+    BalloonLineStyle, BalloonUnderlay, BalloonVoice, BokehShape, LiveBalloon, LiveBalloonBody, LiveBalloonGroup, LiveBalloonTail, TailPreset, UniflashMode,
 };
 use photocraft_doc::vector_brush::VectorBrushPreset;
 use photocraft_doc::{FillRule, Knot, Path, PathOp, Subpath};
@@ -1043,6 +1043,24 @@ pub fn hash_f64(seed: u32, index: u32) -> f64 {
     z = (z ^ (z >> 13)).wrapping_mul(0xC2B2AE35);
     z = z ^ (z >> 16);
     (z as f64) / (u32::MAX as f64)
+}
+
+/// Base-2 van der Corput radical inverse: `0 -> 0.0`, `1 -> 0.5`, `2 -> 0.25`, `3 -> 0.75`, …
+///
+/// Used to distribute particles inside a fixed contour sector so that growing the particle count
+/// only *adds* particles: the first `N` positions never move when the count becomes larger.
+#[inline]
+fn van_der_corput_2(mut n: u32) -> f64 {
+    let mut result = 0.0;
+    let mut denom = 0.5;
+    while n != 0 {
+        if n & 1 != 0 {
+            result += denom;
+        }
+        denom *= 0.5;
+        n >>= 1;
+    }
+    result
 }
 
 /// The geometry of a parametric balloon.
@@ -2852,14 +2870,20 @@ fn compute_stipple_dots_on_table(balloon: &LiveBalloon, table: &ContourArcTable)
     let min_r = rx.min(ry);
 
     let density = balloon.stipple_density.clamp(0.0, 100.0) / 100.0;
-    let base_count = balloon.stipple_count.clamp(24, 600) as f64;
+    let base_count = balloon.stipple_count.clamp(24, 2000) as f64;
     let randomness = balloon.stipple_randomness.clamp(0.0, 100.0) / 100.0;
     let spread = balloon.haze_spread.clamp(0.0, 100.0) / 100.0;
     let grain = balloon.grain_size.clamp(5.0, 100.0) / 100.0;
     let roughness = balloon.edge_roughness.clamp(0.0, 100.0) / 100.0;
     let seed = balloon.noise_seed() ^ 0xA533_C0DE;
+    // Only 1, 2 or 4 symmetric spawn sectors are meaningful; anything else degrades to 4.
+    let spawns = match balloon.particle_spawns {
+        1 => 1,
+        2 => 2,
+        _ => 4,
+    };
 
-    let count = ((base_count * (0.35 + 0.65 * density)).round() as u32).clamp(24, 260);
+    let count = ((base_count * (0.20 + 0.80 * density)).round() as u32).clamp(24, 2000);
     let band_px = (min_r * (0.04 + spread * 0.34)).max(3.0);
     let base_dot_r = (1.1 + grain * 4.6).clamp(0.9, 7.5);
 
@@ -2871,8 +2895,13 @@ fn compute_stipple_dots_on_table(balloon: &LiveBalloon, table: &ContourArcTable)
         let u4 = hash_f64(seed, i * 5 + 3);
         let u5 = hash_f64(seed, i * 5 + 4);
 
-        let arc_jitter = (u1 - 0.5) * 1.35 * randomness;
-        let u = ((i as f64 + arc_jitter) / (count as f64)).rem_euclid(1.0);
+        // The contour coordinate comes from the sector and a low-discrepancy sequence, never from
+        // `i / count`, so growing `count` preserves the positions of already-present dots.
+        let sector = i % spawns;
+        let k = i / spawns;
+        let base_u = (sector as f64 + van_der_corput_2(k)) / (spawns as f64);
+        let tang_u = (u1 - 0.5) * 0.22 * randomness / (spawns as f64);
+        let u = (base_u + tang_u).rem_euclid(1.0);
         let (base_pt, normal, tangent) = table.sample_at_u(u, balloon);
 
         let ring_layer = (i % 3) as f64;
@@ -2907,13 +2936,26 @@ fn compute_stipple_dots_on_table(balloon: &LiveBalloon, table: &ContourArcTable)
 /// end and the middle) and a lateral offset clamped so it stays within `haze_spread` of the ray.
 pub fn compute_uniflash_stipple_dots(balloon: &LiveBalloon) -> Vec<(u32, [f64; 2], f64)> {
     let Some(needles) = uniflash_needles(balloon) else { return Vec::new() };
-    let count = balloon.stipple_count.clamp(24, 600);
+    if needles.is_empty() {
+        return Vec::new();
+    }
+    let count = balloon.stipple_count.clamp(24, 2000);
     let max_lat = (balloon.haze_spread.clamp(0.0, 100.0) / 100.0 * 12.0).clamp(1.2, 14.0);
     let grain = balloon.grain_size.clamp(5.0, 100.0) / 100.0;
     let seed = balloon.noise_seed() ^ 0x5EED_0123;
+    let spawns = match balloon.particle_spawns {
+        1 => 1,
+        2 => 2,
+        _ => 4,
+    };
     let mut dots = Vec::with_capacity(count as usize);
     for i in 0..count {
-        let n = &needles[(i as usize * 7919) % needles.len()];
+        // Symmetric spawn sectors work on Uniflash too: map each sector's low-discrepancy position
+        // onto the needle ring instead of scattering dots by a modular stride of `i`.
+        let sector = i % spawns;
+        let k = i / spawns;
+        let ray_idx = (((sector as f64 + van_der_corput_2(k)) / (spawns as f64)) * needles.len() as f64).floor() as usize % needles.len();
+        let n = &needles[ray_idx];
         let u = hash_f64(seed, i * 4);
         let s = u.powf(0.65) * 0.96;
         let lat = (hash_f64(seed, i * 4 + 1) - 0.5) * 2.0 * max_lat * (1.0 - 0.65 * s);
@@ -2969,13 +3011,28 @@ fn apply_stipple_dots_line_style(balloon: &LiveBalloon, mut welded_base: Path, m
     Path::new(subpaths)
 }
 
-/// 4-point shoujo star subpaths along the welded body + tail contour (used by both single-pass
-/// `SparkleGlitter` and two-pass ink overlay).
-fn build_sparkle_star_subpaths(balloon: &LiveBalloon, welded_base: &Path, detached: &[Subpath]) -> Vec<Subpath> {
-    let table = ContourArcTable::from_paths(welded_base, detached);
-    let count = balloon.sparkle_count.clamp(6, 96);
+/// One sparkle / Bokeh particle: its centre and outer radius in document px.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct SparkleParticle {
+    center: [f64; 2],
+    radius: f64,
+}
+
+/// Computes the star and Bokeh particle data of `SparkleGlitter` from an already-built contour
+/// table. Positions come from a fixed number of spawn sectors and a low-discrepancy sequence, so
+/// raising the count only adds particles: none of the existing ones move.
+fn compute_sparkle_particles(balloon: &LiveBalloon, table: &ContourArcTable) -> (Vec<SparkleParticle>, Vec<SparkleParticle>) {
+    let spawns = match balloon.particle_spawns {
+        1 => 1,
+        2 => 2,
+        _ => 4,
+    };
+
+    // ---- 4-point shoujo stars ----------------------------------------------------------------
+    let count = balloon.sparkle_count.clamp(0, 400);
     let size_scale = balloon.sparkle_size.clamp(0.2, 2.5);
     let randomness = balloon.sparkle_randomness.clamp(0.0, 100.0) / 100.0;
+    let size_jitter = balloon.sparkle_size_jitter.clamp(0.0, 100.0) / 100.0;
     let seed = balloon.noise_seed() ^ 0x7F4A_7C15;
     let mut stars = Vec::with_capacity(count as usize);
 
@@ -2984,37 +3041,122 @@ fn build_sparkle_star_subpaths(balloon: &LiveBalloon, welded_base: &Path, detach
         let u2 = hash_f64(seed, i * 4 + 1);
         let u3 = hash_f64(seed, i * 4 + 2);
         let u4 = hash_f64(seed, i * 4 + 3);
-        let u = ((i as f64 + (u1 - 0.5) * 0.85 * randomness) / (count as f64)).rem_euclid(1.0);
+        let sector = i % spawns;
+        let k = i / spawns;
+        let base_u = (sector as f64 + van_der_corput_2(k)) / (spawns as f64);
+        let tang_u = (u1 - 0.5) * 0.22 * randomness / (spawns as f64);
+        let u = (base_u + tang_u).rem_euclid(1.0);
         let (pt, normal, tangent) = table.sample_at_u(u, balloon);
         let (off, scale_override) = balloon.get_stipple_override(i);
         let drift = (u2 - 0.45) * (4.0 + 14.0 * randomness) * size_scale;
         let tang_shift = (u4 - 0.5) * 8.0 * randomness * size_scale;
         let cx = pt[0] + normal[0] * drift + tangent[0] * tang_shift + off[0];
         let cy = pt[1] + normal[1] * drift + tangent[1] * tang_shift + off[1];
-        let rand_scale = 1.0 + (u3 - 0.5) * 1.1 * randomness;
-        let outer_r = (4.5 * rand_scale.clamp(0.4, 1.75)) * size_scale * scale_override.clamp(0.2, 4.0);
-        let inner_r = outer_r * 0.24;
 
+        // A skewed power law gives tiny glints most of the time and sparse hero stars, while 0%
+        // keeps every star at the same size. `0.25x .. ~2.8x` at full jitter.
+        let skew = u3.powf(2.2);
+        let size_at_full = 0.25 + 2.55 * skew;
+        let jitter_factor = 1.0 + size_jitter * (size_at_full - 1.0);
+        // Size variation belongs to the dedicated `sparkle_size_jitter` control only; positional
+        // `sparkle_randomness` never changes the size, so 0% jitter is exactly uniform.
+        let outer_r = (4.5 * jitter_factor) * size_scale * scale_override.clamp(0.2, 4.0);
+        stars.push(SparkleParticle { center: [cx, cy], radius: outer_r.max(0.2) });
+    }
+
+    // ---- Bokeh particles --------------------------------------------------------------------
+    let bokeh_count = balloon.bokeh_count.clamp(0, 400);
+    let bokeh_size = balloon.bokeh_size.clamp(2.0, 36.0);
+    let bokeh_rand = balloon.bokeh_size_randomness.clamp(0.0, 100.0) / 100.0;
+    let spread = balloon.haze_spread.clamp(0.0, 100.0) / 100.0;
+    let bseed = balloon.noise_seed() ^ 0x2424_B0FE;
+    let mut bokeh = Vec::with_capacity(bokeh_count as usize);
+
+    for i in 0..bokeh_count {
+        let b1 = hash_f64(bseed, i * 3);
+        let b2 = hash_f64(bseed, i * 3 + 1);
+        let b3 = hash_f64(bseed, i * 3 + 2);
+        let sector = i % spawns;
+        let k = i / spawns;
+        let base_u = (sector as f64 + van_der_corput_2(k)) / (spawns as f64);
+        let tang_u = (b1 - 0.5) * 0.22 * bokeh_rand / (spawns as f64);
+        let u = (base_u + tang_u).rem_euclid(1.0);
+        let (pt, normal, tangent) = table.sample_at_u(u, balloon);
+        let haze = (b2 - 0.35) * (2.0 + 22.0 * spread);
+        let tang_shift = (b3 - 0.5) * 8.0 * spread;
+        let cx = pt[0] + normal[0] * haze + tangent[0] * tang_shift;
+        let cy = pt[1] + normal[1] * haze + tangent[1] * tang_shift;
+        let size_at_full = 0.30 + 1.70 * b3.powf(2.2);
+        let radius = (bokeh_size * (1.0 + bokeh_rand * (size_at_full - 1.0))).clamp(0.5, 80.0);
+        bokeh.push(SparkleParticle { center: [cx, cy], radius });
+    }
+
+    (stars, bokeh)
+}
+
+/// Star + Bokeh particles for a whole balloon, rebuilding its welded contour when the caller does
+/// not already have one (used by SAI linework baking).
+fn sparkle_glitter_particles(balloon: &LiveBalloon) -> (Vec<SparkleParticle>, Vec<SparkleParticle>) {
+    let (welded, detached) = build_welded_contour_for_sampling(balloon);
+    let table = ContourArcTable::from_paths(&welded, &detached);
+    compute_sparkle_particles(balloon, &table)
+}
+
+/// 4-point shoujo stars and Bokeh particles as filled subpaths along the welded body + tail contour
+/// (used by both single-pass `SparkleGlitter` and two-pass ink overlay).
+fn build_sparkle_star_subpaths(balloon: &LiveBalloon, welded_base: &Path, detached: &[Subpath]) -> Vec<Subpath> {
+    let table = ContourArcTable::from_paths(welded_base, detached);
+    let (stars, bokeh) = compute_sparkle_particles(balloon, &table);
+    let mut out = Vec::with_capacity(stars.len() + bokeh.len());
+
+    for p in stars {
+        let r = p.radius;
+        let inner_r = r * 0.24;
+        let [cx, cy] = p.center;
         let mut star = Vec::with_capacity(8);
         for k in 0..8 {
             let a = (k as f64) * std::f64::consts::FRAC_PI_4;
-            let rad = if k % 2 == 0 { outer_r } else { inner_r };
+            let rad = if k % 2 == 0 { r } else { inner_r };
             star.push((cx + rad * a.cos(), cy + rad * a.sin()));
         }
         let mut sp = Subpath::polygon(&star);
         sp.op = PathOp::Combine;
-        stars.push(sp);
+        out.push(sp);
     }
-    stars
+
+    for p in bokeh {
+        let [cx, cy] = p.center;
+        let r = p.radius;
+        let pts = match balloon.bokeh_shape {
+            BokehShape::Circle => circle_contour((cx, cy), r, 16),
+            BokehShape::Hexagon => (0..6)
+                .map(|k| {
+                    let a = std::f64::consts::TAU * (k as f64) / 6.0;
+                    (cx + r * a.cos(), cy + r * a.sin())
+                })
+                .collect(),
+            BokehShape::Ring => {
+                let mut sp = hollow_ring(cx, cy, r, (r * 0.62).max(1.0));
+                sp.op = PathOp::Combine;
+                out.push(sp);
+                continue;
+            }
+        };
+        let mut sp = Subpath::polygon(&pts);
+        sp.op = PathOp::Combine;
+        out.push(sp);
+    }
+
+    out
 }
 
 /// `BalloonLineStyle::SparkleGlitter`: combines the welded body + detached tails with shoujo stars.
 fn apply_sparkle_glitter_line_style(balloon: &LiveBalloon, mut welded_base: Path, detached: Vec<Subpath>) -> Path {
-    let stars = build_sparkle_star_subpaths(balloon, &welded_base, &detached);
+    let particles = build_sparkle_star_subpaths(balloon, &welded_base, &detached);
     for sp in &mut welded_base.subpaths {
         sp.op = PathOp::Combine;
     }
-    welded_base.subpaths.extend(stars);
+    welded_base.subpaths.extend(particles);
     welded_base.subpaths.extend(detached);
     welded_base
 }
@@ -3423,6 +3565,33 @@ impl LiveBalloonGroupGeom for LiveBalloonGroup {
     }
 }
 
+/// The clean interior fill path of a live balloon group: welded bodies plus detached tails, with
+/// the dots / stars / Bokeh particles removed. `Uniflash + Solid` is skipped (the needles are the
+/// fill); `Uniflash + StippleDots` uses only the inner ellipse so the fill never spills past the
+/// needle rays. Used when baking a group to SAI linework so the backing fill layer is correct even
+/// in Gloom mode, where the on-screen fill lives inside the stipple pass.
+pub fn rebuild_group_fill_paths(group: &LiveBalloonGroup) -> Path {
+    let mut subpaths = Vec::new();
+    for b in &group.items {
+        let is_uniflash = matches!(b.body, LiveBalloonBody::Uniflash { .. });
+        if is_uniflash && b.line_style == BalloonLineStyle::Solid {
+            continue;
+        }
+        if is_uniflash && b.line_style == BalloonLineStyle::StippleDots {
+            if let Some(sp) = uniflash_inner_fill_subpath(b) {
+                subpaths.push(sp);
+            }
+            continue;
+        }
+        let (welded, detached) = build_welded_contour_for_sampling(b);
+        for mut sp in welded.subpaths.into_iter().chain(detached) {
+            sp.op = PathOp::Combine;
+            subpaths.push(sp);
+        }
+    }
+    Path::new(subpaths)
+}
+
 /// Splits a [`LiveBalloonGroup`] into single-pass `standard_path` and two-pass
 /// `(fill_only_path, ink_from_stroke_path)` for `CompiledShape` rendering (TZ v6.0 §2.3).
 pub fn rebuild_group_render_paths(group: &LiveBalloonGroup) -> BalloonGroupRenderPaths {
@@ -3739,6 +3908,95 @@ pub fn export_balloon_svg(balloon: &LiveBalloon, dialogue_lines: Option<&[String
     )
 }
 
+/// A two-node, round-capped stroke that bakes into a solid filled vector dot. Both nodes are
+/// corners so the curve sampler emits a single straight segment with two half-circle caps.
+fn linework_dot_stroke(center: [f64; 2], radius: f64) -> LiveVectorStroke {
+    LiveVectorStroke {
+        nodes: vec![
+            SaiPoint { p: (center[0] - 0.02, center[1]), pressure: 1.0, density: 1.0, corner: true },
+            SaiPoint { p: (center[0] + 0.02, center[1]), pressure: 1.0, density: 1.0, corner: true },
+        ],
+        base_width: (radius * 2.0).max(1.0),
+        min_ratio: 1.0,
+        base_density: 1.0,
+        min_density_ratio: 0.0,
+        curve_type: SaiCurveType::Normal,
+        tapered: false,
+        closed: false,
+        tension: SAI_DEFAULT_TENSION,
+    }
+}
+
+/// A 4-point star baked as two crossed, tapered three-node strokes (a horizontal and a vertical
+/// glint). Tapered ends keep the points sharp while the middle carries the full ink width.
+fn linework_star_strokes(p: SparkleParticle) -> Vec<LiveVectorStroke> {
+    let [cx, cy] = p.center;
+    let r = p.radius;
+    let make = |nodes: Vec<SaiPoint>| LiveVectorStroke {
+        nodes,
+        base_width: (r * 0.48).max(0.1),
+        min_ratio: 0.05,
+        base_density: 1.0,
+        min_density_ratio: 0.0,
+        curve_type: SaiCurveType::Normal,
+        tapered: true,
+        closed: false,
+        tension: SAI_DEFAULT_TENSION,
+    };
+    let point = |x: f64, y: f64, pressure: f32| SaiPoint { p: (x, y), pressure, density: 1.0, corner: true };
+    vec![
+        make(vec![point(cx - r, cy, 0.05), point(cx, cy, 1.0), point(cx + r, cy, 0.05)]),
+        make(vec![point(cx, cy - r, 0.05), point(cx, cy, 1.0), point(cx, cy + r, 0.05)]),
+    ]
+}
+
+/// A Bokeh particle baked as a filled circle, a closed ring or a closed hexagon stroke.
+fn linework_bokeh_stroke(p: SparkleParticle, shape: BokehShape) -> LiveVectorStroke {
+    let [cx, cy] = p.center;
+    let r = p.radius;
+    match shape {
+        BokehShape::Circle => linework_dot_stroke([cx, cy], r),
+        BokehShape::Ring => {
+            let nodes = (0..12)
+                .map(|k| {
+                    let a = std::f64::consts::TAU * (k as f64) / 12.0;
+                    SaiPoint { p: (cx + r * a.cos(), cy + r * a.sin()), pressure: 1.0, density: 1.0, corner: false }
+                })
+                .collect();
+            LiveVectorStroke {
+                nodes,
+                base_width: (r * 0.28).max(1.2),
+                min_ratio: 1.0,
+                base_density: 1.0,
+                min_density_ratio: 0.0,
+                curve_type: SaiCurveType::Normal,
+                tapered: false,
+                closed: true,
+                tension: SAI_DEFAULT_TENSION,
+            }
+        }
+        BokehShape::Hexagon => {
+            let nodes = (0..6)
+                .map(|k| {
+                    let a = std::f64::consts::TAU * (k as f64) / 6.0;
+                    SaiPoint { p: (cx + r * a.cos(), cy + r * a.sin()), pressure: 1.0, density: 1.0, corner: true }
+                })
+                .collect();
+            LiveVectorStroke {
+                nodes,
+                base_width: (r * 0.55).max(1.4),
+                min_ratio: 1.0,
+                base_density: 1.0,
+                min_density_ratio: 0.0,
+                curve_type: SaiCurveType::Normal,
+                tapered: false,
+                closed: true,
+                tension: SAI_DEFAULT_TENSION,
+            }
+        }
+    }
+}
+
 /// Converts a balloon into SAI Linework strokes: every outline becomes a tapered stroke whose
 /// width follows the balloon's pressure, so the balloon can be redrawn as clean linework.
 pub fn balloon_to_linework_strokes(b: &LiveBalloon) -> Vec<LiveVectorStroke> {
@@ -3811,7 +4069,33 @@ pub fn balloon_to_linework_strokes(b: &LiveBalloon) -> Vec<LiveVectorStroke> {
                 });
             }
         }
+        // `Uniflash + StippleDots`: the needles and tails stay as ink, and the dots are baked as
+        // individual filled strokes so each one remains selectable in SAI.
+        if b.line_style == BalloonLineStyle::StippleDots {
+            strokes.extend(compute_uniflash_stipple_dots(b).into_iter().map(|(_, center, radius)| linework_dot_stroke(center, radius)));
+        }
         return strokes;
+    }
+
+    // Stipple dots and sparkle / Bokeh particles are filled shapes. Sending them through
+    // `rebuild_closed_path()` would turn every dot/star into a hollow stroked outline; bake the
+    // actual filled particles instead. The body fill lives on the separate backing fill layer.
+    match b.line_style {
+        BalloonLineStyle::StippleDots => {
+            return compute_stipple_dots(b).into_iter().map(|(_, center, radius)| linework_dot_stroke(center, radius)).collect();
+        }
+        BalloonLineStyle::SparkleGlitter => {
+            let (stars, bokeh) = sparkle_glitter_particles(b);
+            let mut strokes = Vec::with_capacity(stars.len() * 2 + bokeh.len());
+            for p in stars {
+                strokes.extend(linework_star_strokes(p));
+            }
+            for p in bokeh {
+                strokes.push(linework_bokeh_stroke(p, b.bokeh_shape));
+            }
+            return strokes;
+        }
+        _ => {}
     }
 
     // The other balloons: the Bézier segments are sampled, so an oval does not become a rhombus.
@@ -5235,7 +5519,7 @@ mod tests {
         assert!(cov.iter().any(|v| *v > 0.5), "the solid needles have non-zero area");
 
         let dots = compute_uniflash_stipple_dots(&b);
-        assert_eq!(dots.len() as u32, b.stipple_count.clamp(24, 600));
+        assert_eq!(dots.len() as u32, b.stipple_count.clamp(24, 2000));
         for (_, p, _) in dots {
             let nearest = needles
                 .iter()
@@ -5248,5 +5532,168 @@ mod tests {
                 .fold(f64::MAX, f64::min);
             assert!(nearest <= 16.0, "a dot drifted {nearest} px from every needle: {p:?}");
         }
+    }
+
+    fn stipple_balloon(count: u32) -> LiveBalloon {
+        LiveBalloon {
+            id: 1,
+            body: LiveBalloonBody::Ellipse { rect: [40.0, 40.0, 300.0, 220.0], squircle: 0.2 },
+            line_style: BalloonLineStyle::StippleDots,
+            stipple_count: count,
+            stipple_density: 100.0,
+            particle_spawns: 4,
+            ..LiveBalloon::default()
+        }
+    }
+
+    #[test]
+    fn stipple_dot_count_is_honest_at_600_and_2000() {
+        for count in [600, 2000] {
+            let dots = compute_stipple_dots(&stipple_balloon(count));
+            assert_eq!(dots.len(), count as usize, "100% density must produce exactly {count} dots");
+        }
+        // The old 260-dot cap is gone: even 0% density of 2000 is 400 dots.
+        let mut b = stipple_balloon(2000);
+        b.stipple_density = 0.0;
+        assert!(compute_stipple_dots(&b).len() > 300);
+    }
+
+    #[test]
+    fn stipple_dots_are_count_invariant_with_symmetric_spawn_origins() {
+        for spawns in [1u8, 2, 4] {
+            let mut small = stipple_balloon(120);
+            small.particle_spawns = spawns;
+            let mut large = small.clone();
+            large.stipple_count = 400;
+            let a = compute_stipple_dots(&small);
+            let b = compute_stipple_dots(&large);
+            assert_eq!(a.len(), 120);
+            assert_eq!(b.len(), 400);
+            for (i, ((idx_a, pa, ra), (idx_b, pb, rb))) in a.iter().zip(&b).enumerate() {
+                assert_eq!(idx_a, idx_b);
+                assert!((pa[0] - pb[0]).abs() < 1e-9 && (pa[1] - pb[1]).abs() < 1e-9, "spawns={spawns}: dot {i} moved when the count grew: {pa:?} vs {pb:?}");
+                assert!((ra - rb).abs() < 1e-9);
+            }
+        }
+    }
+
+    #[test]
+    fn sparkle_glitter_scales_to_400_stars_and_all_bokeh_shapes() {
+        use photocraft_doc::vector::BokehShape;
+
+        let mut b = LiveBalloon {
+            id: 3,
+            body: LiveBalloonBody::Ellipse { rect: [40.0, 40.0, 300.0, 220.0], squircle: 0.1 },
+            line_style: BalloonLineStyle::SparkleGlitter,
+            sparkle_count: 400,
+            bokeh_count: 400,
+            particle_spawns: 4,
+            ..LiveBalloon::default()
+        };
+        let (stars, bokeh) = sparkle_glitter_particles(&b);
+        assert_eq!(stars.len(), 400);
+        assert_eq!(bokeh.len(), 400);
+        assert!(stars.iter().all(|p| p.radius > 0.0 && p.center.iter().all(|v| v.is_finite())));
+        assert!(bokeh.iter().all(|p| p.radius > 0.0 && p.center.iter().all(|v| v.is_finite())));
+
+        // 0% size jitter keeps every star at the same size; 100% mixes glints and hero stars.
+        b.sparkle_size_jitter = 0.0;
+        let (uniform, _) = sparkle_glitter_particles(&b);
+        let r0 = uniform[0].radius;
+        assert!(uniform.iter().all(|p| (p.radius - r0).abs() < 1e-6), "0% jitter is uniform");
+        b.sparkle_size_jitter = 100.0;
+        let (jittered, _) = sparkle_glitter_particles(&b);
+        let rmin = jittered.iter().map(|p| p.radius).fold(f64::MAX, f64::min);
+        let rmax = jittered.iter().map(|p| p.radius).fold(0.0f64, f64::max);
+        assert!(rmax > rmin * 3.0, "100% jitter mixes tiny glints with hero stars: {rmin} .. {rmax}");
+
+        let (welded, detached) = build_welded_contour_for_sampling(&b);
+        for (shape, knots) in [(BokehShape::Circle, 16), (BokehShape::Hexagon, 6), (BokehShape::Ring, 40)] {
+            b.bokeh_shape = shape;
+            let subs = build_sparkle_star_subpaths(&b, &welded, &detached);
+            assert_eq!(subs.len(), 800, "{shape:?}: 400 stars + 400 bokeh particles");
+            assert_eq!(subs[400].knots.len(), knots, "{shape:?}: bokeh outline resolution");
+        }
+    }
+
+    #[test]
+    fn stipple_dots_bake_as_solid_strokes_even_at_2000() {
+        use crate::comic_sai_curve::LiveLinework;
+
+        let strokes = balloon_to_linework_strokes(&stipple_balloon(2000));
+        assert_eq!(strokes.len(), 2000, "all dots must be baked, nothing truncated");
+        assert!(strokes.iter().all(|s| {
+            s.nodes.len() == 2
+                && s.nodes.iter().all(|n| n.corner && n.pressure == 1.0 && n.density == 1.0)
+                && s.base_width >= 1.0
+                && s.min_ratio == 1.0
+                && !s.tapered
+                && !s.closed
+        }));
+        let lw = LiveLinework::new(strokes);
+        assert!(crate::flatten::validate_shape(&lw.rebuild_path(), None).is_ok(), "2000 dots stay under the knot limit");
+    }
+
+    #[test]
+    fn sparkle_glitter_and_bokeh_bake_as_valid_solid_strokes() {
+        use crate::comic_sai_curve::LiveLinework;
+        use photocraft_doc::vector::BokehShape;
+
+        for (shape, bokeh_nodes) in [(BokehShape::Circle, 2), (BokehShape::Hexagon, 6), (BokehShape::Ring, 12)] {
+            let b = LiveBalloon {
+                id: 4,
+                body: LiveBalloonBody::Ellipse { rect: [40.0, 40.0, 300.0, 220.0], squircle: 0.2 },
+                line_style: BalloonLineStyle::SparkleGlitter,
+                sparkle_count: 400,
+                bokeh_count: 45,
+                particle_spawns: 4,
+                bokeh_shape: shape,
+                ..LiveBalloon::default()
+            };
+            let strokes = balloon_to_linework_strokes(&b);
+            assert_eq!(strokes.len(), 400 * 2 + 45, "{shape:?}: two crossed strokes per star plus one per Bokeh");
+            assert!(strokes[..800].iter().all(|s| s.nodes.len() == 3 && s.tapered && !s.closed));
+            assert!(strokes[800..].iter().all(|s| s.nodes.len() == bokeh_nodes));
+            let lw = LiveLinework::new(strokes);
+            assert!(crate::flatten::validate_shape(&lw.rebuild_path(), None).is_ok(), "{shape:?}: baked linework is valid");
+        }
+    }
+
+    #[test]
+    fn stylized_uniflash_with_black_fill_and_white_stroke_keeps_black_interior() {
+        use photocraft_doc::{Color, Fill, LiveShape, ShapeLayer, ShapeStroke};
+        use photocraft_geom::Rect;
+
+        let b = LiveBalloon {
+            id: 5,
+            body: LiveBalloonBody::Uniflash {
+                rect: [100.0, 100.0, 300.0, 300.0],
+                inner_ratio: 0.62,
+                needles: 60,
+                needle_width: 3.0,
+                outer_sharpness: 1.0,
+                inner_sharpness: 1.0,
+                mode: UniflashMode::InwardNeedles,
+                bundle_group: 0.4,
+                length_jitter: 0.5,
+                angle_jitter: 0.25,
+                seed: 7,
+            },
+            line_style: BalloonLineStyle::StippleDots,
+            stipple_count: 60,
+            ..LiveBalloon::default()
+        };
+        let group = LiveBalloonGroup { items: vec![b], ..LiveBalloonGroup::default() };
+        let sh = ShapeLayer {
+            path: group.rebuild_group_path(),
+            fill: Some(Fill::Solid(Color::BLACK)),
+            stroke: Some(ShapeStroke { paint: Fill::Solid(Color::WHITE), width: 2.0, ..Default::default() }),
+            live: Some(LiveShape::BalloonGroup { group }),
+            ..Default::default()
+        };
+        let canvas = Rect::new(0, 0, 400, 400);
+        let rgba = crate::CompiledShape::new(&sh, crate::DEFAULT_TOLERANCE, canvas).render_rgba(canvas);
+        let center = rgba[250 * 400 + 250];
+        assert!(center[0] < 0.05 && center[1] < 0.05 && center[2] < 0.05 && center[3] > 0.9, "an inverted stylized Uniflash keeps its black fill: {center:?}");
     }
 }

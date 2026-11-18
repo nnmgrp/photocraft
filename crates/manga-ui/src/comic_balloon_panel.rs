@@ -166,8 +166,9 @@ pub struct BalloonPanelUi {
     pub svg_import_buffer: String,
     pub svg_export_buffer: String,
     pub favorites: Vec<BalloonFavoritePreset>,
-    /// Opt in to the gizmo's per-vertex handles (off by default: no 20–32 dots on screen).
-    #[serde(default)]
+    /// `Manual` (true, the default) shows the gizmo's per-vertex shape handles; `Simplified`
+    /// (false) keeps only the frame, tail and dial handles. UI state only, never a balloon field.
+    #[serde(default = "default_true")]
     pub show_vertex_handles: bool,
     /// Layer fill opacity in percent, applied through the layer-style blending options.
     #[serde(default = "default_fill_opacity")]
@@ -261,7 +262,7 @@ impl Default for BalloonPanelUi {
             svg_import_buffer: String::new(),
             svg_export_buffer: String::new(),
             favorites: Vec::new(),
-            show_vertex_handles: false,
+            show_vertex_handles: true,
             fill_opacity: 100.0,
             stroke_color: [0.0, 0.0, 0.0, 1.0],
             fill_color: [1.0, 1.0, 1.0, 1.0],
@@ -308,7 +309,7 @@ pub struct BalloonPanelOutput {
     pub commands: Vec<OutCommand>,
     pub switch_to_balloon_tool: bool,
     pub open_linework_panel: bool,
-    /// The "Edit individual points" toggle, forwarded to the on-canvas gizmo.
+    /// The `Simplified` / `Manual` mode toggle, forwarded to the on-canvas gizmo.
     pub show_vertex_handles: Option<bool>,
     /// Open the TypeR dock for the selected balloon.
     pub open_typer_panel: bool,
@@ -1104,10 +1105,32 @@ fn draw_body_section(ui: &mut Ui, state: &mut BalloonPanelUi, host: &BalloonHost
         BalloonBodyKindChoice::Uniflash => draw_uniflash_params(ui, state),
     }
     ui.add_space(4.0);
-    if ui.checkbox(&mut state.show_vertex_handles, tl!("Edit individual points")).changed() {
-        output.show_vertex_handles = Some(state.show_vertex_handles);
-    }
+    ui.label(RichText::new(tl!("Gizmo mode:")).strong().color(t.text));
+    ui.horizontal(|ui| {
+        let simplified = ui
+            .selectable_label(!state.show_vertex_handles, tl!("Simplified"))
+            .on_hover_text(tl!("Show only the body frame, tail handles and the two body dials"));
+        let manual =
+            ui.selectable_label(state.show_vertex_handles, tl!("Manual")).on_hover_text(tl!("Also show and drag the balloon's individual shape points"));
+        if simplified.clicked() {
+            set_gizmo_mode(state, output, false);
+        }
+        if manual.clicked() {
+            set_gizmo_mode(state, output, true);
+        }
+    });
     draw_dual_chambers_row(ui, state, host, output);
+}
+
+/// Applies one click on the `Simplified` / `Manual` buttons. `manual = true` shows the shape's
+/// individual vertex handles; `manual = false` keeps only the frame, tail and dial handles.
+/// Kept separate from the widget so the emitted change can be tested without pointer simulation,
+/// and so a no-op click does not emit a spurious host sync.
+fn set_gizmo_mode(state: &mut BalloonPanelUi, output: &mut BalloonPanelOutput, manual: bool) {
+    if state.show_vertex_handles != manual {
+        state.show_vertex_handles = manual;
+        output.show_vertex_handles = Some(manual);
+    }
 }
 
 fn draw_jitter_row(ui: &mut Ui, value: &mut f64, seed: &mut u32, hover: &str) {
@@ -1541,8 +1564,8 @@ mod tests {
     use photocraft_doc::vector::{BalloonLineStyle, LiveBalloon, UniflashMode};
 
     use super::{
-        BALLOON_COLOR_TAB, BalloonBodyKindChoice, BalloonFillMode, BalloonPanelUi, MIN_BALLOON_SIZE, PANEL, body_from_state,
-        create_live_balloon_in_rect_commands, handles, hydrate_geometry_from_balloon,
+        BALLOON_COLOR_TAB, BalloonBodyKindChoice, BalloonFillMode, BalloonPanelOutput, BalloonPanelUi, MIN_BALLOON_SIZE, PANEL, body_from_state,
+        create_live_balloon_in_rect_commands, handles, hydrate_geometry_from_balloon, set_gizmo_mode,
     };
 
     #[test]
@@ -1564,6 +1587,38 @@ mod tests {
         assert!(st.stroke_width > 0.0);
         assert_eq!(st.fill_mode, BalloonFillMode::White);
         assert!(st.favorites.is_empty());
+        assert!(st.show_vertex_handles, "the Simplified/Manual toggle defaults to Manual");
+    }
+
+    /// Clicking `Simplified` emits `Some(false)`, clicking `Manual` emits `Some(true)`; a click on
+    /// the already-selected mode is a no-op. These are the exact calls the two buttons make.
+    #[test]
+    fn gizmo_mode_toggle_emits_the_selected_mode() {
+        let mut st = BalloonPanelUi::default();
+        let mut out = BalloonPanelOutput::default();
+        assert!(st.show_vertex_handles);
+        assert_eq!(out.show_vertex_handles, None);
+
+        set_gizmo_mode(&mut st, &mut out, false);
+        assert!(!st.show_vertex_handles, "Simplified hides the vertex handles");
+        assert_eq!(out.show_vertex_handles, Some(false));
+
+        out.show_vertex_handles = None;
+        set_gizmo_mode(&mut st, &mut out, false);
+        assert_eq!(out.show_vertex_handles, None, "an already-selected mode emits nothing");
+
+        set_gizmo_mode(&mut st, &mut out, true);
+        assert!(st.show_vertex_handles, "Manual exposes the vertex handles");
+        assert_eq!(out.show_vertex_handles, Some(true));
+    }
+
+    /// The panel's missing `showVertexHandles` field in an older UI-state payload still means
+    /// Manual (the default), so the panel and the gizmo agree on startup.
+    #[test]
+    fn gizmo_mode_defaults_to_manual_when_deserializing_older_state() {
+        let raw = serde_json::json!({});
+        let st: BalloonPanelUi = serde_json::from_value(raw).unwrap();
+        assert!(st.show_vertex_handles);
     }
 
     #[test]

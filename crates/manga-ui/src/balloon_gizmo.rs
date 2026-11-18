@@ -68,15 +68,21 @@ pub struct BalloonGizmoDrag {
 }
 
 /// The gizmo's state between frames.
-#[derive(Default)]
 pub struct BalloonGizmoState {
     pub active_balloon_id: Option<u32>,
     pub hovered: Option<GizmoHit>,
     pub drag: Option<BalloonGizmoDrag>,
     pub next_gesture_id: u64,
-    /// Off by default: the gizmo manages the balloon's shape/body, not its 64 stipple dots or its
-    /// 20–32 individual vertices. The panel's "Edit individual points" toggle opts in to vertices.
+    /// The panel's `Simplified` / `Manual` mode: manual shows the shape's individual vertex
+    /// handles as well as the body, tail and dial handles. Defaults to `Manual` so the handles
+    /// are visible as soon as a balloon is selected. Stipple dots are never handles in either mode.
     pub show_vertex_handles: bool,
+}
+
+impl Default for BalloonGizmoState {
+    fn default() -> Self {
+        Self { active_balloon_id: None, hovered: None, drag: None, next_gesture_id: 0, show_vertex_handles: true }
+    }
 }
 
 impl BalloonGizmoState {
@@ -146,9 +152,26 @@ fn special_body_handles_doc(body: &LiveBalloonBody) -> Option<([f64; 2], [f64; 2
     }
 }
 
-/// The document positions of the draggable vertices of the spikes and the cloud lobes.
+/// The document positions of the draggable vertices of the balloon body.
 fn vertex_handles_doc(balloon: &LiveBalloon) -> Vec<(u32, [f64; 2])> {
     balloon.vertex_handle_positions()
+}
+
+/// Screen positions of the four bounding-frame resize squares, shared by drawing and hit-testing
+/// so the visual and the clickable handle never drift apart.
+///
+/// In `Manual` mode a `Rect` places its own four `VertexHandle` circles exactly on the bounding
+/// corners. The resize squares are pushed ~8 px outwards there (and on `ChamferRect`, whose bevel
+/// endpoints can approach the corners), so both sets can be seen and dragged independently.
+fn body_resize_screen_positions(xf: &CanvasViewXform, balloon: &LiveBalloon, show_vertex_handles: bool) -> [Pos2; 4] {
+    let r = balloon.body.rect();
+    let corners = [[r[0], r[1]], [r[0] + r[2], r[1]], [r[0] + r[2], r[1] + r[3]], [r[0], r[1] + r[3]]];
+    const OUT: [[f32; 2]; 4] = [[-8.0, -8.0], [8.0, -8.0], [8.0, 8.0], [-8.0, 8.0]];
+    let offset = show_vertex_handles && matches!(balloon.body, LiveBalloonBody::Rect { .. } | LiveBalloonBody::ChamferRect { .. });
+    std::array::from_fn(|i| {
+        let p = xf.to_screen(corners[i][0] as f32, corners[i][1] as f32);
+        if offset { p + vec2(OUT[i][0], OUT[i][1]) } else { p }
+    })
 }
 
 /// What the pointer hits on the gizmo of `balloon`.
@@ -201,12 +224,10 @@ pub fn hit_test_balloon_gizmo(xf: &CanvasViewXform, balloon: &LiveBalloon, curso
         }
     }
 
-    // The frame corners resize the body, so they win over a vertex handle sitting on the same
-    // spot (an oval bulge dragged towards a corner must not steal the resize).
+    // The frame corners resize the body. On Rect/ChamferRect in Manual mode the squares are
+    // drawn (and hit-tested) slightly outward, leaving the corner VertexHandles reachable.
     let r = balloon.body.rect();
-    let corners = [[r[0], r[1]], [r[0] + r[2], r[1]], [r[0] + r[2], r[1] + r[3]], [r[0], r[1] + r[3]]];
-    for (idx, c) in corners.iter().enumerate() {
-        let c_scr = xf.to_screen(c[0] as f32, c[1] as f32);
+    for (idx, c_scr) in body_resize_screen_positions(xf, balloon, show_vertex_handles).into_iter().enumerate() {
         if cursor_scr.distance(c_scr) <= hit_r {
             return Some(GizmoHit::BodyResize { balloon_id: bid, corner: idx });
         }
@@ -260,9 +281,7 @@ pub fn draw_balloon_gizmo(painter: &egui::Painter, xf: &CanvasViewXform, balloon
     let box_scr = Rect::from_two_pos(tl, br);
     painter.rect_stroke(box_scr, 0.0, Stroke::new(1.0, accent.gamma_multiply(0.35)), egui::StrokeKind::Outside);
 
-    let corners = [[r[0], r[1]], [r[0] + r[2], r[1]], [r[0] + r[2], r[1] + r[3]], [r[0], r[1] + r[3]]];
-    for (idx, c) in corners.iter().enumerate() {
-        let c_scr = xf.to_screen(c[0] as f32, c[1] as f32);
+    for (idx, c_scr) in body_resize_screen_positions(xf, balloon, state.show_vertex_handles).into_iter().enumerate() {
         let hov = state.hovered == Some(GizmoHit::BodyResize { balloon_id: bid, corner: idx });
         let sz = if hov { 8.0 } else { 6.0 };
         painter.rect_filled(Rect::from_center_size(c_scr, vec2(sz, sz)), 1.0, if hov { accent } else { white });
@@ -337,7 +356,7 @@ pub fn draw_balloon_gizmo(painter: &egui::Painter, xf: &CanvasViewXform, balloon
         painter.rect_stroke(d_rect, 3.0, Stroke::new(1.0, Color32::BLACK), egui::StrokeKind::Outside);
     }
 
-    // 6. Individual spike/cloud vertices, only with "Edit individual points" on.
+    // 6. The body's individual vertices, only in `Manual` mode. Stipple dots stay hidden.
     if state.show_vertex_handles {
         for (v_idx, v_pt) in vertex_handles_doc(balloon) {
             let v_scr = xf.to_screen(v_pt[0] as f32, v_pt[1] as f32);
@@ -909,37 +928,48 @@ mod tests {
         assert_eq!(hit_test_balloon_gizmo(&xf, &b, pos2(780.0, 580.0), false), None);
     }
 
-    /// The gizmo manages the balloon's shape and body by default: no 64 stipple dots, no 20–32
-    /// individual vertices are drawn or hit-tested until "Edit individual points" is switched on.
+    /// `Manual` is the default on both the panel UI state and the gizmo state, and stipple dots
+    /// are never a gizmo handle regardless of the mode.
     #[test]
-    fn only_the_body_handles_are_live_until_individual_points_are_enabled() {
-        for body in [
-            LiveBalloonBody::Cloud { rect: [40.0, 40.0, 220.0, 140.0], bumps: 14, amplitude: 0.3, cusp_bite: 0.22, jitter: 0.2, seed: 7 },
-            LiveBalloonBody::Spiky {
-                rect: [40.0, 40.0, 220.0, 140.0],
-                spikes: 14,
-                length: 0.35,
-                sub_harmonic: 0.4,
-                concavity: 0.5,
-                jitter: 0.2,
-                smooth: false,
-                seed: 7,
-            },
-        ] {
-            let mut b = LiveBalloon { body, line_style: BalloonLineStyle::StippleDots, stipple_count: 64, ..LiveBalloon::default() };
-            let xf = one_to_one();
+    fn manual_mode_is_the_default_for_panel_and_gizmo() {
+        assert!(BalloonGizmoState::default().show_vertex_handles, "the gizmo shows shape handles by default");
+        assert!(crate::comic_balloon_panel::BalloonPanelUi::default().show_vertex_handles, "the panel selects Manual by default");
+    }
+
+    /// `Simplified` hides all `VertexHandle`s; `Manual` exposes them for all six balloon body
+    /// kinds. `StippleDot` is never drawn or hit-tested in either mode.
+    #[test]
+    fn simplified_hides_vertex_handles_and_manual_exposes_them_for_all_six_bodies() {
+        let rect = [40.0, 40.0, 220.0, 140.0];
+        let bodies = [
+            LiveBalloonBody::Ellipse { rect, squircle: 0.25 },
+            LiveBalloonBody::Rect { rect, corner_radius: 12.0 },
+            LiveBalloonBody::ChamferRect { rect, chamfer: 20.0, concave: 0.4 },
+            LiveBalloonBody::Cloud { rect, bumps: 14, amplitude: 0.3, cusp_bite: 0.22, jitter: 0.2, seed: 7 },
+            LiveBalloonBody::Spiky { rect, spikes: 14, length: 0.35, sub_harmonic: 0.4, concavity: 0.5, jitter: 0.2, smooth: false, seed: 7 },
+            LiveBalloonBody::Burst { rect, rays: 12, length: 0.6, depth: 0.26, jitter: 0.35, seed: 303 },
+        ];
+        let xf = one_to_one();
+        for body in bodies {
+            let mut b = LiveBalloon { body, tails: Vec::new(), line_style: BalloonLineStyle::StippleDots, stipple_count: 64, ..LiveBalloon::default() };
             let v = vertex_handles_doc(&b);
             assert!(!v.is_empty(), "the body has vertices");
             assert!(!b.stipple_dot_positions().is_empty(), "the body has stipple dots");
+            let handle_count = v.len();
 
             let v_at = xf.to_screen(v[0].1[0] as f32, v[0].1[1] as f32);
             let d_at = xf.to_screen(b.stipple_dot_positions()[0].1[0] as f32, b.stipple_dot_positions()[0].1[1] as f32);
-            assert_ne!(hit_test_balloon_gizmo(&xf, &b, v_at, false), Some(GizmoHit::VertexHandle { balloon_id: b.id, vertex_index: v[0].0 }));
-            assert_ne!(hit_test_balloon_gizmo(&xf, &b, d_at, false), Some(GizmoHit::StippleDot { balloon_id: b.id, dot_index: 0 }));
-            assert_eq!(hit_test_balloon_gizmo(&xf, &b, v_at, true), Some(GizmoHit::VertexHandle { balloon_id: b.id, vertex_index: v[0].0 }));
-            assert_ne!(hit_test_balloon_gizmo(&xf, &b, d_at, true), Some(GizmoHit::StippleDot { balloon_id: b.id, dot_index: 0 }));
+            for show in [false, true] {
+                let hit_v = hit_test_balloon_gizmo(&xf, &b, v_at, show);
+                if show {
+                    assert_eq!(hit_v, Some(GizmoHit::VertexHandle { balloon_id: b.id, vertex_index: v[0].0 }), "Manual exposes the vertex handle");
+                } else {
+                    assert_ne!(hit_v, Some(GizmoHit::VertexHandle { balloon_id: b.id, vertex_index: v[0].0 }), "Simplified hides it");
+                }
+                assert!(!matches!(hit_test_balloon_gizmo(&xf, &b, d_at, show), Some(GizmoHit::StippleDot { .. })), "stipple dots are never clickable");
+            }
 
-            // Drawing the default gizmo is also free of the extra point overlays.
+            // Drawing reflects the mode too: Manual adds the circles, Simplified does not.
             let shapes_for = |show: bool| {
                 let ctx = egui::Context::default();
                 let state = BalloonGizmoState { show_vertex_handles: show, ..Default::default() };
@@ -948,11 +978,37 @@ mod tests {
                 out.textures_delta.clear();
                 n
             };
-            assert!(shapes_for(true) > shapes_for(false), "the opt-in adds the vertex overlays");
+            assert!(shapes_for(true) > shapes_for(false), "Manual adds the vertex overlays");
 
             b.stipple_count = 8;
-            assert!(vertex_handles_doc(&b).len() >= 10, "changing the dot count cannot leave dangling vertex overlays");
+            assert_eq!(vertex_handles_doc(&b).len(), handle_count, "changing the dot count cannot leave dangling vertex overlays");
         }
+    }
+
+    /// A Rect puts its corner handles on the same spot as its bounding frame. In Manual mode the
+    /// resize squares move ~8 px outward so both the resize square and the corner vertex can be
+    /// grabbed independently; in Simplified mode the corner is again the resize square.
+    #[test]
+    fn rect_manual_mode_separates_resize_squares_from_corner_vertices() {
+        let b =
+            LiveBalloon { body: LiveBalloonBody::Rect { rect: [40.0, 40.0, 220.0, 140.0], corner_radius: 12.0 }, tails: Vec::new(), ..LiveBalloon::default() };
+        let xf = one_to_one();
+        let corner_scr = xf.to_screen(40.0, 40.0);
+        assert_eq!(
+            hit_test_balloon_gizmo(&xf, &b, corner_scr, false),
+            Some(GizmoHit::BodyResize { balloon_id: b.id, corner: 0 }),
+            "Simplified: the corner is the resize square"
+        );
+        assert_eq!(
+            hit_test_balloon_gizmo(&xf, &b, corner_scr, true),
+            Some(GizmoHit::VertexHandle { balloon_id: b.id, vertex_index: 0 }),
+            "Manual: the corner is the vertex handle"
+        );
+        assert_eq!(
+            hit_test_balloon_gizmo(&xf, &b, corner_scr + vec2(-8.0, -8.0), true),
+            Some(GizmoHit::BodyResize { balloon_id: b.id, corner: 0 }),
+            "Manual: the outward-offset square still resizes the body"
+        );
     }
 
     #[test]

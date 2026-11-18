@@ -1152,10 +1152,12 @@ fn burst_path(rect: [f64; 4], rays: u32, length: f64, depth: f64, jitter: f64, s
         let valley_r = (1.0 - depth * (1.0 + (hash_f64(seed, i * 4 + 2) - 0.5) * jit * 0.6)).clamp(0.30, 1.0);
         let valley = (cx + rx * valley_r * a_valley.cos(), cy + ry * valley_r * a_valley.sin());
 
-        // A manually dragged tip moves the ray it belongs to.
-        let off = offset(i);
-        points.push((tip.0 + off[0], tip.1 + off[1]));
-        points.push(valley);
+        // A manually dragged ray tip or inner valley moves only its own knot. The valley
+        // handles are indexed after the `n` tips (`n..2*n`), mirroring `vertex_handle_positions`.
+        let tip_off = offset(i);
+        let valley_off = offset(n + i);
+        points.push((tip.0 + tip_off[0], tip.1 + tip_off[1]));
+        points.push((valley.0 + valley_off[0], valley.1 + valley_off[1]));
     }
 
     Path::new(vec![Subpath::polygon(&points)])
@@ -1217,8 +1219,21 @@ struct ConcaveOrFlat {
     concave: f64,
 }
 
-/// ChamferRect body: narration / system plaque with 45-degree beveled or inward-scooped corners.
-fn build_chamfer_rect_body(rect: [f64; 4], chamfer: f64, ConcaveOrFlat { concave }: ConcaveOrFlat) -> Path {
+/// The base geometry of one chamfer corner: its two bevel endpoints and the quadratic control
+/// point of the scooped bevel. Endpoints are exposed as `VertexHandle`s `c*2` / `c*2+1`; each
+/// bevel midpoint is the handle `8+c`.
+struct ChamferCorner {
+    a: P,
+    b: P,
+    ctrl: P,
+}
+
+struct ChamferBodyGeometry {
+    scoop: f64,
+    corners: [ChamferCorner; 4],
+}
+
+fn chamfer_body_geometry(rect: [f64; 4], chamfer: f64, ConcaveOrFlat { concave }: ConcaveOrFlat) -> ChamferBodyGeometry {
     let [x, y, w, h] = rect;
     let (x0, y0) = (x.min(x + w), y.min(y + h));
     let (bw, bh) = (w.abs().max(4.0), h.abs().max(4.0));
@@ -1226,22 +1241,52 @@ fn build_chamfer_rect_body(rect: [f64; 4], chamfer: f64, ConcaveOrFlat { concave
     let max_c = (bw.min(bh) * 0.42).max(1.0);
     let c = chamfer.clamp(1.0, max_c);
     let scoop = concave.clamp(0.0, 1.0) * c * 0.55;
+    ChamferBodyGeometry {
+        scoop,
+        corners: [
+            ChamferCorner { a: (x0, y0 + c), b: (x0 + c, y0), ctrl: (x0 + c - scoop, y0 + c - scoop) },
+            ChamferCorner { a: (x1 - c, y0), b: (x1, y0 + c), ctrl: (x1 - c + scoop, y0 + c - scoop) },
+            ChamferCorner { a: (x1, y1 - c), b: (x1 - c, y1), ctrl: (x1 - c + scoop, y1 - c + scoop) },
+            ChamferCorner { a: (x0 + c, y1), b: (x0, y1 - c), ctrl: (x0 + c - scoop, y1 - c + scoop) },
+        ],
+    }
+}
 
-    let corners: [(P, P, P); 4] = [
-        ((x0, y0 + c), (x0 + c, y0), (x0 + c - scoop, y0 + c - scoop)),
-        ((x1 - c, y0), (x1, y0 + c), (x1 - c + scoop, y0 + c - scoop)),
-        ((x1, y1 - c), (x1 - c, y1), (x1 - c + scoop, y1 - c + scoop)),
-        ((x0 + c, y1), (x0, y1 - c), (x0 + c - scoop, y1 - c + scoop)),
-    ];
-
+/// ChamferRect body: narration / system plaque with 45-degree beveled or inward-scooped corners.
+///
+/// `offset` maps `0..8` to the dragged bevel endpoints and `8..12` to the dragged bevel bends, so
+/// the same geometry drives both the contour and the gizmo handles.
+fn build_chamfer_rect_body(rect: [f64; 4], chamfer: f64, concavity: ConcaveOrFlat, offset: impl Fn(u32) -> [f64; 2]) -> Path {
+    let geo = chamfer_body_geometry(rect, chamfer, concavity);
     let mut knots = Vec::with_capacity(8);
-    for (p_a, p_b, ctrl) in corners {
-        if scoop <= 0.05 {
-            knots.push(Knot::corner(p_a.0, p_a.1));
-            knots.push(Knot::corner(p_b.0, p_b.1));
+    for (c, corner) in geo.corners.into_iter().enumerate() {
+        let c = c as u32;
+        let oa = offset(c * 2);
+        let ob = offset(c * 2 + 1);
+        let a = (corner.a.0 + oa[0], corner.a.1 + oa[1]);
+        let b = (corner.b.0 + ob[0], corner.b.1 + ob[1]);
+        let obend = offset(8 + c);
+
+        // The bend handle sits on the bevel's quadratic midpoint in both the flat and the
+        // scooped case. Dragging it moves that midpoint; dragging an endpoint moves the base.
+        let base_mid = if geo.scoop > 0.05 {
+            (0.25 * a.0 + 0.5 * corner.ctrl.0 + 0.25 * b.0, 0.25 * a.1 + 0.5 * corner.ctrl.1 + 0.25 * b.1)
         } else {
-            knots.push(Knot { anchor: to_point(p_a), in_ctrl: to_point(p_a), out_ctrl: to_point(ctrl), smooth: false });
-            knots.push(Knot { anchor: to_point(p_b), in_ctrl: to_point(ctrl), out_ctrl: to_point(p_b), smooth: false });
+            (0.5 * (a.0 + b.0), 0.5 * (a.1 + b.1))
+        };
+        let target_mid = (base_mid.0 + obend[0], base_mid.1 + obend[1]);
+
+        if geo.scoop <= 0.05 && obend[0].hypot(obend[1]) <= 0.05 {
+            knots.push(Knot::corner(a.0, a.1));
+            knots.push(Knot::corner(b.0, b.1));
+        } else {
+            // Quadratic `a -> b` through `target_mid`, as a cubic so the curve's t=0.5 point is
+            // exactly the bend handle (the handle never floats away from the contour).
+            let ctrl = (2.0 * target_mid.0 - 0.5 * (a.0 + b.0), 2.0 * target_mid.1 - 0.5 * (a.1 + b.1));
+            let c1 = ((a.0 + 2.0 * ctrl.0) / 3.0, (a.1 + 2.0 * ctrl.1) / 3.0);
+            let c2 = ((b.0 + 2.0 * ctrl.0) / 3.0, (b.1 + 2.0 * ctrl.1) / 3.0);
+            knots.push(Knot { anchor: to_point(a), in_ctrl: to_point(a), out_ctrl: to_point(c1), smooth: false });
+            knots.push(Knot { anchor: to_point(b), in_ctrl: to_point(c2), out_ctrl: to_point(b), smooth: false });
         }
     }
     Path::new(vec![Subpath { knots, closed: true, op: PathOp::Combine }])
@@ -1249,7 +1294,7 @@ fn build_chamfer_rect_body(rect: [f64; 4], chamfer: f64, ConcaveOrFlat { concave
 
 /// Standalone constructor for `ChamferRect` balloons.
 pub fn chamfer_rect(rect: [f64; 4], chamfer: f64, concave: f64) -> Path {
-    build_chamfer_rect_body(rect, chamfer, ConcaveOrFlat { concave })
+    build_chamfer_rect_body(rect, chamfer, ConcaveOrFlat { concave }, |_| [0.0, 0.0])
 }
 
 /// Whether the hand-drawn wobble may move this body's contour.
@@ -1289,7 +1334,7 @@ fn build_superellipse_path(cx: f64, cy: f64, rx: f64, ry: f64, squircle: f64) ->
 
 /// How many draggable bulges the oval body exposes. The same indices drive the geometry and the
 /// gizmo handles, so a handle always moves the knot it is drawn on.
-pub const OVAL_BULGES: u32 = 12;
+pub const OVAL_BULGES: u32 = 8;
 
 /// How many of a Uniflash body's needles get a drag handle (the rest follow the shape sliders).
 pub const UNIFLASH_HANDLES: u32 = 14;
@@ -1311,7 +1356,7 @@ fn cubic_at(p0: P, c1: P, c2: P, p3: P, t: f64) -> P {
 fn oval_bulge_points(cx: f64, cy: f64, rx: f64, ry: f64, squircle: f64) -> Vec<P> {
     let knots = superellipse_knots(cx, cy, rx, ry, squircle);
     let n = knots.len();
-    let mut out = Vec::with_capacity(n * 3);
+    let mut out = Vec::with_capacity(n * 2);
     for i in 0..n {
         let a = &knots[i];
         let b = &knots[(i + 1) % n];
@@ -1319,11 +1364,10 @@ fn oval_bulge_points(cx: f64, cy: f64, rx: f64, ry: f64, squircle: f64) -> Vec<P
         let c1 = (a.out_ctrl.x, a.out_ctrl.y);
         let c2 = (b.in_ctrl.x, b.in_ctrl.y);
         let p3 = (b.anchor.x, b.anchor.y);
-        // Three knots per quadrant: the corner plus two thirds points, so the twelve indices are
-        // evenly spread over the contour.
+        // The four cardinal anchors (N, E, S, W) interleaved with the four quadrant midpoints
+        // (NE, SE, SW, NW), clockwise from the top: eight evenly spread handles, one per bulge.
         out.push(p0);
-        out.push(cubic_at(p0, c1, c2, p3, 1.0 / 3.0));
-        out.push(cubic_at(p0, c1, c2, p3, 2.0 / 3.0));
+        out.push(cubic_at(p0, c1, c2, p3, 0.5));
     }
     out
 }
@@ -1879,6 +1923,50 @@ fn nearest_mouth_on_noisy_body(balloon: &LiveBalloon, fallback: [f64; 2], fallba
     result
 }
 
+/// A rectangle whose four corners were dragged individually, with each corner rounded by
+/// `corner_radius` (clamped to half the shorter adjacent edge, like CSS `border-radius`).
+///
+/// The four corner handles are the indices `0..4` of `vertex_handle_positions`; when none of them
+/// has an offset the untouched `rounded_rect` path is kept instead (see `body_outline_with_noise`).
+fn build_dragged_rect(balloon: &LiveBalloon, rect: [f64; 4], corner_radius: f64) -> Path {
+    let (x0, y0) = (rect[0].min(rect[0] + rect[2]), rect[1].min(rect[1] + rect[3]));
+    let (x1, y1) = (rect[0].max(rect[0] + rect[2]), rect[1].max(rect[1] + rect[3]));
+    let base = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+    let corners: Vec<P> = base
+        .iter()
+        .enumerate()
+        .map(|(i, p)| {
+            let off = balloon.get_vertex_offset(i as u32);
+            (p[0] + off[0], p[1] + off[1])
+        })
+        .collect();
+
+    let mut knots = Vec::with_capacity(8);
+    for i in 0..4 {
+        let cur = corners[i];
+        let prev = corners[(i + 3) % 4];
+        let next = corners[(i + 1) % 4];
+        let in_len = dist(prev, cur);
+        let out_len = dist(next, cur);
+        let r = corner_radius.max(0.0).min(0.48 * in_len.min(out_len));
+        if r <= 0.1 {
+            knots.push(Knot::corner(cur.0, cur.1));
+            continue;
+        }
+        // Unit vectors from the corner towards its two neighbours along the incoming/outgoing
+        // edges. The arc starts/ends r px along those edges, its handles sit KAPPA*r closer in.
+        let toward_prev = ((prev.0 - cur.0) / in_len, (prev.1 - cur.1) / in_len);
+        let toward_next = ((next.0 - cur.0) / out_len, (next.1 - cur.1) / out_len);
+        let arc_start = (cur.0 + toward_prev.0 * r, cur.1 + toward_prev.1 * r);
+        let arc_end = (cur.0 + toward_next.0 * r, cur.1 + toward_next.1 * r);
+        let c_start = (arc_start.0 - toward_prev.0 * crate::shapes::KAPPA * r, arc_start.1 - toward_prev.1 * crate::shapes::KAPPA * r);
+        let c_end = (arc_end.0 - toward_next.0 * crate::shapes::KAPPA * r, arc_end.1 - toward_next.1 * crate::shapes::KAPPA * r);
+        knots.push(Knot { anchor: to_point(arc_start), in_ctrl: to_point(arc_start), out_ctrl: to_point(c_start), smooth: false });
+        knots.push(Knot { anchor: to_point(arc_end), in_ctrl: to_point(c_end), out_ctrl: to_point(arc_end), smooth: false });
+    }
+    Path::new(vec![Subpath { knots, closed: true, op: PathOp::Combine }])
+}
+
 /// The body outline alone (no tails), with the hand-drawn wobble applied where it is allowed.
 ///
 /// `LiveBalloon` lives in `photocraft-doc`, so this stays a free function: the vector crate only
@@ -1899,10 +1987,16 @@ fn body_outline_with_noise(balloon: &LiveBalloon) -> Path {
             }
         }
         LiveBalloonBody::Rect { rect, corner_radius } => {
-            let r = *corner_radius;
-            crate::shapes::rounded_rect(rect[0], rect[1], rect[2], rect[3], [r, r, r, r])
+            if balloon.vertex_overrides.iter().any(|v| v.index < 4) {
+                build_dragged_rect(balloon, *rect, *corner_radius)
+            } else {
+                let r = *corner_radius;
+                crate::shapes::rounded_rect(rect[0], rect[1], rect[2], rect[3], [r, r, r, r])
+            }
         }
-        LiveBalloonBody::ChamferRect { rect, chamfer, concave } => build_chamfer_rect_body(*rect, *chamfer, ConcaveOrFlat { concave: *concave }),
+        LiveBalloonBody::ChamferRect { rect, chamfer, concave } => {
+            build_chamfer_rect_body(*rect, *chamfer, ConcaveOrFlat { concave: *concave }, |i| balloon.get_vertex_offset(i))
+        }
         LiveBalloonBody::Cloud { rect, bumps, amplitude, cusp_bite, jitter, seed } => {
             build_cloud_body(balloon, *rect, *bumps, *amplitude, *cusp_bite, *jitter, *seed)
         }
@@ -3155,17 +3249,58 @@ impl LiveBalloonGeom for LiveBalloon {
                     out.push((i, [cx + rx * tip_r * angle.cos() + off[0], cy + ry * tip_r * angle.sin() + off[1]]));
                 }
             }
-            LiveBalloonBody::Burst { rays, length, jitter, seed, .. } => {
+            LiveBalloonBody::Burst { rays, length, depth, jitter, seed, .. } => {
                 let n = (*rays).clamp(5, 64);
                 let step = std::f64::consts::TAU / (n as f64);
                 let jit = jitter.clamp(0.0, 1.0);
                 let len = length.clamp(0.10, 1.20);
+                let dep = depth.clamp(0.0, 0.60);
+                let mut valleys = Vec::with_capacity(n as usize);
                 for i in 0..n {
                     let a_tip = -std::f64::consts::FRAC_PI_2 + (i as f64) * step + (hash_f64(*seed, i * 4) - 0.5) * jit * step * 0.5;
                     let tip_r = 1.0 + len * (1.0 + (hash_f64(*seed, i * 4 + 1) - 0.5) * jit * 0.8);
                     let off = self.get_vertex_offset(i);
                     out.push((i, [cx + rx * tip_r * a_tip.cos() + off[0], cy + ry * tip_r * a_tip.sin() + off[1]]));
+
+                    // The valley after each tip is dragged through indices `n..2*n`, matching
+                    // the offsets `burst_path` applies to the polygon's odd knots.
+                    let a_valley = a_tip + step * 0.5;
+                    let valley_r = (1.0 - dep * (1.0 + (hash_f64(*seed, i * 4 + 2) - 0.5) * jit * 0.6)).clamp(0.30, 1.0);
+                    let off = self.get_vertex_offset(n + i);
+                    valleys.push((n + i, [cx + rx * valley_r * a_valley.cos() + off[0], cy + ry * valley_r * a_valley.sin() + off[1]]));
                 }
+                out.extend(valleys);
+            }
+            LiveBalloonBody::Rect { rect, .. } => {
+                let (x0, y0) = (rect[0].min(rect[0] + rect[2]), rect[1].min(rect[1] + rect[3]));
+                let (x1, y1) = (rect[0].max(rect[0] + rect[2]), rect[1].max(rect[1] + rect[3]));
+                for (i, p) in [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].into_iter().enumerate() {
+                    let off = self.get_vertex_offset(i as u32);
+                    out.push((i as u32, [p[0] + off[0], p[1] + off[1]]));
+                }
+            }
+            LiveBalloonBody::ChamferRect { rect, chamfer, concave } => {
+                let geo = chamfer_body_geometry(*rect, *chamfer, ConcaveOrFlat { concave: *concave });
+                // The eight bevel endpoints come first (indices 0..8), then the four bends
+                // (indices 8..12), so the handle index matches the drag offset index.
+                let mut bends = Vec::with_capacity(4);
+                for (c, corner) in geo.corners.into_iter().enumerate() {
+                    let c = c as u32;
+                    let oa = self.get_vertex_offset(c * 2);
+                    let ob = self.get_vertex_offset(c * 2 + 1);
+                    let a = (corner.a.0 + oa[0], corner.a.1 + oa[1]);
+                    let b = (corner.b.0 + ob[0], corner.b.1 + ob[1]);
+                    out.push((c * 2, [a.0, a.1]));
+                    out.push((c * 2 + 1, [b.0, b.1]));
+                    let base_mid = if geo.scoop > 0.05 {
+                        (0.25 * a.0 + 0.5 * corner.ctrl.0 + 0.25 * b.0, 0.25 * a.1 + 0.5 * corner.ctrl.1 + 0.25 * b.1)
+                    } else {
+                        (0.5 * (a.0 + b.0), 0.5 * (a.1 + b.1))
+                    };
+                    let off = self.get_vertex_offset(8 + c);
+                    bends.push((8 + c, [base_mid.0 + off[0], base_mid.1 + off[1]]));
+                }
+                out.extend(bends);
             }
             LiveBalloonBody::Ellipse { squircle, .. } => {
                 for (i, p) in oval_bulge_points(cx, cy, rx, ry, *squircle).into_iter().enumerate() {
@@ -4265,11 +4400,186 @@ mod tests {
         );
 
         let handles = bulged.vertex_handle_positions();
+        assert_eq!(OVAL_BULGES, 8, "the oval exposes the four cardinal points and four quadrant midpoints");
         assert_eq!(handles.len(), OVAL_BULGES as usize, "the oval exposes its bulge handles");
         for ((_, pos), knot) in handles.iter().zip(&bulged_path.subpaths[0].knots) {
             assert!((pos[0] - knot.anchor.x).abs() < 1e-6 && (pos[1] - knot.anchor.y).abs() < 1e-6, "a handle sits on its own knot");
         }
         assert!(crate::flatten::validate_shape(&bulged_path, None).is_ok());
+
+        // Dragging a quadrant midpoint (not just a cardinal anchor) also bends the spline, and
+        // only that bulge moves.
+        let mid_dragged = LiveBalloon { vertex_overrides: vec![VertexOverride { index: 1, offset: [14.0, 9.0] }], ..plain.clone() };
+        let mid_path = mid_dragged.rebuild_closed_path();
+        let mid_handles = mid_dragged.vertex_handle_positions();
+        assert_eq!(mid_handles.len(), 8);
+        assert!((mid_handles[1].1[0] - (handles[1].1[0] + 14.0)).abs() < 1e-6);
+        assert!((mid_handles[2].1[0] - handles[2].1[0]).abs() < 1e-6);
+        assert!(crate::flatten::validate_shape(&mid_path, None).is_ok());
+    }
+
+    /// A rectangle exposes its four theoretical corners, and dragging one deforms the contour
+    /// both with square corners and with a non-zero corner radius.
+    #[test]
+    fn rect_four_corner_handles_deform_the_rounded_contour() {
+        use photocraft_doc::vector::VertexOverride;
+
+        let rect = [100.0, 120.0, 200.0, 140.0];
+        for corner_radius in [0.0, 12.0] {
+            let plain = LiveBalloon { id: 14, body: LiveBalloonBody::Rect { rect, corner_radius }, tails: Vec::new(), ..LiveBalloon::default() };
+            let handles = plain.vertex_handle_positions();
+            assert_eq!(handles.len(), 4, "four corner handles (radius {corner_radius})");
+            assert_eq!(handles.iter().map(|(i, _)| *i).collect::<Vec<_>>(), vec![0, 1, 2, 3]);
+            assert!((handles[0].1[0] - 100.0).abs() < 1e-6 && (handles[0].1[1] - 120.0).abs() < 1e-6);
+            assert!((handles[2].1[0] - 300.0).abs() < 1e-6 && (handles[2].1[1] - 260.0).abs() < 1e-6);
+
+            let dragged = LiveBalloon { vertex_overrides: vec![VertexOverride { index: 2, offset: [30.0, 20.0] }], ..plain.clone() };
+            let dragged_handles = dragged.vertex_handle_positions();
+            assert!((dragged_handles[2].1[0] - 330.0).abs() < 1e-6 && (dragged_handles[2].1[1] - 280.0).abs() < 1e-6);
+            assert!((dragged_handles[1].1[0] - handles[1].1[0]).abs() < 1e-6, "other corners stay put");
+
+            let plain_path = plain.rebuild_closed_path();
+            let dragged_path = dragged.rebuild_closed_path();
+            let max_x = |p: &Path| p.subpaths[0].knots.iter().map(|k| k.anchor.x).fold(f64::NEG_INFINITY, f64::max);
+            assert!(max_x(&dragged_path) > max_x(&plain_path) + 25.0, "dragging the corner widens the contour (radius {corner_radius})");
+            assert!(crate::flatten::validate_shape(&dragged_path, None).is_ok());
+        }
+
+        // A stale override outside 0..4 must not switch to the bespoke rounded quad.
+        let stale = LiveBalloon {
+            id: 15,
+            body: LiveBalloonBody::Rect { rect, corner_radius: 12.0 },
+            tails: Vec::new(),
+            vertex_overrides: vec![VertexOverride { index: 4, offset: [30.0, 20.0] }],
+            ..LiveBalloon::default()
+        };
+        let plain = LiveBalloon { id: 15, body: LiveBalloonBody::Rect { rect, corner_radius: 12.0 }, tails: Vec::new(), ..LiveBalloon::default() };
+        assert_eq!(stale.rebuild_closed_path().subpaths[0].knots.len(), plain.rebuild_closed_path().subpaths[0].knots.len());
+    }
+
+    /// ChamferRect exposes 8 bevel endpoints and 4 bend handles; both kinds deform the contour.
+    #[test]
+    fn chamfer_rect_twelve_handles_deform_endpoints_and_bends() {
+        use photocraft_doc::vector::VertexOverride;
+
+        let mut base = LiveBalloon {
+            id: 16,
+            body: LiveBalloonBody::ChamferRect { rect: [100.0, 120.0, 200.0, 140.0], chamfer: 20.0, concave: 0.5 },
+            tails: Vec::new(),
+            ..LiveBalloon::default()
+        };
+        let before = base.vertex_handle_positions();
+        assert_eq!(before.len(), 12, "8 endpoints + 4 bevel bends");
+        assert_eq!(before.iter().map(|(i, _)| *i).collect::<Vec<_>>(), (0..12).collect::<Vec<_>>());
+        let path_before = base.rebuild_closed_path();
+        assert_eq!(path_before.subpaths[0].knots.len(), 8);
+
+        base.vertex_overrides.push(VertexOverride { index: 1, offset: [14.0, -11.0] });
+        let after_endpoint = base.vertex_handle_positions();
+        assert!((after_endpoint[1].1[0] - (before[1].1[0] + 14.0)).abs() < 1e-6);
+        let path_endpoint = base.rebuild_closed_path();
+        assert!((path_endpoint.subpaths[0].knots[1].anchor.x - (path_before.subpaths[0].knots[1].anchor.x + 14.0)).abs() < 1e-6);
+
+        base.vertex_overrides.push(VertexOverride { index: 8, offset: [0.0, -18.0] });
+        let after_bend = base.vertex_handle_positions();
+        assert!((after_bend[8].1[1] - (after_endpoint[8].1[1] - 18.0)).abs() < 1e-6);
+        let path_bend = base.rebuild_closed_path();
+        // The bevel's control points carry the bend; a dragged bend must reshape the curve
+        // between the two unchanged endpoints.
+        assert!(
+            (path_bend.subpaths[0].knots[0].out_ctrl.y - path_endpoint.subpaths[0].knots[0].out_ctrl.y).abs() > 5.0,
+            "the bend handle reshapes its corner bevel"
+        );
+        assert!(crate::flatten::validate_shape(&path_bend, None).is_ok());
+
+        // A flat chamfer can be bent too (the handle is live even with no scoop).
+        let flat = LiveBalloon {
+            id: 17,
+            body: LiveBalloonBody::ChamferRect { rect: [100.0, 120.0, 200.0, 140.0], chamfer: 20.0, concave: 0.0 },
+            tails: Vec::new(),
+            vertex_overrides: vec![VertexOverride { index: 9, offset: [12.0, 10.0] }],
+            ..LiveBalloon::default()
+        };
+        let flat_path = flat.rebuild_closed_path();
+        assert_eq!(flat_path.subpaths[0].knots.len(), 8, "a dragged bend makes the flat bevel a curve");
+        assert!(crate::flatten::validate_shape(&flat_path, None).is_ok());
+    }
+
+    /// A burst exposes `2 * rays` handles: the ray tips first, then the inner valleys, and a
+    /// valley drag moves only the polygon's valley knot.
+    #[test]
+    fn burst_exposes_tip_and_valley_handles_and_a_valley_drag_moves_the_contour() {
+        use photocraft_doc::vector::VertexOverride;
+
+        let rays = 12;
+        let plain = LiveBalloon {
+            id: 18,
+            body: LiveBalloonBody::Burst { rect: [100.0, 120.0, 200.0, 140.0], rays, length: 0.6, depth: 0.26, jitter: 0.35, seed: 303 },
+            tails: Vec::new(),
+            ..LiveBalloon::default()
+        };
+        let handles = plain.vertex_handle_positions();
+        assert_eq!(handles.len(), (2 * rays) as usize);
+        assert_eq!(handles.iter().map(|(i, _)| *i).collect::<Vec<_>>(), (0..2 * rays).collect::<Vec<_>>());
+        let path_before = plain.rebuild_closed_path();
+        assert_eq!(path_before.subpaths[0].knots.len(), (2 * rays) as usize);
+        // The polygon interleaves tip/valley, while the handles list the tips first; handle `i`
+        // is knot `2*i` and handle `n+i` is knot `2*i+1`.
+        for (i, pos) in handles.iter().skip(rays as usize) {
+            let ray = *i - rays;
+            let knot = &path_before.subpaths[0].knots[(2 * ray + 1) as usize];
+            assert!((pos[0] - knot.anchor.x).abs() < 1e-6 && (pos[1] - knot.anchor.y).abs() < 1e-6, "valley handle sits on its knot");
+        }
+
+        let ray = 0u32;
+        let valley_handle = rays + ray; // handle index of ray 0's valley
+        let dragged = LiveBalloon { vertex_overrides: vec![VertexOverride { index: valley_handle, offset: [18.0, -14.0] }], ..plain.clone() };
+        let path_after = dragged.rebuild_closed_path();
+        let moved = &path_after.subpaths[0].knots[(2 * ray + 1) as usize];
+        let orig = &path_before.subpaths[0].knots[(2 * ray + 1) as usize];
+        assert!((moved.anchor.x - (orig.anchor.x + 18.0)).abs() < 1e-6);
+        assert!((moved.anchor.y - (orig.anchor.y - 14.0)).abs() < 1e-6);
+        let tip = &path_after.subpaths[0].knots[0];
+        let tip_orig = &path_before.subpaths[0].knots[0];
+        assert!((tip.anchor.x - tip_orig.anchor.x).abs() < 1e-6, "a valley drag leaves the tips alone");
+        assert!(crate::flatten::validate_shape(&path_after, None).is_ok());
+    }
+
+    /// Every one of the six editable body kinds exposes handles whose indices match the contour
+    /// knots they move (so a gizmo circle always sits on the geometry it drags).
+    #[test]
+    fn all_six_body_kinds_expose_live_vertex_handles() {
+        use photocraft_doc::vector::VertexOverride;
+
+        let mut base = LiveBalloon { id: 19, tails: Vec::new(), ..LiveBalloon::default() };
+        let bodies = [
+            LiveBalloonBody::Ellipse { rect: [100.0, 120.0, 200.0, 140.0], squircle: 0.25 },
+            LiveBalloonBody::Rect { rect: [100.0, 120.0, 200.0, 140.0], corner_radius: 12.0 },
+            LiveBalloonBody::ChamferRect { rect: [100.0, 120.0, 200.0, 140.0], chamfer: 20.0, concave: 0.4 },
+            LiveBalloonBody::Cloud { rect: [100.0, 120.0, 200.0, 140.0], bumps: 10, amplitude: 0.18, cusp_bite: 0.22, jitter: 0.35, seed: 42 },
+            LiveBalloonBody::Spiky {
+                rect: [100.0, 120.0, 200.0, 140.0],
+                spikes: 16,
+                length: 0.38,
+                sub_harmonic: 0.45,
+                concavity: 0.65,
+                jitter: 0.3,
+                smooth: false,
+                seed: 101,
+            },
+            LiveBalloonBody::Burst { rect: [100.0, 120.0, 200.0, 140.0], rays: 12, length: 0.6, depth: 0.26, jitter: 0.35, seed: 303 },
+        ];
+        for body in bodies {
+            base.body = body;
+            let handles = base.vertex_handle_positions();
+            assert!(!handles.is_empty(), "every editable body exposes handles");
+            assert!(handles.iter().all(|(_, p)| p[0].is_finite() && p[1].is_finite()), "handles are finite");
+            for (i, p) in &handles {
+                let moved = LiveBalloon { vertex_overrides: vec![VertexOverride { index: *i, offset: [9.0, -7.0] }], ..base.clone() };
+                let moved_pos = moved.vertex_handle_positions().into_iter().find(|(idx, _)| idx == i).map(|(_, p)| p);
+                assert_eq!(moved_pos, Some([p[0] + 9.0, p[1] - 7.0]), "a handle follows its own offset");
+            }
+        }
     }
 
     #[test]

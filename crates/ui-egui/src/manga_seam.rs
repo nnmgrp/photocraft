@@ -384,6 +384,11 @@ mod native {
             vector_brush_presets: &brushes,
             tool_is_balloon: app.active_tool() == Tool::Balloon,
         };
+        // The panel owns the Simplified/Manual mode. Both states default to Manual (true);
+        // keep them in step on startup too, including when panel UI state was restored.
+        if app.manga.ui.balloon_ui.show_vertex_handles != app.manga.ui.balloon_gizmo.show_vertex_handles {
+            app.manga.ui.balloon_gizmo.show_vertex_handles = app.manga.ui.balloon_ui.show_vertex_handles;
+        }
         let out = comic_balloon_panel::panel(ui, &mut app.manga.ui.balloon_ui, &host);
         if let Some(bid) = out.select_balloon_id {
             app.manga.ui.balloon_gizmo.active_balloon_id = Some(bid);

@@ -33,6 +33,8 @@ pub enum Group {
     Navigator,
     /// History | Actions | Layer Comps.
     History,
+    /// Balloons | Screentones | Linework | TypeR Manga | Pages | Timelapse | SFX.
+    Manga,
     /// Layers | Channels | Paths.
     Layers,
     /// Brushes presets.
@@ -41,7 +43,8 @@ pub enum Group {
 
 impl Group {
     /// Photoshop Essentials order, top to bottom.
-    pub const ALL: [Group; 7] = [Group::Color, Group::Properties, Group::Character, Group::Navigator, Group::History, Group::Layers, Group::Brushes];
+    pub const ALL: [Group; 8] =
+        [Group::Color, Group::Properties, Group::Character, Group::Navigator, Group::History, Group::Manga, Group::Layers, Group::Brushes];
 
     pub fn key(self) -> &'static str {
         match self {
@@ -50,6 +53,7 @@ impl Group {
             Group::Character => "character",
             Group::Navigator => "navigator",
             Group::History => "history",
+            Group::Manga => "manga",
             Group::Layers => "layers",
             Group::Brushes => "brushes",
         }
@@ -64,6 +68,7 @@ impl Group {
             Group::Character => 270.0,
             Group::Navigator => 210.0,
             Group::History => 200.0,
+            Group::Manga => 340.0,
             Group::Layers => 320.0,
             Group::Brushes => 200.0,
         }
@@ -78,6 +83,7 @@ impl Group {
             Group::Character => 160.0,
             Group::Navigator => 140.0,
             Group::History => 130.0,
+            Group::Manga => 200.0,
             Group::Layers => 200.0,
             Group::Brushes => 150.0,
         }
@@ -98,6 +104,7 @@ impl Group {
         match self {
             Group::Layers => 140.0,
             Group::Brushes => 100.0,
+            Group::Manga => 120.0,
             _ => 80.0,
         }
     }
@@ -111,6 +118,7 @@ impl Group {
             Group::Character => &["Character", "Paragraph"],
             Group::Navigator => &["Navigator", "Histogram", "Info"],
             Group::History => &["History", "Actions", "Layer Comps"],
+            Group::Manga => &["Balloons", "Screentones", "Linework", "TypeR Manga", "Pages", "Timelapse", "SFX"],
             Group::Layers => &["Layers", "Channels", "Paths"],
             Group::Brushes => &["Brushes"],
         }
@@ -122,7 +130,7 @@ impl Group {
     /// areas shared the wheel, and where the outer content overflowed by one physical pixel (at
     /// 125 % scaling for some window heights) the footer and list moved a pixel as you scrolled (#6238).
     pub fn scrolls_itself(self, tab: usize) -> bool {
-        matches!((self, tab), (Group::Layers, 0..=2) | (Group::History, 0) | (Group::History, 1) | (Group::Navigator, 0))
+        matches!((self, tab), (Group::Layers, 0..=2) | (Group::History, 0) | (Group::History, 1) | (Group::Navigator, 0) | (Group::Manga, _))
     }
 
     pub(crate) fn tab_mut(self, tabs: &mut DockTabs) -> &mut usize {
@@ -132,6 +140,7 @@ impl Group {
             Group::Character => &mut tabs.character,
             Group::Navigator => &mut tabs.navigator,
             Group::History => &mut tabs.history,
+            Group::Manga => &mut tabs.manga,
             Group::Layers => &mut tabs.layers,
             Group::Brushes => &mut tabs.brushes,
         }
@@ -149,6 +158,7 @@ impl Group {
             Group::Character => panels.character,
             Group::Navigator => panels.navigator,
             Group::History => panels.history,
+            Group::Manga => panels.manga,
             Group::Layers => panels.layers,
             Group::Brushes => panels.brushes,
         }
@@ -161,6 +171,7 @@ impl Group {
             Group::Character => &mut panels.character,
             Group::Navigator => &mut panels.navigator,
             Group::History => &mut panels.history,
+            Group::Manga => &mut panels.manga,
             Group::Layers => &mut panels.layers,
             Group::Brushes => &mut panels.brushes,
         }

@@ -235,6 +235,9 @@ pub struct LayerM {
     /// The layer's own XMP packet (missing in older files = none).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub xmp: Option<String>,
+    /// Non-destructive Manga SFX lettering data (missing in older files = none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sfx: Option<photocraft_doc::SfxData>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -279,6 +282,11 @@ pub enum ContentM {
         antialias: text::AntiAlias,
         #[serde(default)]
         warp: Option<text::TextWarp>,
+        /// Threaded `Stories` chain: optional so older documents stay valid.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        next_story_layer: Option<photocraft_doc::LayerId>,
+        #[serde(default)]
+        story_threaded: bool,
     },
     Shape {
         fill: Option<Fill>,

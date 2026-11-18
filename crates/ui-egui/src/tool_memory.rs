@@ -43,6 +43,9 @@ pub(crate) fn select(app: &mut PhotocraftApp, tool: Tool) {
     if tool == Tool::Balloon && crate::manga_seam::panel_checked(app, "window.panel.balloon") == Some(false) {
         let _ = crate::panel_docking::command(app, "window.panel.balloon", &serde_json::json!({ "show": true }));
     }
+    if tool == Tool::Sfx && crate::manga_seam::panel_checked(app, "window.panel.sfx") == Some(false) {
+        let _ = crate::panel_docking::command(app, "window.panel.sfx", &serde_json::json!({ "show": true }));
+    }
 }
 
 /// Add New Artboard's placing mode ends with the Artboard tool (#11386): every place that sets
@@ -397,6 +400,11 @@ pub(crate) fn sanitize(o: &mut ToolOptions) {
     }
     if !photocraft_engine::sample_cmds::SAMPLE_SIZES.contains(&o.eyedropper_size) {
         o.eyedropper_size = d.eyedropper_size;
+    }
+    // The Type panel remembers the last vertical alignment in the style defaults. An unknown or
+    // malformed saved key must not reach a new layer: `top` (the implicit default) stands.
+    if o.type_style_defaults.get("verticalAlign").is_some_and(|v| !v.as_str().is_some_and(|s| matches!(s, "top" | "center" | "bottom" | "justify"))) {
+        o.type_style_defaults.remove("verticalAlign");
     }
     if !o.shape_stroke.valid() {
         o.shape_stroke = d.shape_stroke;

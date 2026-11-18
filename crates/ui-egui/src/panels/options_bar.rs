@@ -784,6 +784,7 @@ fn tool_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens, 
         return;
     }
     match app.ui.tool {
+        Tool::Sfx => crate::manga_seam::sfx_options_bar(app, ui),
         Tool::Move => {
             let o = &mut app.ui.tool_options;
             widgets::checkbox(ui, &mut o.move_auto_select, tl!("Auto-Select:"));

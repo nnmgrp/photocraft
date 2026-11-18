@@ -135,6 +135,33 @@ fn rubber_band_shown(app: &PhotocraftApp, tool: Tool, pen: &super::PenPath) -> b
     tool != Tool::Pen || pen.curvature || app.ui.tool_options.pen_rubber_band
 }
 
+fn active_shape_overlay_path(app: &PhotocraftApp, tool: Tool) -> Option<&Path> {
+    let st = app.session.active()?;
+    let l = st.active_layer.and_then(|id| st.doc.layer(id))?;
+    let LayerContent::Shape(sh) = &l.content else {
+        return None;
+    };
+    let path_tool = matches!(
+        tool,
+        Tool::Pen
+            | Tool::CurvaturePen
+            | Tool::FreeformPen
+            | Tool::PathSelection
+            | Tool::DirectSelection
+            | Tool::AddAnchorPoint
+            | Tool::DeleteAnchorPoint
+            | Tool::ConvertPoint
+    );
+    let linework = photocraft_engine::manga_cmds::vector_curve::get_live_linework(l).is_some();
+    let balloon_uniflash = matches!(&sh.live, Some(photocraft_doc::LiveShape::BalloonGroup { group }) if group.items.iter().any(|b| matches!(b.body, photocraft_doc::vector::LiveBalloonBody::Uniflash { .. })));
+    let balloon_gizmo = matches!(&sh.live, Some(photocraft_doc::LiveShape::BalloonGroup { .. })) && (tool == Tool::Balloon || (balloon_uniflash && !path_tool));
+    // The balloon gizmo draws its own clean frame; a blue vector skeleton over Uniflash or
+    // SAI linework is stale ink from the pre-bake path, not an editable outline.
+    let hide = (!path_tool && linework) || balloon_gizmo;
+    let transforming_this_shape = app.ui.transform.as_ref().is_some_and(|t| t.layer == l.id.0 && !t.selection && t.target.is_none() && t.path.is_none());
+    (!hide && !transforming_this_shape).then_some(&sh.path)
+}
+
 pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, doc: &Document) {
     let tool = app.ui.tool;
     let accent = Tokens::get(painter.ctx()).accent;
@@ -179,16 +206,8 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
             draw_path(moved(MovedPath::Saved).unwrap_or(p), anchors);
         }
         let st = app.session.active();
-        if let Some(l) = st.and_then(|s| s.active_layer.and_then(|id| s.doc.layer(id)))
-            && let LayerContent::Shape(sh) = &l.content
-            && !(tool == Tool::VectorCurve && photocraft_engine::manga_cmds::vector_curve::get_live_linework(l).is_some())
-        {
-            // Hide the stale shape path while its transform preview is active.
-            let transforming_this_shape =
-                app.ui.transform.as_ref().is_some_and(|t| t.layer == l.id.0 && !t.selection && t.target.is_none() && t.path.is_none());
-            if !transforming_this_shape {
-                draw_path(&sh.path, anchors);
-            }
+        if let Some(path) = active_shape_overlay_path(app, tool) {
+            draw_path(path, anchors);
         }
         // A targeted vector mask shows its path with any tool (#196).
         if let Some((_, p)) = targeted_vector_mask(app) {

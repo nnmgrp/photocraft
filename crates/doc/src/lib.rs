@@ -18,6 +18,7 @@ pub mod frame;
 pub mod import_conversion;
 pub mod mode;
 pub mod pattern;
+pub mod sfx;
 pub mod slices;
 pub mod text;
 pub mod text_styles;
@@ -44,8 +45,12 @@ pub use pattern::Pattern;
 pub use photocraft_color::{BlendMode, Color, ColorMode, PixelFormat, SampleType};
 pub use photocraft_geom::{Affine, Rect, Size};
 pub use photocraft_raster::Surface;
-pub use photocraft_tone::{DotShape, PatternType, ScreentoneBackend, ScreentoneGradientType, ScreentoneMode, ScreentoneSpec};
+pub use photocraft_tone::{DotShape, PatternType, SatelliteLayout, ScreentoneBackend, ScreentoneGradientType, ScreentoneMode, ScreentoneSpec};
 use serde::{Deserialize, Serialize};
+pub use sfx::{
+    SfxData, SfxDistress, SfxFillSource, SfxFreeTransform, SfxGlyphTransform, SfxLineJoin, SfxLiquifyBrush, SfxMeshInterpolation, SfxMeshLattice, SfxPreset,
+    SfxStylePass, SfxWarpMode,
+};
 pub use slices::{Slice, SliceKind, SliceOrigin, Slices};
 pub use text_styles::TextStyles;
 pub use variables::{DataSet, DataValue, PixelAlign, PixelMethod, VarKind, VariableDef, Variables};
@@ -431,6 +436,11 @@ pub struct TextLayer {
     pub antialias: text::AntiAlias,
     /// Warp Text settings (applied to the glyph outlines when rendering).
     pub warp: Option<text::TextWarp>,
+    /// Next text layer of a threaded `Stories` chain (double/triple speech bubbles).
+    /// Optional and default-empty so older documents stay valid.
+    pub next_story_layer: Option<LayerId>,
+    /// This layer participates in a multi-bubble story thread.
+    pub story_threaded: bool,
 }
 
 impl Default for TextLayer {
@@ -449,6 +459,8 @@ impl Default for TextLayer {
             orientation: text::Orientation::Horizontal,
             antialias: text::AntiAlias::Smooth,
             warp: None,
+            next_story_layer: None,
+            story_threaded: false,
         }
     }
 }
@@ -746,6 +758,8 @@ pub struct Layer {
     /// embedding apps keep data about the layer under their own namespaces. Copied by
     /// [`Layer::duplicate`], as in Photoshop. PSD `shmd` › `cust` › `layerXMP`.
     pub xmp: Option<Arc<str>>,
+    /// Non-destructive Manga SFX lettering data (`None` for ordinary layers).
+    pub sfx: Option<Arc<SfxData>>,
 }
 
 impl Layer {
@@ -799,6 +813,7 @@ impl Layer {
             video: None,
             reference: false,
             xmp: None,
+            sfx: None,
         }
     }
     pub fn raster(name: impl Into<String>, format: PixelFormat) -> Self {

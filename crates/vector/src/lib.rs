@@ -676,22 +676,40 @@ impl CompiledShape {
         }
 
         if let Some(passes) = &balloon_passes {
-            if !passes.fill_only_path.subpaths.is_empty()
-                && let Some(f) = &shape.fill
-            {
+            let has_ink = !passes.ink_from_stroke_path.subpaths.is_empty();
+            // Legacy stylized Uniflash layers were saved with `fill = black, stroke = null`. Their
+            // ink passes were therefore skipped and the closed envelope became one black blob.
+            // Substitute a white interior and black ink for that flagged combination only; new
+            // documents arrive with the correct fill/stroke and are rendered unchanged.
+            let legacy_black_fill = passes.uniflash_stylized
+                && has_ink
+                && shape
+                    .fill
+                    .as_ref()
+                    .is_some_and(|f| matches!(f, Fill::Solid(c) if { let rgb = c.to_rgb(); rgb[0] < 0.02 && rgb[1] < 0.02 && rgb[2] < 0.02 }));
+            let solid_white = Paint::Solid([1.0, 1.0, 1.0, 1.0]);
+            if !passes.fill_only_path.subpaths.is_empty() {
                 let fpb = passes.fill_only_path.control_bounds().unwrap_or((0.0, 0.0, 0.0, 0.0));
-                let r = fill_rasterizer(&passes.fill_only_path, tol);
-                bounds = union_rect_opt(bounds, r.pixel_bounds());
-                let density = if shape.density.is_finite() { shape.density.clamp(0.0, 1.0) } else { 1.0 };
-                extra_fills.push((r, Paint::from_fill(f, fpb, cb), density));
+                if let Some(f) = &shape.fill {
+                    let r = fill_rasterizer(&passes.fill_only_path, tol);
+                    bounds = union_rect_opt(bounds, r.pixel_bounds());
+                    let density = if shape.density.is_finite() { shape.density.clamp(0.0, 1.0) } else { 1.0 };
+                    let paint = if legacy_black_fill { solid_white.clone() } else { Paint::from_fill(f, fpb, cb) };
+                    extra_fills.push((r, paint, density));
+                }
             }
-            if !passes.ink_from_stroke_path.subpaths.is_empty()
-                && let Some(s) = shape.stroke.as_ref().filter(|s| s.width > 0.0 && s.opacity > 0.0)
-            {
+            if has_ink {
                 let ipb = passes.ink_from_stroke_path.control_bounds().unwrap_or((0.0, 0.0, 0.0, 0.0));
-                let r = fill_rasterizer(&passes.ink_from_stroke_path, tol);
-                bounds = union_rect_opt(bounds, r.pixel_bounds());
-                extra_inks.push((r, Paint::from_fill(&s.paint, ipb, cb), s.opacity.clamp(0.0, 1.0)));
+                let stroke = shape.stroke.as_ref().filter(|s| s.width > 0.0 && s.opacity > 0.0);
+                if stroke.is_some() || passes.uniflash_stylized {
+                    let r = fill_rasterizer(&passes.ink_from_stroke_path, tol);
+                    bounds = union_rect_opt(bounds, r.pixel_bounds());
+                    let (paint, opacity) = match stroke {
+                        Some(s) => (Paint::from_fill(&s.paint, ipb, cb), s.opacity.clamp(0.0, 1.0)),
+                        None => (Paint::Solid([0.0, 0.0, 0.0, 1.0]), 1.0),
+                    };
+                    extra_inks.push((r, paint, opacity));
+                }
             }
         }
 

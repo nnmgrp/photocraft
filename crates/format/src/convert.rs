@@ -152,6 +152,8 @@ fn layer_m(l: &Layer, sink: &mut dyn Sink) -> LayerM {
             orientation: t.orientation,
             antialias: t.antialias,
             warp: t.warp.clone(),
+            next_story_layer: t.next_story_layer,
+            story_threaded: t.story_threaded,
         },
         LayerContent::Shape(s) => ContentM::Shape {
             fill: s.fill.clone(),
@@ -233,6 +235,7 @@ fn layer_m(l: &Layer, sink: &mut dyn Sink) -> LayerM {
         video: l.video.as_ref().map(|v| video_m(v, sink)),
         reference: l.reference,
         xmp: l.xmp.as_deref().map(str::to_string),
+        sfx: l.sfx.as_deref().cloned(),
     }
 }
 
@@ -486,23 +489,39 @@ impl Loader<'_> {
             }
             ContentM::Adjustment { adjustment } => LayerContent::Adjustment(adjustment.clone()),
             ContentM::Fill { fill } => LayerContent::Fill(fill.clone()),
-            ContentM::Text { text, font_family, size_pt, color, transform, cache, psd_raw, runs, paragraphs, shape, orientation, antialias, warp } => {
-                LayerContent::Text(TextLayer {
-                    text: text.clone(),
-                    font_family: font_family.clone(),
-                    size_pt: *size_pt,
-                    color: *color,
-                    transform: *transform,
-                    cache: self.opt_surface(cache)?,
-                    psd_raw: self.opt_blob(psd_raw)?,
-                    runs: runs.clone(),
-                    paragraphs: paragraphs.clone(),
-                    shape: shape.clone(),
-                    orientation: *orientation,
-                    antialias: *antialias,
-                    warp: warp.clone(),
-                })
-            }
+            ContentM::Text {
+                text,
+                font_family,
+                size_pt,
+                color,
+                transform,
+                cache,
+                psd_raw,
+                runs,
+                paragraphs,
+                shape,
+                orientation,
+                antialias,
+                warp,
+                next_story_layer,
+                story_threaded,
+            } => LayerContent::Text(TextLayer {
+                text: text.clone(),
+                font_family: font_family.clone(),
+                size_pt: *size_pt,
+                color: *color,
+                transform: *transform,
+                cache: self.opt_surface(cache)?,
+                psd_raw: self.opt_blob(psd_raw)?,
+                runs: runs.clone(),
+                paragraphs: paragraphs.clone(),
+                shape: shape.clone(),
+                orientation: *orientation,
+                antialias: *antialias,
+                warp: warp.clone(),
+                next_story_layer: *next_story_layer,
+                story_threaded: *story_threaded,
+            }),
             ContentM::Shape { fill, cache, psd_raw, path, stroke, live, arrow_live, triangle_live, density, feather } => LayerContent::Shape(ShapeLayer {
                 path: path.clone(),
                 fill: fill.clone(),
@@ -615,6 +634,10 @@ impl Loader<'_> {
             video: m.video.as_ref().map(|v| self.video(v)).transpose()?,
             reference: m.reference,
             xmp: m.xmp.as_deref().map(Arc::from),
+            sfx: m.sfx.clone().map(|mut s| {
+                s.validate();
+                Arc::new(s)
+            }),
         })
     }
 

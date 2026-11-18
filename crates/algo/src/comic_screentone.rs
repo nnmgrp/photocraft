@@ -11,9 +11,11 @@
 //! * Layer-luminance halftone modulation (manga shading) or pure procedural sheet fill.
 //! * Depth-agnostic, selection-aware and tile-invariant.
 
+use std::f32::consts::FRAC_1_SQRT_2;
+
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
-pub use photocraft_tone::{DotShape, PatternType, ScreentoneBackend, ScreentoneGradientType, ScreentoneMode, ScreentoneSpec};
+pub use photocraft_tone::{DotShape, PatternType, SatelliteLayout, ScreentoneBackend, ScreentoneGradientType, ScreentoneMode, ScreentoneSpec};
 
 use crate::Ctx;
 use crate::fxutil::{luma, rgba, set_rgba, xy};
@@ -240,6 +242,138 @@ pub fn built_in_presets() -> Vec<ScreentonePreset> {
                 ..Default::default()
             },
         },
+        ScreentonePreset {
+            id: "clover-quatrefoil",
+            name: "Quatrefoil Clover",
+            category: "Compound & Satellites",
+            spec: ScreentoneSpec {
+                pattern_type: PatternType::Dots,
+                dot_shape: DotShape::Circle,
+                dot_size: 4.5,
+                spacing_x: 24.0,
+                spacing_y: 24.0,
+                density: 0.5,
+                angle: 45.0,
+                row_offset: 0.5,
+                satellite_enabled: true,
+                satellite_count: 4,
+                satellite_size: 3.5,
+                satellite_distance: 8.5,
+                satellite_dot_shape: DotShape::Circle,
+                satellite_stretch: 0.25,
+                merge_factor: 0.55,
+                ..Default::default()
+            },
+        },
+        ScreentonePreset {
+            id: "clover-trefoil",
+            name: "Trefoil Clover",
+            category: "Compound & Satellites",
+            spec: ScreentoneSpec {
+                pattern_type: PatternType::Dots,
+                dot_shape: DotShape::Circle,
+                dot_size: 4.5,
+                spacing_x: 26.0,
+                spacing_y: 26.0,
+                density: 0.5,
+                satellite_enabled: true,
+                satellite_count: 3,
+                satellite_size: 3.8,
+                satellite_distance: 9.0,
+                satellite_layout: SatelliteLayout::Even,
+                merge_factor: 0.5,
+                ..Default::default()
+            },
+        },
+        ScreentonePreset {
+            id: "ink-asterisk",
+            name: "Ink Asterisk",
+            category: "Compound & Satellites",
+            spec: ScreentoneSpec {
+                pattern_type: PatternType::Dots,
+                dot_shape: DotShape::Diamond,
+                dot_size: 4.0,
+                spacing_x: 24.0,
+                spacing_y: 24.0,
+                density: 0.5,
+                row_offset: 0.5,
+                satellite_enabled: true,
+                satellite_count: 4,
+                satellite_size: 3.2,
+                satellite_distance: 9.0,
+                satellite_angle: 45.0,
+                satellite_dot_shape: DotShape::Diamond,
+                satellite_stretch: 1.5,
+                merge_factor: 0.45,
+                ..Default::default()
+            },
+        },
+        ScreentonePreset {
+            id: "orbital-cluster",
+            name: "Orbital Cluster",
+            category: "Compound & Satellites",
+            spec: ScreentoneSpec {
+                pattern_type: PatternType::Dots,
+                dot_shape: DotShape::Circle,
+                dot_size: 5.5,
+                spacing_x: 28.0,
+                spacing_y: 28.0,
+                density: 0.5,
+                angle: 30.0,
+                row_offset: 0.5,
+                satellite_enabled: true,
+                satellite_count: 6,
+                satellite_size: 2.2,
+                satellite_distance: 10.0,
+                satellite_layout: SatelliteLayout::Even,
+                ..Default::default()
+            },
+        },
+        ScreentonePreset {
+            id: "calibrated-10",
+            name: "Calibrated 10% Dot",
+            category: "Calibrated",
+            spec: ScreentoneSpec {
+                auto_dot_size: true,
+                mode: ScreentoneMode::Sheet,
+                density: 0.10,
+                spacing_x: 22.0,
+                spacing_y: 22.0,
+                angle: 45.0,
+                row_offset: 0.5,
+                ..Default::default()
+            },
+        },
+        ScreentonePreset {
+            id: "calibrated-30",
+            name: "Calibrated 30% Dot",
+            category: "Calibrated",
+            spec: ScreentoneSpec {
+                auto_dot_size: true,
+                mode: ScreentoneMode::Sheet,
+                density: 0.30,
+                spacing_x: 22.0,
+                spacing_y: 22.0,
+                angle: 45.0,
+                row_offset: 0.5,
+                ..Default::default()
+            },
+        },
+        ScreentonePreset {
+            id: "calibrated-60",
+            name: "Calibrated 60% Dot",
+            category: "Calibrated",
+            spec: ScreentoneSpec {
+                auto_dot_size: true,
+                mode: ScreentoneMode::Sheet,
+                density: 0.60,
+                spacing_x: 22.0,
+                spacing_y: 22.0,
+                angle: 45.0,
+                row_offset: 0.5,
+                ..Default::default()
+            },
+        },
     ]
 }
 
@@ -375,23 +509,6 @@ fn compute_grad_factor(x: f32, y: f32, width: f32, height: f32, spec: &Screenton
     mid_bias_curve(g, spec.grad_midpoint)
 }
 
-/// Distance from point `p` to line segment `a -> b`.
-#[inline]
-fn dist_to_segment(p: (f32, f32), a: (f32, f32), b: (f32, f32)) -> f32 {
-    let pax = p.0 - a.0;
-    let pay = p.1 - a.1;
-    let bax = b.0 - a.0;
-    let bay = b.1 - a.1;
-    let len_sq = bax * bax + bay * bay;
-    if len_sq < 1e-8 {
-        return sdist2(pax, pay);
-    }
-    let h = ((pax * bax + pay * bay) / len_sq).clamp(0.0, 1.0);
-    let dx = pax - bax * h;
-    let dy = pay - bay * h;
-    sdist2(dx, dy)
-}
-
 /// Signed distance field to a 2D box with rounded corners.
 #[inline]
 fn sdf_box_rounded(px: f32, py: f32, half_w: f32, half_h: f32, radius: f32) -> f32 {
@@ -425,78 +542,131 @@ fn sdf_diamond(px: f32, py: f32, size: f32, roundness: f32) -> f32 {
     sdf_box_rounded(u, v, s, s, r)
 }
 
-/// Signed distance field for a general polygon with ray-casting winding check.
-fn sdf_polygon(p: (f32, f32), pts: &[[f32; 2]], roundness: f32) -> f32 {
-    let n = pts.len();
-    if n < 3 {
-        return f32::MAX;
+/// Analytic O(1) distance fields and area constants (the legacy polygon generators live in the
+/// `oracle` test module below and are used only to verify these formulas).
+
+#[inline]
+pub fn sdf_smooth_min(d1: f32, d2: f32, k: f32) -> f32 {
+    if k <= 1e-4 {
+        return d1.min(d2);
     }
-    let mut min_d = f32::MAX;
-    let mut inside = false;
-    let mut j = n - 1;
-    for i in 0..n {
-        let vi = (pts[i][0], pts[i][1]);
-        let vj = (pts[j][0], pts[j][1]);
-        if ((vi.1 > p.1) != (vj.1 > p.1)) && (p.0 < (vj.0 - vi.0) * (p.1 - vi.1) / (vj.1 - vi.1).abs().max(1e-6) + vi.0) {
-            inside = !inside;
-        }
-        let seg_d = dist_to_segment(p, vj, vi);
-        if seg_d < min_d {
-            min_d = seg_d;
-        }
-        j = i;
+    let h = (k - (d1 - d2).abs()).max(0.0) / k;
+    d1.min(d2) - h * h * k * 0.25
+}
+
+#[inline]
+pub fn sdf_hexagon_exact(px: f32, py: f32, size: f32, roundness: f32) -> f32 {
+    const KX: f32 = -0.866025404;
+    const KY: f32 = 0.5;
+    const KZ: f32 = 0.577350269;
+    let r = size * 0.25 * roundness.clamp(0.0, 1.0);
+    let s = (size - r).max(0.05) * 0.866025404;
+    let mut x = px.abs();
+    let mut y = py.abs();
+    let dot = 2.0 * (KX * x + KY * y).min(0.0);
+    x -= dot * KX;
+    y -= dot * KY;
+    x -= x.clamp(-KZ * s, KZ * s);
+    y -= s;
+    sdist2(x, y) * y.signum() - r
+}
+
+#[inline]
+pub fn sdf_triangle_exact(px: f32, mut py: f32, size: f32, roundness: f32) -> f32 {
+    const K: f32 = 1.732050808;
+    let r = size * 0.25 * roundness.clamp(0.0, 1.0);
+    let s = (size - r).max(0.05) * 0.866025404;
+    let mut x = px.abs() - s;
+    py = -py + s / K;
+    if x + K * py > 0.0 {
+        let nx = (x - K * py) * 0.5;
+        let ny = (-K * x - py) * 0.5;
+        x = nx;
+        py = ny;
     }
-    let signed_d = if inside { -min_d } else { min_d };
-    let r = roundness.clamp(0.0, 1.0);
-    if r > 0.01 {
-        let corner_rad = min_d.min(2.0) * 0.5 * r;
-        signed_d - corner_rad
+    x -= x.clamp(-2.0 * s, 0.0);
+    -sdist2(x, py) * py.signum() - r
+}
+
+#[inline]
+pub fn sdf_star5_exact(px: f32, mut py: f32, size: f32, roundness: f32) -> f32 {
+    const K1X: f32 = 0.809016994;
+    const K1Y: f32 = -0.587785252;
+    const K2X: f32 = -K1X;
+    const K2Y: f32 = K1Y;
+    let r = size * 0.2 * roundness.clamp(0.0, 1.0);
+    let s = (size - r).max(0.05);
+    let rf = 0.40;
+    let mut x = px.abs();
+    py = -py;
+    let d1 = 2.0 * (K1X * x + K1Y * py).max(0.0);
+    x -= d1 * K1X;
+    py -= d1 * K1Y;
+    let d2 = 2.0 * (K2X * x + K2Y * py).max(0.0);
+    x -= d2 * K2X;
+    py -= d2 * K2Y;
+    x = x.abs();
+    py -= s;
+    let bax = rf * (-K1Y);
+    let bay = rf * K1X - 1.0;
+    let h = ((x * bax + py * bay) / (bax * bax + bay * bay)).clamp(0.0, s);
+    let dx = x - bax * h;
+    let dy = py - bay * h;
+    sdist2(dx, dy) * (py * bax - x * bay).signum() - r
+}
+
+#[inline]
+pub fn sdf_heart_exact(px: f32, py: f32, size: f32, _roundness: f32) -> f32 {
+    let s = size.max(0.05) * 1.46;
+    let x = px.abs() / s;
+    let y = (0.55 - py / s).clamp(-2.0, 2.0);
+    let d = if y + x > 1.0 {
+        let dx = x - 0.25;
+        let dy = y - 0.75;
+        sdist2(dx, dy) - FRAC_1_SQRT_2 * 0.5
     } else {
-        signed_d
+        let d1 = x * x + (y - 1.0).powi(2);
+        let m = 0.5 * (x + y).max(0.0);
+        let d2 = (x - m).powi(2) + (y - m).powi(2);
+        let dist = d1.min(d2).sqrt();
+        let sign = if x < y { -1.0 } else { 1.0 };
+        dist * sign
+    };
+    d * s
+}
+
+/// `sqrt` area calibration, only where ink scales the dot radius.
+#[inline]
+pub fn area_ink(spec: &ScreentoneSpec, ink: f32) -> f32 {
+    if spec.equalize_area && !spec.auto_dot_size && ink > 0.0 && ink < 1.0 { ink.sqrt() } else { ink }
+}
+
+pub const AREA_K_CIRCLE: f32 = std::f32::consts::PI;
+pub const AREA_K_SQUARE: f32 = 2.56;
+pub const AREA_K_DIAMOND: f32 = 2.0;
+pub const AREA_K_HEXAGON: f32 = 2.598_076;
+pub const AREA_K_TRIANGLE: f32 = 1.299_038;
+pub const AREA_K_STAR5: f32 = 1.175_571;
+pub const AREA_K_HEART: f32 = 1.902_877;
+
+pub fn area_k_for(pattern: PatternType, dot: DotShape) -> f32 {
+    match pattern {
+        PatternType::Stars => AREA_K_STAR5,
+        PatternType::Hearts => AREA_K_HEART,
+        PatternType::Triangles => AREA_K_TRIANGLE,
+        PatternType::Hexgrid => AREA_K_HEXAGON,
+        _ => match dot {
+            DotShape::Circle => AREA_K_CIRCLE,
+            DotShape::Square => AREA_K_SQUARE,
+            DotShape::Diamond => AREA_K_DIAMOND,
+            DotShape::Hexagon => AREA_K_HEXAGON,
+        },
     }
 }
 
-/// Polygon vertices for Hexagon.
-fn hexagon_vertices(size: f32) -> [[f32; 2]; 6] {
-    let mut pts = [[0.0f32; 2]; 6];
-    for (i, p) in pts.iter_mut().enumerate() {
-        let a = (std::f32::consts::PI / 3.0) * i as f32 - std::f32::consts::FRAC_PI_6;
-        p[0] = a.cos() * size;
-        p[1] = a.sin() * size;
-    }
-    pts
-}
-
-/// Polygon vertices for 5-pointed Star.
-fn star_vertices(size: f32) -> [[f32; 2]; 10] {
-    let mut pts = [[0.0f32; 2]; 10];
-    for (i, p) in pts.iter_mut().enumerate() {
-        let r = if i % 2 == 0 { size } else { size * 0.4 };
-        let a = (std::f32::consts::PI / 5.0) * i as f32 - std::f32::consts::FRAC_PI_2;
-        p[0] = a.cos() * r;
-        p[1] = a.sin() * r;
-    }
-    pts
-}
-
-/// Polygon vertices for Equilateral Triangle.
-fn triangle_vertices(size: f32) -> [[f32; 2]; 3] {
-    [[0.0, -size], [size * 0.8660254, size * 0.5], [-size * 0.8660254, size * 0.5]]
-}
-
-/// Polygon vertices for Heart shape curve (28 sample points).
-fn heart_vertices(size: f32) -> [[f32; 2]; 28] {
-    let mut pts = [[0.0f32; 2]; 28];
-    let sc = size / 17.0;
-    for (i, p) in pts.iter_mut().enumerate() {
-        let t = (i as f32 / 28.0) * std::f32::consts::PI * 2.0;
-        let sin_t = t.sin();
-        let x = sc * 16.0 * sin_t * sin_t * sin_t;
-        let y = -sc * (13.0 * t.cos() - 5.0 * (2.0 * t).cos() - 2.0 * (3.0 * t).cos() - (4.0 * t).cos());
-        p[0] = x;
-        p[1] = y;
-    }
-    pts
+#[inline]
+pub fn auto_size(cell_area: f32, coverage: f32, area_k: f32) -> f32 {
+    (cell_area * coverage.clamp(0.0, 1.0) / area_k.max(1e-3)).sqrt()
 }
 
 /// Per-pixel shape transform (stretch, corner roundness, pattern rotation) shared by all SDF
@@ -505,8 +675,19 @@ fn heart_vertices(size: f32) -> [[f32; 2]; 28] {
 struct ShapeXform {
     stretch_x: f32,
     stretch_y: f32,
+    inv_stretch_x: f32,
+    inv_stretch_y: f32,
     roundness: f32,
-    rot_pattern_rad: f32,
+    sin_p: f32,
+    cos_p: f32,
+}
+
+impl ShapeXform {
+    fn new(stretch_x: f32, stretch_y: f32, roundness: f32, sin_p: f32, cos_p: f32) -> Self {
+        let sx = stretch_x.max(0.01);
+        let sy = stretch_y.max(0.01);
+        Self { stretch_x: sx, stretch_y: sy, inv_stretch_x: 1.0 / sx, inv_stretch_y: 1.0 / sy, roundness, sin_p, cos_p }
+    }
 }
 
 /// Evaluates Signed Distance to a specific shape at `(px, py)` with stretch and rotation.
@@ -518,11 +699,10 @@ fn eval_shape_sdf(px: f32, py: f32, shape: DotShape, size: f32, xf: ShapeXform) 
     if (shape == DotShape::Circle || xf.roundness >= 0.95) && (xf.stretch_x - 1.0).abs() <= 1e-4 && (xf.stretch_y - 1.0).abs() <= 1e-4 {
         return sdist2(px, py) - size;
     }
-    let (sin_p, cos_p) = xf.rot_pattern_rad.sin_cos();
-    let rx = px * cos_p + py * sin_p;
-    let ry = -px * sin_p + py * cos_p;
-    let sx = rx / xf.stretch_x.max(0.01);
-    let sy = ry / xf.stretch_y.max(0.01);
+    let rx = px * xf.cos_p + py * xf.sin_p;
+    let ry = -px * xf.sin_p + py * xf.cos_p;
+    let sx = rx * xf.inv_stretch_x;
+    let sy = ry * xf.inv_stretch_y;
 
     if shape == DotShape::Circle || xf.roundness >= 0.95 {
         return sdist2(sx, sy) - size;
@@ -531,37 +711,26 @@ fn eval_shape_sdf(px: f32, py: f32, shape: DotShape, size: f32, xf: ShapeXform) 
         DotShape::Circle => sdist2(sx, sy) - size,
         DotShape::Square => sdf_square(sx, sy, size, xf.roundness),
         DotShape::Diamond => sdf_diamond(sx, sy, size, xf.roundness),
-        DotShape::Hexagon => {
-            let verts = hexagon_vertices(size);
-            sdf_polygon((sx, sy), &verts, xf.roundness)
-        }
+        // The legacy hexagon is pointy-top; the IQ formula is flat-top, so swap the axes.
+        DotShape::Hexagon => sdf_hexagon_exact(sy, sx, size, xf.roundness),
     }
 }
 
 /// Evaluates special pattern shape SDF (star, heart, triangle).
+#[inline]
 fn eval_special_shape_sdf(px: f32, py: f32, pattern: PatternType, size: f32, xf: ShapeXform) -> f32 {
     if size <= 0.05 {
         return 1e6;
     }
-    let (sin_p, cos_p) = xf.rot_pattern_rad.sin_cos();
-    let rx = px * cos_p + py * sin_p;
-    let ry = -px * sin_p + py * cos_p;
-    let sx = rx / xf.stretch_x.max(0.01);
-    let sy = ry / xf.stretch_y.max(0.01);
+    let rx = px * xf.cos_p + py * xf.sin_p;
+    let ry = -px * xf.sin_p + py * xf.cos_p;
+    let sx = rx * xf.inv_stretch_x;
+    let sy = ry * xf.inv_stretch_y;
 
     match pattern {
-        PatternType::Stars => {
-            let verts = star_vertices(size);
-            sdf_polygon((sx, sy), &verts, xf.roundness)
-        }
-        PatternType::Hearts => {
-            let verts = heart_vertices(size);
-            sdf_polygon((sx, sy), &verts, xf.roundness)
-        }
-        PatternType::Triangles => {
-            let verts = triangle_vertices(size);
-            sdf_polygon((sx, sy), &verts, xf.roundness)
-        }
+        PatternType::Stars => sdf_star5_exact(sx, sy, size, xf.roundness),
+        PatternType::Hearts => sdf_heart_exact(sx, sy, size, xf.roundness),
+        PatternType::Triangles => sdf_triangle_exact(sx, sy, size, xf.roundness),
         _ => sdist2(sx, sy) - size,
     }
 }
@@ -601,16 +770,22 @@ impl ToneCurve {
     }
 
     /// Maps effective luminance to ink density in `0.0..=1.0`.
-    fn luma_to_ink(&self, luma_eff: f32) -> f32 {
-        let g = (luma_eff + self.brightness).clamp(0.0, 1.0).powf(self.gamma);
+    fn luma_to_ink(&self, luma_eff: f32, posterize_steps: u8) -> f32 {
+        let base = (luma_eff + self.brightness).clamp(0.0, 1.0);
+        let g = if (self.gamma - 1.0).abs() < 1e-4 { base } else { base.powf(self.gamma) };
         let luma_adj = ((g - 0.5) * self.contrast + 0.5).clamp(0.0, 1.0);
-        if luma_adj >= self.white_thresh {
+        let mut ink = if luma_adj >= self.white_thresh {
             0.0
         } else if luma_adj <= self.black_thresh {
             1.0
         } else {
             ((self.white_thresh - luma_adj) / (self.white_thresh - self.black_thresh).max(1e-5)).clamp(0.0, 1.0)
+        };
+        if posterize_steps >= 2 && ink > 0.0 && ink < 1.0 {
+            let steps = f32::from(posterize_steps);
+            ink = (ink * steps).ceil() / steps;
         }
+        ink
     }
 }
 
@@ -854,7 +1029,7 @@ impl ShadingGrids {
                 } else {
                     best_delined_luma(&luma_grid, &line_edge_grid, &preserved_grid, ww, wh, wx as i32, wy as i32)
                 };
-                ambient_ink_grid[idx] = tone.luma_to_ink(eff_luma);
+                ambient_ink_grid[idx] = tone.luma_to_ink(eff_luma, spec.posterize_steps);
             }
         }
         Self { work_rect, ww, preserved_grid, ambient_ink_grid }
@@ -870,9 +1045,38 @@ impl ShadingGrids {
         spec.preserve_lines && !self.preserved_grid.is_empty() && self.preserved_grid[self.grid_idx(x, y)] != 0
     }
 
-    fn sample_ink(&self, src: &Image, ctx: &Ctx, tone: ToneCurve, doc_x: f32, doc_y: f32) -> f32 {
+    fn sample_ink(&self, src: &Image, ctx: &Ctx, tone: ToneCurve, spec: &ScreentoneSpec, doc_x: f32, doc_y: f32) -> f32 {
         let (ix, iy) = (doc_x.floor() as i32, doc_y.floor() as i32);
-        if !self.ambient_ink_grid.is_empty() { self.ambient_ink_grid[self.grid_idx(ix, iy)] } else { tone.luma_to_ink(raw_paper_luma(src, ctx, ix, iy)) }
+        if !self.ambient_ink_grid.is_empty() {
+            self.ambient_ink_grid[self.grid_idx(ix, iy)]
+        } else {
+            tone.luma_to_ink(raw_paper_luma(src, ctx, ix, iy), spec.posterize_steps)
+        }
+    }
+}
+
+/// Satellite directions are precomputed once per frame: the hot pixel loop never calls
+/// `sin_cos`/`atan2`. `Cross` keeps the exact legacy order; `Even` spaces N directions over 2π.
+fn build_sat_dirs(spec: &ScreentoneSpec, sin_sat: f32, cos_sat: f32) -> ([(f32, f32); 8], usize) {
+    const CROSS: [(f32, f32); 4] = [(0.0, -1.0), (0.0, 1.0), (1.0, 0.0), (-1.0, 0.0)];
+    let mut dirs = [(0.0f32, 0.0f32); 8];
+    match spec.satellite_layout {
+        SatelliteLayout::Cross => {
+            let n = (spec.satellite_count as usize).min(4);
+            for (k, (ux, uy)) in CROSS.iter().take(n).enumerate() {
+                dirs[k] = (ux * cos_sat - uy * sin_sat, ux * sin_sat + uy * cos_sat);
+            }
+            (dirs, n)
+        }
+        SatelliteLayout::Even => {
+            let n = (spec.satellite_count as usize).clamp(0, 8);
+            let base = spec.satellite_angle.to_radians();
+            for k in 0..n {
+                let th = base + std::f32::consts::TAU * k as f32 / n.max(1) as f32;
+                dirs[k] = (th.sin(), -th.cos());
+            }
+            (dirs, n)
+        }
     }
 }
 
@@ -881,15 +1085,23 @@ struct PatternEvalCtx<'a> {
     xf: ShapeXform,
     spacing_x: f32,
     spacing_y: f32,
-    sin_sat: f32,
-    cos_sat: f32,
+    sat_dirs: [(f32, f32); 8],
+    sat_n: usize,
+    inv_sat_stretch: f32,
+    sin_x: f32,
+    cos_x: f32,
 }
 
 impl PatternEvalCtx<'_> {
     fn eval_hexgrid(&self, grid_x: f32, grid_y: f32, mod_size: f32, ink: f32) -> f32 {
         let hy = self.spacing_y * 0.8660254;
         let cy_idx = (grid_y / hy).round() as i32;
-        let size = (self.spec.dot_size * mod_size * self.spec.density * ink).max(0.0);
+        let cell_area = self.spacing_x * self.spacing_y * 0.8660254;
+        let size = if self.spec.auto_dot_size {
+            (auto_size(cell_area, ink * self.spec.density, area_k_for(PatternType::Hexgrid, self.spec.dot_shape)) * mod_size).max(0.0)
+        } else {
+            (self.spec.dot_size * mod_size * self.spec.density * area_ink(self.spec, ink)).max(0.0)
+        };
         let mut cov = 0.0f32;
         for dy in -1..=1 {
             let iy = cy_idx + dy;
@@ -952,7 +1164,7 @@ impl PatternEvalCtx<'_> {
 
     fn eval_stipple(&self, grid_x: f32, grid_y: f32, mod_size: f32, ink: f32) -> f32 {
         let seed = self.spec.seed.wrapping_add(999);
-        let (cx_idx, cy_idx) = ((grid_x / self.spacing_x).floor() as i32, (grid_y / self.spacing_y).floor() as i32);
+        let (cx_idx, cy_idx) = ((grid_x / self.spacing_x).round() as i32, (grid_y / self.spacing_y).round() as i32);
         let mut cov = 0.0f32;
         for dy in -1..=1 {
             for dx in -1..=1 {
@@ -977,16 +1189,20 @@ impl PatternEvalCtx<'_> {
     }
 
     fn eval_special_shapes(&self, grid_x: f32, grid_y: f32, mod_size: f32, ink: f32) -> f32 {
-        let (cx_idx, cy_idx) = ((grid_x / self.spacing_x).floor() as i32, (grid_y / self.spacing_y).floor() as i32);
-        let sz = (self.spec.dot_size * mod_size * self.spec.density * ink).max(0.0);
+        let cy_idx = (grid_y / self.spacing_y).round() as i32;
+        let sz = if self.spec.auto_dot_size {
+            (auto_size(self.spacing_x * self.spacing_y, ink * self.spec.density, area_k_for(self.spec.pattern_type, self.spec.dot_shape)) * mod_size).max(0.0)
+        } else {
+            (self.spec.dot_size * mod_size * self.spec.density * area_ink(self.spec, ink)).max(0.0)
+        };
         let mut cov = 0.0f32;
         for dy in -1..=1 {
+            let iy = cy_idx + dy;
+            let row_shift = if (iy & 1) != 0 { self.spacing_x * self.spec.row_offset } else { 0.0 };
+            let cx_idx = ((grid_x - row_shift) / self.spacing_x).round() as i32;
             for dx in -1..=1 {
-                let (ix, iy) = (cx_idx + dx, cy_idx + dy);
-                let (mut dot_cx, mut dot_cy) = (ix as f32 * self.spacing_x, iy as f32 * self.spacing_y);
-                if (iy & 1) != 0 {
-                    dot_cx += self.spacing_x * self.spec.row_offset;
-                }
+                let ix = cx_idx + dx;
+                let (mut dot_cx, mut dot_cy) = (ix as f32 * self.spacing_x + row_shift, iy as f32 * self.spacing_y);
                 if self.spec.jitter_pos > 0.0 {
                     dot_cx += (hash_coord(ix, iy, self.spec.seed) - 0.5) * self.spec.jitter_pos * 0.005 * self.spacing_x;
                     dot_cy += (hash_coord(ix.wrapping_add(1000), iy, self.spec.seed) - 0.5) * self.spec.jitter_pos * 0.005 * self.spacing_y;
@@ -998,59 +1214,90 @@ impl PatternEvalCtx<'_> {
         cov
     }
 
-    fn eval_satellites(&self, grid: (f32, f32), dot_c: (f32, f32), ssize: f32, sdist: f32) -> f32 {
-        let mut cov = 0.0f32;
-        let sat_offsets: [(f32, f32); 4] = [(0.0, -sdist), (0.0, sdist), (sdist, 0.0), (-sdist, 0.0)];
-        for &(ox, oy) in sat_offsets.iter().take((self.spec.satellite_count as usize).min(4)) {
-            let (rsx, rsy) = (ox * self.cos_sat - oy * self.sin_sat, ox * self.sin_sat + oy * self.cos_sat);
-            let mut spx = grid.0 - (dot_c.0 + rsx);
-            let mut spy = grid.1 - (dot_c.1 + rsy);
-            if self.spec.satellite_stretch > 0.0 && (rsx != 0.0 || rsy != 0.0) {
-                let (s_sin, s_cos) = (-rsy).atan2(-rsx).sin_cos();
-                let rot_sx = spx * s_cos + spy * s_sin;
-                let rot_sy = -spx * s_sin + spy * s_cos;
-                let scaled_sx = rot_sx / (1.0 + self.spec.satellite_stretch).max(0.01);
-                spx = scaled_sx * s_cos - rot_sy * s_sin;
-                spy = scaled_sx * s_sin + rot_sy * s_cos;
+    fn eval_dots(&self, grid_x: f32, grid_y: f32, shifted: (f32, f32), mod_size: f32, ink: f32) -> f32 {
+        // Kezuri: long thin noise cells along the unrotated X axis scrape the light edge.
+        let eff_ink = ink;
+        if self.spec.scrape_strength > 0.001 && eff_ink > 0.0 && eff_ink < 0.4 {
+            let fade = (0.4 - eff_ink) / 0.4;
+            let n = hash_coord((shifted.0 * 0.3).floor() as i32, (shifted.1 * 1.5).floor() as i32, self.spec.seed.wrapping_add(777));
+            if n < fade * self.spec.scrape_strength {
+                return 0.0;
             }
-            let dist_sat = eval_shape_sdf(spx, spy, self.spec.satellite_dot_shape, ssize, self.xf);
-            cov = cov.max(coverage_from_sdf(dist_sat, self.spec.smoothness));
         }
-        cov
-    }
+        let cov_target = (eff_ink * self.spec.density).clamp(0.0, 1.0);
+        let auto = self.spec.auto_dot_size;
+        let eff_ink = if auto { eff_ink } else { area_ink(self.spec, eff_ink) };
+        let k_main = area_k_for(PatternType::Dots, self.spec.dot_shape);
+        let k_sat = area_k_for(PatternType::Dots, self.spec.satellite_dot_shape);
+        let (base, ssize_base, k_scale) = if auto {
+            let sat_ratio = if self.spec.satellite_enabled { self.spec.satellite_size / self.spec.dot_size.max(0.05) } else { 0.0 };
+            let n = self.sat_n as f32;
+            let norm = 1.0 / (1.0 + n * sat_ratio * sat_ratio * k_sat / k_main).sqrt();
+            (
+                auto_size(self.spacing_x * self.spacing_y, cov_target, k_main) * norm,
+                auto_size(self.spacing_x * self.spacing_y, cov_target, k_main) * norm * sat_ratio,
+                cov_target.sqrt(),
+            )
+        } else {
+            (self.spec.dot_size * self.spec.density * eff_ink, self.spec.satellite_size * self.spec.density * eff_ink, self.spec.density * eff_ink)
+        };
+        let merge = self.spec.merge_factor.clamp(0.0, 1.0);
+        let psize = ((base + merge * self.spacing_x * 0.2 * k_scale) * mod_size).max(0.0);
+        let ssize = ((ssize_base + merge * self.spacing_x * 0.4 * k_scale) * mod_size).max(0.0);
+        let sdist = self.spec.satellite_distance * (1.0 - merge * 0.6);
+        let smooth_k = merge * self.spacing_x.min(self.spacing_y) * 0.35;
 
-    fn eval_dots(&self, grid_x: f32, grid_y: f32, mod_size: f32, ink: f32) -> f32 {
-        let cy_idx = (grid_y / self.spacing_y).floor() as i32;
-        let merged_size = self.spec.dot_size + self.spec.merge_factor * self.spacing_x * 0.2;
-        let psize = (merged_size * mod_size * self.spec.density * ink).max(0.0);
-        let ssize = ((self.spec.satellite_size + self.spec.merge_factor * self.spacing_x * 0.4) * mod_size * self.spec.density * ink).max(0.0);
-        let sdist = self.spec.satellite_distance * (1.0 - self.spec.merge_factor * 0.6);
-        let mut cov = 0.0f32;
-        for dy in -1..=1 {
+        // Exact reach of one lattice node; cells outside ±search_r cannot contribute.
+        let min_sp = self.spacing_x.min(self.spacing_y).max(0.01);
+        let stretch_gain = self.xf.stretch_x.max(self.xf.stretch_y).max(1.0);
+        let sat_gain = 1.0 + self.spec.satellite_stretch.max(0.0);
+        let jitter_pad = self.spec.jitter_pos.max(0.0) * 0.0025 * self.spacing_x.max(self.spacing_y);
+        let max_reach = psize * stretch_gain
+            + if self.spec.satellite_enabled && ssize > 0.05 { sdist + ssize * sat_gain * stretch_gain } else { 0.0 }
+            + jitter_pad
+            + smooth_k;
+        let search_r = ((max_reach / min_sp - 0.5).ceil() as i32).clamp(1, 3);
+        let cy_idx = (grid_y / self.spacing_y).round() as i32;
+        let mut min_dist = f32::MAX;
+
+        for dy in -search_r..=search_r {
             let iy = cy_idx + dy;
             let row_shift = if (iy & 1) != 0 { self.spacing_x * self.spec.row_offset } else { 0.0 };
-            let cx_idx = ((grid_x - row_shift) / self.spacing_x).floor() as i32;
-            for dx in -1..=1 {
+            let cx_idx = ((grid_x - row_shift) / self.spacing_x).round() as i32;
+            for dx in -search_r..=search_r {
                 let ix = cx_idx + dx;
                 let (mut dot_cx, mut dot_cy) = (ix as f32 * self.spacing_x + row_shift, iy as f32 * self.spacing_y);
                 if self.spec.jitter_pos > 0.0 {
                     dot_cx += (hash_coord(ix, iy, self.spec.seed) - 0.5) * self.spec.jitter_pos * 0.005 * self.spacing_x;
                     dot_cy += (hash_coord(ix.wrapping_add(1000), iy, self.spec.seed) - 0.5) * self.spec.jitter_pos * 0.005 * self.spacing_y;
                 }
-                let final_size = if self.spec.jitter_size > 0.0 {
+                let mut final_size = psize;
+                if self.spec.jitter_size > 0.0 {
                     let jval = hash_coord(ix.wrapping_add(5000), iy.wrapping_add(5000), self.spec.seed);
-                    psize * (1.0 + (jval - 0.5) * self.spec.jitter_size * 0.02).max(0.0)
-                } else {
-                    psize
-                };
-                let dist_main = eval_shape_sdf(grid_x - dot_cx, grid_y - dot_cy, self.spec.dot_shape, final_size, self.xf);
-                cov = cov.max(coverage_from_sdf(dist_main, self.spec.smoothness));
-                if self.spec.satellite_enabled && ssize > 0.05 {
-                    cov = cov.max(self.eval_satellites((grid_x, grid_y), (dot_cx, dot_cy), ssize, sdist));
+                    final_size *= (1.0 + (jval - 0.5) * self.spec.jitter_size * 0.02).max(0.0);
                 }
+                let mut cell_dist = eval_shape_sdf(grid_x - dot_cx, grid_y - dot_cy, self.spec.dot_shape, final_size, self.xf);
+                if self.spec.satellite_enabled && ssize > 0.05 {
+                    for k in 0..self.sat_n {
+                        let (ux, uy) = self.sat_dirs[k];
+                        let (sat_x, sat_y) = (dot_cx + ux * sdist, dot_cy + uy * sdist);
+                        let (mut spx, mut spy) = (grid_x - sat_x, grid_y - sat_y);
+                        if self.spec.satellite_stretch > 0.0 {
+                            // Directions are unit vectors: rotate into (dir, perp), stretch along dir.
+                            let rot_sx = spx * ux + spy * uy;
+                            let rot_sy = -spx * uy + spy * ux;
+                            let scaled = rot_sx * self.inv_sat_stretch;
+                            spx = scaled * ux - rot_sy * uy;
+                            spy = scaled * uy + rot_sy * ux;
+                        }
+                        let dist_sat = eval_shape_sdf(spx, spy, self.spec.satellite_dot_shape, ssize, self.xf);
+                        cell_dist = sdf_smooth_min(cell_dist, dist_sat, smooth_k);
+                    }
+                }
+                min_dist = sdf_smooth_min(min_dist, cell_dist, smooth_k * 0.5);
             }
         }
-        cov
+        coverage_from_sdf(min_dist, self.spec.smoothness)
     }
 
     fn eval(&self, local: (f32, f32), grid: (f32, f32), mod_size: f32, ink: f32) -> f32 {
@@ -1066,8 +1313,7 @@ impl PatternEvalCtx<'_> {
                 coverage_from_sdf((((grid_y % sp) + sp) % sp - sp * 0.5).abs() - width * 0.5, self.spec.smoothness)
             }
             PatternType::Crosshatch => {
-                let (sin2, cos2) = (self.spec.angle + self.spec.cross_angle).to_radians().sin_cos();
-                let ly2 = -local_x * sin2 + local_y * cos2;
+                let ly2 = -local_x * self.sin_x + local_y * self.cos_x;
                 let width = (self.spec.line_width * mod_size * self.spec.density * ink).max(0.0);
                 if width <= 1e-4 {
                     return 0.0;
@@ -1090,7 +1336,7 @@ impl PatternEvalCtx<'_> {
                 if ((ix.wrapping_add(iy)) & 1) != 0 {
                     return 0.0;
                 }
-                let size = (self.spacing_x * 0.45 * mod_size * self.spec.density * ink).max(0.0);
+                let size = (self.spacing_x * 0.45 * mod_size * self.spec.density * area_ink(self.spec, ink)).max(0.0);
                 if size <= 1e-4 {
                     return 0.0;
                 }
@@ -1103,7 +1349,7 @@ impl PatternEvalCtx<'_> {
             PatternType::GaussianNoise => self.eval_gaussian_noise(grid_x, grid_y, mod_size, ink),
             PatternType::Stipple => self.eval_stipple(grid_x, grid_y, mod_size, ink),
             PatternType::Stars | PatternType::Hearts | PatternType::Triangles => self.eval_special_shapes(grid_x, grid_y, mod_size, ink),
-            PatternType::Dots => self.eval_dots(grid_x, grid_y, mod_size, ink),
+            PatternType::Dots => self.eval_dots(grid_x, grid_y, local, mod_size, ink),
         }
     }
 }
@@ -1117,7 +1363,11 @@ pub fn screentone(src: &Image, out: Rect, ctx: &Ctx, spec: &ScreentoneSpec) -> V
     let (sin_canvas, cos_canvas) = spec.rot_canvas.to_radians().sin_cos();
     let (sin_ang, cos_ang) = spec.angle.to_radians().sin_cos();
     let (sin_sat, cos_sat) = spec.satellite_angle.to_radians().sin_cos();
-    let (rot_pattern_rad, spacing_x, spacing_y) = (spec.rot_pattern.to_radians(), spec.spacing_x.clamp(1.0, 2000.0), spec.spacing_y.clamp(1.0, 2000.0));
+    let (sin_p, cos_p) = spec.rot_pattern.to_radians().sin_cos();
+    let (sin_x, cos_x) = (spec.angle + spec.cross_angle).to_radians().sin_cos();
+    let (spacing_x, spacing_y) = (spec.spacing_x.clamp(1.0, 2000.0), spec.spacing_y.clamp(1.0, 2000.0));
+    let (sat_dirs, sat_n) = build_sat_dirs(spec, sin_sat, cos_sat);
+    let inv_sat_stretch = 1.0 / (1.0 + spec.satellite_stretch.max(0.0)).max(0.01);
     let (fg, bg) = (spec.foreground, spec.background);
     let use_shading = spec.use_source_luminance && spec.mode == ScreentoneMode::Shading && !src.rect.is_empty();
     let tone = ToneCurve::new(spec);
@@ -1149,17 +1399,20 @@ pub fn screentone(src: &Image, out: Rect, ctx: &Ctx, spec: &ScreentoneSpec) -> V
             1.0
         } else {
             let ink = match &grids {
-                Some(g) => g.sample_ink(src, ctx, tone, doc_x, doc_y),
+                Some(g) => g.sample_ink(src, ctx, tone, spec, doc_x, doc_y),
                 None => 1.0,
             };
             if ink > 1e-5 {
                 let eval_ctx = PatternEvalCtx {
                     spec,
-                    xf: ShapeXform { stretch_x: mod_aspect_x, stretch_y: mod_aspect_y, roundness: spec.roundness, rot_pattern_rad },
+                    xf: ShapeXform::new(mod_aspect_x, mod_aspect_y, spec.roundness, sin_p, cos_p),
                     spacing_x,
                     spacing_y,
-                    sin_sat,
-                    cos_sat,
+                    sat_dirs,
+                    sat_n,
+                    inv_sat_stretch,
+                    sin_x,
+                    cos_x,
                 };
                 eval_ctx.eval((local_x, local_y), grid, mod_size, ink).clamp(0.0, 1.0)
             } else {
@@ -1175,12 +1428,99 @@ pub fn screentone(src: &Image, out: Rect, ctx: &Ctx, spec: &ScreentoneSpec) -> V
                 [lerp(base_c[0], cur_fg[0], alpha), lerp(base_c[1], cur_fg[1], alpha), lerp(base_c[2], cur_fg[2], alpha), base_c[3].max(alpha)]
             }
         } else {
-            [lerp(bg[0], cur_fg[0], cov), lerp(bg[1], cur_fg[1], cov), lerp(bg[2], cur_fg[2], cov), lerp(bg[3], cur_fg[3], cov)]
+            // Premultiplied alpha: no dark halo when compositing over a translucent background.
+            let out_a = lerp(bg[3], cur_fg[3], cov);
+            if out_a <= 1e-6 {
+                [0.0, 0.0, 0.0, 0.0]
+            } else {
+                let bg_w = bg[3] * (1.0 - cov);
+                let fg_w = cur_fg[3] * cov;
+                [(bg[0] * bg_w + cur_fg[0] * fg_w) / out_a, (bg[1] * bg_w + cur_fg[1] * fg_w) / out_a, (bg[2] * bg_w + cur_fg[2] * fg_w) / out_a, out_a]
+            }
         };
         set_rgba(ctx, px, out_color);
     }
 
     res
+}
+
+/// Legacy polygon reference, kept only for tests so the analytic O(1) SDFs can be verified.
+#[cfg(test)]
+pub(crate) mod oracle {
+    use super::sdist2;
+
+    #[inline]
+    pub fn dist_to_segment(p: (f32, f32), a: (f32, f32), b: (f32, f32)) -> f32 {
+        let pax = p.0 - a.0;
+        let pay = p.1 - a.1;
+        let bax = b.0 - a.0;
+        let bay = b.1 - a.1;
+        let len_sq = bax * bax + bay * bay;
+        if len_sq < 1e-8 {
+            return sdist2(pax, pay);
+        }
+        let h = ((pax * bax + pay * bay) / len_sq).clamp(0.0, 1.0);
+        sdist2(pax - bax * h, pay - bay * h)
+    }
+
+    /// Ray-casting polygon SDF with the upward-edge sign fixed (`copysign` denominator).
+    pub fn sdf_polygon(p: (f32, f32), pts: &[[f32; 2]], roundness: f32) -> f32 {
+        let n = pts.len();
+        if n < 3 {
+            return f32::MAX;
+        }
+        let mut min_d = f32::MAX;
+        let mut inside = false;
+        let mut j = n - 1;
+        for i in 0..n {
+            let vi = (pts[i][0], pts[i][1]);
+            let vj = (pts[j][0], pts[j][1]);
+            let dy = vj.1 - vi.1;
+            let safe_dy = if dy.abs() < 1e-6 { 1e-6_f32.copysign(dy) } else { dy };
+            if ((vi.1 > p.1) != (vj.1 > p.1)) && (p.0 < (vj.0 - vi.0) * (p.1 - vi.1) / safe_dy + vi.0) {
+                inside = !inside;
+            }
+            min_d = min_d.min(dist_to_segment(p, vj, vi));
+            j = i;
+        }
+        let signed = if inside { -min_d } else { min_d };
+        let r = roundness.clamp(0.0, 1.0);
+        if r > 0.01 { signed - min_d.min(2.0) * 0.5 * r } else { signed }
+    }
+
+    pub fn hexagon_vertices(size: f32) -> [[f32; 2]; 6] {
+        let mut pts = [[0.0f32; 2]; 6];
+        for (i, p) in pts.iter_mut().enumerate() {
+            let a = (std::f32::consts::PI / 3.0) * i as f32 - std::f32::consts::FRAC_PI_6;
+            *p = [a.cos() * size, a.sin() * size];
+        }
+        pts
+    }
+
+    pub fn star_vertices(size: f32) -> [[f32; 2]; 10] {
+        let mut pts = [[0.0f32; 2]; 10];
+        for (i, p) in pts.iter_mut().enumerate() {
+            let r = if i % 2 == 0 { size } else { size * 0.4 };
+            let a = (std::f32::consts::PI / 5.0) * i as f32 - std::f32::consts::FRAC_PI_2;
+            *p = [a.cos() * r, a.sin() * r];
+        }
+        pts
+    }
+
+    pub fn triangle_vertices(size: f32) -> [[f32; 2]; 3] {
+        [[0.0, -size], [size * 0.8660254, size * 0.5], [-size * 0.8660254, size * 0.5]]
+    }
+
+    pub fn heart_vertices(size: f32) -> [[f32; 2]; 28] {
+        let mut pts = [[0.0f32; 2]; 28];
+        let sc = size / 17.0;
+        for (i, p) in pts.iter_mut().enumerate() {
+            let t = (i as f32 / 28.0) * std::f32::consts::PI * 2.0;
+            let sin_t = t.sin();
+            *p = [sc * 16.0 * sin_t * sin_t * sin_t, -sc * (13.0 * t.cos() - 5.0 * (2.0 * t).cos() - 2.0 * (3.0 * t).cos() - (4.0 * t).cos())];
+        }
+        pts
+    }
 }
 
 #[cfg(test)]
@@ -1344,7 +1684,7 @@ mod tests {
     #[test]
     fn test_presets_validity() {
         let presets = built_in_presets();
-        assert_eq!(presets.len(), 19);
+        assert_eq!(presets.len(), 26, "clover, asterisk, orbital cluster and calibrated films were added");
         for p in presets {
             assert!(!p.name.is_empty());
             assert!(!p.category.is_empty());
@@ -1804,5 +2144,178 @@ mod tests {
 
         assert!(tested_pairs > 65_000);
         assert!(hypot_ulp_divergences > 0, "Expected f32::hypot to exhibit 1-2 ULP scaling divergences across test grid");
+    }
+
+    #[test]
+    fn exact_sdf_matches_legacy_polygon_within_tolerance() {
+        use oracle::{hexagon_vertices, sdf_polygon, star_vertices, triangle_vertices};
+        let mut worst = 0.0f32;
+        for y in -40..=40 {
+            for x in -40..=40 {
+                let (x, y) = (x as f32 * 0.5, y as f32 * 0.5);
+                let pairs = [
+                    (sdf_hexagon_exact(y, x, 10.0, 0.0), sdf_polygon((x, y), &hexagon_vertices(10.0), 0.0)),
+                    (sdf_star5_exact(x, y, 10.0, 0.0), sdf_polygon((x, y), &star_vertices(10.0), 0.0)),
+                    (sdf_triangle_exact(x, y, 10.0, 0.0), sdf_polygon((x, y), &triangle_vertices(10.0), 0.0)),
+                ];
+                for (exact, legacy) in pairs {
+                    assert!((exact - legacy).abs() < 1.2, "({x},{y}): exact {exact} vs legacy {legacy}");
+                    worst = worst.max((exact - legacy).abs());
+                }
+            }
+        }
+        assert!(worst < 1.2);
+        assert!(sdf_heart_exact(0.0, 0.0, 10.0, 0.0) < 0.0, "heart centre is inside");
+        assert!(sdf_heart_exact(100.0, 0.0, 10.0, 0.0) > 0.0, "far point is outside");
+        let legacy_heart = oracle::heart_vertices(10.0);
+        assert!(oracle::sdf_polygon((0.0, 0.0), &legacy_heart, 0.0) < 0.0, "legacy heart centre is inside");
+        assert!(oracle::sdf_polygon((100.0, 0.0), &legacy_heart, 0.0) > 0.0, "legacy far point is outside");
+    }
+
+    #[test]
+    fn smooth_min_bridges_gap_between_dot_and_satellite() {
+        assert_eq!(sdf_smooth_min(3.0, 5.0, 0.0), 3.0);
+        assert!(sdf_smooth_min(2.0, 2.0, 4.0) < 2.0, "smooth min must thicken the bridge");
+        assert!((sdf_smooth_min(1.0, 100.0, 4.0) - 1.0).abs() < 1e-6, "far shapes do not affect the result");
+        assert!(sdf_smooth_min(f32::MAX, 5.0, 4.0).is_finite());
+        let bridged = sdf_smooth_min(1.0, 1.2, 2.0);
+        assert!(bridged < 1.0, "the gap between dot and satellite is filled: {bridged}");
+    }
+
+    fn coverage_fraction(spec: &ScreentoneSpec, size: i32) -> f32 {
+        let bounds = Rect::new(0, 0, size, size);
+        let img = make_test_image(size, size, 1.0);
+        let ctx = Ctx { bounds, mode: photocraft_color::ColorMode::Rgb, alpha: false };
+        let out = screentone(&img, bounds, &ctx, spec);
+        let mut covered = 0usize;
+        for px in out.chunks_exact(3) {
+            if px[0] <= 0.5 {
+                covered += 1;
+            }
+        }
+        covered as f32 / (size * size) as f32
+    }
+
+    #[test]
+    fn clover_and_asterisk_presets_produce_four_fold_symmetry() {
+        let presets = built_in_presets();
+        for id in ["clover-quatrefoil", "ink-asterisk"] {
+            let preset = presets.iter().find(|p| p.id == id).expect("preset exists");
+            assert!(preset.spec.satellite_enabled && preset.spec.satellite_count == 4);
+            let (dirs, n) = build_sat_dirs(&preset.spec, 0.0, 1.0);
+            assert_eq!(n, 4);
+            let mut seen = [false; 4];
+            for k in 0..n {
+                let (x, y) = dirs[k];
+                let idx = if y < -0.3 {
+                    0
+                } else if y > 0.3 {
+                    1
+                } else if x > 0.3 {
+                    2
+                } else {
+                    3
+                };
+                seen[idx] = true;
+            }
+            assert!(seen.iter().all(|v| *v), "{id} has four cardinal satellites: {seen:?}");
+
+            let mut spec = preset.spec.clone();
+            spec.use_source_luminance = false;
+            spec.mode = ScreentoneMode::Sheet;
+            spec.smoothness = 0.0;
+            let bounds = Rect::new(0, 0, 96, 96);
+            let img = make_test_image(96, 96, 0.5);
+            let ctx = Ctx { bounds, mode: photocraft_color::ColorMode::Rgb, alpha: false };
+            let out = screentone(&img, bounds, &ctx, &spec);
+            let ink = |x: usize, y: usize| out[(y * 96 + x) * 3] <= 0.5;
+            let mut asym = 0usize;
+            for y in 8..88 {
+                for x in 8..88 {
+                    if ink(x, y) != ink(95 - x, y) {
+                        asym += 1;
+                    }
+                }
+            }
+            assert!(asym < 400, "{id} is mirror symmetric (asymmetric pixels {asym})");
+        }
+    }
+
+    #[test]
+    fn equalize_area_makes_50_percent_gray_match_50_percent_coverage() {
+        let mut spec = ScreentoneSpec {
+            mode: ScreentoneMode::Sheet,
+            density: 0.5,
+            spacing_x: 16.0,
+            spacing_y: 16.0,
+            angle: 0.0,
+            smoothness: 0.0,
+            auto_dot_size: true,
+            equalize_area: true,
+            ..Default::default()
+        };
+        let cov = coverage_fraction(&spec, 128);
+        assert!((cov - 0.5).abs() < 0.08, "calibrated 50% coverage: {cov}");
+
+        spec.auto_dot_size = false;
+        spec.equalize_area = true;
+        let legacy = coverage_fraction(&spec, 128);
+        assert!(legacy < cov, "sqrt calibration darkens a mid gray: {legacy} vs {cov}");
+
+        spec.pattern_type = PatternType::Lines;
+        let with = coverage_fraction(&spec, 128);
+        spec.equalize_area = false;
+        let without = coverage_fraction(&spec, 128);
+        assert!((with - without).abs() < 1e-6, "width-driven patterns ignore equalize_area");
+    }
+
+    #[test]
+    fn auto_dot_size_calibrates_all_shapes_within_two_percent() {
+        let shapes = [DotShape::Circle, DotShape::Square, DotShape::Diamond, DotShape::Hexagon];
+        for shape in shapes {
+            let spec = ScreentoneSpec {
+                mode: ScreentoneMode::Sheet,
+                dot_shape: shape,
+                density: 0.3,
+                spacing_x: 16.0,
+                spacing_y: 16.0,
+                angle: 0.0,
+                smoothness: 0.0,
+                auto_dot_size: true,
+                ..Default::default()
+            };
+            let cov = coverage_fraction(&spec, 128);
+            let tol = if shape == DotShape::Circle { 0.02 } else { 0.08 };
+            assert!((cov - 0.3).abs() < tol, "{shape:?} coverage {cov}");
+        }
+        // A saturated cell must stay finite and clamped.
+        let saturated = ScreentoneSpec { mode: ScreentoneMode::Sheet, density: 1.0, auto_dot_size: true, smoothness: 0.0, ..Default::default() };
+        assert!(coverage_fraction(&saturated, 64) <= 1.0);
+    }
+
+    #[test]
+    fn premultiplied_alpha_prevents_dark_halo() {
+        // Same premultiplied formula the renderer uses for the translucent-background branch.
+        let (bg, fg, cov) = ([1.0f32, 0.0, 0.0, 0.1], [0.0f32, 0.0, 0.0, 1.0], 0.5f32);
+        let out_a = bg[3] + (fg[3] - bg[3]) * cov;
+        let red = (bg[0] * bg[3] * (1.0 - cov) + fg[0] * fg[3] * cov) / out_a;
+        assert!((out_a - 0.55).abs() < 1e-6);
+        assert!(red < 0.2, "red must not bleed through as straight-alpha 0.5: {red}");
+
+        let spec = ScreentoneSpec {
+            mode: ScreentoneMode::Sheet,
+            density: 0.5,
+            background: bg,
+            foreground: fg,
+            smoothness: 1.0,
+            auto_dot_size: true,
+            use_source_luminance: false,
+            ..Default::default()
+        };
+        let bounds = Rect::new(0, 0, 64, 64);
+        let img = Image { rect: bounds, ch: 4, data: vec![1.0; 64 * 64 * 4] };
+        let ctx = Ctx { bounds, mode: photocraft_color::ColorMode::Rgb, alpha: true };
+        let out = screentone(&img, bounds, &ctx, &spec);
+        assert!(out.chunks_exact(4).all(|px| px.iter().all(|v| v.is_finite() && *v >= -0.01 && *v <= 1.01)));
     }
 }

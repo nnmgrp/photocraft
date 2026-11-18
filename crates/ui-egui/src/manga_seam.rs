@@ -40,11 +40,15 @@ mod native {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    use photocraft_doc::{DocId, Document, Layer, LayerContent, LayerId};
+    use photocraft_color::PixelFormat;
+    use photocraft_doc::vector::{BalloonLineStyle, LiveBalloon, LiveBalloonBody, LiveBalloonGroup};
+    use photocraft_doc::{DocId, Document, Fill, Layer, LayerContent, LayerId, LiveShape, ShapeLayer};
+    use photocraft_engine::DocState;
     use photocraft_engine::cmd::manga_cmds::typesetter_adapter;
-    use photocraft_manga_core::snow_knuth_plass::{bind_orphan_prepositions, knuth_plass_bubble_wrap_ext, measure_token_width};
+    use photocraft_manga_core::snow_knuth_plass::{bind_orphan_prepositions, knuth_plass_bubble_wrap_ext, knuth_plass_split_overflow, measure_token_width};
     use photocraft_manga_core::snow_typesetter::{
-        TextStylePreset, TplImportReport, TypesetterState, contour_variants, detect_speech_bubble_bounds_in_surface, text_shape_candidates_with_bubble,
+        TextStylePreset, TplImportReport, TypesetterState, contour_variants, detect_bubble_chambers, detect_speech_bubble_bounds_in_surface,
+        fit_script_text_to_selection, parse_script_markup, script_markup_run_params, sort_chamber_indices_reading_order, text_shape_candidates_with_bubble,
     };
     use photocraft_manga_ui::balloon_gizmo::{self, BalloonView};
     use photocraft_manga_ui::comic_balloon_panel::{self, BalloonHostContext, create_live_balloon_in_rect_commands};
@@ -61,6 +65,8 @@ mod native {
     use photocraft_manga_ui::snow_typesetter_ui::{FontSampleSpec, TypesetterAction, TypesetterHost};
     use photocraft_manga_ui::view::{CanvasToolEvent, CanvasViewXform};
     use photocraft_manga_ui::{BridgeDocId, MangaUiState, OutCommand, theme as manga_theme};
+    use photocraft_raster::Surface;
+    use photocraft_vector::balloon::LiveBalloonGeom;
     use photocraft_vector::sai_curve::SaiCurveType;
     use serde_json::{Value, json};
 
@@ -84,14 +90,20 @@ mod native {
         pub typesetter_paste_on_click_was_enabled: bool,
     }
 
+    /// Canonical order matches [`Group::Manga::tabs`].
     pub const MANGA_PANELS: &[(&str, &str, Group)] = &[
-        ("screentone", "Screentones", Group::Color),
-        ("balloon", "Balloons", Group::Color),
-        ("linework", "Linework", Group::Layers),
-        ("timelapse", "Timelapse", Group::History),
-        ("pages", "Pages", Group::Character),
-        ("typesetter", "TypeR Manga", Group::Character),
+        ("balloon", "Balloons", Group::Manga),
+        ("screentone", "Screentones", Group::Manga),
+        ("linework", "Linework", Group::Manga),
+        ("typesetter", "TypeR Manga", Group::Manga),
+        ("pages", "Pages", Group::Manga),
+        ("timelapse", "Timelapse", Group::Manga),
+        ("sfx", "SFX", Group::Manga),
     ];
+
+    fn manga_tab_index(id: &str) -> Option<usize> {
+        MANGA_PANELS.iter().position(|p| p.0 == id)
+    }
 
     const MANGA_IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "webp", "psd", "tif", "tiff"];
 
@@ -220,6 +232,9 @@ mod native {
         if trimmed.eq_ignore_ascii_case("Balloon") || trimmed.eq_ignore_ascii_case("Manga Balloons") {
             return Some("balloon");
         }
+        if trimmed.eq_ignore_ascii_case("SFX") || trimmed.eq_ignore_ascii_case("Manga SFX") || trimmed.eq_ignore_ascii_case("SFX Lettering") {
+            return Some("sfx");
+        }
         None
     }
 
@@ -230,7 +245,7 @@ mod native {
         let (w, h) = match id {
             "typesetter" => (360.0, 560.0),
             "pages" => (280.0, 520.0),
-            "screentone" | "balloon" | "linework" => (300.0, 480.0),
+            "screentone" | "balloon" | "linework" | "sfx" => (300.0, 480.0),
             "timelapse" => (290.0, 420.0),
             _ => (300.0, 420.0),
         };
@@ -246,6 +261,7 @@ mod native {
             "timelapse" => Some(panels.timelapse),
             "pages" => Some(panels.pages),
             "typesetter" => Some(panels.typesetter),
+            "sfx" => Some(panels.sfx),
             _ => None,
         }
     }
@@ -259,12 +275,20 @@ mod native {
             "timelapse" => Some(&mut panels.timelapse),
             "pages" => Some(&mut panels.pages),
             "typesetter" => Some(&mut panels.typesetter),
+            "sfx" => Some(&mut panels.sfx),
             _ => None,
         }
     }
 
+    fn is_legacy_manga_tab_active(app: &PhotocraftApp, id: &str) -> bool {
+        !MANGA_PANELS.is_empty()
+            && app.ui.panels.manga
+            && !app.ui.dock.is_collapsed(Group::Manga)
+            && manga_tab_index(id).is_some_and(|idx| app.ui.dock_tabs.manga.min(MANGA_PANELS.len().saturating_sub(1)) == idx)
+    }
+
     fn is_panel_shown(app: &PhotocraftApp, id: &str) -> bool {
-        if let Some(ws) = &app.ui.docking { ws.layout.contains(&id.to_owned()) } else { panel_shown(&app.ui.panels, id).unwrap_or(false) }
+        if let Some(ws) = &app.ui.docking { ws.layout.contains(&id.to_owned()) } else { is_legacy_manga_tab_active(app, id) }
     }
 
     fn is_panel_active(app: &PhotocraftApp, id: &str) -> bool {
@@ -281,13 +305,13 @@ mod native {
             }
             ws.layout.root.iter().chain(ws.layout.floating.iter().map(|w| &w.root)).any(|n| active_in_node(n, id))
         } else {
-            panel_shown(&app.ui.panels, id).unwrap_or(false)
+            is_legacy_manga_tab_active(app, id)
         }
     }
 
     /// Window-menu checkmark state for manga panel commands (`window.panel.*` / `window.toggle.timelapse`).
     pub fn panel_checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
-        normalize_panel(id.strip_prefix("window.panel.").or_else(|| id.strip_prefix("window.toggle.")).unwrap_or(id)).map(|short| is_panel_shown(app, short))
+        normalize_panel(id.strip_prefix("window.panel.").or_else(|| id.strip_prefix("window.toggle.")).unwrap_or(id)).map(|short| is_panel_active(app, short))
     }
 
     fn dispatch_commands(app: &mut PhotocraftApp, cmds: Vec<OutCommand>) -> Option<Value> {
@@ -336,21 +360,24 @@ mod native {
 
     fn render_balloon(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         let brushes = vector_brush_list(app);
-        let (doc_id, doc_ref, active_layer, doc_dpi, fg, bg) = match app.session.active() {
+        let (doc_id, doc_ref, active_layer, selected_layers, doc_dpi, fg, bg) = match app.session.active() {
             Some(st) => (
                 Some(BridgeDocId(st.doc.id.0)),
                 Some(st.doc.as_ref()),
                 st.active_layer,
+                st.selected_layers(),
                 st.doc.resolution_dpi.max(1.0),
                 app.session.tools.foreground,
                 app.session.tools.background,
             ),
-            None => (None, None, None, 72.0, app.session.tools.foreground, app.session.tools.background),
+            None => (None, None, None, Vec::new(), 72.0, app.session.tools.foreground, app.session.tools.background),
         };
         let host = BalloonHostContext {
             doc: doc_ref,
             doc_id,
             active_layer,
+            selected_layers: &selected_layers,
+            active_balloon_id: app.manga.ui.balloon_gizmo.active_balloon_id,
             doc_dpi,
             fg_color: fg,
             bg_color: bg,
@@ -358,6 +385,9 @@ mod native {
             tool_is_balloon: app.active_tool() == Tool::Balloon,
         };
         let out = comic_balloon_panel::panel(ui, &mut app.manga.ui.balloon_ui, &host);
+        if let Some(bid) = out.select_balloon_id {
+            app.manga.ui.balloon_gizmo.active_balloon_id = Some(bid);
+        }
         let last = dispatch_commands(app, out.commands);
         if let Some(bid) = last.as_ref().and_then(|v| v.get("balloonId").and_then(Value::as_u64)).and_then(|n| u32::try_from(n).ok()) {
             app.manga.ui.balloon_gizmo.active_balloon_id = Some(bid);
@@ -370,8 +400,18 @@ mod native {
             app.ui.tool = Tool::Balloon;
             app.ui.remember_group_tool(Tool::Balloon);
         }
+        if let Some(show) = out.show_vertex_handles {
+            app.manga.ui.balloon_gizmo.show_vertex_handles = show;
+        }
+        if out.open_typer_panel {
+            let _ = app.run("window.panel.activate", json!({ "panel": "typesetter" }));
+        }
         if out.open_linework_panel {
             let _ = app.run("window.panel.activate", json!({ "panel": "linework" }));
+            // The baked SAI strokes are now the editable geometry, so switch to the Linework tool
+            // exactly as the Layers' "Create Linework" action does.
+            app.ui.tool = Tool::VectorCurve;
+            app.ui.remember_group_tool(Tool::VectorCurve);
         }
     }
 
@@ -690,15 +730,83 @@ mod native {
             let mut host = AppTypesetterHost { app, picked_style: None };
             ts.render_embedded(ui, &mut host)
         };
+        let create_sfx = ts.take_create_sfx_request();
         app.manga.ui.typesetter = ts;
         if let Some(act) = action {
             handle_typesetter_action(app, act);
         }
+        if create_sfx {
+            handle_typesetter_create_sfx(app);
+        }
         refresh_typesetter_contour(app);
+    }
+
+    fn handle_typesetter_create_sfx(app: &mut PhotocraftApp) {
+        if let Some(line) = app.manga.ui.typesetter.state.active_line().cloned() {
+            let line_idx = app.manga.ui.typesetter.state.current_line_idx;
+            let preset = app.manga.ui.typesetter.state.preset_for_line(line_idx).cloned().unwrap_or_default();
+            let mut sfx = app.manga.ui.sfx_panel.draft.clone();
+            sfx.text = line.text;
+            if !preset.font_family.trim().is_empty() {
+                sfx.font_family = preset.font_family;
+            }
+            sfx.postscript_name = (!preset.font_postscript.trim().is_empty()).then_some(preset.font_postscript);
+            sfx.size_pt = preset.font_size.max(8.0);
+            sfx.weight = if preset.bold { 800 } else { 700 };
+            sfx.italic = preset.italic;
+            sfx.tracking = preset.tracking as f32;
+            if let Some(st) = app.session.active() {
+                let origin = st
+                    .doc
+                    .selection
+                    .as_ref()
+                    .map(|s| s.content_bounds())
+                    .filter(|b| !b.is_empty())
+                    .map(|b| [f64::from(b.x0), f64::from(b.y0)])
+                    .unwrap_or([f64::from(st.doc.size.width) * 0.35, f64::from(st.doc.size.height) * 0.4]);
+                sfx.origin = origin;
+            }
+            sfx.validate();
+            if app.run("sfx.create", json!({ "sfx": sfx })).is_ok() {
+                app.manga.ui.typesetter.state.advance_line();
+                app.manga.ui.typesetter.auto_save();
+                let _ = app.run("window.panel.sfx", json!({ "show": true }));
+            }
+            return;
+        }
+        if let Some(st) = app.session.active()
+            && let Some(tid) = active_text_layer_id(st)
+            && app.run("sfx.convertFromText", json!({ "layer": tid.0 })).is_ok()
+        {
+            let _ = app.run("window.panel.sfx", json!({ "show": true }));
+        }
+    }
+
+    fn render_sfx(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+        let presets = app.session.manga.sfx_presets.presets().to_vec();
+        let target = if let Some(st) = app.session.active() {
+            let active_is_text = active_text_layer_id(st).is_some()
+                && st.active_layer.and_then(|id| st.doc.layer(id)).is_some_and(|l| matches!(l.content, LayerContent::Text(_)));
+            let sfx_data = st.active_layer.and_then(|id| st.doc.layer(id)).and_then(|l| l.sfx.as_deref().cloned());
+            photocraft_manga_ui::sfx_panel::SfxTargetInfo {
+                doc_id: Some(BridgeDocId(st.doc.id.0)),
+                layer_id: st.active_layer,
+                data: sfx_data,
+                active_is_text,
+                presets: &presets,
+            }
+        } else {
+            photocraft_manga_ui::sfx_panel::SfxTargetInfo { doc_id: None, layer_id: None, data: None, active_is_text: false, presets: &presets }
+        };
+        let out = photocraft_manga_ui::sfx_panel::panel(ui, &mut app.manga.ui.sfx_panel, &mut app.manga.ui.sfx_gizmo, &target);
+        dispatch_commands(app, out.commands);
     }
 
     /// Renders the body of manga panel `id` when owned by this seam. Returns `true` if handled.
     pub fn render_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: &str) -> bool {
+        // Manga panels are controls, not prose: their headings must never turn into browser-style
+        // blue text selections. egui's TextEdit keeps its own selectable caret/selection.
+        ui.style_mut().interaction.selectable_labels = false;
         let seam = app.session.seam_flags();
         match id {
             "timelapse" => {
@@ -711,6 +819,7 @@ mod native {
             "screentone" => render_screentone(app, ui),
             "balloon" => render_balloon(app, ui),
             "linework" => render_linework(app, ui),
+            "sfx" => render_sfx(app, ui),
             "pages" => {
                 if seam.pages {
                     render_pages(app, ui);
@@ -730,24 +839,44 @@ mod native {
         true
     }
 
+    /// Renders the `tab` index of the unified [`Group::Manga`] dock card.
+    pub fn render_dock_tab(app: &mut PhotocraftApp, ui: &mut egui::Ui, tab: usize) {
+        if let Some(&(id, _, _)) = MANGA_PANELS.get(tab) {
+            let _ = render_panel(app, ui, id);
+        }
+    }
+
     /// Panel menu entries specific to manga panels, if any.
     pub fn panel_menu(_app: &mut PhotocraftApp, _ui: &mut egui::Ui, _id: &str) {}
 
-    /// Handles legacy dock/panel commands for manga panels when `app.ui.docking` is inactive.
+    /// Handles legacy dock/panel commands for manga panels when `app.ui.docking` is inactive:
+    /// opens the unified `Group::Manga` dock on the requested tab (or toggles it closed when that
+    /// tab is already open, expanded and selected).
     pub fn panel_command(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
         let short = id.strip_prefix("window.panel.").or_else(|| id.strip_prefix("window.toggle.")).and_then(normalize_panel)?;
         if app.ui.docking.is_some() {
             return None;
         }
+        let tab_idx = manga_tab_index(short).unwrap_or(0);
+        let currently_active = app.ui.panels.manga && !app.ui.dock.is_collapsed(Group::Manga) && app.ui.dock_tabs.manga == tab_idx;
         let show = match params.get("show").or_else(|| params.get("on")) {
-            None => !panel_shown(&app.ui.panels, short).unwrap_or(false),
+            None => !currently_active,
             Some(v) => match v.as_bool() {
                 Some(b) => b,
                 None => return Some(Err("show must be a boolean".into())),
             },
         };
-        if let Some(slot) = panel_shown_mut(&mut app.ui.panels, short) {
-            *slot = show;
+        if show {
+            app.ui.panels.manga = true;
+            app.ui.dock_tabs.manga = tab_idx;
+            crate::dock::reveal(app, Group::Manga);
+        } else {
+            app.ui.panels.manga = false;
+        }
+        for &(pid, _, _) in MANGA_PANELS {
+            if let Some(slot) = panel_shown_mut(&mut app.ui.panels, pid) {
+                *slot = show && pid == short;
+            }
         }
         Some(Ok(json!({ "showing": show })))
     }
@@ -841,7 +970,20 @@ mod native {
         if !app.session.seam_flags().canvas_gizmos {
             return;
         }
-        comic_screentone_gizmo::escape(ctx, &mut app.manga.ui.screentone_ui, &mut app.manga.ui.screentone_gizmo);
+        let Some(xf) = ViewXform::active(app) else { return };
+        let mxf = to_manga_xf(&xf);
+        let panel_showing = is_panel_active(app, "screentone");
+        let Some(st) = app.session.active() else { return };
+        let doc = st.doc.clone();
+        let doc_id = BridgeDocId(doc.id.0);
+        let active_layer = st.active_layer;
+        let mut out = Vec::new();
+        {
+            let view = GizmoView { panel_showing, doc: &doc, doc_id, active_layer, xf: &mxf };
+            comic_screentone_gizmo::escape(ctx, &view, &mut app.manga.ui.screentone_ui, &mut app.manga.ui.screentone_gizmo, &mut out);
+        }
+        // A cancelled GPU drag sends the pre-drag spec back through the same coalesce key.
+        dispatch_commands(app, out);
     }
 
     fn pointer_screentone(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers, xf: &ViewXform) -> bool {
@@ -862,6 +1004,44 @@ mod native {
         handled
     }
 
+    fn balloon_story_links(doc: &Document, active_layer: Option<LayerId>) -> Vec<([f64; 2], [f64; 2])> {
+        let Some(lid) = active_layer else { return Vec::new() };
+        let Some(layer) = doc.layer(lid) else { return Vec::new() };
+        let LayerContent::Shape(sh) = &layer.content else { return Vec::new() };
+        let Some(LiveShape::BalloonGroup { group }) = &sh.live else { return Vec::new() };
+        let mut center_by_text: std::collections::HashMap<LayerId, [f64; 2]> = std::collections::HashMap::new();
+        for (_, _, l) in doc.walk() {
+            if let LayerContent::Shape(other_sh) = &l.content
+                && let Some(LiveShape::BalloonGroup { group: g }) = &other_sh.live
+            {
+                for b in &g.items {
+                    if let Some(tid) = b.linked_text_layer {
+                        let r = b.body.rect();
+                        center_by_text.insert(tid, [r[0] + r[2] * 0.5, r[1] + r[3] * 0.5]);
+                    }
+                }
+            }
+        }
+        let mut links = Vec::new();
+        for b in &group.items {
+            let Some(tid) = b.linked_text_layer else { continue };
+            let Some(from) = center_by_text.get(&tid).copied() else { continue };
+            let Some(tl) = doc.layer(tid).and_then(|l| match &l.content {
+                LayerContent::Text(t) => Some(t),
+                _ => None,
+            }) else {
+                continue;
+            };
+            if tl.story_threaded
+                && let Some(next_id) = tl.next_story_layer
+                && let Some(to) = center_by_text.get(&next_id).copied()
+            {
+                links.push((from, to));
+            }
+        }
+        links
+    }
+
     fn pointer_balloon(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers, xf: &ViewXform) -> bool {
         let Some(st) = app.session.active() else {
             return false;
@@ -873,6 +1053,7 @@ mod native {
             active_layer: st.active_layer,
             tool_is_balloon: app.active_tool() == Tool::Balloon,
             view_xform: to_manga_xf(xf),
+            story_links: Vec::new(),
         };
         let out = balloon_gizmo::pointer(&mut app.manga.ui.balloon_gizmo, &view, to_manga_ev(ev), mods);
         if let Some(updated) = out.updated_balloon {
@@ -891,7 +1072,157 @@ mod native {
         let Some(xf) = ViewXform::active(app) else {
             return false;
         };
-        pointer_screentone(app, ev, mods, &xf) || pointer_balloon(app, ev, mods, &xf)
+        pointer_screentone(app, ev, mods, &xf) || pointer_balloon(app, ev, mods, &xf) || pointer_sfx(app, ev, mods, &xf)
+    }
+
+    fn sfx_view_from<'a>(
+        doc: &'a Document,
+        active_layer: Option<LayerId>,
+        tool_is_sfx: bool,
+        panel_open: bool,
+        xf: &ViewXform,
+    ) -> photocraft_manga_ui::sfx_gizmo::SfxView<'a> {
+        photocraft_manga_ui::sfx_gizmo::SfxView {
+            doc_id: Some(BridgeDocId(doc.id.0)),
+            doc: Some(doc),
+            active_layer,
+            tool_is_sfx,
+            panel_open,
+            view_xform: to_manga_xf(xf),
+        }
+    }
+
+    fn pointer_sfx(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers, xf: &ViewXform) -> bool {
+        let Some(st) = app.session.active() else { return false };
+        let doc = st.doc.clone();
+        let active_layer = st.active_layer;
+        let tool_is_sfx = app.active_tool() == Tool::Sfx;
+        let panel_open = is_panel_active(app, "sfx");
+        let out = {
+            let view = sfx_view_from(&doc, active_layer, tool_is_sfx, panel_open, xf);
+            app.manga.ui.sfx_gizmo.sync_target(&view);
+            photocraft_manga_ui::sfx_gizmo::pointer(&mut app.manga.ui.sfx_gizmo, &view, to_manga_ev(ev), mods)
+        };
+        if let Some(updated) = out.updated_sfx {
+            app.manga.ui.sfx_panel.draft = updated.clone();
+            app.manga.ui.sfx_panel.synced_data = Some(updated);
+        }
+        dispatch_commands(app, out.commands);
+        out.handled
+    }
+
+    /// Cancels an active SFX canvas drag on Escape, returning true when consumed.
+    pub fn sfx_escape_key(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
+        if !app.manga.ui.sfx_gizmo.has_active_drag() {
+            return false;
+        }
+        if !ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            return false;
+        }
+        sfx_escape(app, ctx);
+        true
+    }
+
+    /// Cancels any active SFX gizmo drag if Escape was pressed this frame.
+    pub fn sfx_escape(app: &mut PhotocraftApp, ctx: &egui::Context) {
+        if !app.session.seam_flags().canvas_gizmos || !app.manga.ui.sfx_gizmo.has_active_drag() {
+            return;
+        }
+        if !ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            return;
+        }
+        let Some(xf) = ViewXform::active(app) else { return };
+        let Some(st) = app.session.active() else { return };
+        let doc = st.doc.clone();
+        let active_layer = st.active_layer;
+        let tool_is_sfx = app.active_tool() == Tool::Sfx;
+        let panel_open = is_panel_active(app, "sfx");
+        let out = {
+            let view = sfx_view_from(&doc, active_layer, tool_is_sfx, panel_open, &xf);
+            photocraft_manga_ui::sfx_gizmo::cancel_drag(&mut app.manga.ui.sfx_gizmo, &view)
+        };
+        if let Some(updated) = out.updated_sfx {
+            app.manga.ui.sfx_panel.draft = updated.clone();
+            app.manga.ui.sfx_panel.synced_data = Some(updated);
+        }
+        dispatch_commands(app, out.commands);
+    }
+
+    fn layer_contains_pt(layer: &Layer, px: i32, py: i32) -> bool {
+        match &layer.content {
+            LayerContent::Raster(s) => {
+                let b = s.content_bounds();
+                !b.is_empty() && b.contains(px, py)
+            }
+            LayerContent::Group(g) => g.children.iter().any(|c| {
+                c.surface().is_some_and(|s| {
+                    let b = s.content_bounds();
+                    !b.is_empty() && b.contains(px, py)
+                })
+            }),
+            _ => false,
+        }
+    }
+
+    /// Creates a new SFX layer (or switches selection) when pressing on canvas with `Tool::Sfx`.
+    pub fn sfx_canvas_press(app: &mut PhotocraftApp, doc_pt: [f64; 2]) {
+        let px = doc_pt[0].round() as i32;
+        let py = doc_pt[1].round() as i32;
+        if let Some(st) = app.session.active()
+            && let Some(hit_id) = st.doc.layers.iter().rev().find(|l| l.visible && l.sfx.is_some() && layer_contains_pt(l, px, py)).map(|l| l.id)
+        {
+            if st.active_layer != Some(hit_id) {
+                let _ = app.run("layer.select", json!({ "layer": hit_id.0 }));
+            }
+            return;
+        }
+        let mut sfx = app.manga.ui.sfx_panel.draft.clone();
+        sfx.origin = doc_pt;
+        sfx.validate();
+        let _ = app.run("sfx.create", json!({ "sfx": sfx }));
+    }
+
+    /// Top Options Bar controls when `Tool::Sfx` is active.
+    pub fn sfx_options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+        use photocraft_doc::sfx::SfxWarpMode;
+        let mut active_mode = app
+            .session
+            .active()
+            .and_then(|st| st.active_layer.and_then(|id| st.doc.layer(id)))
+            .and_then(|l| l.sfx.as_deref())
+            .map(|s| s.warp_mode)
+            .unwrap_or(app.manga.ui.sfx_panel.draft.warp_mode);
+        let prev = active_mode;
+        ui.label("SFX Mode:");
+        for (mode, label) in [
+            (SfxWarpMode::FreeTransform, "Transform"),
+            (SfxWarpMode::PerGlyph, "Per-Glyph"),
+            (SfxWarpMode::MeshLattice, "Mesh"),
+            (SfxWarpMode::LiquifyField, "Liquify"),
+        ] {
+            ui.selectable_value(&mut active_mode, mode, label);
+        }
+        if active_mode != prev {
+            app.manga.ui.sfx_panel.draft.warp_mode = active_mode;
+            if let Some(st) = app.session.active()
+                && let Some(id) = st.active_layer
+                && let Some(cur) = st.doc.layer(id).and_then(|l| l.sfx.as_deref())
+            {
+                let mut next = cur.clone();
+                next.warp_mode = active_mode;
+                let _ = app.run("sfx.update", json!({ "layer": id.0, "sfx": next, "coalesce": "sfx-mode" }));
+            }
+        }
+        crate::widgets::vline(ui, 22.0);
+        if ui.button("Open SFX Panel").clicked() {
+            let _ = app.run("window.panel.sfx", json!({ "show": true }));
+        }
+        if let Some(st) = app.session.active()
+            && let Some(id) = active_text_layer_id(st)
+            && ui.button("Convert Text -> SFX").clicked()
+        {
+            let _ = app.run("sfx.convertFromText", json!({ "layer": id.0 }));
+        }
     }
 
     /// Hover cursor for screentone and balloon gizmo handles over the canvas.
@@ -912,8 +1243,13 @@ mod native {
             active_layer: st.active_layer,
             tool_is_balloon: app.active_tool() == Tool::Balloon,
             view_xform: mxf,
+            story_links: Vec::new(),
         };
-        balloon_gizmo::hover_cursor(&app.manga.ui.balloon_gizmo, &bview, Some(cursor_scr))
+        if let Some(c) = balloon_gizmo::hover_cursor(&app.manga.ui.balloon_gizmo, &bview, Some(cursor_scr)) {
+            return Some(c);
+        }
+        let sfx_v = sfx_view_from(&st.doc, st.active_layer, app.active_tool() == Tool::Sfx, is_panel_active(app, "sfx"), xf);
+        photocraft_manga_ui::sfx_gizmo::hover_cursor(&app.manga.ui.sfx_gizmo, &sfx_v, cursor_scr)
     }
 
     /// Draws screentone and balloon gizmos onto the canvas overlay painter.
@@ -934,8 +1270,11 @@ mod native {
             active_layer: st.active_layer,
             tool_is_balloon: app.active_tool() == Tool::Balloon,
             view_xform: mxf,
+            story_links: balloon_story_links(&st.doc, st.active_layer),
         };
         balloon_gizmo::draw(painter, &app.manga.ui.balloon_gizmo, &bview);
+        let sfx_v = sfx_view_from(&st.doc, st.active_layer, app.active_tool() == Tool::Sfx, is_panel_active(app, "sfx"), xf);
+        photocraft_manga_ui::sfx_gizmo::draw(painter, &app.manga.ui.sfx_gizmo, &sfx_v);
     }
 
     /// Removes a hovered balloon tail on Delete/Backspace when the Balloon tool is active.
@@ -1119,7 +1458,6 @@ mod native {
             || app.ui.canvas_tool_menu.is_some()
             || app.ui.layer_menu.is_some()
             || app.ui.brush_picker.is_some()
-            || egui::Popup::is_any_open(ctx)
             || app.session.active().is_none()
         {
             return;
@@ -1214,6 +1552,118 @@ mod native {
         }
     }
 
+    /// Visible vector balloons: prefer the active layer, then the one under the click.
+    fn balloon_group_at(st: &DocState, anchor: (f32, f32)) -> Option<(LayerId, LiveBalloonGroup)> {
+        let mut candidates: Vec<&Layer> = st.doc.layers.iter().rev().filter(|l| l.visible).collect();
+        if let Some(active) = st.active_layer
+            && let Some(pos) = candidates.iter().position(|l| l.id == active)
+        {
+            let layer = candidates.remove(pos);
+            candidates.insert(0, layer);
+        }
+        for layer in candidates {
+            let LayerContent::Shape(sh) = &layer.content else { continue };
+            let Some(LiveShape::BalloonGroup { group }) = &sh.live else { continue };
+            if group.items.is_empty() {
+                continue;
+            }
+            let b = sh.path.control_bounds().unwrap_or((0.0, 0.0, 0.0, 0.0));
+            let (ax, ay) = (f64::from(anchor.0), f64::from(anchor.1));
+            let under_click = ax >= b.0 && ax <= b.2 && ay >= b.1 && ay <= b.3;
+            if under_click || Some(layer.id) == st.active_layer {
+                return Some((layer.id, group.clone()));
+            }
+        }
+        None
+    }
+
+    #[derive(Clone, Copy)]
+    struct OrderedChamber {
+        rect: photocraft_geom::Rect,
+        balloon_id: Option<u32>,
+        balloon_layer: Option<LayerId>,
+        is_rect: bool,
+        linked_text_layer: Option<LayerId>,
+    }
+
+    fn live_balloon_safe_rect(b: &LiveBalloon) -> photocraft_geom::Rect {
+        let r = b.safe_text_rect();
+        photocraft_geom::Rect::from_xywh(r[0].round() as i32, r[1].round() as i32, r[2].max(1.0).round() as u32, r[3].max(1.0).round() as u32)
+    }
+
+    fn sort_rects_reading_order(rects: &[photocraft_geom::Rect], rtl: bool) -> Vec<usize> {
+        let boxes: Vec<[f64; 4]> = rects.iter().map(|r| [f64::from(r.x0), f64::from(r.y0), f64::from(r.width()), f64::from(r.height())]).collect();
+        sort_chamber_indices_reading_order(&boxes, rtl)
+    }
+
+    fn balloon_group_ordered_chambers(layer_id: LayerId, group: &LiveBalloonGroup, rtl: bool) -> Vec<OrderedChamber> {
+        let raw_rects: Vec<photocraft_geom::Rect> = group.items.iter().map(live_balloon_safe_rect).collect();
+        sort_rects_reading_order(&raw_rects, rtl)
+            .into_iter()
+            .filter_map(|idx| {
+                let b = group.items.get(idx)?;
+                Some(OrderedChamber {
+                    rect: raw_rects[idx],
+                    balloon_id: Some(b.id),
+                    balloon_layer: Some(layer_id),
+                    is_rect: matches!(b.body, LiveBalloonBody::Rect { .. } | LiveBalloonBody::ChamferRect { .. }),
+                    linked_text_layer: b.linked_text_layer,
+                })
+            })
+            .collect()
+    }
+
+    /// Chamber rectangles of a vector balloon group, straight from each balloon's safe text area.
+    fn balloon_group_chambers(group: &LiveBalloonGroup) -> Vec<photocraft_geom::Rect> {
+        balloon_group_ordered_chambers(LayerId(0), group, true).into_iter().map(|c| c.rect).collect()
+    }
+
+    /// A white mask standing in for a bubble's interior, for the 64-line contour fitter.
+    /// Oval/round balloons use an elliptical silhouette (`rx`, `ry`) so top and bottom rows are
+    /// narrower than the middle; rectangular balloons keep the full rectangle.
+    fn synthetic_bubble_selection(rect: photocraft_geom::Rect, rectangular: bool) -> Surface {
+        let mut surface = Surface::new(PixelFormat::RGBA32F);
+        if rectangular || rect.width() < 8 || rect.height() < 8 {
+            surface.fill_rect(rect, &[1.0, 1.0, 1.0, 1.0]);
+            return surface;
+        }
+        let cx = f64::from(rect.x0) + f64::from(rect.width()) * 0.5;
+        let cy = f64::from(rect.y0) + f64::from(rect.height()) * 0.5;
+        let rx = (f64::from(rect.width()) * 0.5).max(1.0);
+        let ry = (f64::from(rect.height()) * 0.5).max(1.0);
+        for y in rect.y0..rect.y1 {
+            let ny = ((f64::from(y) + 0.5 - cy) / ry).clamp(-1.0, 1.0);
+            let span = (1.0 - ny * ny).max(0.0).sqrt() * rx;
+            let x0 = (cx - span).floor() as i32;
+            let x1 = (cx + span).ceil() as i32;
+            let row = photocraft_geom::Rect::new(x0.max(rect.x0), y, x1.min(rect.x1), y + 1);
+            if !row.is_empty() {
+                surface.fill_rect(row, &[1.0, 1.0, 1.0, 1.0]);
+            }
+        }
+        surface
+    }
+
+    /// A black vector balloon needs inverted (white) lettering. `Uniflash + Solid` keeps its black
+    /// needles on a white centre, so it is explicitly excluded.
+    fn vector_balloon_is_dark(sh: &ShapeLayer) -> bool {
+        let Some(LiveShape::BalloonGroup { group }) = &sh.live else {
+            return false;
+        };
+        let dark_fill = match &sh.fill {
+            Some(Fill::Solid(c)) => {
+                let rgb = c.to_rgb();
+                rgb[0] < 0.2 && rgb[1] < 0.2 && rgb[2] < 0.2
+            }
+            _ => false,
+        };
+        dark_fill && !group.items.iter().all(|b| matches!(b.body, LiveBalloonBody::Uniflash { .. }) && b.line_style == BalloonLineStyle::Solid)
+    }
+
+    fn typesetter_text_is_dark(color: [u8; 4]) -> bool {
+        (0.299 * f32::from(color[0]) + 0.587 * f32::from(color[1]) + 0.114 * f32::from(color[2])) < 118.0
+    }
+
     fn refresh_typesetter_contour(app: &mut PhotocraftApp) {
         if !app.session.seam_flags().typesetter {
             return;
@@ -1228,10 +1678,12 @@ mod native {
                 let text = line.text.clone();
                 let preset = app.manga.ui.typesetter.state.active_preset().cloned().unwrap_or_default();
                 let selection = state.doc.selection.as_ref().map(|s| s.content_bounds()).filter(|b| !b.is_empty());
+                let anchor =
+                    app.hover_doc.map(|[x, y]| (x as f32, y as f32)).unwrap_or((state.doc.size.width as f32 * 0.5, state.doc.size.height as f32 * 0.5));
                 let bubble = selection.or_else(|| {
-                    let anchor =
-                        app.hover_doc.map(|[x, y]| (x as f32, y as f32)).unwrap_or((state.doc.size.width as f32 * 0.5, state.doc.size.height as f32 * 0.5));
-                    typesetter_adapter::detect_speech_bubble_bounds(&app.manga.ui.typesetter.state, &state.doc, anchor)
+                    balloon_group_at(state, anchor)
+                        .and_then(|(_, group)| balloon_group_chambers(&group).first().copied())
+                        .or_else(|| typesetter_adapter::detect_speech_bubble_bounds(&app.manga.ui.typesetter.state, &state.doc, anchor))
                 });
                 contour_variants(&text, &preset, bubble, state.doc.resolution_dpi, 12)
             }
@@ -1380,6 +1832,7 @@ mod native {
                 _ => None,
             };
             from_box
+                .or_else(|| balloon_group_at(st, (anchor[0] as f32, anchor[1] as f32)).and_then(|(_, group)| balloon_group_chambers(&group).first().copied()))
                 .or_else(|| {
                     st.doc
                         .layers
@@ -1388,6 +1841,7 @@ mod native {
                         .filter(|l| l.visible && l.id != id)
                         .find_map(|l| l.surface().and_then(|s| detect_speech_bubble_bounds_in_surface(s, anchor[0], anchor[1], 240)))
                 })
+                .or_else(|| typesetter_adapter::detect_speech_bubble_bounds(&app.manga.ui.typesetter.state, &st.doc, (anchor[0] as f32, anchor[1] as f32)))
                 .or_else(|| {
                     let line_count = text.text.lines().count().max(1) as f32;
                     let max_chars = text.text.lines().map(|l| l.chars().count()).max().unwrap_or(10).max(4) as f32;
@@ -1717,31 +2171,160 @@ mod native {
         (resolved_family, style_name, faux_bold, faux_italic, weight)
     }
 
-    fn apply_markdown_runs(app: &mut PhotocraftApp, layer_id: u64, runs_text: &str, styled_segments: &[(String, bool, bool)]) {
-        if styled_segments.is_empty() {
-            return;
+    /// Text for each chamber of a double/triple bubble. Two chambers use the overflow splitter
+    /// (`//` and blank lines are explicit separators); extra chambers take successive script lines.
+    fn chamber_text_parts(text: &str, chambers: &[photocraft_geom::Rect], font_size: f32, dpi: f32, h_scale: f32) -> Vec<String> {
+        if chambers.len() == 2 {
+            let a = (chambers[0].width() as f32, chambers[0].height() as f32);
+            let b = (chambers[1].width() as f32, chambers[1].height() as f32);
+            let (first, second) = knuth_plass_split_overflow(text, a, b, font_size, dpi, h_scale);
+            let mut parts = vec![first];
+            if let Some(second) = second {
+                parts.push(second);
+            }
+            return parts;
         }
-        let chars: Vec<char> = runs_text.chars().collect();
-        let mut runs = Vec::new();
-        let mut at = 0usize;
-        for (content, bold, italic) in styled_segments {
-            let needle: Vec<char> = content.chars().collect();
-            let mut index = at;
-            let mut found = None;
-            while index + needle.len() <= chars.len() {
-                if chars.get(index..index + needle.len()).is_some_and(|s| s == needle.as_slice()) {
-                    found = Some(index);
+        let lines: Vec<String> = text.lines().map(str::trim).filter(|l| !l.is_empty()).map(ToOwned::to_owned).collect();
+        (0..chambers.len()).map(|i| lines.get(i).cloned().unwrap_or_default()).collect()
+    }
+
+    struct ChamberFitInput<'a> {
+        raw_text: &'a str,
+        preset: &'a TextStylePreset,
+        fit_surface: Option<&'a photocraft_raster::Surface>,
+        selection_box: Option<[f32; 4]>,
+        doc_bounds: photocraft_geom::Rect,
+        doc_dpi: f32,
+        line_spacing_sync: bool,
+        minimum_fit_scale_percent: f32,
+    }
+
+    fn fit_text_for_chamber(input: &ChamberFitInput<'_>) -> (String, f32, f32, Option<String>) {
+        let mut final_text = input.raw_text.to_string();
+        let mut font_size = input.preset.font_size;
+        let mut leading = if input.preset.leading > 0.0 { input.preset.leading } else { font_size * 1.2 };
+        if input.preset.punctuation_only_scale > 1.0 && is_punctuation_only(&final_text) {
+            font_size *= input.preset.punctuation_only_scale;
+            leading *= input.preset.punctuation_only_scale;
+        }
+        let mut contour_fitted = false;
+        let mut err_msg = None;
+        if let Some(surface) = input.fit_surface {
+            let mut fitted_preset = input.preset.clone();
+            match fit_script_text_to_selection(
+                &final_text,
+                &mut fitted_preset,
+                surface,
+                input.doc_bounds,
+                input.doc_dpi,
+                input.line_spacing_sync,
+                input.minimum_fit_scale_percent,
+            ) {
+                Ok(Some(fitted)) => {
+                    final_text = fitted;
+                    font_size = fitted_preset.font_size;
+                    leading = if fitted_preset.leading > 0.0 { fitted_preset.leading } else { font_size * 1.2 };
+                    contour_fitted = true;
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    err_msg = Some(format!("TypeR contour fit: {error}"));
+                }
+            }
+        }
+        if !contour_fitted && let Some([_bx, _by, bw, bh]) = input.selection_box {
+            final_text =
+                knuth_plass_bubble_wrap_ext(&final_text, bw, bh, font_size, input.doc_dpi, input.preset.horizontal_scale, input.preset.hanging_punctuation);
+            let h_scale = if input.preset.horizontal_scale > 1.5 { input.preset.horizontal_scale / 100.0 } else { 1.0 };
+            for _ in 0..6 {
+                let lines = final_text.split('\n').count().max(1) as f32;
+                let widest = final_text.split('\n').map(|l| measure_token_width(l, font_size, h_scale)).fold(0.0f32, f32::max);
+                let factor = ((bw * 0.72) / widest.max(1.0)).min((bh * 0.72) / (lines * leading).max(1.0)).min(1.0);
+                if factor > 0.97 {
                     break;
                 }
-                index += 1;
+                font_size = (font_size * factor).max(6.0);
+                leading = (leading * factor).max(font_size * 1.05);
+                final_text =
+                    knuth_plass_bubble_wrap_ext(&final_text, bw, bh, font_size, input.doc_dpi, input.preset.horizontal_scale, input.preset.hanging_punctuation);
             }
-            if let Some(start) = found {
-                runs.push(json!({ "start": start, "end": start + needle.len(), "fauxBold": bold, "fauxItalic": italic }));
-                at = start + needle.len();
+        } else if !contour_fitted {
+            final_text = bind_orphan_prepositions(&final_text);
+        }
+        (final_text, font_size, leading, err_msg)
+    }
+
+    fn apply_chamber_runs_and_stroke(app: &mut PhotocraftApp, layer_id: u64, markup_runs: &[Value], preset: &TextStylePreset, invert_for_dark_bubble: bool) {
+        if !markup_runs.is_empty() {
+            let _ = app.run("type.edit", json!({ "layer": layer_id, "runs": markup_runs }));
+        }
+        if preset.stroke_width > 0.0 && !invert_for_dark_bubble {
+            let stroke_hex = format!("#{:02x}{:02x}{:02x}", preset.stroke_color[0], preset.stroke_color[1], preset.stroke_color[2]);
+            let _ = app.run(
+                "layer.layerStyle.stroke",
+                json!({
+                    "layer": layer_id,
+                    "size": preset.stroke_width,
+                    "position": "outside",
+                    "color": stroke_hex,
+                    "opacity": (f32::from(preset.stroke_color[3]) / 2.55).round() as u32
+                }),
+            );
+        }
+    }
+
+    fn upsert_chamber_text(
+        app: &mut PhotocraftApp,
+        existing: Option<LayerId>,
+        style_base: &Value,
+        create_params: Value,
+        text: &str,
+        story_threaded: bool,
+    ) -> Option<u64> {
+        let can_reuse = existing.and_then(|tid| {
+            let st = app.session.active()?;
+            let l = st.doc.layer(tid)?;
+            if matches!(l.content, LayerContent::Text(_)) && !st.doc.effective_locks(tid).all { Some(tid.0) } else { None }
+        });
+        if let Some(tid) = can_reuse {
+            let mut edit = json!({
+                "layer": tid,
+                "replace": { "start": 0, "end": usize::MAX, "text": text },
+                "storyThreaded": story_threaded,
+            });
+            if let Some(b) = create_params.get("box") {
+                edit["box"] = b.clone();
+            }
+            if app.run("type.edit", edit).is_ok() {
+                let mut st_params = style_base.clone();
+                st_params["layer"] = json!(tid);
+                let _ = app.run("type.setStyle", st_params);
+                return Some(tid);
             }
         }
-        if !runs.is_empty() {
-            let _ = app.run("type.edit", json!({ "layer": layer_id, "runs": runs }));
+        let mut p = create_params;
+        if story_threaded {
+            p["storyThreaded"] = json!(true);
+        }
+        app.run("type.create", p).ok().and_then(|v| v.get("layer").and_then(Value::as_u64))
+    }
+
+    fn link_chambers_to_text_layers(app: &mut PhotocraftApp, links: &[(LayerId, u32, u64)]) {
+        for &(blid, bid, tid) in links {
+            let updated_balloon = app.session.active().and_then(|st| {
+                let l = st.doc.layer(blid)?;
+                let LayerContent::Shape(sh) = &l.content else { return None };
+                let Some(LiveShape::BalloonGroup { group }) = &sh.live else { return None };
+                let mut b = group.items.iter().find(|it| it.id == bid)?.clone();
+                if b.linked_text_layer == Some(LayerId(tid)) {
+                    return None;
+                }
+                b.linked_text_layer = Some(LayerId(tid));
+                Some(b)
+            });
+            if let Some(b) = updated_balloon {
+                let _ = app.run("shape.balloon.update", json!({ "layer": blid.0, "balloon": b }));
+            }
         }
     }
 
@@ -1749,16 +2332,61 @@ mod native {
         if app.manga.ui.typesetter.is_blocking_canvas_insertion() {
             return;
         }
-        let (selection_box, auto_clean_params, doc_dpi, doc_size) = {
+        let rtl = app.manga.ui.typesetter.state.options.manga_rtl_reading_order;
+        let (selection_box, auto_clean_params, doc_dpi, doc_size, doc_bounds, fit_surface, chambers, dark_bubble) = {
             let Some(st) = app.session.active() else {
                 app.ui.status = "Open or create a document to insert text".into();
                 app.ui.status_error = true;
                 return;
             };
-            let sel_box = st.doc.selection.as_ref().and_then(|sel| {
-                let b = sel.content_bounds();
-                (!b.is_empty()).then_some([b.x0 as f32, b.y0 as f32, b.width() as f32, b.height() as f32])
-            });
+            let anchor = app.hover_doc.map_or((st.doc.size.width as f32 * 0.5, st.doc.size.height as f32 * 0.5), |[x, y]| (x as f32, y as f32));
+            let vector = balloon_group_at(st, anchor);
+            let detected_raster = if st.doc.selection.is_none() && vector.is_none() {
+                typesetter_adapter::detect_speech_bubble_bounds(&app.manga.ui.typesetter.state, &st.doc, anchor)
+            } else {
+                None
+            };
+            let ordered = match &st.doc.selection {
+                Some(sel) => {
+                    let raw = detect_bubble_chambers(sel, sel.content_bounds());
+                    sort_rects_reading_order(&raw, rtl)
+                        .into_iter()
+                        .map(|i| OrderedChamber { rect: raw[i], balloon_id: None, balloon_layer: None, is_rect: false, linked_text_layer: None })
+                        .collect()
+                }
+                None => match &vector {
+                    Some((blid, g)) => balloon_group_ordered_chambers(*blid, g, rtl),
+                    None => detected_raster
+                        .into_iter()
+                        .map(|r| OrderedChamber { rect: r, balloon_id: None, balloon_layer: None, is_rect: false, linked_text_layer: None })
+                        .collect(),
+                },
+            };
+            let rect_box = |r: photocraft_geom::Rect| [r.x0 as f32, r.y0 as f32, r.width() as f32, r.height() as f32];
+            let sel_box = st
+                .doc
+                .selection
+                .as_ref()
+                .and_then(|sel| {
+                    let b = sel.content_bounds();
+                    (!b.is_empty()).then(|| rect_box(b))
+                })
+                .or_else(|| ordered.first().map(|c| rect_box(c.rect)));
+            let fit_surface = st.doc.selection.clone().or_else(|| ordered.first().map(|c| synthetic_bubble_selection(c.rect, c.is_rect)));
+            let dark = match &st.doc.selection {
+                Some(sel) => {
+                    let art = st.active_layer.and_then(|id| st.doc.layer(id)).and_then(|l| l.surface());
+                    snow_clean::clean_fill_color(art, sel) == [0, 0, 0]
+                }
+                None => vector
+                    .as_ref()
+                    .and_then(|(id, _)| st.doc.layer(*id))
+                    .and_then(|l| match &l.content {
+                        LayerContent::Shape(sh) => Some(vector_balloon_is_dark(sh)),
+                        _ => None,
+                    })
+                    .unwrap_or(false),
+            };
             let clean = if sel_box.is_some() && app.manga.ui.typesetter.state.options.auto_clean {
                 st.doc.selection.as_ref().map(|sel| {
                     let art = st.active_layer.and_then(|id| st.doc.layer(id)).and_then(|l| l.surface());
@@ -1770,42 +2398,27 @@ mod native {
             } else {
                 None
             };
-            (sel_box, clean, st.doc.resolution_dpi, st.doc.size)
+            (sel_box, clean, st.doc.resolution_dpi, st.doc.size, st.doc.bounds(), fit_surface, ordered, dark)
         };
 
         let source_text = if action.preset.all_caps { action.text.to_uppercase() } else { action.text };
-        let (mut final_text, styled_segments) = strip_typer_markdown(&source_text);
-        let mut font_size = action.preset.font_size;
-        let mut leading = if action.preset.leading > 0.0 { action.preset.leading } else { font_size * 1.2 };
-        if action.preset.punctuation_only_scale > 1.0 && is_punctuation_only(&final_text) {
-            font_size *= action.preset.punctuation_only_scale;
-            leading *= action.preset.punctuation_only_scale;
-        }
-        if let Some([_bx, _by, bw, bh]) = selection_box {
-            final_text =
-                knuth_plass_bubble_wrap_ext(&final_text, bw, bh, font_size, doc_dpi, action.preset.horizontal_scale, action.preset.hanging_punctuation);
-            let h_scale = if action.preset.horizontal_scale > 1.5 { action.preset.horizontal_scale / 100.0 } else { 1.0 };
-            for _ in 0..6 {
-                let lines = final_text.split('\n').count().max(1) as f32;
-                let widest = final_text.split('\n').map(|l| measure_token_width(l, font_size, h_scale)).fold(0.0f32, f32::max);
-                let factor = ((bw * 0.72) / widest.max(1.0)).min((bh * 0.72) / (lines * leading).max(1.0)).min(1.0);
-                if factor > 0.97 {
-                    break;
-                }
-                font_size = (font_size * factor).max(6.0);
-                leading = (leading * factor).max(font_size * 1.05);
-                final_text =
-                    knuth_plass_bubble_wrap_ext(&final_text, bw, bh, font_size, doc_dpi, action.preset.horizontal_scale, action.preset.hanging_punctuation);
-            }
-        } else {
-            final_text = bind_orphan_prepositions(&final_text);
-        }
+        // Inline `**bold**` / `*italic*` markers become editable character runs after fitting.
+        let (plain_text, markup_words) = parse_script_markup(&source_text);
+        let (line_spacing_sync, minimum_fit_scale_percent, optical_factor) = {
+            let opts = &app.manga.ui.typesetter.state.options;
+            (opts.line_spacing_sync, opts.minimum_fit_scale_percent, opts.optical_baseline_factor)
+        };
 
         let (resolved_family, style_name, faux_bold, faux_italic, weight) = resolve_preset_font(&action.preset);
-        let hex_color = format!(
-            "#{:02x}{:02x}{:02x}{:02x}",
-            action.preset.text_color[0], action.preset.text_color[1], action.preset.text_color[2], action.preset.text_color[3]
-        );
+        let invert_for_dark_bubble = dark_bubble && typesetter_text_is_dark(action.preset.text_color);
+        let hex_color = if invert_for_dark_bubble {
+            "#ffffffff".to_string()
+        } else {
+            format!(
+                "#{:02x}{:02x}{:02x}{:02x}",
+                action.preset.text_color[0], action.preset.text_color[1], action.preset.text_color[2], action.preset.text_color[3]
+            )
+        };
         let is_optical = action.preset.measurement_system.is_optical();
         let caps_mode = if action.preset.all_caps {
             "all"
@@ -1821,11 +2434,7 @@ mod native {
         } else {
             "normal"
         };
-        let (click_x, click_y) = app.hover_doc.map_or((doc_size.width as f32 * 0.5, doc_size.height as f32 * 0.5), |[x, y]| (x as f32, y as f32));
-        let runs_text = final_text.clone();
-        let mut type_params = json!({
-            "text": final_text,
-            "size": font_size,
+        let style_template = json!({
             "font": resolved_family,
             "fontStyle": style_name,
             "weight": weight,
@@ -1838,37 +2447,18 @@ mod native {
             "underline": action.preset.underline,
             "strikethrough": action.preset.strikethrough,
             "tracking": action.preset.tracking,
-            "leading": leading,
             "horizontalScale": action.preset.horizontal_scale,
             "color": hex_color,
             "kerning": if is_optical { "optical" } else { "metrics" },
-            "autoKern": if is_optical { "opticalKern" } else { "metricsKern" },
             "hangingRoman": action.preset.hanging_punctuation,
-            "antialias": action.preset.anti_alias,
             "firstLineIndent": action.preset.first_line_indent,
             "startIndent": action.preset.start_indent,
             "endIndent": action.preset.end_indent,
             "spaceAfter": action.preset.space_after,
             "hyphenate": action.preset.hyphenate,
-            "direction": action.preset.direction
+            "direction": action.preset.direction,
         });
-        if let Some([bx, by, bw, bh]) = selection_box {
-            type_params["box"] = json!([bx, by, bw, bh]);
-            type_params["verticalAlign"] = json!("center");
-            let optical = font_size * app.manga.ui.typesetter.state.options.optical_baseline_factor;
-            if optical != 0.0 {
-                type_params["baselineShift"] = json!(-optical);
-            }
-        } else {
-            let px_per_pt = if doc_dpi.is_finite() && doc_dpi > 0.0 { doc_dpi / 72.0 } else { 1.0 };
-            let line_count = runs_text.lines().count().max(1);
-            let baseline_y = click_y - ((line_count - 1) as f32 * (leading * px_per_pt)) * 0.5 + (font_size * px_per_pt) * 0.35;
-            type_params["x"] = json!(click_x);
-            type_params["y"] = json!(baseline_y);
-        }
-        if !action.preset.font_postscript.is_empty() {
-            type_params["postscriptName"] = Value::String(action.preset.font_postscript.clone());
-        }
+
         if let Some((clean_layer_id, hex_fill)) = auto_clean_params {
             if let Some(clean_id) = clean_layer_id {
                 let _ = app.run("layer.select", json!({ "layer": clean_id.0, "mode": "replace" }));
@@ -1877,62 +2467,115 @@ mod native {
             }
             let _ = app.run("edit.fill", json!({ "color": hex_fill }));
         }
-        if let Ok(v) = app.run("type.create", type_params)
-            && let Some(layer_id) = v.get("layer").and_then(Value::as_u64)
-        {
-            apply_markdown_runs(app, layer_id, &runs_text, &styled_segments);
-            if action.preset.stroke_width > 0.0 {
-                let stroke_hex = format!("#{:02x}{:02x}{:02x}", action.preset.stroke_color[0], action.preset.stroke_color[1], action.preset.stroke_color[2]);
-                let _ = app.run(
-                    "layer.layerStyle.stroke",
-                    json!({
-                        "layer": layer_id,
-                        "size": action.preset.stroke_width,
-                        "position": "outside",
-                        "color": stroke_hex,
-                        "opacity": (f32::from(action.preset.stroke_color[3]) / 2.55).round() as u32
-                    }),
-                );
+
+        let hover_doc = app.hover_doc;
+        let make_create_params = |text: &str, size: f32, leading: f32, box_rect: Option<[f32; 4]>| {
+            let mut p = style_template.clone();
+            p["text"] = json!(text);
+            p["size"] = json!(size);
+            p["leading"] = json!(leading);
+            p["antialias"] = json!(action.preset.anti_alias);
+            p["autoKern"] = json!(if is_optical { "opticalKern" } else { "metricsKern" });
+            if !action.preset.font_postscript.is_empty() {
+                p["postscriptName"] = Value::String(action.preset.font_postscript.clone());
+            }
+            if let Some([bx, by, bw, bh]) = box_rect {
+                p["box"] = json!([bx, by, bw, bh]);
+                p["verticalAlign"] = json!("center");
+                let optical = size * optical_factor;
+                if optical != 0.0 {
+                    p["baselineShift"] = json!(-optical);
+                }
+            } else {
+                let (click_x, click_y) = hover_doc.map_or((doc_size.width as f32 * 0.5, doc_size.height as f32 * 0.5), |[x, y]| (x as f32, y as f32));
+                let px_per_pt = if doc_dpi.is_finite() && doc_dpi > 0.0 { doc_dpi / 72.0 } else { 1.0 };
+                let line_count = text.lines().count().max(1);
+                let baseline_y = click_y - ((line_count - 1) as f32 * (leading * px_per_pt)) * 0.5 + (size * px_per_pt) * 0.35;
+                p["x"] = json!(click_x);
+                p["y"] = json!(baseline_y);
+            }
+            p
+        };
+
+        if chambers.len() > 1 {
+            let rects: Vec<photocraft_geom::Rect> = chambers.iter().map(|c| c.rect).collect();
+            let parts = chamber_text_parts(&plain_text, &rects, action.preset.font_size, doc_dpi, action.preset.horizontal_scale);
+            let mut created: Vec<u64> = Vec::new();
+            let mut pending_links: Vec<(LayerId, u32, u64)> = Vec::new();
+            for (idx, chamber) in chambers.iter().enumerate() {
+                let raw_part = parts.get(idx).cloned().unwrap_or_default();
+                let part_surface = synthetic_bubble_selection(chamber.rect, chamber.is_rect);
+                let part_box = [chamber.rect.x0 as f32, chamber.rect.y0 as f32, chamber.rect.width() as f32, chamber.rect.height() as f32];
+                let (part_text, part_size, part_leading, fit_err) = fit_text_for_chamber(&ChamberFitInput {
+                    raw_text: &raw_part,
+                    preset: &action.preset,
+                    fit_surface: Some(&part_surface),
+                    selection_box: Some(part_box),
+                    doc_bounds,
+                    doc_dpi,
+                    line_spacing_sync,
+                    minimum_fit_scale_percent,
+                });
+                if let Some(err) = fit_err {
+                    app.ui.status = err;
+                    app.ui.status_error = true;
+                }
+                let mut part_style = style_template.clone();
+                part_style["size"] = json!(part_size);
+                part_style["leading"] = json!(part_leading);
+                part_style["verticalAlign"] = json!("center");
+                let params = make_create_params(&part_text, part_size, part_leading, Some(part_box));
+                if let Some(tid) = upsert_chamber_text(app, chamber.linked_text_layer, &part_style, params, &part_text, true) {
+                    let part_runs = script_markup_run_params(&part_text, &markup_words);
+                    apply_chamber_runs_and_stroke(app, tid, &part_runs, &action.preset, invert_for_dark_bubble);
+                    created.push(tid);
+                    if let (Some(blid), Some(bid)) = (chamber.balloon_layer, chamber.balloon_id) {
+                        pending_links.push((blid, bid, tid));
+                    }
+                }
+            }
+            for (idx, id) in created.iter().enumerate() {
+                let mut edit = json!({ "layer": id, "storyThreaded": true });
+                edit["nextStoryLayer"] = created.get(idx + 1).map_or(Value::Null, |n| json!(n));
+                let _ = app.run("type.edit", edit);
+            }
+            link_chambers_to_text_layers(app, &pending_links);
+            let _ = app.run("select.deselect", json!({}));
+            return;
+        }
+
+        let (final_text, font_size, leading, fit_err) = fit_text_for_chamber(&ChamberFitInput {
+            raw_text: &plain_text,
+            preset: &action.preset,
+            fit_surface: fit_surface.as_ref(),
+            selection_box,
+            doc_bounds,
+            doc_dpi,
+            line_spacing_sync,
+            minimum_fit_scale_percent,
+        });
+        if let Some(err) = fit_err {
+            app.ui.status = err;
+            app.ui.status_error = true;
+        }
+        let markup_runs = script_markup_run_params(&final_text, &markup_words);
+        let mut single_style = style_template.clone();
+        single_style["size"] = json!(font_size);
+        single_style["leading"] = json!(leading);
+        if selection_box.is_some() {
+            single_style["verticalAlign"] = json!("center");
+        }
+        let params = make_create_params(&final_text, font_size, leading, selection_box);
+        let existing_single = chambers.first().and_then(|c| c.linked_text_layer);
+        if let Some(layer_id) = upsert_chamber_text(app, existing_single, &single_style, params, &final_text, false) {
+            apply_chamber_runs_and_stroke(app, layer_id, &markup_runs, &action.preset, invert_for_dark_bubble);
+            if let Some(ch) = chambers.first()
+                && let (Some(blid), Some(bid)) = (ch.balloon_layer, ch.balloon_id)
+            {
+                link_chambers_to_text_layers(app, &[(blid, bid, layer_id)]);
             }
             let _ = app.run("select.deselect", json!({}));
         }
-    }
-
-    fn strip_typer_markdown(text: &str) -> (String, Vec<(String, bool, bool)>) {
-        let chars: Vec<char> = text.chars().collect();
-        let (mut plain, mut segment, mut segments) = (String::new(), String::new(), Vec::new());
-        let (mut bold, mut italic) = (false, false);
-        let flush = |segment: &mut String, bold: bool, italic: bool, segments: &mut Vec<(String, bool, bool)>| {
-            if !segment.is_empty() && (bold || italic) {
-                segments.push((std::mem::take(segment), bold, italic));
-            } else {
-                segment.clear();
-            }
-        };
-        let mut index = 0usize;
-        while index < chars.len() {
-            if chars[index] == '*' {
-                if chars.get(index + 1) == Some(&'*') {
-                    flush(&mut segment, bold, italic, &mut segments);
-                    bold = !bold;
-                    index += 2;
-                    continue;
-                }
-                flush(&mut segment, bold, italic, &mut segments);
-                italic = !italic;
-                index += 1;
-                continue;
-            }
-            plain.push(chars[index]);
-            if bold || italic {
-                segment.push(chars[index]);
-            } else if !segment.is_empty() {
-                flush(&mut segment, bold, italic, &mut segments);
-            }
-            index += 1;
-        }
-        flush(&mut segment, bold, italic, &mut segments);
-        (plain, segments)
     }
 
     fn is_punctuation_only(text: &str) -> bool {
@@ -1989,6 +2632,95 @@ mod native {
             apply_search_activation(&mut app, act);
             assert_eq!(app.session.active().map(|s| s.doc.name.as_str()), Some("A"));
         }
+
+        /// The capsule's own font list must be allowed to stay open: hiding the capsule whenever
+        /// any egui popup is open closed the very list the user had just opened.
+        #[test]
+        fn the_capsule_font_popup_stays_open_and_can_pick_a_family() {
+            use crate::state::Tool;
+            use egui::accesskit::Role;
+            use egui_kittest::Harness;
+            use egui_kittest::kittest::Queryable;
+
+            let _ = photocraft_text::shared();
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
+            app.run("file.new", json!({"width": 800, "height": 600})).unwrap();
+            app.run("type.create", json!({"text": "Sample", "font": "Ubuntu-Light", "x": 200, "y": 200})).unwrap();
+            app.ui.tool_options.type_font = "Ubuntu-Light".into();
+            app.session.edit_prefs(|p| p.seam.canvas_capsule = true);
+            app.ui.panels.canvas_capsule = true;
+            app.ui.tool = Tool::Type;
+            app.sync_views();
+
+            let mut h = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).with_max_steps(16).build_ui_state(
+                |ui, app: &mut PhotocraftApp| {
+                    if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                        return;
+                    }
+                    show_canvas_capsule(app, ui.ctx());
+                },
+                app,
+            );
+            PhotocraftApp::setup_context(&h.ctx, Default::default());
+            h.run_steps(6);
+
+            h.get_by_role_and_label(Role::Button, "Font").click();
+            h.run_steps(4);
+            assert!(egui::Popup::is_any_open(&h.ctx), "the family popup opened");
+
+            // These extra frames used to hide the capsule (and with it the popup) entirely.
+            h.run_steps(6);
+            assert!(egui::Popup::is_any_open(&h.ctx), "the popup is still open after several frames");
+            assert!(h.query_by_role_and_label(Role::Button, "Font").is_some(), "the capsule is still drawn");
+
+            // The list itself is live: arrow to the next family and accept it with Enter.
+            h.key_press(egui::Key::ArrowDown);
+            h.run_steps(2);
+            h.key_press(egui::Key::Enter);
+            h.run_steps(2);
+            assert_ne!(h.state().ui.tool_options.type_font, "Ubuntu-Light", "a family can be picked from the kept-open list");
+        }
+
+        #[test]
+        fn typesetter_dual_chamber_manga_rtl_splits_fits_styles_and_links_stories() {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
+            app.run("file.new", json!({"name": "Dual", "width": 900, "height": 600})).unwrap();
+
+            let right_b =
+                LiveBalloon { id: 1, body: LiveBalloonBody::Ellipse { rect: [460.0, 120.0, 220.0, 140.0], squircle: 0.25 }, ..LiveBalloon::default() };
+            let created = app.run("shape.balloon.create", json!({ "balloon": right_b })).unwrap();
+            let balloon_lid = created["layer"].as_u64().unwrap();
+            let left_b = LiveBalloon { id: 2, body: LiveBalloonBody::Ellipse { rect: [140.0, 140.0, 220.0, 140.0], squircle: 0.25 }, ..LiveBalloon::default() };
+            app.run("shape.balloon.add", json!({ "layer": balloon_lid, "balloon": left_b })).unwrap();
+            app.hover_doc = Some([560.0, 190.0]);
+            app.manga.ui.typesetter.state.options.manga_rtl_reading_order = true;
+
+            let preset = TextStylePreset { all_caps: false, font_size: 14.0, stroke_width: 2.0, ..TextStylePreset::default() };
+            handle_typesetter_action(&mut app, TypesetterAction { text: "**Right** first // Left second".to_string(), preset });
+
+            let st = app.session.active().unwrap();
+            let LayerContent::Shape(sh) = &st.doc.layer(LayerId(balloon_lid)).unwrap().content else {
+                panic!("expected shape");
+            };
+            let Some(LiveShape::BalloonGroup { group }) = &sh.live else {
+                panic!("expected group");
+            };
+            let tid_right = group.items[0].linked_text_layer.expect("right chamber linked");
+            let tid_left = group.items[1].linked_text_layer.expect("left chamber linked");
+            assert_ne!(tid_right, tid_left);
+
+            let l_right = st.doc.layer(tid_right).unwrap();
+            let LayerContent::Text(tl_right) = &l_right.content else { panic!("expected text") };
+            assert!(tl_right.text.contains("Right"), "RTL puts first part into right chamber: {:?}", tl_right.text);
+            assert!(tl_right.story_threaded);
+            assert_eq!(tl_right.next_story_layer, Some(tid_left));
+            assert!(!l_right.effects.items.is_empty(), "stroke effect applied per chamber");
+
+            let l_left = st.doc.layer(tid_left).unwrap();
+            let LayerContent::Text(tl_left) = &l_left.content else { panic!("expected text") };
+            assert!(tl_left.text.contains("Left"), "RTL puts second part into left chamber: {:?}", tl_left.text);
+            assert!(!l_left.effects.items.is_empty(), "stroke effect applied to second chamber too");
+        }
     }
 }
 
@@ -2040,6 +2772,7 @@ mod wasm {
     pub fn render_panel(_app: &mut PhotocraftApp, _ui: &mut egui::Ui, _id: &str) -> bool {
         false
     }
+    pub fn render_dock_tab(_app: &mut PhotocraftApp, _ui: &mut egui::Ui, _tab: usize) {}
     pub fn panel_menu(_app: &mut PhotocraftApp, _ui: &mut egui::Ui, _id: &str) {}
     pub fn panel_command(_app: &mut PhotocraftApp, _id: &str, _params: &Value) -> Option<Result<Value, String>> {
         None
@@ -2090,6 +2823,12 @@ mod wasm {
     pub fn balloon_tail_delete_key(_app: &mut PhotocraftApp, _ctx: &egui::Context) -> bool {
         false
     }
+    pub fn sfx_escape_key(_app: &mut PhotocraftApp, _ctx: &egui::Context) -> bool {
+        false
+    }
+    pub fn sfx_escape(_app: &mut PhotocraftApp, _ctx: &egui::Context) {}
+    pub fn sfx_canvas_press(_app: &mut PhotocraftApp, _doc_pt: [f64; 2]) {}
+    pub fn sfx_options_bar(_app: &mut PhotocraftApp, _ui: &mut egui::Ui) {}
     pub fn frame_overlays(_app: &mut PhotocraftApp, _ctx: &egui::Context) {}
 }
 

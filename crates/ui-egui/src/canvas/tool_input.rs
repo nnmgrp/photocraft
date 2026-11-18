@@ -750,6 +750,10 @@ fn down_special_tool(app: &mut PhotocraftApp, tool: Tool, raw: ToolEvent, x: f64
             crate::vector_ui::vector_curve_down(app, [x, y], mods, false, f64::from(app.point_zoom()));
             return true;
         }
+        Tool::Sfx => {
+            crate::manga_seam::sfx_canvas_press(app, [x, y]);
+            return true;
+        }
         Tool::CloneStamp | Tool::Healing if mods.alt => {
             crate::retouch_ui::set_source(app, x, y);
             return true;

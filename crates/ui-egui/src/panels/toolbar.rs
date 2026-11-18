@@ -39,11 +39,12 @@ pub(crate) const TOOL_SECTIONS: &[&[&[Tool]]] = &[
         &[Tool::Dodge, Tool::Burn, Tool::Sponge],
     ],
     &[
-        &[Tool::Pen, Tool::FreeformPen, Tool::CurvaturePen, Tool::AddAnchorPoint, Tool::DeleteAnchorPoint, Tool::ConvertPoint, Tool::VectorCurve],
+        &[Tool::Pen, Tool::FreeformPen, Tool::CurvaturePen, Tool::AddAnchorPoint, Tool::DeleteAnchorPoint, Tool::ConvertPoint],
         &[Tool::Type, Tool::VerticalType, Tool::VerticalTypeMask, Tool::HorizontalTypeMask],
         &[Tool::PathSelection, Tool::DirectSelection],
-        &[Tool::Rectangle, Tool::EllipseShape, Tool::Triangle, Tool::Polygon, Tool::Star, Tool::Line, Tool::CustomShape, Tool::Balloon],
+        &[Tool::Rectangle, Tool::EllipseShape, Tool::Triangle, Tool::Polygon, Tool::Star, Tool::Line, Tool::CustomShape],
     ],
+    &[&[Tool::Balloon, Tool::VectorCurve, Tool::Sfx]],
     &[&[Tool::Hand, Tool::RotateView], &[Tool::Zoom]],
 ];
 
@@ -173,6 +174,7 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if !seam.toolbar_tools {
         hidden.push("Balloon Tool".into());
         hidden.push("Vector Curve Tool".into());
+        hidden.push("SFX Tool".into());
     }
     let sections = visible_sections(&hidden);
     // Two columns when the header chevron asks for them; a column that doesn't fit scrolls.
@@ -223,7 +225,7 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             mesh.add_triangle(0, 2, 3);
             ui.painter().add(mesh);
         }
-        ui.spacing_mut().item_spacing = vec2(2.0, 3.0);
+        ui.spacing_mut().item_spacing = vec2(2.0, 1.0);
         let flyout_id = egui::Id::unique("tool-flyout");
         let held_id = flyout_id.with("held");
         if ui.input(|i| i.pointer.any_pressed()) {

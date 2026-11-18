@@ -1271,11 +1271,15 @@ fn handle_canvas_tool_stroke(
             Some(tool_input::ToolViewContext::new(xf, Some(input.ctx.viewport_id()))),
         );
         app.press_stroke = app.drag.is_some();
+        // The action already happened on press. Remember it so the release's `clicked` cannot
+        // replay it (a second wand click would land inside the new selection and deselect it).
+        app.press_handled = true;
     }
     let press_stroke = app.press_stroke;
+    let press_handled = app.press_handled;
     // A live tool's press that went to the ⌥ eyedropper keeps sampling for the whole press: the
     // drag recognised later must not decide again with ⌥ already let go and paint (#7802).
-    if press_stroke || (strokes_live(tool) && (app.alt_sampling || app.mixer_sampling)) {
+    if press_stroke || press_handled || (strokes_live(tool) && (app.alt_sampling || app.mixer_sampling)) {
         buttons.started = false;
     }
     let transform_press = transform_press_moves(app, ui, input, mods, buttons);
@@ -1372,7 +1376,7 @@ fn handle_canvas_tool_stroke(
         // The live painting press already created the stroke and this release commits it.
         // egui may also report clicked on the same release; replaying that click paints a
         // second full-pressure dab over the real (possibly light-pressure) pen dab.
-        if press_stroke {
+        if press_stroke || press_handled {
             buttons.clicked = false;
         }
         let at = response.interact_pointer_pos();
@@ -1503,35 +1507,18 @@ fn transform_press_release(
 }
 
 /// Dispatches discrete pointer click and release events to active tools with view transform context.
-fn handle_canvas_tool_clicks(
+fn dispatch_idle_hover_steps(
     app: &mut PhotocraftApp,
     ui: &mut egui::Ui,
-    view: &mut View,
     input: &CanvasToolInput<'_>,
     mods: egui::Modifiers,
-    tool_press: egui::Id,
     buttons: &crate::paint_mouse::Buttons,
 ) {
-    let ctx = input.ctx;
-    let response = input.response;
+    let tool = input.tool;
     let xf = input.xf;
     let rect = input.rect;
-    let tool = input.tool;
-    let transform_owns_pointer = input.transform_owns_pointer;
-    let ppp = input.ppp;
-    let zoom_out = input.zoom_out;
-    let display_zoom = input.display_zoom;
-    // Magnetic Lasso: between clicks the border follows the pointer with the button up. This is a
-    // pointer-only gesture — `canvas_buttons` makes `clicked` false on frames without a button
-    // event — so it must stay outside the click-only branch below, or live edge tracking and
-    // automatic fastening freeze until the next click. A menu-dismissal gesture is inert, so the
-    // hover is suppressed with the same flag that starves the rest of the input pass (#9841).
-    if tool == Tool::MagneticLasso
-        && app.ui.magnetic.active()
-        && !input.menu_dismiss_press
-        && !(buttons.started || buttons.dragged || buttons.stopped)
-        && response.hovered()
-    {
+    let idle = !(buttons.started || buttons.dragged || buttons.stopped) && input.response.hovered();
+    if tool == Tool::MagneticLasso && app.ui.magnetic.active() && !input.menu_dismiss_press && idle {
         let moves: Vec<Pos2> = ui.input(|i| i.events.iter().filter_map(|e| if let egui::Event::PointerMoved(p) = e { Some(*p) } else { None }).collect());
         app.defer_live_stroke = true;
         for p in moves.into_iter().filter(|p| rect.contains(*p)) {
@@ -1546,26 +1533,54 @@ fn handle_canvas_tool_clicks(
         app.defer_live_stroke = false;
         crate::magnetic_lasso_ui::flush(app);
     }
-    // Perspective Crop: between corner clicks the preview quad follows the pointer (#11804).
     if tool == Tool::PerspectiveCrop
         && !app.pcrop.clicks.is_empty()
-        && !(buttons.started || buttons.dragged || buttons.stopped)
-        && response.hovered()
+        && idle
         && let Some(p) = ui.input(|i| i.pointer.latest_pos()).filter(|p| rect.contains(*p))
     {
         let d = xf.to_doc(p);
         tool_event(app, ToolEvent::Move { x: d[0], y: d[1], pressure: 1.0 }, mods);
     }
-    // VectorCurve: track free pointer hover for rubber-band preview and Shift segment insertion.
     if tool == Tool::VectorCurve
-        && !(buttons.started || buttons.dragged || buttons.stopped)
-        && response.hovered()
+        && idle
         && app.drag.is_none()
         && app.ui.vector_curve.as_ref().is_none_or(|vc| vc.layer_drag.is_none())
-        && let Some(p) = response.hover_pos().filter(|p| rect.contains(*p))
+        && let Some(p) = input.response.hover_pos().filter(|p| rect.contains(*p))
     {
         let d = xf.to_doc(p);
         crate::vector_ui::vector_curve_hover(app, d[0], d[1]);
+    }
+}
+
+fn handle_canvas_tool_clicks(
+    app: &mut PhotocraftApp,
+    ui: &mut egui::Ui,
+    view: &mut View,
+    input: &CanvasToolInput<'_>,
+    mods: egui::Modifiers,
+    tool_press: egui::Id,
+    buttons: &crate::paint_mouse::Buttons,
+) {
+    let ctx = input.ctx;
+    let response = input.response;
+    let xf = input.xf;
+    let tool = input.tool;
+    let transform_owns_pointer = input.transform_owns_pointer;
+    let ppp = input.ppp;
+    let zoom_out = input.zoom_out;
+    let display_zoom = input.display_zoom;
+    // Free-hover preview updates (Magnetic Lasso, Perspective Crop, Vector Curve) live in
+    // `dispatch_idle_hover_steps` so click-only `canvas_buttons` never stalls pointer tracking (#9841, #11804).
+    dispatch_idle_hover_steps(app, ui, input, mods, buttons);
+    // A press already handled by the Fill/Wand keeps its release: do not send a second Down+Up
+    // here (that click would fall inside the fresh wand selection and immediately deselect it).
+    // Clear only once the button is up, so a release arriving in a later frame is still suppressed.
+    let mut buttons = *buttons;
+    if app.press_handled {
+        buttons.clicked = false;
+        if !ui.input(|i| i.pointer.primary_down()) {
+            app.press_handled = false;
+        }
     }
     if buttons.clicked
         && let Some(p) = response.interact_pointer_pos()
@@ -2225,12 +2240,25 @@ struct CanvasTailInput<'a> {
     camera: Option<([f32; 2], f32)>,
 }
 
+/// A ruler drag held past the canvas edge scrolls the camera without a new `PointerMoved`. Feed the
+/// tool the `Move` that the same document point would have produced if the pointer itself had
+/// followed the scroll, so the dragged end keeps stretching instead of sticking to the old limit.
+fn ruler_autoscroll_move(app: &mut PhotocraftApp, view: &mut View, xf: &mut ViewXform, p: egui::Pos2, mods: egui::Modifiers, step: egui::Vec2) -> bool {
+    if !crate::canvas_autoscroll::scroll(view, step, *xf) {
+        return false;
+    }
+    xf.center = view.center;
+    let d = xf.to_doc(p);
+    tool_event(app, ToolEvent::Move { x: d[0], y: d[1], pressure: app.stylus.pressure() }, mods);
+    true
+}
+
 fn finish_canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, input: &CanvasTailInput<'_>) {
     let ctx = input.ctx;
     let painter = input.painter;
     let response = input.response;
     let doc = input.doc;
-    let xf = input.xf;
+    let mut xf = input.xf;
     let rect = input.rect;
     let full = input.full;
     let idx = input.idx;
@@ -2253,14 +2281,21 @@ fn finish_canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut Vie
     // freezes the drag).
     let crop_drag =
         response.is_pointer_button_down_on() && tool == app.ui.tool && (crate::crop_ui::autoscrolls(app) || crate::perspective_crop_ui::dragging(app));
+    // The Ruler keeps its own drag in `analysis.drag`: held at the canvas edge it must scroll too.
+    let ruler_drag = tool == Tool::Ruler && app.ui.analysis.drag.is_some();
     if primary
-        && (app.drag.is_some() || crop_drag)
+        && (app.drag.is_some() || crop_drag || ruler_drag)
         && tool != Tool::Hand
         && !middle
         && let Some(p) = ui.input(|i| i.pointer.primary_down().then(|| i.pointer.latest_pos()).flatten())
     {
         let step = crate::canvas_autoscroll::edge_step(p, rect, ui.input(|i| i.stable_dt));
-        if crate::canvas_autoscroll::scroll(view, step, xf) {
+        let moved = if ruler_drag {
+            ruler_autoscroll_move(app, view, &mut xf, p, ui.input(|i| i.modifiers), step)
+        } else {
+            crate::canvas_autoscroll::scroll(view, step, xf)
+        };
+        if moved {
             ctx.request_repaint();
         }
     }
@@ -2384,6 +2419,7 @@ fn update_polygon_camera(app: &mut PhotocraftApp, ctx: &egui::Context, (idx, pri
 pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect: Rect, mut view: View, primary: bool) -> View {
     let ctx = ui.ctx().clone();
     crate::manga_seam::screentone_escape(app, &ctx);
+    crate::manga_seam::sfx_escape(app, &ctx);
     // The Frame tool starts transforms from pointer events, which carry no context; the options
     // bar that also records it can be hidden.
     if primary {
@@ -2802,6 +2838,8 @@ mod tabs_tests;
 #[cfg(test)]
 mod doc_window_dialog_tests;
 
+#[cfg(test)]
+mod ruler_autoscroll_tests;
 #[cfg(test)]
 mod tests;
 

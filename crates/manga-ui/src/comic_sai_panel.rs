@@ -89,8 +89,8 @@ impl TipProfileId {
             Self::Round => "●",
             Self::Calligraphic => "▲",
             Self::Soft => "■",
-            Self::SemiFlat => "▬",
-            Self::Uniform => "█",
+            Self::SemiFlat => "▪",
+            Self::Uniform => "■",
         }
     }
 
@@ -118,7 +118,7 @@ pub struct LineworkPanelState {
     pub auto_taper_ends: bool,
     pub closed_loop: bool,
     pub snap_close: bool,
-    /// Whether the quick-sizes table is expanded (the `▾` on the Brush Size row).
+    /// Whether the quick-sizes table is expanded (the `▼` on the Brush Size row).
     #[serde(default = "default_show_quick_sizes")]
     pub show_quick_sizes: bool,
     /// Optional custom or built-in vector brush preset applied to Linework strokes.
@@ -553,7 +553,7 @@ fn draw_sai_sliders(ui: &mut Ui, state: &mut LineworkPanelState, output: &mut Li
         ui,
         None,
         |ui| {
-            let arrow = if show_quick_sizes { "▾" } else { "▸" };
+            let arrow = if show_quick_sizes { "▼" } else { "▶" };
             let btn = egui::Button::new(RichText::new(format!("Brush Size {arrow}")).size(12.0)).small();
             if ui.add(btn).clicked() {
                 show_quick_sizes = !show_quick_sizes;
@@ -760,7 +760,7 @@ fn draw_vector_brush_row(ui: &mut Ui, id_salt: &str, presets: &[(String, String)
                 }
             }
         });
-        let import = ui.button("＋ Import (.json/.png)").on_hover_text("Import a VectorBrushPreset JSON or grayscale PNG ribbon texture");
+        let import = ui.button("+ Import (.json/.png)").on_hover_text("Import a VectorBrushPreset JSON or grayscale PNG ribbon texture");
         if import.clicked()
             && let Some(path) = rfd::FileDialog::new().add_filter("Vector Brush", &["json", "png"]).pick_file()
         {
@@ -773,7 +773,7 @@ fn draw_vector_brush_row(ui: &mut Ui, id_salt: &str, presets: &[(String, String)
 /// The full-width action buttons at the bottom of the panel.
 fn draw_action_buttons(ui: &mut Ui, state: &mut LineworkPanelState, output: &mut LineworkPanelOutput, accent: Color32) {
     let full_w = ui.available_width();
-    let label = RichText::new("＋ Создать новый Linework слой").strong().color(Color32::WHITE);
+    let label = RichText::new("+ Создать новый Linework слой").strong().color(Color32::WHITE);
     let new_layer = ui.add_sized([full_w, 28.0], egui::Button::new(label).fill(accent));
     if new_layer.clicked() {
         output.commands.push(OutCommand::new("layer.newLinework", json!({ "width": state.base_width })));
@@ -794,6 +794,8 @@ fn draw_action_buttons(ui: &mut Ui, state: &mut LineworkPanelState, output: &mut
 
 /// Render the complete SAI Linework Studio panel from host-supplied context.
 pub fn panel(ui: &mut Ui, state: &mut LineworkPanelState, host: &LineworkHostContext<'_>) -> LineworkPanelOutput {
+    // Headings here are labels, not selectable prose; TextEdit keeps its own selection.
+    ui.style_mut().interaction.selectable_labels = false;
     let t = Tokens::get(ui.ctx());
     let mut output = LineworkPanelOutput::default();
 
@@ -871,7 +873,7 @@ pub fn render_linework_dock_panel(ui: &mut Ui, state: &mut LineworkPanelState) -
             ui.add(Slider::new(&mut state.base_width, 0.7..=500.0).logarithmic(true).suffix(" px"));
         });
         ui.horizontal(|ui| {
-            if ui.button("＋ Новый Linework").clicked() {
+            if ui.button("+ Новый Linework").clicked() {
                 act = Some(LineworkAction::NewLayer);
             }
             if ui.button("⚡ Convert Balloon").clicked() {

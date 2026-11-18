@@ -334,3 +334,82 @@ fn double_outline_chamfer_rect_and_brush_preset_validation() {
     bad_payload["brushPresetId"] = json!("../escape");
     assert!(s.execute("shape.balloon.create", json!({"balloon": bad_payload})).is_err());
 }
+
+#[test]
+fn dual_balloon_add_merge_split_and_stories_reflow_undo_cleanly() {
+    let mut s = session(800, 600);
+    // Create two separate balloons with two linked Story text layers.
+    let b1 = live_balloon(json!({"bodyKind": "ellipse", "rect": [300.0, 80.0, 200.0, 120.0]}));
+    let l_b1 = s.execute("shape.balloon.create", json!({"balloon": b1})).unwrap()["layer"].as_u64().unwrap();
+    let b2 = live_balloon(json!({"bodyKind": "ellipse", "rect": [100.0, 180.0, 200.0, 140.0]}));
+    let l_b2 = s.execute("shape.balloon.create", json!({"balloon": b2})).unwrap()["layer"].as_u64().unwrap();
+
+    let t1 = s
+        .execute(
+            "type.create",
+            json!({"box": [330, 100, 140, 80], "text": "One two three four five six seven eight nine ten", "size": 14, "storyThreaded": true}),
+        )
+        .unwrap()["layer"]
+        .as_u64()
+        .unwrap();
+    let t2 = s.execute("type.create", json!({"box": [130, 200, 140, 100], "text": "", "size": 14, "storyThreaded": true})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("type.edit", json!({"layer": t1, "storyThreaded": true, "nextStoryLayer": t2})).unwrap();
+
+    // Link each balloon to its text layer, then merge the two balloons into one group.
+    let mut upd1 = live_balloon(json!({"bodyKind": "ellipse", "rect": [300.0, 80.0, 200.0, 120.0]}));
+    upd1["id"] = json!(1);
+    upd1["linkedTextLayer"] = json!(t1);
+    s.execute("shape.balloon.update", json!({"layer": l_b1, "balloon": upd1})).unwrap();
+
+    let mut upd2 = live_balloon(json!({"bodyKind": "ellipse", "rect": [100.0, 180.0, 200.0, 140.0]}));
+    upd2["id"] = json!(1);
+    upd2["linkedTextLayer"] = json!(t2);
+    s.execute("shape.balloon.update", json!({"layer": l_b2, "balloon": upd2})).unwrap();
+
+    let merge = s.execute("shape.balloon.merge", json!({"layers": [l_b1, l_b2]})).unwrap();
+    assert_eq!(merge["balloonCount"].as_u64(), Some(2));
+    assert!(doc(&s).layer(LayerId(l_b2)).is_none(), "absorbed balloon layer is removed");
+    let merged = balloon_group(&s, l_b1);
+    assert_eq!(merged.items[0].linked_text_layer, Some(LayerId(t1)));
+    assert_eq!(merged.items[1].linked_text_layer, Some(LayerId(t2)));
+
+    // Shrinking chamber 1 triggers live Stories box update + text overflow into t2 in one step.
+    let hist_before = s.active().unwrap().history.past_len();
+    let mut shrink1 = serde_json::to_value(&merged.items[0]).unwrap();
+    shrink1["body"] = json!({"bodyKind": "ellipse", "rect": [300.0, 80.0, 110.0, 56.0], "squircle": 0.25});
+    s.execute("shape.balloon.update", json!({"layer": l_b1, "balloon": shrink1, "coalesce": "drag-story"})).unwrap();
+    assert_eq!(s.active().unwrap().history.past_len(), hist_before + 1);
+    let text_b_after_shrink = match &doc(&s).layer(LayerId(t2)).unwrap().content {
+        LayerContent::Text(tl) => tl.text.clone(),
+        _ => panic!("expected text layer"),
+    };
+    assert!(!text_b_after_shrink.trim().is_empty(), "shrunk chamber 1 must push overflow into story chamber 2");
+
+    // Growing chamber 1 pulls text back from t2.
+    let mut grow1 = serde_json::to_value(&balloon_group(&s, l_b1).items[0]).unwrap();
+    grow1["body"] = json!({"bodyKind": "ellipse", "rect": [260.0, 60.0, 420.0, 280.0], "squircle": 0.25});
+    s.execute("shape.balloon.update", json!({"layer": l_b1, "balloon": grow1, "coalesce": "drag-story"})).unwrap();
+    assert_eq!(s.active().unwrap().history.past_len(), hist_before + 1, "coalesced drag stays one undo step");
+    let text_b_after_grow = match &doc(&s).layer(LayerId(t2)).unwrap().content {
+        LayerContent::Text(tl) => tl.text.clone(),
+        _ => panic!("expected text layer"),
+    };
+    assert!(text_b_after_grow.trim().is_empty(), "enlarged chamber 1 must pull text back from t2: {text_b_after_grow:?}");
+
+    // Undo restores both text boxes & balloon shape cleanly.
+    s.execute("edit.undo", json!({})).unwrap();
+    let t2_undone = match &doc(&s).layer(LayerId(t2)).unwrap().content {
+        LayerContent::Text(tl) => tl.text.clone(),
+        _ => panic!("expected text layer"),
+    };
+    assert!(t2_undone.is_empty());
+
+    // Add a 3rd chamber and split one back out.
+    let added = s
+        .execute("shape.balloon.add", json!({"layer": l_b1, "balloon": live_balloon(json!({"bodyKind": "ellipse", "rect": [50.0, 50.0, 90.0, 70.0]}))}))
+        .unwrap();
+    assert_eq!(added["balloonId"].as_u64(), Some(3));
+    let split = s.execute("shape.balloon.split", json!({"layer": l_b1, "balloonId": 2})).unwrap();
+    let new_layer = split["newLayer"].as_u64().unwrap();
+    assert_eq!(balloon_group(&s, new_layer).items[0].linked_text_layer, Some(LayerId(t2)));
+}

@@ -316,18 +316,18 @@ layers	Fill:	Độ tô:
 	Bubble Contour	Hình dạng bong bóng
 	No contour variants	Không có biến thể đường viền
 	~ SCurve	~ SCurve
-	＋ Add tail	＋ Add tail
-	＋ Create balloon on canvas	＋ Create balloon on canvas
-	＋ Fit balloon	＋ Fit balloon
+	+ Add tail	+ Add tail
+	+ Create balloon on canvas	+ Create balloon on canvas
+	+ Fit balloon	+ Fit balloon
 	⊘ None	⊘ None
-	⌒ Arc	⌒ Arc
+	≈ Arc	≈ Arc
 	▽ Wedge	▽ Wedge
-	◎ Double outline	◎ Double outline
-	◌ Thought	◌ Thought
+	● Double outline	● Double outline
+	○ Thought	○ Thought
 	☁️ Cloud	☁️ Cloud
 	✓ Text fits: {lines} lines, {size} pt	✓ Text fits: {lines} lines, {size} pt
 	✴️ Burst	✴️ Burst
-	⑂ Double	⑂ Double
+	Y Double	Y Double
 	◽ Rect	◽ Rect
 	⚠ Text does not fit — enlarge the balloon or reduce the type size	⚠ Text does not fit — enlarge the balloon or reduce the type size
 	⚡ Bake to SAI Linework	⚡ Bake to SAI Linework
@@ -372,4 +372,16 @@ layers	Fill:	Độ tô:
 	Valley depth:	Valley depth:
 	💥 Spiky	💥 Spiky
 	🔄 Reset to the manga default	🔄 Reset to the manga default
-	🦔 Uniflash	🦔 Uniflash
+	⚡ Uniflash	⚡ Uniflash
+Auto dot size	Auto dot size
+By area	By area
+Coverage = brightness × Density; dot size is ignored	Coverage = brightness × Density; dot size is ignored
+Derived from coverage	Derived from coverage
+Equalize area	Equalize area
+Not used in auto mode	Not used in auto mode
+Calibrate area by brightness	Calibrate area by brightness
+Posterize steps	Posterize steps
+Scrape / Kezuri	Scrape / Kezuri
+Layout:	Layout:
+Cross	Cross
+Even	Even

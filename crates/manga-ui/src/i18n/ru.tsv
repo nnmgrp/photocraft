@@ -419,18 +419,18 @@ layers	Fill:	Заливка:
 	Bubble Contour	Форма баббла
 	No contour variants	Нет вариантов контура
 	~ SCurve	~ SCurve
-	＋ Add tail	＋ Добавить хвост
-	＋ Create balloon on canvas	＋ Создать баллон на холсте
-	＋ Fit balloon	＋ Вписать баббл
+	+ Add tail	+ Добавить хвост
+	+ Create balloon on canvas	+ Создать баллон на холсте
+	+ Fit balloon	+ Вписать баббл
 	⊘ None	⊘ Нет
-	⌒ Arc	⌒ Дуга
+	≈ Arc	≈ Дуга
 	▽ Wedge	▽ Клин
-	◎ Double outline	◎ Двойной контур
-	◌ Thought	◌ Мысль
+	● Double outline	● Двойной контур
+	○ Thought	○ Мысль
 	☁️ Cloud	☁️ Облако
 	✓ Text fits: {lines} lines, {size} pt	✓ Текст влезает: строк {lines}, кегль {size} pt
 	✴️ Burst	✴️ Взрыв
-	⑂ Double	⑂ Двойной
+	Y Double	Y Двойной
 	◽ Rect	◽ Прямоугольник
 	⚠ Text does not fit — enlarge the balloon or reduce the type size	⚠ Текст не влезает — увеличьте баллон или уменьшите кегль
 	⚡ Bake to SAI Linework	⚡ Запечь в лайнворк SAI
@@ -475,7 +475,7 @@ layers	Fill:	Заливка:
 	Valley depth:	Глубина впадин:
 	💥 Spiky	💥 Шипастый
 	🔄 Reset to the manga default	🔄 Сбросить на манга-стандарт
-	🦔 Uniflash	🦔 Унифлеш
+	⚡ Uniflash	⚡ Унифлеш
 	Align:	Выравнивание:
 	Batch balloons from script (one line per balloon):	Пакет баллонов по сценарию (по строке на баллон):
 	Brush contrast:	Контраст кисти:
@@ -519,9 +519,9 @@ layers	Fill:	Заливка:
 	Voice and intonation:	Голос и интонация:
 	Voice intensity:	Сила эффекта:
 	Workflow: Presets, Script & SVG	Рабочий процесс: пресеты, сценарий и SVG
-	━ Solid	━ Сплошная
-	◌ Whisper	◌ Шёпот
-	◎ Double	◎ Двойная
+	— Solid	— Сплошная
+	○ Whisper	○ Шёпот
+	● Double	● Двойная
 	★ Save current style to favorites	★ Сохранить текущий стиль в избранное
 	⚠ Overflow by height (+{px} px needed)	⚠ Переполнение по высоте (нужно +{px} px)
 	⚠ Overflow by width (+{px} px needed)	⚠ Переполнение по ширине (нужно +{px} px)
@@ -530,14 +530,26 @@ layers	Fill:	Заливка:
 	✨ Sparkle / glitter	✨ Блёстки / искры
 	⬆ Import SVG contour	⬆ Импорт SVG-контура
 	⬇ Export balloon SVG	⬇ Экспорт SVG баллона
-	＋ Create batch from script	＋ Создать пакет из сценария
-	＋ Import (.json/.png)	＋ Импорт (.json/.png)
+	+ Create batch from script	+ Создать пакет из сценария
+	+ Import (.json/.png)	+ Импорт (.json/.png)
 	👻 Eerie	👻 Жуткий
 	👾 1-bit pixel	👾 1-бит пиксель
 	💢 Irritated	💢 Раздражённый
 	💬 Neutral	💬 Нейтральный
 	📢 Shout	📢 Крик
 	📻 Broadcast	📻 Радио / экран
-	🖌 Ukiyo-e brush	🖌 Кисть укиё-э
+	🎨 Ukiyo-e brush	🎨 Кисть укиё-э
 	🤫 Whisper	🤫 Шёпот
-	🪪 Chamfer rect	🪪 Срезанный прям.
+	◇ Chamfer rect	◇ Срезанный прям.
+Auto dot size	Авто-размер точки
+By area	по площади
+Coverage = brightness × Density; dot size is ignored	Покрытие = яркость × Плотность; размер точки не используется
+Derived from coverage	из покрытия
+Equalize area	Калибровать площадь
+Not used in auto mode	не используется в авто-режиме
+Calibrate area by brightness	Калибровать площадь по яркости
+Posterize steps	Ступени постеризации
+Scrape / Kezuri	Соскабливание / Kezuri
+Layout:	Раскладка:
+Cross	Крест
+Even	По кругу

@@ -1716,6 +1716,97 @@ fn sdf_diamond(p: vec2<f32>, size: f32, roundness: f32) -> f32 {
     return sdf_box_rounded(vec2<f32>(u, v), s, s, r);
 }
 
+// WGSL `sign(0.0)` is 0 while Rust `f32::signum(0.0)` is 1: always use this helper for SDF signs.
+fn st_sgn(x: f32) -> f32 {
+    return select(-1.0, 1.0, x >= 0.0);
+}
+
+// Polynomial smooth minimum (Inigo Quilez), matching the CPU screentone kernel.
+fn sdf_smooth_min(d1: f32, d2: f32, k: f32) -> f32 {
+    if (k <= 1e-4) { return min(d1, d2); }
+    let h = max(k - abs(d1 - d2), 0.0) / k;
+    return min(d1, d2) - h * h * k * 0.25;
+}
+
+// Exact O(1) hexagon SDF (flat-top IQ form; the caller swaps axes for the pointy-top legacy shape).
+fn sdf_hexagon_exact(p_in: vec2<f32>, size: f32, roundness: f32) -> f32 {
+    let kx = -0.866025404;
+    let ky = 0.5;
+    let kz = 0.577350269;
+    let r = size * 0.25 * clamp(roundness, 0.0, 1.0);
+    let s = max(size - r, 0.05) * 0.866025404;
+    var x = abs(p_in.x);
+    var y = abs(p_in.y);
+    let d_proj = 2.0 * min(kx * x + ky * y, 0.0);
+    x = x - d_proj * kx;
+    y = y - d_proj * ky;
+    x = x - clamp(x, -kz * s, kz * s);
+    y = y - s;
+    return length(vec2<f32>(x, y)) * st_sgn(y) - r;
+}
+
+// Exact O(1) equilateral triangle SDF.
+fn sdf_triangle_exact(px: f32, py_in: f32, size: f32, roundness: f32) -> f32 {
+    let k = 1.732050808;
+    let r = size * 0.25 * clamp(roundness, 0.0, 1.0);
+    let s = max(size - r, 0.05) * 0.866025404;
+    var x = abs(px) - s;
+    var py = -py_in + s / k;
+    if (x + k * py > 0.0) {
+        let nx = (x - k * py) * 0.5;
+        let ny = (-k * x - py) * 0.5;
+        x = nx;
+        py = ny;
+    }
+    x = x - clamp(x, -2.0 * s, 0.0);
+    return -length(vec2<f32>(x, py)) * st_sgn(py) - r;
+}
+
+// Exact O(1) five-pointed star SDF (inner/outer ratio 0.4 matches the legacy polygon).
+fn sdf_star5_exact(px: f32, py_in: f32, size: f32, roundness: f32) -> f32 {
+    let k1x = 0.809016994;
+    let k1y = -0.587785252;
+    let k2x = -k1x;
+    let k2y = k1y;
+    let r = size * 0.2 * clamp(roundness, 0.0, 1.0);
+    let s = max(size - r, 0.05);
+    let rf = 0.40;
+    var x = abs(px);
+    var py = -py_in;
+    let d1 = 2.0 * max(k1x * x + k1y * py, 0.0);
+    x = x - d1 * k1x;
+    py = py - d1 * k1y;
+    let d2 = 2.0 * max(k2x * x + k2y * py, 0.0);
+    x = x - d2 * k2x;
+    py = py - d2 * k2y;
+    x = abs(x);
+    py = py - s;
+    let bax = rf * (-k1y);
+    let bay = rf * k1x - 1.0;
+    let h = clamp((x * bax + py * bay) / (bax * bax + bay * bay), 0.0, s);
+    let dx = x - bax * h;
+    let dy = py - bay * h;
+    return length(vec2<f32>(dx, dy)) * st_sgn(py * bax - x * bay) - r;
+}
+
+// Exact O(1) heart SDF (scale 1.46 matches the legacy 28-gon footprint).
+fn sdf_heart_exact(p: vec2<f32>, size: f32, roundness: f32) -> f32 {
+    let unused_r = roundness;
+    let s = max(size, 0.05) * 1.46 + unused_r * 0.0;
+    let x = abs(p.x) / s;
+    let y = clamp(0.55 - p.y / s, -2.0, 2.0);
+    var d = 0.0;
+    if (y + x > 1.0) {
+        d = length(vec2<f32>(x - 0.25, y - 0.75)) - ST_FRAC_1_SQRT_2 * 0.5;
+    } else {
+        let d1 = x * x + (y - 1.0) * (y - 1.0);
+        let m = 0.5 * max(x + y, 0.0);
+        let d2 = (x - m) * (x - m) + (y - m) * (y - m);
+        d = sqrt(min(d1, d2)) * select(1.0, -1.0, x < y);
+    }
+    return d * s;
+}
+
 // Finalize polygon SDF with ray-casting sign and corner roundness (`sdf_polygon`).
 fn finalize_polygon_sdf(min_d: f32, inside_poly: bool, roundness: f32) -> f32 {
     let signed_d = select(min_d, -min_d, inside_poly);
@@ -1843,7 +1934,7 @@ fn eval_shape_sdf(
     switch shape {
         case 1u: { return sdf_square(s, size, roundness); }
         case 2u: { return sdf_diamond(s, size, roundness); }
-        case 3u: { return sdf_hexagon(s, size, roundness); }
+        case 3u: { return sdf_hexagon_exact(vec2<f32>(s.y, s.x), size, roundness); }
         default: { return length(s) - size; }
     }
 }
@@ -1868,11 +1959,32 @@ fn eval_special_shape_sdf(
     let s = vec2<f32>(rx / max(stretch_x, 0.01), ry / max(stretch_y, 0.01));
 
     switch pattern {
-        case 9: { return sdf_star(s, size, roundness); }
-        case 10: { return sdf_heart(s, size, roundness); }
-        case 11: { return sdf_triangle(s, size, roundness); }
+        case 9: { return sdf_star5_exact(s.x, s.y, size, roundness); }
+        case 10: { return sdf_heart_exact(s, size, roundness); }
+        case 11: { return sdf_triangle_exact(s.x, s.y, size, roundness); }
         default: { return length(s) - size; }
     }
+}
+
+// Area calibration helpers matching crates/algo/src/comic_screentone.rs (Appendix A.13).
+fn st_area_ink(ink: f32, equalize: f32, is_auto: f32) -> f32 {
+    if (equalize > 0.5 && is_auto < 0.5 && ink > 0.0 && ink < 1.0) { return sqrt(ink); }
+    return ink;
+}
+
+fn st_area_k(pattern: i32, shape: u32) -> f32 {
+    if (pattern == 9) { return 1.175571; }
+    if (pattern == 10) { return 1.902877; }
+    if (pattern == 11) { return 1.299038; }
+    if (pattern == 6) { return 2.598076; }
+    if (shape == 1u) { return 2.56; }
+    if (shape == 2u) { return 2.0; }
+    if (shape == 3u) { return 2.598076; }
+    return 3.14159265;
+}
+
+fn st_auto_size(cell_area: f32, coverage: f32, area_k: f32) -> f32 {
+    return sqrt(cell_area * clamp(coverage, 0.0, 1.0) / max(area_k, 1e-3));
 }
 
 // Compute gradient factor in `[0.0, 1.0]` at relative position `(x, y)` from center.
@@ -1945,10 +2057,11 @@ fn screentone_tone(d: vec2<i32>, loc: vec2<i32>) -> vec4<f32> {
     let dot_shape = packed_bits & 3u;
     let sat_shape = (packed_bits >> 2u) & 3u;
     let sat_enabled = ((packed_bits >> 4u) & 1u) != 0u;
-    let sat_count = clamp(i32((packed_bits >> 5u) & 7u), 1, 4);
+    var sat_count = clamp(i32((packed_bits >> 5u) & 7u), 1, 8);
     let grad_type = (packed_bits >> 8u) & 3u;
     let grad_reverse = ((packed_bits >> 10u) & 1u) != 0u;
     let grad_color_trans = ((packed_bits >> 11u) & 1u) != 0u;
+    let sat_even = ((packed_bits >> 12u) & 1u) != 0u;
 
     let dot_size = max(op.p1.y, 0.0);
     let smoothness = clamp(op.p1.z, 0.0, 1.0);
@@ -1996,6 +2109,11 @@ fn screentone_tone(d: vec2<i32>, loc: vec2<i32>) -> vec4<f32> {
     let gamma = select(1.0, lut_at(24), has_ext);
     let preserve_lines = select(0.0, lut_at(25), has_ext) > 0.5;
     let line_thresh = select(0.24, lut_at(26), has_ext);
+    let equalize_area = select(0.0, lut_at(29), has_ext);
+    let auto_dot_size = select(0.0, lut_at(30), has_ext);
+    let posterize_steps = select(0.0, lut_at(31), has_ext);
+    let scrape_strength = select(0.0, lut_at(32), has_ext);
+    sat_count = select(sat_count, clamp(i32(lut_at(28)), 1, 8), has_ext);
 
     // 1. Relative coordinate from bounds center in canvas-rotated frame
     let rel_x = doc_x - cx;
@@ -2053,7 +2171,8 @@ fn screentone_tone(d: vec2<i32>, loc: vec2<i32>) -> vec4<f32> {
         if (preserve_lines && luma_eff <= line_thresh) {
             solid_line = true;
         } else {
-            let g = pow(clamp(luma_eff + brightness, 0.0, 1.0), gamma);
+            let base_luma = clamp(luma_eff + brightness, 0.0, 1.0);
+            let g = select(pow(base_luma, gamma), base_luma, abs(gamma - 1.0) < 1e-4);
             let luma_adj = clamp((g - 0.5) * contrast + 0.5, 0.0, 1.0);
             if (luma_adj >= white_thresh) {
                 ink = 0.0;
@@ -2061,6 +2180,9 @@ fn screentone_tone(d: vec2<i32>, loc: vec2<i32>) -> vec4<f32> {
                 ink = 1.0;
             } else {
                 ink = clamp((white_thresh - luma_adj) / max(white_thresh - black_thresh, 1e-5), 0.0, 1.0);
+            }
+            if (posterize_steps >= 2.0 && ink > 0.0 && ink < 1.0) {
+                ink = ceil(ink * posterize_steps) / posterize_steps;
             }
         }
     }
@@ -2131,8 +2253,8 @@ fn screentone_tone(d: vec2<i32>, loc: vec2<i32>) -> vec4<f32> {
         }
         case 5: { // PatternType::Stipple
             let s_seed = seed + 999u;
-            let cx_idx = i32(floor(grid_x / spacing_x));
-            let cy_idx = i32(floor(grid_y / spacing_y));
+            let cx_idx = i32(round(grid_x / spacing_x));
+            let cy_idx = i32(round(grid_y / spacing_y));
             for (var dy = -1; dy <= 1; dy = dy + 1) {
                 for (var dx = -1; dx <= 1; dx = dx + 1) {
                     let ix = cx_idx + dx;
@@ -2164,7 +2286,11 @@ fn screentone_tone(d: vec2<i32>, loc: vec2<i32>) -> vec4<f32> {
         case 6: { // PatternType::Hexgrid
             let hy = spacing_y * 0.8660254;
             let cy_idx = i32(round(grid_y / hy));
-            let size = max(dot_size * mod_size * density * ink, 0.0);
+            let size = select(
+                max(dot_size * mod_size * density * st_area_ink(ink, equalize_area, auto_dot_size), 0.0),
+                st_auto_size(spacing_x * hy, ink * density, 2.598076) * mod_size,
+                auto_dot_size > 0.5,
+            );
             for (var dy = -1; dy <= 1; dy = dy + 1) {
                 let iy = cy_idx + dy;
                 let cell_y = f32(iy) * hy;
@@ -2191,7 +2317,7 @@ fn screentone_tone(d: vec2<i32>, loc: vec2<i32>) -> vec4<f32> {
             let iy = i32(floor(grid_y / spacing_y));
             if (((ix + iy) & 1) == 0) {
                 let cell_c = vec2<f32>((f32(ix) + 0.5) * spacing_x, (f32(iy) + 0.5) * spacing_y);
-                let size = max(spacing_x * 0.45 * mod_size * density * ink, 0.0);
+                let size = max(spacing_x * 0.45 * mod_size * density * st_area_ink(ink, equalize_area, auto_dot_size), 0.0);
                 if (size > 1e-4) {
                     let dist = eval_shape_sdf(
                         grid_p - cell_c,
@@ -2216,18 +2342,20 @@ fn screentone_tone(d: vec2<i32>, loc: vec2<i32>) -> vec4<f32> {
             }
         }
         case 9, 10, 11: { // PatternType::Stars (9), Hearts (10), Triangles (11)
-            let cx_idx = i32(floor(grid_x / spacing_x));
-            let cy_idx = i32(floor(grid_y / spacing_y));
-            let sz = max(dot_size * mod_size * density * ink, 0.0);
+            let cy_idx = i32(round(grid_y / spacing_y));
+            let sz = select(
+                max(dot_size * mod_size * density * st_area_ink(ink, equalize_area, auto_dot_size), 0.0),
+                st_auto_size(spacing_x * spacing_y, ink * density, st_area_k(op.kind, dot_shape)) * mod_size,
+                auto_dot_size > 0.5,
+            );
             for (var dy = -1; dy <= 1; dy = dy + 1) {
+                let iy = cy_idx + dy;
+                let row_shift = select(0.0, spacing_x * row_offset, (iy & 1) != 0);
+                let cx_idx = i32(round((grid_x - row_shift) / spacing_x));
                 for (var dx = -1; dx <= 1; dx = dx + 1) {
                     let ix = cx_idx + dx;
-                    let iy = cy_idx + dy;
-                    var dot_cx = f32(ix) * spacing_x;
+                    var dot_cx = f32(ix) * spacing_x + row_shift;
                     var dot_cy = f32(iy) * spacing_y;
-                    if ((iy & 1) != 0) {
-                        dot_cx = dot_cx + spacing_x * row_offset;
-                    }
                     if (jitter_pos > 0.0) {
                         dot_cx = dot_cx + (hash_coord(ix, iy, seed) - 0.5) * jitter_pos * 0.005 * spacing_x;
                         dot_cy = dot_cy + (hash_coord(ix + 1000, iy, seed) - 0.5) * jitter_pos * 0.005 * spacing_y;
@@ -2246,80 +2374,105 @@ fn screentone_tone(d: vec2<i32>, loc: vec2<i32>) -> vec4<f32> {
             }
         }
         default: { // PatternType::Dots (0) + Orbital Satellites
-            let cy_idx = i32(floor(grid_y / spacing_y));
-            let merged_size = dot_size + merge_factor * spacing_x * 0.2;
-            let psize = max(merged_size * mod_size * density * ink, 0.0);
-            let ssize = max((sat_size + merge_factor * spacing_x * 0.4) * mod_size * density * ink, 0.0);
-            let sdist = sat_distance * (1.0 - merge_factor * 0.6);
-            let sin_sat = sin(sat_angle_rad);
-            let cos_sat = cos(sat_angle_rad);
+            // Kezuri: scrape the light edge with long thin noise cells along the unrotated X axis.
+            var scraped = false;
+            let eff_ink = ink;
+            if (scrape_strength > 0.001 && eff_ink > 0.0 && eff_ink < 0.4) {
+                let fade = (0.4 - eff_ink) / 0.4;
+                let n = hash_coord(i32(floor(local_x * 0.3)), i32(floor(local_y * 1.5)), seed + 777u);
+                if (n < fade * scrape_strength) { scraped = true; }
+            }
+            if (!scraped) {
+                let cov_target = clamp(eff_ink * density, 0.0, 1.0);
+                let calibrated = st_area_ink(eff_ink, equalize_area, auto_dot_size);
+                let k_main = st_area_k(0, dot_shape);
+                let k_sat = st_area_k(0, sat_shape);
+                var base_rad = 0.0;
+                var ssize_base = 0.0;
+                var k_scale = 0.0;
+                if (auto_dot_size > 0.5) {
+                    let sat_ratio = select(0.0, sat_size / max(dot_size, 0.05), sat_enabled);
+                    let nf = f32(sat_count);
+                    let norm = 1.0 / sqrt(1.0 + nf * sat_ratio * sat_ratio * k_sat / k_main);
+                    let r = st_auto_size(spacing_x * spacing_y, cov_target, k_main) * norm;
+                    base_rad = r;
+                    ssize_base = r * sat_ratio;
+                    k_scale = sqrt(cov_target);
+                } else {
+                    base_rad = dot_size * density * calibrated;
+                    ssize_base = sat_size * density * calibrated;
+                    k_scale = density * calibrated;
+                }
+                let merge = clamp(merge_factor, 0.0, 1.0);
+                let psize = max((base_rad + merge * spacing_x * 0.2 * k_scale) * mod_size, 0.0);
+                let ssize = max((ssize_base + merge * spacing_x * 0.4 * k_scale) * mod_size, 0.0);
+                let sdist = sat_distance * (1.0 - merge * 0.6);
+                let smooth_k = merge * min(spacing_x, spacing_y) * 0.35;
+                let min_sp = max(min(spacing_x, spacing_y), 0.01);
+                let stretch_gain = max(max(mod_aspect_x, mod_aspect_y), 1.0);
+                let sat_gain = 1.0 + max(sat_stretch, 0.0);
+                let jitter_pad = max(jitter_pos, 0.0) * 0.0025 * max(spacing_x, spacing_y);
+                let max_reach = psize * stretch_gain
+                    + select(0.0, sdist + ssize * sat_gain * stretch_gain, sat_enabled && ssize > 0.05)
+                    + jitter_pad + smooth_k;
+                let search_r = clamp(i32(ceil(max_reach / min_sp - 0.5)), 1, 3);
+                let sin_sat = sin(sat_angle_rad);
+                let cos_sat = cos(sat_angle_rad);
+                var cross_dirs = array<vec2<f32>, 4>(
+                    vec2<f32>(0.0, -1.0), vec2<f32>(0.0, 1.0), vec2<f32>(1.0, 0.0), vec2<f32>(-1.0, 0.0)
+                );
 
-            for (var dy = -1; dy <= 1; dy = dy + 1) {
-                let iy = cy_idx + dy;
-                let row_shift = select(0.0, spacing_x * row_offset, (iy & 1) != 0);
-                let cx_idx = i32(floor((grid_x - row_shift) / spacing_x));
-                for (var dx = -1; dx <= 1; dx = dx + 1) {
-                    let ix = cx_idx + dx;
-                    var dot_cx = f32(ix) * spacing_x + row_shift;
-                    var dot_cy = f32(iy) * spacing_y;
-                    if (jitter_pos > 0.0) {
-                        dot_cx = dot_cx + (hash_coord(ix, iy, seed) - 0.5) * jitter_pos * 0.005 * spacing_x;
-                        dot_cy = dot_cy + (hash_coord(ix + 1000, iy, seed) - 0.5) * jitter_pos * 0.005 * spacing_y;
-                    }
-                    var final_size = psize;
-                    if (jitter_size > 0.0) {
-                        let jval = hash_coord(ix + 5000, iy + 5000, seed);
-                        final_size = final_size * max(1.0 + (jval - 0.5) * jitter_size * 0.02, 0.0);
-                    }
-                    let dist_main = eval_shape_sdf(
-                        grid_p - vec2<f32>(dot_cx, dot_cy),
-                        dot_shape,
-                        final_size,
-                        mod_aspect_x,
-                        mod_aspect_y,
-                        roundness,
-                        rot_pattern_rad,
-                    );
-                    cov = max(cov, coverage_from_sdf(dist_main, smoothness));
-
-                    if (sat_enabled && ssize > 0.05) {
-                        let sat_offsets = array<vec2<f32>, 4>(
-                            vec2<f32>(0.0, -sdist),
-                            vec2<f32>(0.0, sdist),
-                            vec2<f32>(sdist, 0.0),
-                            vec2<f32>(-sdist, 0.0),
-                        );
-                        for (var si = 0; si < 4; si = si + 1) {
-                            if (si >= sat_count) { break; }
-                            let off = sat_offsets[si];
-                            let rsx = off.x * cos_sat - off.y * sin_sat;
-                            let rsy = off.x * sin_sat + off.y * cos_sat;
-                            var sp = grid_p - vec2<f32>(dot_cx + rsx, dot_cy + rsy);
-                            if (sat_stretch > 0.0 && (rsx != 0.0 || rsy != 0.0)) {
-                                let stretch_dir = atan2(-rsy, -rsx);
-                                let s_sin = sin(stretch_dir);
-                                let s_cos = cos(stretch_dir);
-                                let rot_sx = sp.x * s_cos + sp.y * s_sin;
-                                let rot_sy = -sp.x * s_sin + sp.y * s_cos;
-                                let scaled_sx = rot_sx / max(1.0 + sat_stretch, 0.01);
-                                sp = vec2<f32>(
-                                    scaled_sx * s_cos - rot_sy * s_sin,
-                                    scaled_sx * s_sin + rot_sy * s_cos,
-                                );
-                            }
-                            let dist_sat = eval_shape_sdf(
-                                sp,
-                                sat_shape,
-                                ssize,
-                                mod_aspect_x,
-                                mod_aspect_y,
-                                roundness,
-                                rot_pattern_rad,
-                            );
-                            cov = max(cov, coverage_from_sdf(dist_sat, smoothness));
+                let cy_idx = i32(round(grid_y / spacing_y));
+                var min_d = F32_MAX;
+                for (var dy = -search_r; dy <= search_r; dy = dy + 1) {
+                    let iy = cy_idx + dy;
+                    let row_shift = select(0.0, spacing_x * row_offset, (iy & 1) != 0);
+                    let cx_idx = i32(round((grid_x - row_shift) / spacing_x));
+                    for (var dx = -search_r; dx <= search_r; dx = dx + 1) {
+                        let ix = cx_idx + dx;
+                        var dot_cx = f32(ix) * spacing_x + row_shift;
+                        var dot_cy = f32(iy) * spacing_y;
+                        if (jitter_pos > 0.0) {
+                            dot_cx = dot_cx + (hash_coord(ix, iy, seed) - 0.5) * jitter_pos * 0.005 * spacing_x;
+                            dot_cy = dot_cy + (hash_coord(ix + 1000, iy, seed) - 0.5) * jitter_pos * 0.005 * spacing_y;
                         }
+                        var final_size = psize;
+                        if (jitter_size > 0.0) {
+                            let jval = hash_coord(ix + 5000, iy + 5000, seed);
+                            final_size = final_size * max(1.0 + (jval - 0.5) * jitter_size * 0.02, 0.0);
+                        }
+                        var cell_d = eval_shape_sdf(
+                            grid_p - vec2<f32>(dot_cx, dot_cy), dot_shape, final_size,
+                            mod_aspect_x, mod_aspect_y, roundness, rot_pattern_rad,
+                        );
+                        if (sat_enabled && ssize > 0.05) {
+                            for (var si = 0; si < sat_count; si = si + 1) {
+                                var dir = vec2<f32>(0.0, 0.0);
+                                if (sat_even) {
+                                    let th = sat_angle_rad + 6.283185307 * f32(si) / f32(max(sat_count, 1));
+                                    dir = vec2<f32>(sin(th), -cos(th));
+                                } else {
+                                    let c = cross_dirs[min(si, 3)];
+                                    dir = vec2<f32>(c.x * cos_sat - c.y * sin_sat, c.x * sin_sat + c.y * cos_sat);
+                                }
+                                var sp = grid_p - (vec2<f32>(dot_cx, dot_cy) + dir * sdist);
+                                if (sat_stretch > 0.0) {
+                                    let rot_sx = sp.x * dir.x + sp.y * dir.y;
+                                    let rot_sy = -sp.x * dir.y + sp.y * dir.x;
+                                    let scaled = rot_sx / max(1.0 + sat_stretch, 0.01);
+                                    sp = vec2<f32>(scaled * dir.x - rot_sy * dir.y, scaled * dir.y + rot_sy * dir.x);
+                                }
+                                let ds = eval_shape_sdf(
+                                    sp, sat_shape, ssize,
+                                    mod_aspect_x, mod_aspect_y, roundness, rot_pattern_rad,
+                                );
+                                cell_d = sdf_smooth_min(cell_d, ds, smooth_k);
+                            }
+                        }
+                        min_d = sdf_smooth_min(min_d, cell_d, smooth_k * 0.5);
                     }
                 }
+                cov = coverage_from_sdf(min_d, smoothness);
             }
         }
     }
@@ -2338,7 +2491,19 @@ fn screentone_tone(d: vec2<i32>, loc: vec2<i32>) -> vec4<f32> {
         }
         return vec4<f32>(cur_fg.rgb, alpha);
     }
-    return mix(bg, cur_fg, cov);
+    // Premultiplied alpha: no dark halo over translucent backgrounds.
+    let out_a = mix(bg.a, cur_fg.a, cov);
+    if (out_a <= 1e-6) {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+    let bg_w = bg.a * (1.0 - cov);
+    let fg_w = cur_fg.a * cov;
+    return vec4<f32>(
+        (bg.r * bg_w + cur_fg.r * fg_w) / out_a,
+        (bg.g * bg_w + cur_fg.g * fg_w) / out_a,
+        (bg.b * bg_w + cur_fg.b * fg_w) / out_a,
+        out_a,
+    );
 }
 
 // Fragment entry point for `Kernel::Screentone`: evaluates the procedural screentone

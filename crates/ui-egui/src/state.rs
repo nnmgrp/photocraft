@@ -82,6 +82,9 @@ pub struct Panels {
     /// Window › Character / Paragraph: the Character | Paragraph dock group (#150).
     #[serde(default)]
     pub character: bool,
+    /// Unified Manga dock group (Balloons, Screentones, Linework, TypeR, Pages, Timelapse).
+    #[serde(default)]
+    pub manga: bool,
     /// The toolbar's header chevron: two columns even when one fits (#1197).
     #[serde(default)]
     pub toolbar_double: bool,
@@ -136,6 +139,9 @@ pub struct Panels {
     /// Manga typesetter (TypeR) panel.
     #[serde(default)]
     pub typesetter: bool,
+    /// Manga SFX lettering panel.
+    #[serde(default)]
+    pub sfx: bool,
     /// Canvas quick capsule overlay.
     #[serde(default)]
     pub canvas_capsule: bool,
@@ -168,6 +174,7 @@ impl Default for Panels {
             brush_settings: false,
             brushes: false,
             character: false,
+            manga: false,
             toolbar_double: false,
             toolbar_side: ToolbarSide::Start,
             dock: true,
@@ -184,6 +191,7 @@ impl Default for Panels {
             timelapse: false,
             pages: false,
             typesetter: false,
+            sfx: false,
             canvas_capsule: false,
         }
     }
@@ -908,7 +916,8 @@ mod tests {
         assert_eq!(Tool::from_name("Fill Tool"), Some(Tool::Fill));
         assert_eq!(Tool::from_name("Vector Curve Tool"), Some(Tool::VectorCurve));
         assert_eq!(Tool::from_name("Balloon Tool"), Some(Tool::Balloon));
-        assert_eq!(Tool::ALL.len(), 72);
+        assert_eq!(Tool::from_name("SFX Tool"), Some(Tool::Sfx));
+        assert_eq!(Tool::ALL.len(), 73);
     }
 
     fn vector_tool_names_parse() {

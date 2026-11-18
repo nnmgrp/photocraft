@@ -13,6 +13,8 @@ pub struct DockTabs {
     pub history: usize,
     /// Character | Paragraph.
     pub character: usize,
+    /// Manga panels (`Balloons | Screentones | Linework | TypeR Manga | Pages | Timelapse`).
+    pub manga: usize,
     /// Brushes presets.
     pub brushes: usize,
 }

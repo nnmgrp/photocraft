@@ -6,8 +6,8 @@
 //! [`BalloonPanelOutput`]. That keeps the panel reusable from both the dock host and a canvas
 //! balloon drag-create seam.
 //!
-//! Offers body selectors (Ellipse, Rect, ChamferRect, Cloud, Spiky, Burst, DoubleOutline,
-//! Uniflash), voice/tail presets, dynamic parameter sliders, dialogue fitting, and 1-click spawn.
+//! Offers body selectors (Ellipse, Rect, ChamferRect, Cloud, Spiky, Burst, Uniflash), the
+//! `Line · Fill · Color` controls, tail presets, a TypeR text link, and 1-click spawn.
 //! Protected against collapse: minimum body bounds are enforced everywhere a rect is built.
 
 use egui::{Color32, RichText, Ui, vec2};
@@ -166,6 +166,19 @@ pub struct BalloonPanelUi {
     pub svg_import_buffer: String,
     pub svg_export_buffer: String,
     pub favorites: Vec<BalloonFavoritePreset>,
+    /// Opt in to the gizmo's per-vertex handles (off by default: no 20–32 dots on screen).
+    #[serde(default)]
+    pub show_vertex_handles: bool,
+    /// Layer fill opacity in percent, applied through the layer-style blending options.
+    #[serde(default = "default_fill_opacity")]
+    pub fill_opacity: f64,
+    #[serde(default = "default_ink_color")]
+    pub stroke_color: [f32; 4],
+    #[serde(default = "default_paper_color")]
+    pub fill_color: [f32; 4],
+    /// Automatically keep linked TypeR text layer boxes / Stories synced when the balloon resizes.
+    #[serde(default = "default_true")]
+    pub auto_follow_text: bool,
 }
 
 impl Default for BalloonPanelUi {
@@ -248,8 +261,29 @@ impl Default for BalloonPanelUi {
             svg_import_buffer: String::new(),
             svg_export_buffer: String::new(),
             favorites: Vec::new(),
+            show_vertex_handles: false,
+            fill_opacity: 100.0,
+            stroke_color: [0.0, 0.0, 0.0, 1.0],
+            fill_color: [1.0, 1.0, 1.0, 1.0],
+            auto_follow_text: true,
         }
     }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_fill_opacity() -> f64 {
+    100.0
+}
+
+fn default_ink_color() -> [f32; 4] {
+    [0.0, 0.0, 0.0, 1.0]
+}
+
+fn default_paper_color() -> [f32; 4] {
+    [1.0, 1.0, 1.0, 1.0]
 }
 
 /// Everything the panel reads from its host, without depending on the host's concrete type.
@@ -258,6 +292,8 @@ pub struct BalloonHostContext<'a> {
     pub doc: Option<&'a photocraft_doc::Document>,
     pub doc_id: Option<BridgeDocId>,
     pub active_layer: Option<photocraft_doc::LayerId>,
+    pub selected_layers: &'a [photocraft_doc::LayerId],
+    pub active_balloon_id: Option<u32>,
     pub doc_dpi: f32,
     pub fg_color: [f32; 4],
     pub bg_color: [f32; 4],
@@ -272,8 +308,19 @@ pub struct BalloonPanelOutput {
     pub commands: Vec<OutCommand>,
     pub switch_to_balloon_tool: bool,
     pub open_linework_panel: bool,
+    /// The "Edit individual points" toggle, forwarded to the on-canvas gizmo.
+    pub show_vertex_handles: Option<bool>,
+    /// Open the TypeR dock for the selected balloon.
+    pub open_typer_panel: bool,
+    /// Select another chamber id inside the active dual/multi-balloon layer.
+    pub select_balloon_id: Option<u32>,
     /// `(message, is_error)` status text for the host's status bar.
     pub status_message: Option<(String, bool)>,
+    /// The dialogue editor changed this frame (or `+ Fit balloon` was pressed): the paired Text
+    /// layer must be created/updated once, with a coalescing key so typing stays one undo step.
+    pub fit_text_dirty: bool,
+    /// Safe rectangle of an already grown balloon, for the text command emitted by the Fit button.
+    pub fit_text_safe_rect: Option<[f64; 4]>,
 }
 
 pub fn handles(id: &str) -> bool {
@@ -283,12 +330,16 @@ pub fn handles(id: &str) -> bool {
 struct ActiveBalloonTarget {
     layer_id: u64,
     balloon: LiveBalloon,
+    group_index: usize,
+    group_len: usize,
     fill: Option<photocraft_doc::Fill>,
+    fill_opacity: f32,
     stroke_width: Option<f32>,
+    stroke_paint: Option<photocraft_doc::Fill>,
 }
 
-/// Returns the currently active balloon target when the active layer is a `BalloonGroup`.
-fn active_balloon_target(host: &BalloonHostContext<'_>) -> Option<ActiveBalloonTarget> {
+/// Returns the active balloon group layer id and group when the active layer is a `BalloonGroup`.
+fn active_balloon_group<'a>(host: &BalloonHostContext<'a>) -> Option<(photocraft_doc::LayerId, &'a photocraft_doc::vector::LiveBalloonGroup)> {
     let doc = host.doc?;
     let lid = host.active_layer?;
     let layer = doc.layer(lid)?;
@@ -298,8 +349,53 @@ fn active_balloon_target(host: &BalloonHostContext<'_>) -> Option<ActiveBalloonT
     let Some(photocraft_doc::LiveShape::BalloonGroup { group }) = &sh.live else {
         return None;
     };
-    let balloon = group.items.first()?.clone();
-    Some(ActiveBalloonTarget { layer_id: lid.0, balloon, fill: sh.fill.clone(), stroke_width: sh.stroke.as_ref().map(|s| s.width) })
+    Some((lid, group))
+}
+
+/// Returns the currently active balloon target when the active layer is a `BalloonGroup`.
+fn active_balloon_target(host: &BalloonHostContext<'_>) -> Option<ActiveBalloonTarget> {
+    let doc = host.doc?;
+    let (lid, group) = active_balloon_group(host)?;
+    let layer = doc.layer(lid)?;
+    let photocraft_doc::LayerContent::Shape(sh) = &layer.content else {
+        return None;
+    };
+    let (group_index, balloon) = host
+        .active_balloon_id
+        .and_then(|bid| group.items.iter().enumerate().find(|(_, it)| it.id == bid))
+        .map(|(idx, it)| (idx, it.clone()))
+        .or_else(|| group.items.first().cloned().map(|it| (0, it)))?;
+    Some(ActiveBalloonTarget {
+        layer_id: lid.0,
+        balloon,
+        group_index,
+        group_len: group.items.len(),
+        fill: sh.fill.clone(),
+        fill_opacity: layer.fill_opacity,
+        stroke_width: sh.stroke.as_ref().map(|s| s.width),
+        stroke_paint: sh.stroke.as_ref().map(|s| s.paint.clone()),
+    })
+}
+
+fn selected_balloon_layer_ids(host: &BalloonHostContext<'_>) -> Vec<u64> {
+    let Some(doc) = host.doc else {
+        return Vec::new();
+    };
+    let mut ids = Vec::new();
+    for lid in host.selected_layers {
+        if ids.contains(&lid.0) {
+            continue;
+        }
+        let Some(layer) = doc.layer(*lid) else {
+            continue;
+        };
+        if let photocraft_doc::LayerContent::Shape(sh) = &layer.content
+            && matches!(sh.live, Some(photocraft_doc::LiveShape::BalloonGroup { .. }))
+        {
+            ids.push(lid.0);
+        }
+    }
+    ids
 }
 
 fn body_from_state(st: &BalloonPanelUi, rect: [f64; 4]) -> LiveBalloonBody {
@@ -430,7 +526,7 @@ pub fn hydrate_geometry_from_balloon(state: &mut BalloonPanelUi, balloon: &LiveB
     state.whisper_duty = balloon.whisper_duty.clamp(0.20, 0.85);
     state.pencil_strands = balloon.pencil_strands.clamp(2, 7);
     state.pencil_roughness = balloon.pencil_roughness.clamp(0.0, 1.0);
-    state.pixel_size_px = balloon.pixel_size_px.clamp(1.5, 32.0);
+    state.pixel_size_px = balloon.pixel_size_px.clamp(1.0, 32.0);
     state.ukiyo_contrast = balloon.ukiyo_contrast.clamp(0.0, 1.0);
     state.haze_spread = balloon.haze_spread.clamp(0.0, 100.0);
     state.stipple_density = balloon.stipple_density.clamp(0.0, 100.0);
@@ -459,6 +555,7 @@ pub fn hydrate_geometry_from_balloon(state: &mut BalloonPanelUi, balloon: &LiveB
     state.text_direction = balloon.text_direction;
     state.text_align = balloon.text_align;
     state.handwritten_font = balloon.handwritten_font;
+    state.auto_follow_text = balloon.auto_follow_text;
     if let Some(u) = &balloon.underlay {
         state.underlay_enabled = u.enabled;
         state.underlay_offset_x = u.offset[0];
@@ -470,18 +567,26 @@ pub fn hydrate_geometry_from_balloon(state: &mut BalloonPanelUi, balloon: &LiveB
     }
 }
 
-fn hydrate_state_from_balloon(state: &mut BalloonPanelUi, balloon: &LiveBalloon, fill: Option<&photocraft_doc::Fill>, stroke_width: Option<f32>) {
-    hydrate_geometry_from_balloon(state, balloon);
-    state.stroke_width = stroke_width.map(f64::from).unwrap_or(balloon.stroke_width).clamp(0.5, 20.0);
-    state.fill_mode = match fill {
+fn hydrate_state_from_balloon(state: &mut BalloonPanelUi, target: &ActiveBalloonTarget) {
+    hydrate_geometry_from_balloon(state, &target.balloon);
+    state.stroke_width = target.stroke_width.map(f64::from).unwrap_or(target.balloon.stroke_width).clamp(0.5, 20.0);
+    state.fill_mode = match &target.fill {
         None => BalloonFillMode::Transparent,
         Some(photocraft_doc::Fill::Solid(c)) if c.c[0] > 0.98 && c.c[1] > 0.98 && c.c[2] > 0.98 => BalloonFillMode::White,
         Some(_) => BalloonFillMode::Background,
     };
+    state.fill_opacity = (f64::from(target.fill_opacity.clamp(0.0, 1.0)) * 100.0).round();
+    if let Some(photocraft_doc::Fill::Solid(c)) = &target.fill {
+        state.fill_color = [c.c[0], c.c[1], c.c[2], c.alpha];
+    }
+    if let Some(photocraft_doc::Fill::Solid(c)) = &target.stroke_paint {
+        state.stroke_color = [c.c[0], c.c[1], c.c[2], c.alpha];
+    }
 }
 
-/// Whether the panel state changed anything the balloon stores (transient text/script buffers are
-/// ignored, so typing dialogue does not dispatch a geometry edit every frame).
+/// Whether the panel state changed anything the balloon stores (transient text/script buffers and
+/// standalone paint/opacity controls that dispatch `shape.edit` / `blendingOptions` directly are
+/// ignored so they do not emit duplicate `shape.balloon.update` steps).
 fn geometry_changed(a: &BalloonPanelUi, b: &BalloonPanelUi) -> bool {
     let mut a = a.clone();
     let mut b = b.clone();
@@ -497,6 +602,12 @@ fn geometry_changed(a: &BalloonPanelUi, b: &BalloonPanelUi) -> bool {
     b.svg_export_buffer.clear();
     a.favorites.clear();
     b.favorites.clear();
+    a.fill_opacity = 0.0;
+    b.fill_opacity = 0.0;
+    a.stroke_color = [0.0; 4];
+    b.stroke_color = [0.0; 4];
+    a.fill_color = [0.0; 4];
+    b.fill_color = [0.0; 4];
     a != b
 }
 
@@ -517,10 +628,15 @@ fn apply_panel_to_active_layer(state: &BalloonPanelUi, prev: &BalloonPanelUi, ho
         || (state.tail_bubble_radius - prev.tail_bubble_radius).abs() > 1e-4;
     let fill_changed = state.fill_mode != prev.fill_mode;
     let stroke_changed = (state.stroke_width - prev.stroke_width).abs() > 1e-4;
-    // The Uniflash render mode: closed needle polygons are the ink, so the layer is filled with
-    // black and has no stroke; leaving Uniflash restores the panel's fill/stroke.
-    let body_became_uniflash = state.body_choice == BalloonBodyKindChoice::Uniflash && prev.body_choice != BalloonBodyKindChoice::Uniflash;
-    let body_left_uniflash = state.body_choice != BalloonBodyKindChoice::Uniflash && prev.body_choice == BalloonBodyKindChoice::Uniflash;
+    let line_style_changed = state.line_style != prev.line_style;
+    let is_uniflash = state.body_choice == BalloonBodyKindChoice::Uniflash;
+    // Only `Uniflash + Solid` uses a black fill with no stroke: the needle polygons themselves
+    // are the ink. Every stylized line style keeps the normal balloon fill (white by default)
+    // and a black stroke, so its ink passes stay visible instead of becoming a black blob.
+    let uniflash_solid = is_uniflash && state.line_style == BalloonLineStyle::Solid;
+    let body_became_uniflash = is_uniflash && prev.body_choice != BalloonBodyKindChoice::Uniflash;
+    let body_left_uniflash = !is_uniflash && prev.body_choice == BalloonBodyKindChoice::Uniflash;
+    let uniflash_paint_changed = is_uniflash && line_style_changed;
 
     if state.body_choice != prev.body_choice {
         balloon.vertex_overrides.clear();
@@ -549,20 +665,17 @@ fn apply_panel_to_active_layer(state: &BalloonPanelUi, prev: &BalloonPanelUi, ho
     }
     commands.push(balloon_update_command(layer_id, &balloon));
 
-    if fill_changed || stroke_changed || body_became_uniflash || body_left_uniflash {
+    if fill_changed || stroke_changed || body_became_uniflash || body_left_uniflash || uniflash_paint_changed {
         let mut edit = json!({ "layer": layer_id });
-        if body_became_uniflash {
+        if uniflash_solid && (body_became_uniflash || uniflash_paint_changed) {
             edit["fill"] = json!("#000000");
             edit["stroke"] = json!(null);
-        } else if body_left_uniflash {
-            edit["fill"] = balloon_fill_value(state.fill_mode, host.bg_color);
-            edit["stroke"] = json!({ "width": state.stroke_width });
         } else {
-            if fill_changed {
+            if fill_changed || body_became_uniflash || body_left_uniflash || uniflash_paint_changed {
                 edit["fill"] = balloon_fill_value(state.fill_mode, host.bg_color);
             }
-            if stroke_changed {
-                edit["stroke"] = json!({ "width": state.stroke_width });
+            if stroke_changed || body_became_uniflash || body_left_uniflash || uniflash_paint_changed {
+                edit["stroke"] = json!({ "width": state.stroke_width, "color": hex_color(state.stroke_color) });
             }
         }
         commands.push(OutCommand::new("shape.edit", edit));
@@ -578,7 +691,7 @@ fn apply_geometry_to_balloon(state: &BalloonPanelUi, balloon: &mut LiveBalloon) 
     balloon.whisper_duty = state.whisper_duty.clamp(0.20, 0.85);
     balloon.pencil_strands = state.pencil_strands.clamp(2, 7);
     balloon.pencil_roughness = state.pencil_roughness.clamp(0.0, 1.0);
-    balloon.pixel_size_px = state.pixel_size_px.clamp(1.5, 32.0);
+    balloon.pixel_size_px = state.pixel_size_px.clamp(1.0, 32.0);
     balloon.ukiyo_contrast = state.ukiyo_contrast.clamp(0.0, 1.0);
     balloon.haze_spread = state.haze_spread.clamp(0.0, 100.0);
     balloon.stipple_density = state.stipple_density.clamp(0.0, 100.0);
@@ -600,6 +713,7 @@ fn apply_geometry_to_balloon(state: &BalloonPanelUi, balloon: &mut LiveBalloon) 
     balloon.text_direction = state.text_direction;
     balloon.text_align = state.text_align;
     balloon.handwritten_font = state.handwritten_font;
+    balloon.auto_follow_text = state.auto_follow_text;
     balloon.underlay = if state.underlay_enabled {
         Some(BalloonUnderlay {
             enabled: true,
@@ -612,89 +726,73 @@ fn apply_geometry_to_balloon(state: &BalloonPanelUi, balloon: &mut LiveBalloon) 
     };
 }
 
-/// The safe text area of the active balloon's body, in document px.
-fn active_safe_rect(host: &BalloonHostContext<'_>) -> Option<[f64; 4]> {
-    let target = active_balloon_target(host)?;
-    Some(LiveBalloonGeom::safe_text_rect(&target.balloon))
+/// Stable name of the Text layer paired with a balloon layer, so the panel can find it in the
+/// document without storing a layer id that would go stale across undo/redo or document swaps.
+fn balloon_dialogue_layer_name(layer_id: u64) -> String {
+    format!("Balloon dialogue (L{layer_id})")
 }
 
-fn active_dpi(host: &BalloonHostContext<'_>) -> f32 {
-    if host.doc_dpi.is_finite() && host.doc_dpi > 0.0 { host.doc_dpi } else { 72.0 }
+fn balloon_text_align_id(align: BalloonTextAlign) -> &'static str {
+    match align {
+        BalloonTextAlign::Center => "center",
+        BalloonTextAlign::Left => "left",
+        BalloonTextAlign::Justify => "justify",
+    }
 }
 
-/// Fits `state.fit_text` into the active balloon using the deterministic manga-core estimator.
-fn balloon_fit_status(host: &BalloonHostContext<'_>, state: &BalloonPanelUi) -> Option<balloon_fit::BalloonTextFit> {
-    let safe = active_safe_rect(host)?;
-    let v_mod = balloon_fit::voice_modifiers(state.voice, state.voice_intensity);
-    let eff_pt = (state.fit_size_pt as f32) * v_mod.font_scale;
-    Some(balloon_fit::fit_text_directed(&state.fit_text, safe[2] as f32, safe[3] as f32, eff_pt, active_dpi(host), state.text_direction))
+/// The point size actually used for the dialogue: the voice preset's font multiplier and the
+/// shrink-to-fit result are both folded in, so the Text layer's glyphs match the fit estimate.
+fn effective_dialogue_size_pt(state: &BalloonPanelUi) -> f64 {
+    let mods = balloon_fit::voice_modifiers(state.voice, state.voice_intensity);
+    (state.fit_size_pt * f64::from(mods.font_scale)).clamp(4.0, 1296.0)
 }
 
-/// Grows the active balloon's body (or shrinks the type when `fit_mode_shrink` is active) until its
-/// safe area holds `state.fit_text`. Emits a `shape.balloon.update` command for the host.
-fn fit_balloon_to_text_commands(state: &mut BalloonPanelUi, host: &BalloonHostContext<'_>, output: &mut BalloonPanelOutput) {
+/// Creates or updates the Text layer paired with the active balloon. `type.create` lays the text
+/// out in the balloon's `safe_text_rect` (centred, oriented, sized); later edits use `type.edit`
+/// on the same named layer. All commands share a coalescing key, so continuous typing is a single
+/// history step instead of one command per frame.
+fn sync_balloon_dialogue_text(state: &BalloonPanelUi, host: &BalloonHostContext<'_>, safe_override: Option<[f64; 4]>, commands: &mut Vec<OutCommand>) {
     let Some(target) = active_balloon_target(host) else {
         return;
     };
-    if state.fit_mode_shrink {
-        if let Some(fit) = balloon_fit_status(host, state) {
-            state.fit_size_pt = f64::from(fit.size_pt);
-        }
+    let name = balloon_dialogue_layer_name(target.layer_id);
+    let exists = host.doc.is_some_and(|doc| doc.walk().iter().any(|(_, _, l)| l.name == name));
+    if !exists && state.fit_text.is_empty() {
         return;
     }
-
-    let mut balloon = target.balloon;
-    let rect = balloon.body.rect();
-    let cx = rect[0] + rect[2] * 0.5;
-    let cy = rect[1] + rect[3] * 0.5;
-    let base_w = rect[2].abs().max(MIN_BALLOON_SIZE);
-    let base_h = rect[3].abs().max(MIN_BALLOON_SIZE);
-
-    let safe = LiveBalloonGeom::safe_text_rect(&balloon);
-    let fraction = ((safe[2].abs() / base_w).min(safe[3].abs() / base_h)).clamp(0.15, 0.95);
-    let dpi = active_dpi(host);
-    let [need_w, need_h] = balloon_fit::body_size_for_text_oriented(&state.fit_text, state.fit_size_pt as f32, dpi, fraction, state.text_direction);
-    let mut w = base_w.max(need_w).min(1.0e4);
-    let mut h = base_h.max(need_h).min(1.0e4);
-
-    for _ in 0..12 {
-        balloon.body.set_rect([cx - w * 0.5, cy - h * 0.5, w, h]);
-        let probe = LiveBalloonGeom::safe_text_rect(&balloon);
-        let f = balloon_fit::fit_text_directed(&state.fit_text, probe[2] as f32, probe[3] as f32, state.fit_size_pt as f32, dpi, state.text_direction);
-        if f.fits {
-            break;
-        }
-        let grow_x = if probe[2] > 1e-6 { f.widest_px / probe[2] as f32 } else { 1.0 };
-        let grow_y = if probe[3] > 1e-6 { f.needs_px / probe[3] as f32 } else { 1.0 };
-        if grow_x <= 1.02 && grow_y <= 1.02 {
-            break;
-        }
-        w = (w * f64::from(grow_x.max(1.02))).min(1.0e4);
-        h = (h * f64::from(grow_y.max(1.02))).min(1.0e4);
+    let safe = safe_override.unwrap_or_else(|| LiveBalloonGeom::safe_text_rect(&target.balloon));
+    if safe[2] <= 1.0 || safe[3] <= 1.0 {
+        return;
     }
-
-    balloon.body.set_rect([cx - w * 0.5, cy - h * 0.5, w.max(MIN_BALLOON_SIZE), h.max(MIN_BALLOON_SIZE)]);
-    output.commands.push(balloon_update_command(target.layer_id, &balloon));
-    output.status_message = Some((tl!("✓ Balloon fitted to the dialogue").to_string(), false));
-}
-
-/// Applies the selected `BalloonVoice` preset to the panel's stroke and body parameters.
-fn apply_voice_preset(state: &mut BalloonPanelUi, voice: BalloonVoice) {
-    state.voice = voice;
-    let mods = balloon_fit::voice_modifiers(voice, state.voice_intensity);
-    state.stroke_width = (2.5 * mods.stroke_scale).clamp(0.5, 20.0);
-    state.hand_drawn_noise = mods.fine_noise_add.clamp(0.0, 1.0);
-    state.hand_drawn_warp = mods.warp_noise_add.clamp(0.0, 1.0);
-    match voice {
-        BalloonVoice::Whisper => state.line_style = BalloonLineStyle::Whisper,
-        BalloonVoice::Shout => state.body_choice = BalloonBodyKindChoice::Spiky,
-        BalloonVoice::Irritated => state.body_choice = BalloonBodyKindChoice::Burst,
-        BalloonVoice::Broadcast => state.body_choice = BalloonBodyKindChoice::ChamferRect,
-        BalloonVoice::Eerie => {
-            state.body_choice = BalloonBodyKindChoice::Ellipse;
-            state.line_style = BalloonLineStyle::StippleDots;
+    let size = effective_dialogue_size_pt(state);
+    let align = balloon_text_align_id(state.text_align);
+    let coalesce = format!("balloon-dialogue-{}", target.layer_id);
+    let mut params = json!({
+        "box": [safe[0], safe[1], safe[2], safe[3]],
+        "text": state.fit_text,
+        "size": size,
+        "align": align,
+        "verticalAlign": "center",
+        "coalesce": coalesce,
+    });
+    if exists {
+        params["layer"] = json!(name);
+        params["runs"] = json!([{ "start": 0, "end": state.fit_text.chars().count(), "size": size }]);
+        if let Some(obj) = params.as_object_mut() {
+            obj.remove("size");
         }
-        BalloonVoice::Neutral => {}
+        commands.push(OutCommand::new("type.edit", params));
+        // `type.edit` has no alignment/vertical-alignment keys; the sibling style command keeps
+        // the paragraph centred when the user changes the balloon's alignment mid-edit.
+        commands.push(OutCommand::new("type.setStyle", json!({ "layer": name, "align": align, "verticalAlign": "center", "coalesce": coalesce })));
+    } else {
+        params["name"] = json!(name);
+        params["orientation"] = json!(if state.text_direction == TextDirection::Vertical { "vertical" } else { "horizontal" });
+        params["color"] = json!("#000000");
+        commands.push(OutCommand::new("type.create", params));
+        // `type.create` makes the new text layer active. Keep the balloon active so later
+        // keystrokes still find their target and the balloon panel stays bound to it.
+        commands.push(OutCommand::new("layer.select", json!({ "layer": target.layer_id })));
     }
 }
 
@@ -729,7 +827,7 @@ pub fn vector_brush_picker_row(
                 }
             }
         });
-        let import = ui.button(tl!("＋ Import (.json/.png)")).on_hover_text(tl!("Import a VectorBrushPreset JSON or grayscale PNG ribbon texture"));
+        let import = ui.button(tl!("+ Import (.json/.png)")).on_hover_text(tl!("Import a VectorBrushPreset JSON or grayscale PNG ribbon texture"));
         if import.clicked()
             && let Some(path) = rfd::FileDialog::new().add_filter("Vector Brush", &["json", "png"]).pick_file()
         {
@@ -787,7 +885,7 @@ pub fn create_live_balloon_in_rect_commands(
         whisper_duty: st.whisper_duty.clamp(0.20, 0.85),
         pencil_strands: st.pencil_strands.clamp(2, 7),
         pencil_roughness: st.pencil_roughness.clamp(0.0, 1.0),
-        pixel_size_px: st.pixel_size_px.clamp(1.5, 32.0),
+        pixel_size_px: st.pixel_size_px.clamp(1.0, 32.0),
         ukiyo_contrast: st.ukiyo_contrast.clamp(0.0, 1.0),
         haze_spread: st.haze_spread.clamp(0.0, 100.0),
         stipple_density: st.stipple_density.clamp(0.0, 100.0),
@@ -816,10 +914,22 @@ pub fn create_live_balloon_in_rect_commands(
         brush_preset_id: st.brush_preset_id.clone(),
         stroke_width: st.stroke_width,
         auto_merge_overlapping: true,
+        linked_text_layer: None,
+        auto_follow_text: st.auto_follow_text,
     };
 
-    let fill_val = if is_uniflash { json!("#000000") } else { balloon_fill_value(st.fill_mode, bg_color) };
-    let stroke_val = if is_uniflash { json!(null) } else { json!({ "width": st.stroke_width, "color": hex_color(fg_color) }) };
+    // Uniflash + Solid draws the needles themselves in the fill colour; stylized line styles
+    // need the ordinary white (or chosen) balloon interior and a black stroke for their ink.
+    let is_uniflash_solid = is_uniflash && st.line_style == BalloonLineStyle::Solid;
+    let fill_val = if is_uniflash_solid {
+        json!("#000000")
+    } else if st.fill_mode == BalloonFillMode::White {
+        json!(hex_color(st.fill_color))
+    } else {
+        balloon_fill_value(st.fill_mode, bg_color)
+    };
+    let ink_color = if st.stroke_color == [0.0, 0.0, 0.0, 1.0] { fg_color } else { st.stroke_color };
+    let stroke_val = if is_uniflash_solid { json!(null) } else { json!({ "width": st.stroke_width, "color": hex_color(ink_color) }) };
     vec![OutCommand::new("shape.balloon.create", json!({ "balloon": balloon, "fill": fill_val, "stroke": stroke_val }))]
 }
 
@@ -851,11 +961,12 @@ fn add_tail_commands(st: &BalloonPanelUi, host: &BalloonHostContext<'_>) -> Vec<
     let Some(layer_id) = host.active_layer else {
         return Vec::new();
     };
+    let balloon_id = active_balloon_target(host).map_or(1, |t| t.balloon.id);
     vec![OutCommand::new(
         "shape.balloon.tail.add",
         json!({
             "layer": layer_id.0,
-            "balloonId": 1,
+            "balloonId": balloon_id,
             "preset": st.tail_preset.id(),
             "mouthWidth": st.tail_mouth_width,
             "tip": [200.0, 300.0],
@@ -863,23 +974,109 @@ fn add_tail_commands(st: &BalloonPanelUi, host: &BalloonHostContext<'_>) -> Vec<
     )]
 }
 
-fn draw_body_section(ui: &mut Ui, state: &mut BalloonPanelUi) {
+fn draw_dual_chambers_row(ui: &mut Ui, state: &BalloonPanelUi, host: &BalloonHostContext<'_>, output: &mut BalloonPanelOutput) {
+    let active = active_balloon_target(host);
+    let selected_ids = selected_balloon_layer_ids(host);
+    if active.is_none() && selected_ids.len() < 2 {
+        return;
+    }
+    ui.add_space(4.0);
+    ui.horizontal_wrapped(|ui| {
+        if let Some(target) = &active {
+            if ui.button(tl!("+ Chamber")).on_hover_text(tl!("Add an overlapping/connected chamber to this balloon layer")).clicked() {
+                let r = target.balloon.body.rect();
+                let nw = (r[2] * 0.90).max(MIN_BALLOON_SIZE);
+                let nh = (r[3] * 0.90).max(MIN_BALLOON_SIZE);
+                let nx = r[0] - nw * 0.72;
+                let ny = r[1] + r[3] * 0.55;
+                let next_b = LiveBalloon {
+                    id: 0,
+                    body: body_from_state(state, [nx, ny, nw, nh]),
+                    line_style: state.line_style,
+                    double_gap_px: state.double_gap_px.clamp(0.5, 64.0),
+                    whisper_dash_count: state.whisper_dashes.clamp(6, 96),
+                    whisper_duty: state.whisper_duty.clamp(0.20, 0.85),
+                    pencil_strands: state.pencil_strands.clamp(2, 7),
+                    pencil_roughness: state.pencil_roughness.clamp(0.0, 1.0),
+                    pixel_size_px: state.pixel_size_px.clamp(1.0, 32.0),
+                    ukiyo_contrast: state.ukiyo_contrast.clamp(0.0, 1.0),
+                    haze_spread: state.haze_spread.clamp(0.0, 100.0),
+                    stipple_density: state.stipple_density.clamp(0.0, 100.0),
+                    stipple_count: state.stipple_count.clamp(24, 600),
+                    stipple_randomness: state.stipple_randomness.clamp(0.0, 100.0),
+                    grain_size: state.grain_size.clamp(5.0, 100.0),
+                    edge_roughness: state.edge_roughness.clamp(0.0, 100.0),
+                    stipple_fill_interior: state.stipple_fill_interior,
+                    stipple_overrides: Vec::new(),
+                    sparkle_count: state.sparkle_count.clamp(0, 96),
+                    sparkle_size: state.sparkle_size.clamp(0.2, 2.5),
+                    sparkle_randomness: state.sparkle_randomness.clamp(0.0, 100.0),
+                    tails: Vec::new(),
+                    next_tail_id: 2,
+                    vertex_overrides: Vec::new(),
+                    hand_drawn_noise: state.hand_drawn_noise.clamp(0.0, 1.0),
+                    hand_drawn_warp: state.hand_drawn_warp.clamp(0.0, 1.0),
+                    noise_scale: state.noise_scale.clamp(0.25, 4.0),
+                    voice: state.voice,
+                    voice_intensity: state.voice_intensity.clamp(0.0, 1.0),
+                    text_direction: state.text_direction,
+                    text_align: state.text_align,
+                    handwritten_font: state.handwritten_font,
+                    underlay: target.balloon.underlay.clone(),
+                    custom_svg_contour: None,
+                    brush_preset_id: state.brush_preset_id.clone(),
+                    stroke_width: state.stroke_width,
+                    auto_merge_overlapping: true,
+                    linked_text_layer: None,
+                    auto_follow_text: state.auto_follow_text,
+                };
+                output.commands.push(OutCommand::new("shape.balloon.add", json!({ "layer": target.layer_id, "balloon": next_b })));
+            }
+            if target.group_len > 1
+                && let Some((_, group)) = active_balloon_group(host)
+            {
+                let ids: Vec<u32> = group.items.iter().map(|it| it.id).collect();
+                if ui.button("◀").on_hover_text(tl!("Previous chamber")).clicked() && !ids.is_empty() {
+                    let prev_idx = (target.group_index + ids.len() - 1) % ids.len();
+                    output.select_balloon_id = Some(ids[prev_idx]);
+                }
+                ui.label(format!("{} / {}", target.group_index + 1, ids.len()));
+                if ui.button("▶").on_hover_text(tl!("Next chamber")).clicked() && !ids.is_empty() {
+                    let next_idx = (target.group_index + 1) % ids.len();
+                    output.select_balloon_id = Some(ids[next_idx]);
+                }
+                if ui.button(tl!("Split")).on_hover_text(tl!("Detach active chamber into a new balloon layer")).clicked() {
+                    output.commands.push(OutCommand::new("shape.balloon.split", json!({ "layer": target.layer_id, "balloonId": target.balloon.id })));
+                }
+            }
+        }
+        if selected_ids.len() >= 2
+            && ui.button(tl!("Merge selected")).on_hover_text(tl!("Merge selected balloon layers into one multi-chamber group")).clicked()
+        {
+            output.commands.push(OutCommand::new("shape.balloon.merge", json!({ "layers": selected_ids })));
+        }
+    });
+}
+
+fn draw_body_section(ui: &mut Ui, state: &mut BalloonPanelUi, host: &BalloonHostContext<'_>, output: &mut BalloonPanelOutput) {
     let t = Tokens::get(ui.ctx());
     ui.label(RichText::new(tl!("Balloon body:")).strong().color(t.text));
     ui.horizontal_wrapped(|ui| {
         let bodies = [
             (BalloonBodyKindChoice::Ellipse, tl!("⚪ Ellipse")),
             (BalloonBodyKindChoice::Rect, tl!("◽ Rect")),
-            (BalloonBodyKindChoice::ChamferRect, tl!("🪪 Chamfer rect")),
+            (BalloonBodyKindChoice::ChamferRect, tl!("◇ Chamfer rect")),
             (BalloonBodyKindChoice::Cloud, tl!("☁️ Cloud")),
             (BalloonBodyKindChoice::Spiky, tl!("💥 Spiky")),
             (BalloonBodyKindChoice::Burst, tl!("✴️ Burst")),
-            (BalloonBodyKindChoice::DoubleOutline, tl!("◎ Double outline")),
-            (BalloonBodyKindChoice::Uniflash, tl!("🦔 Uniflash")),
+            (BalloonBodyKindChoice::Uniflash, tl!("⚡ Uniflash")),
         ];
         for (choice, label) in bodies {
             if ui.selectable_label(state.body_choice == choice, label).clicked() {
                 state.body_choice = choice;
+                if choice == BalloonBodyKindChoice::Uniflash && !matches!(state.line_style, BalloonLineStyle::Solid | BalloonLineStyle::StippleDots) {
+                    state.line_style = BalloonLineStyle::Solid;
+                }
             }
         }
     });
@@ -906,6 +1103,11 @@ fn draw_body_section(ui: &mut Ui, state: &mut BalloonPanelUi) {
         }
         BalloonBodyKindChoice::Uniflash => draw_uniflash_params(ui, state),
     }
+    ui.add_space(4.0);
+    if ui.checkbox(&mut state.show_vertex_handles, tl!("Edit individual points")).changed() {
+        output.show_vertex_handles = Some(state.show_vertex_handles);
+    }
+    draw_dual_chambers_row(ui, state, host, output);
 }
 
 fn draw_jitter_row(ui: &mut Ui, value: &mut f64, seed: &mut u32, hover: &str) {
@@ -962,20 +1164,36 @@ fn draw_uniflash_params(ui: &mut Ui, state: &mut BalloonPanelUi) {
 
 fn draw_line_style_section(ui: &mut Ui, state: &mut BalloonPanelUi, host: &BalloonHostContext<'_>, output: &mut BalloonPanelOutput) {
     let t = Tokens::get(ui.ctx());
-    ui.label(RichText::new(tl!("Line style:")).strong().color(t.text));
+    ui.label(RichText::new(tl!("Line:")).strong().color(t.text));
+    adaptive_slider(ui, tl!("Width:"), &mut state.stroke_width, 0.5..=20.0, " px", false);
+    ui.horizontal_wrapped(|ui| {
+        for w in [1.5, 2.0, 3.0, 4.0] {
+            let is_cur = (state.stroke_width - w).abs() < 0.1;
+            if ui.selectable_label(is_cur, format!("{w}")).clicked() {
+                state.stroke_width = w;
+            }
+        }
+    });
     ui.horizontal_wrapped(|ui| {
         let line_styles = [
-            (BalloonLineStyle::Solid, tl!("━ Solid")),
-            (BalloonLineStyle::Double, tl!("◎ Double")),
-            (BalloonLineStyle::Whisper, tl!("◌ Whisper")),
+            (BalloonLineStyle::Solid, tl!("— Solid")),
+            (BalloonLineStyle::Double, tl!("● Double")),
+            (BalloonLineStyle::Whisper, tl!("○ Whisper")),
             (BalloonLineStyle::Pencil, tl!("✏ Pencil stroke")),
             (BalloonLineStyle::Pixel1Bit, tl!("👾 1-bit pixel")),
-            (BalloonLineStyle::UkiyoBrush, tl!("🖌 Ukiyo-e brush")),
+            (BalloonLineStyle::UkiyoBrush, tl!("🎨 Ukiyo-e brush")),
             (BalloonLineStyle::StippleDots, tl!("⚫ Stipple dots")),
             (BalloonLineStyle::SparkleGlitter, tl!("✨ Sparkle / glitter")),
         ];
+        let uniflash = state.body_choice == BalloonBodyKindChoice::Uniflash;
         for (style, label) in line_styles {
-            if ui.selectable_label(state.line_style == style, label).clicked() {
+            let enabled = !uniflash || matches!(style, BalloonLineStyle::Solid | BalloonLineStyle::StippleDots);
+            let resp = ui.add_enabled(enabled, egui::Button::selectable(state.line_style == style, label));
+            let clicked = resp.clicked();
+            if !enabled {
+                resp.on_hover_text(tl!("Uniflash supports only Solid and Stipple dots"));
+            }
+            if clicked {
                 state.line_style = style;
             }
         }
@@ -999,7 +1217,8 @@ fn draw_line_style_params(ui: &mut Ui, state: &mut BalloonPanelUi) {
             adaptive_slider(ui, tl!("Pencil roughness:"), &mut state.pencil_roughness, 0.0..=1.0, "", false);
         }
         BalloonLineStyle::Pixel1Bit => {
-            adaptive_slider(ui, tl!("Pixel step:"), &mut state.pixel_size_px, 1.5..=24.0, " px", false);
+            // Whole document pixels only: fractional cells are what produced the grey AA fringe.
+            ui.add(egui::Slider::new(&mut state.pixel_size_px, 1.0..=16.0).step_by(1.0).text(tl!("Pixel size:")));
         }
         BalloonLineStyle::UkiyoBrush => {
             adaptive_slider(ui, tl!("Brush contrast:"), &mut state.ukiyo_contrast, 0.0..=1.0, "", false);
@@ -1021,27 +1240,6 @@ fn draw_line_style_params(ui: &mut Ui, state: &mut BalloonPanelUi) {
     }
 }
 
-fn draw_voice_section(ui: &mut Ui, state: &mut BalloonPanelUi) {
-    let t = Tokens::get(ui.ctx());
-    ui.label(RichText::new(tl!("Voice and intonation:")).strong().color(t.text));
-    ui.horizontal_wrapped(|ui| {
-        let voices = [
-            (BalloonVoice::Neutral, tl!("💬 Neutral")),
-            (BalloonVoice::Whisper, tl!("🤫 Whisper")),
-            (BalloonVoice::Shout, tl!("📢 Shout")),
-            (BalloonVoice::Irritated, tl!("💢 Irritated")),
-            (BalloonVoice::Broadcast, tl!("📻 Broadcast")),
-            (BalloonVoice::Eerie, tl!("👻 Eerie")),
-        ];
-        for (v, label) in voices {
-            if ui.selectable_label(state.voice == v, label).clicked() {
-                apply_voice_preset(state, v);
-            }
-        }
-    });
-    adaptive_slider(ui, tl!("Voice intensity:"), &mut state.voice_intensity, 0.0..=1.0, "", false);
-}
-
 fn draw_tail_section(ui: &mut Ui, state: &mut BalloonPanelUi) {
     let t = Tokens::get(ui.ctx());
     ui.label(RichText::new(tl!("Tail type:")).strong().color(t.text));
@@ -1049,11 +1247,11 @@ fn draw_tail_section(ui: &mut Ui, state: &mut BalloonPanelUi) {
         let tails = [
             (TailPreset::None, tl!("⊘ None")),
             (TailPreset::Wedge, tl!("▽ Wedge")),
-            (TailPreset::Arc, tl!("⌒ Arc")),
+            (TailPreset::Arc, tl!("≈ Arc")),
             (TailPreset::SCurve, tl!("~ SCurve")),
             (TailPreset::Lightning, tl!("⚡ Lightning")),
-            (TailPreset::Double, tl!("⑂ Double")),
-            (TailPreset::Thought, tl!("◌ Thought")),
+            (TailPreset::Double, tl!("Y Double")),
+            (TailPreset::Thought, tl!("○ Thought")),
         ];
         for (preset, label) in tails {
             if ui.selectable_label(state.tail_preset == preset, label).clicked() {
@@ -1071,82 +1269,64 @@ fn draw_tail_section(ui: &mut Ui, state: &mut BalloonPanelUi) {
     }
 }
 
-fn fit_status_text(fit: &balloon_fit::BalloonTextFit) -> String {
-    if fit.fits {
-        let lines = fit.line_count().to_string();
-        let size = format!("{:.1}", fit.size_pt);
-        let template = tl!("✓ Text fits: {lines} lines, {size} pt");
-        crate::i18n::fmt(template, &[("lines", &lines), ("size", &size)])
-    } else {
-        let px = |v: f32| format!("{v:.0}");
-        match fit.overflow_axis {
-            balloon_fit::OverflowAxis::Width => {
-                let v = px(fit.shortage_w_px);
-                crate::i18n::fmt(tl!("⚠ Overflow by width (+{px} px needed)"), &[("px", &v)])
-            }
-            balloon_fit::OverflowAxis::Height => {
-                let v = px(fit.shortage_h_px);
-                crate::i18n::fmt(tl!("⚠ Overflow by height (+{px} px needed)"), &[("px", &v)])
-            }
-            balloon_fit::OverflowAxis::Both | balloon_fit::OverflowAxis::None => {
-                tl!("⚠ Text does not fit — enlarge the balloon or reduce the type size").to_string()
-            }
-        }
-    }
-}
-
-fn draw_fit_section(ui: &mut Ui, state: &mut BalloonPanelUi, host: &BalloonHostContext<'_>, output: &mut BalloonPanelOutput) {
+fn draw_stroke_fill_section(ui: &mut Ui, state: &mut BalloonPanelUi, host: &BalloonHostContext<'_>, output: &mut BalloonPanelOutput) {
     let t = Tokens::get(ui.ctx());
-    ui.label(RichText::new(tl!("Dialogue and fit:")).strong().color(t.text));
-    ui.add(egui::TextEdit::multiline(&mut state.fit_text).desired_rows(2).desired_width(ui.available_width()).hint_text(tl!("Dialogue text…")));
-    ui.horizontal_wrapped(|ui| {
-        ui.label(tl!("Direction:"));
-        ui.selectable_value(&mut state.text_direction, TextDirection::Horizontal, tl!("Horizontal"));
-        ui.selectable_value(&mut state.text_direction, TextDirection::Vertical, tl!("Vertical (Tategaki)"));
-    });
-    ui.horizontal_wrapped(|ui| {
-        ui.label(tl!("Align:"));
-        ui.selectable_value(&mut state.text_align, BalloonTextAlign::Center, tl!("Center"));
-        ui.selectable_value(&mut state.text_align, BalloonTextAlign::Left, tl!("Left"));
-        ui.selectable_value(&mut state.text_align, BalloonTextAlign::Justify, tl!("Justify"));
-        ui.checkbox(&mut state.handwritten_font, tl!("Handwritten font"));
-    });
-    ui.horizontal_wrapped(|ui| {
-        ui.label(tl!("Fit mode:"));
-        ui.selectable_value(&mut state.fit_mode_shrink, false, tl!("Grow balloon"));
-        ui.selectable_value(&mut state.fit_mode_shrink, true, tl!("Shrink text to shape"));
-    });
-    ui.horizontal_wrapped(|ui| {
-        adaptive_slider(ui, tl!("Type size:"), &mut state.fit_size_pt, 4.0..=72.0, " pt", false);
-        if ui.button(tl!("＋ Fit balloon")).on_hover_text(tl!("Fit the shape to the text: the balloon grows when the line does not fit")).clicked() {
-            fit_balloon_to_text_commands(state, host, output);
-        }
-    });
-    if let Some(fit) = balloon_fit_status(host, state) {
-        let fits = fit.fits;
-        let text = fit_status_text(&fit);
-        ui.label(RichText::new(text).color(if fits { t.text } else { t.warning }));
-    }
-}
-
-fn draw_stroke_fill_section(ui: &mut Ui, state: &mut BalloonPanelUi) {
-    let t = Tokens::get(ui.ctx());
-    ui.label(RichText::new(tl!("Stroke and fill:")).strong().color(t.text));
-    adaptive_slider(ui, tl!("Width:"), &mut state.stroke_width, 0.5..=20.0, " px", false);
-    ui.horizontal_wrapped(|ui| {
-        for w in [1.5, 2.0, 2.5, 3.0, 4.0] {
-            let is_cur = (state.stroke_width - w).abs() < 0.1;
-            if ui.selectable_label(is_cur, format!("{w}")).clicked() {
-                state.stroke_width = w;
-            }
-        }
-    });
+    ui.label(RichText::new(tl!("Fill · Color:")).strong().color(t.text));
     ui.horizontal_wrapped(|ui| {
         ui.label(tl!("Fill:"));
-        ui.radio_value(&mut state.fill_mode, BalloonFillMode::White, tl!("White"));
+        if ui.radio_value(&mut state.fill_mode, BalloonFillMode::White, tl!("White")).clicked() {
+            state.fill_color = [1.0, 1.0, 1.0, 1.0];
+        }
         ui.radio_value(&mut state.fill_mode, BalloonFillMode::Transparent, tl!("Transparent"));
-        ui.radio_value(&mut state.fill_mode, BalloonFillMode::Background, tl!("Background colour"));
+        if ui.radio_value(&mut state.fill_mode, BalloonFillMode::Background, tl!("Background colour")).clicked() {
+            state.fill_color = host.bg_color;
+        }
     });
+    if adaptive_slider(ui, tl!("Fill Opacity:"), &mut state.fill_opacity, 0.0..=100.0, " %", false).changed()
+        && let Some(id) = host.active_layer
+    {
+        output.commands.push(OutCommand::new(
+            "layer.layerStyle.blendingOptions",
+            json!({"layer": id.0, "fillOpacity": state.fill_opacity.clamp(0.0, 100.0), "coalesce": "balloon-fill-opacity"}),
+        ));
+    }
+    let to_c32 = |c: [f32; 4]| {
+        Color32::from_rgba_unmultiplied(
+            (c[0].clamp(0.0, 1.0) * 255.0) as u8,
+            (c[1].clamp(0.0, 1.0) * 255.0) as u8,
+            (c[2].clamp(0.0, 1.0) * 255.0) as u8,
+            (c[3].clamp(0.0, 1.0) * 255.0) as u8,
+        )
+    };
+    let from_c32 = |c: Color32| [c.r() as f32 / 255.0, c.g() as f32 / 255.0, c.b() as f32 / 255.0, c.a() as f32 / 255.0];
+    let hex = |c: Color32| format!("#{:02x}{:02x}{:02x}", c.r(), c.g(), c.b());
+    ui.horizontal(|ui| {
+        ui.label(tl!("Ink:"));
+        let mut c = to_c32(state.stroke_color);
+        if ui.color_edit_button_srgba(&mut c).changed() {
+            state.stroke_color = from_c32(c);
+            if let Some(id) = host.active_layer {
+                output.commands.push(OutCommand::new("shape.edit", json!({"layer": id.0, "stroke": {"color": hex(c)}, "coalesce": "balloon-color-edit"})));
+            }
+        }
+        ui.label(tl!("Paper:"));
+        let mut c = to_c32(state.fill_color);
+        if ui.color_edit_button_srgba(&mut c).changed() {
+            state.fill_color = from_c32(c);
+            if let Some(id) = host.active_layer {
+                output.commands.push(OutCommand::new("shape.edit", json!({"layer": id.0, "fill": hex(c), "coalesce": "balloon-color-edit"})));
+            }
+        }
+    });
+    if ui.button(tl!("↔ Invert B/W")).clicked() {
+        std::mem::swap(&mut state.stroke_color, &mut state.fill_color);
+        if let Some(id) = host.active_layer {
+            output.commands.push(OutCommand::new(
+                "shape.edit",
+                json!({"layer": id.0, "fill": hex(to_c32(state.fill_color)), "stroke": {"color": hex(to_c32(state.stroke_color))}}),
+            ));
+        }
+    }
     adaptive_slider(ui, tl!("Hand-drawn noise:"), &mut state.hand_drawn_noise, 0.0..=1.0, "", false);
     adaptive_slider(ui, tl!("Deep contour warp:"), &mut state.hand_drawn_warp, 0.0..=1.0, "", false);
     adaptive_slider(ui, tl!("Noise scale:"), &mut state.noise_scale, 0.25..=4.0, "×", false);
@@ -1203,7 +1383,7 @@ fn draw_workflow_section(ui: &mut Ui, state: &mut BalloonPanelUi, output: &mut B
         ui.separator();
         ui.label(tl!("Batch balloons from script (one line per balloon):"));
         ui.add(egui::TextEdit::multiline(&mut state.batch_script).desired_rows(3).desired_width(ui.available_width()).hint_text(tl!("Line 1\nLine 2!!")));
-        if ui.button(tl!("＋ Create batch from script")).clicked() && !state.batch_script.trim().is_empty() {
+        if ui.button(tl!("+ Create batch from script")).clicked() && !state.batch_script.trim().is_empty() {
             output.commands.push(OutCommand::new(
                 "shape.balloon.batchFromScript",
                 json!({
@@ -1238,7 +1418,7 @@ fn draw_action_buttons(ui: &mut Ui, state: &mut BalloonPanelUi, host: &BalloonHo
     let t = Tokens::get(ui.ctx());
     let create_btn = ui.add_sized(
         [ui.available_width(), 30.0],
-        egui::Button::new(RichText::new(tl!("＋ Create balloon on canvas")).strong().color(Color32::WHITE)).fill(t.accent),
+        egui::Button::new(RichText::new(tl!("+ Create balloon on canvas")).strong().color(Color32::WHITE)).fill(t.accent),
     );
     if create_btn.clicked() {
         output.commands.extend(create_balloon_on_canvas_commands(state, host));
@@ -1247,7 +1427,7 @@ fn draw_action_buttons(ui: &mut Ui, state: &mut BalloonPanelUi, host: &BalloonHo
 
     ui.add_space(4.0);
     ui.horizontal_wrapped(|ui| {
-        if ui.button(tl!("＋ Add tail")).on_hover_text(tl!("Add a tail to the selected balloon")).clicked() {
+        if ui.button(tl!("+ Add tail")).on_hover_text(tl!("Add a tail to the selected balloon")).clicked() {
             output.commands.extend(add_tail_commands(state, host));
             output.switch_to_balloon_tool = !host.tool_is_balloon;
         }
@@ -1264,23 +1444,41 @@ fn draw_action_buttons(ui: &mut Ui, state: &mut BalloonPanelUi, host: &BalloonHo
 
 /// Hydrates panel fields from the active balloon when the host points at a new target.
 fn hydrate_active_target(ui: &Ui, state: &mut BalloonPanelUi, host: &BalloonHostContext<'_>) {
-    let Some(ActiveBalloonTarget { layer_id, balloon, fill, stroke_width }) = active_balloon_target(host) else {
+    let Some(target) = active_balloon_target(host) else {
         let key = ui.scope_id().with("balloon_panel_hydrated_target");
         ui.ctx().data_mut(|d| d.remove::<(u64, u64, u32)>(key));
         return;
     };
     let key = ui.scope_id().with("balloon_panel_hydrated_target");
     let doc_key = host.doc_id.map_or(0, |id| id.0);
-    let cur_key = (doc_key, layer_id, balloon.id);
+    let cur_key = (doc_key, target.layer_id, target.balloon.id);
     let prev_key = ui.ctx().data_mut(|d| d.get_temp::<(u64, u64, u32)>(key));
     if prev_key != Some(cur_key) {
         ui.ctx().data_mut(|d| d.insert_temp(key, cur_key));
-        hydrate_state_from_balloon(state, &balloon, fill.as_ref(), stroke_width);
+        hydrate_state_from_balloon(state, &target);
     }
 }
 
-/// Render the complete Manga Balloons dock panel from host-supplied context.
+fn draw_typer_section(ui: &mut Ui, state: &mut BalloonPanelUi, host: &BalloonHostContext<'_>, output: &mut BalloonPanelOutput) {
+    let t = Tokens::get(ui.ctx());
+    ui.label(RichText::new(tl!("TypeR & Text link:")).strong().color(t.text));
+    if ui.button(tl!("🔤 Open / Send to TypeR")).clicked() {
+        output.open_typer_panel = true;
+    }
+    ui.checkbox(&mut state.auto_follow_text, tl!("Auto-follow balloon box"));
+    let linked_text = active_balloon_target(host).and_then(|target| {
+        let tid = target.balloon.linked_text_layer?;
+        let layer = host.doc.and_then(|doc| doc.layer(tid))?;
+        let story = matches!(&layer.content, photocraft_doc::LayerContent::Text(txt) if txt.story_threaded || txt.next_story_layer.is_some());
+        Some(if story { format!("{} (Stories)", layer.name) } else { layer.name.clone() })
+    });
+    let linked = linked_text.unwrap_or_else(|| tl!("No text layer linked yet").to_string());
+    ui.label(RichText::new(linked).color(t.text_dim));
+}
+
 pub fn panel(ui: &mut Ui, state: &mut BalloonPanelUi, host: &BalloonHostContext<'_>) -> BalloonPanelOutput {
+    // Headings here are labels, not selectable prose; TextEdit keeps its own selection.
+    ui.style_mut().interaction.selectable_labels = false;
     let mut output = BalloonPanelOutput::default();
     let t = Tokens::get(ui.ctx());
     hydrate_active_target(ui, state, host);
@@ -1288,7 +1486,7 @@ pub fn panel(ui: &mut Ui, state: &mut BalloonPanelUi, host: &BalloonHostContext<
 
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         ui.add_space(4.0);
-        draw_body_section(ui, state);
+        draw_body_section(ui, state, host, &mut output);
         ui.add_space(6.0);
         ui.separator();
 
@@ -1296,19 +1494,15 @@ pub fn panel(ui: &mut Ui, state: &mut BalloonPanelUi, host: &BalloonHostContext<
         ui.add_space(6.0);
         ui.separator();
 
-        draw_voice_section(ui, state);
-        ui.add_space(6.0);
-        ui.separator();
-
         draw_tail_section(ui, state);
         ui.add_space(6.0);
         ui.separator();
 
-        draw_fit_section(ui, state, host, &mut output);
+        draw_stroke_fill_section(ui, state, host, &mut output);
         ui.add_space(6.0);
         ui.separator();
 
-        draw_stroke_fill_section(ui, state);
+        draw_typer_section(ui, state, host, &mut output);
         ui.add_space(6.0);
         ui.separator();
 
@@ -1320,6 +1514,20 @@ pub fn panel(ui: &mut Ui, state: &mut BalloonPanelUi, host: &BalloonHostContext<
         ui.add_space(2.0);
         ui.label(RichText::new(tl!("Changes apply to the active balloon when one is selected.")).color(t.text_dim));
     });
+
+    // Dialogue edits are deliberately excluded from `geometry_changed` (no balloon update every
+    // frame while typing), so they are dispatched here with a shared coalescing key instead.
+    let dialogue_changed = output.fit_text_dirty
+        || state.fit_text != initial_state.fit_text
+        || (state.fit_size_pt - initial_state.fit_size_pt).abs() > 1e-6
+        || state.text_direction != initial_state.text_direction
+        || state.text_align != initial_state.text_align
+        || state.voice != initial_state.voice
+        || (state.voice_intensity - initial_state.voice_intensity).abs() > 1e-6;
+    if dialogue_changed {
+        let safe_rect = output.fit_text_safe_rect;
+        sync_balloon_dialogue_text(state, host, safe_rect, &mut output.commands);
+    }
 
     if geometry_changed(state, &initial_state) {
         apply_panel_to_active_layer(state, &initial_state, host, &mut output.commands);
@@ -1364,6 +1572,30 @@ mod tests {
         let raw = serde_json::to_string(&st).unwrap();
         let back: BalloonPanelUi = serde_json::from_str(&raw).unwrap();
         assert_eq!(back, st);
+    }
+
+    #[test]
+    fn uniflash_uses_black_fill_only_with_the_solid_line_style() {
+        let mut st = BalloonPanelUi { body_choice: BalloonBodyKindChoice::Uniflash, ..BalloonPanelUi::default() };
+        let rect = [40.0, 40.0, 200.0, 140.0];
+        let fg = [0.0, 0.0, 0.0, 1.0];
+        let bg = [1.0, 1.0, 1.0, 1.0];
+
+        st.line_style = BalloonLineStyle::Whisper;
+        let cmds = create_live_balloon_in_rect_commands(&st, None, rect, fg, bg);
+        assert_eq!(cmds.len(), 1);
+        assert_eq!(cmds[0].params["fill"].as_str(), Some("#ffffff"), "stylized ink needs a white interior");
+        assert!(cmds[0].params["stroke"].is_object(), "stylized ink needs a black stroke");
+
+        st.line_style = BalloonLineStyle::UkiyoBrush;
+        let cmds = create_live_balloon_in_rect_commands(&st, None, rect, fg, bg);
+        assert_eq!(cmds[0].params["fill"].as_str(), Some("#ffffff"));
+        assert!(cmds[0].params["stroke"].is_object());
+
+        st.line_style = BalloonLineStyle::Solid;
+        let cmds = create_live_balloon_in_rect_commands(&st, None, rect, fg, bg);
+        assert_eq!(cmds[0].params["fill"].as_str(), Some("#000000"), "the solid needles are the ink");
+        assert!(cmds[0].params["stroke"].is_null());
     }
 
     #[test]
@@ -1447,5 +1679,53 @@ mod tests {
         assert_eq!(cmds.len(), 1);
         assert_eq!(cmds[0].params.get("fill").and_then(|v| v.as_str()), Some("#000000"));
         assert!(cmds[0].params.get("stroke").is_some_and(|v| v.is_null()));
+    }
+
+    #[test]
+    fn active_target_hydrates_fill_opacity_stroke_paint_and_auto_follow_by_balloon_id() {
+        use photocraft_doc::{Color, ColorMode, Document, Fill, Layer, LayerContent, LayerId, LiveShape, SampleType, ShapeLayer, ShapeStroke, Size};
+        use photocraft_vector::balloon::LiveBalloonGroupGeom;
+
+        let mut doc = Document::new("PanelHydrate", Size { width: 400, height: 300 }, ColorMode::Rgb, SampleType::U8);
+        let b1 = LiveBalloon { id: 1, linked_text_layer: Some(LayerId(77)), auto_follow_text: true, ..LiveBalloon::default() };
+        let b2 = LiveBalloon { id: 2, linked_text_layer: Some(LayerId(88)), auto_follow_text: false, ..LiveBalloon::default() };
+        let group = photocraft_doc::vector::LiveBalloonGroup::new(vec![b1, b2]);
+        let path = group.rebuild_group_path();
+        let stroke = ShapeStroke { width: 3.5, paint: Fill::Solid(Color::rgba(0.2, 0.4, 0.6, 1.0)), ..Default::default() };
+        let sh = ShapeLayer {
+            path,
+            fill: Some(Fill::Solid(Color::rgba(0.9, 0.8, 0.7, 1.0))),
+            stroke: Some(stroke),
+            live: Some(LiveShape::BalloonGroup { group }),
+            ..Default::default()
+        };
+        let mut layer = Layer::new("Balloon", LayerContent::Shape(sh));
+        layer.id = LayerId(10);
+        layer.fill_opacity = 0.65;
+        doc.layers.push(layer);
+
+        let host = super::BalloonHostContext {
+            doc: Some(&doc),
+            doc_id: None,
+            active_layer: Some(LayerId(10)),
+            selected_layers: &[LayerId(10)],
+            active_balloon_id: Some(2),
+            doc_dpi: 72.0,
+            fg_color: [0.0, 0.0, 0.0, 1.0],
+            bg_color: [1.0, 1.0, 1.0, 1.0],
+            vector_brush_presets: &[],
+            tool_is_balloon: true,
+        };
+        let target = super::active_balloon_target(&host).expect("target");
+        assert_eq!(target.balloon.id, 2);
+        assert_eq!(target.group_index, 1);
+        assert_eq!(target.group_len, 2);
+
+        let mut st = BalloonPanelUi::default();
+        super::hydrate_state_from_balloon(&mut st, &target);
+        assert!((st.fill_opacity - 65.0).abs() < 1e-6);
+        assert!(!st.auto_follow_text);
+        assert!((st.stroke_color[0] - 0.2).abs() < 1e-6);
+        assert!((st.fill_color[1] - 0.8).abs() < 1e-6);
     }
 }

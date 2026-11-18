@@ -609,7 +609,7 @@ impl Manager {
 /// Record a volume's answer (`None` = it didn't say) and derive the growth limit from it.
 fn apply_space(c: &mut Config, used: u64, space: Option<(u64, u64)>) {
     M.space_unmeasured.store(space.is_none(), Ordering::Relaxed);
-    c.room = space.map(|(available, total)| used.saturating_add(available.saturating_sub(RESERVE_MIN.max(total / 20))));
+    c.room = space.map(|(available, _total)| used.saturating_add(available.saturating_sub(RESERVE_MIN)));
     store_limit(c);
     M.next_space_check.store(used.saturating_add(SPACE_CHECK_EVERY), Ordering::Relaxed);
 }

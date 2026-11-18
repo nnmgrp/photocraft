@@ -11,7 +11,10 @@ use crate::theme::ThemeKind;
 #[test]
 fn bad_stored_values_are_sanitised() {
     let mut l = DockLayout { order: vec![Group::Layers, Group::Layers, Group::Color], ..Default::default() };
-    assert_eq!(l.order(), vec![Group::Layers, Group::Brushes, Group::Color, Group::Properties, Group::Character, Group::Navigator, Group::History]);
+    assert_eq!(
+        l.order(),
+        vec![Group::Layers, Group::Brushes, Group::Color, Group::Properties, Group::Character, Group::Navigator, Group::History, Group::Manga]
+    );
     for bad in [f32::NAN, -10.0, f32::INFINITY, 1e12] {
         l.heights.insert(Group::Color, bad);
         let h = l.height(Group::Color);
@@ -19,7 +22,10 @@ fn bad_stored_values_are_sanitised() {
     }
     // Unknown fields, wrong types and old UI state all load.
     let back: DockLayout = serde_json::from_value(json!({"order": ["layers"], "bogus": 1})).unwrap();
-    assert_eq!(back.order(), vec![Group::Layers, Group::Brushes, Group::Color, Group::Properties, Group::Character, Group::Navigator, Group::History]);
+    assert_eq!(
+        back.order(),
+        vec![Group::Layers, Group::Brushes, Group::Color, Group::Properties, Group::Character, Group::Navigator, Group::History, Group::Manga]
+    );
     let mut ui = serde_json::to_value(crate::state::UiState::default()).unwrap();
     ui.as_object_mut().unwrap().remove("dock");
     let ui: crate::state::UiState = serde_json::from_value(ui).unwrap();
@@ -587,7 +593,10 @@ fn window_character_opens_its_own_group_and_keeps_properties() {
     let old = DockLayout { order: vec![Group::Color, Group::Properties, Group::Navigator, Group::History, Group::Layers], ..Default::default() };
     assert_eq!(old.order(), Group::ALL.to_vec());
     let moved = DockLayout { order: vec![Group::Layers, Group::Color], ..Default::default() };
-    assert_eq!(moved.order(), vec![Group::Layers, Group::Brushes, Group::Color, Group::Properties, Group::Character, Group::Navigator, Group::History]);
+    assert_eq!(
+        moved.order(),
+        vec![Group::Layers, Group::Brushes, Group::Color, Group::Properties, Group::Character, Group::Navigator, Group::History, Group::Manga]
+    );
 }
 
 #[test]
@@ -930,4 +939,73 @@ fn a_workspace_from_a_newer_version_shows_the_default_and_stays_saved() {
     frame(&mut app);
     let docking = &app.session.prefs().panel_layout["docking"];
     assert_eq!(docking["version"], json!(craft_ui::docking::Workspace::<String>::VERSION), "a changed layout replaces it: {docking}");
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn manga_panels_open_in_unified_manga_dock_and_toggle_cleanly() {
+    let (mut app, _, _) = app_with_layers();
+    let ctx = egui::Context::default();
+    assert!(!app.ui.panels.manga);
+    assert!(app.ui.docking.is_none());
+
+    crate::menus::invoke(&mut app, &ctx, "window.panel.typesetter", json!({})).unwrap();
+    assert!(app.ui.panels.manga);
+    assert_eq!(app.ui.dock_tabs.manga, 3, "TypeR Manga tab selected");
+    assert_eq!(crate::manga_seam::panel_checked(&app, "window.panel.typesetter"), Some(true));
+    assert_eq!(crate::manga_seam::panel_checked(&app, "window.panel.balloon"), Some(false));
+    assert!(app.ui.docking.is_none(), "no legacy floating window created");
+
+    crate::tool_memory::select(&mut app, crate::state::Tool::Balloon);
+    assert!(app.ui.panels.manga);
+    assert_eq!(app.ui.dock_tabs.manga, 0, "Tool::Balloon switches Group::Manga to Balloons tab");
+    assert_eq!(crate::manga_seam::panel_checked(&app, "window.panel.balloon"), Some(true));
+
+    crate::tool_memory::select(&mut app, crate::state::Tool::Sfx);
+    assert!(app.ui.panels.manga);
+    assert_eq!(app.ui.dock_tabs.manga, 6, "Tool::Sfx switches Group::Manga to SFX tab");
+    assert_eq!(crate::manga_seam::panel_checked(&app, "window.panel.sfx"), Some(true));
+
+    crate::menus::invoke(&mut app, &ctx, "window.panel.sfx", json!({})).unwrap();
+    assert!(!app.ui.panels.manga, "invoking the active tab command again closes the Manga dock");
+
+    // Verify SFX creation & panel rendering paths work end-to-end inside the shell.
+    app.run("file.new", json!({ "width": 256, "height": 256 })).unwrap();
+    app.run("type.create", json!({ "x": 64.0, "y": 80.0, "text": "BAM!", "size": 32.0 })).unwrap();
+    let active_text_id = app.session.active().unwrap().active_layer.unwrap();
+    app.run("sfx.convertFromText", json!({ "layer": active_text_id.0 })).unwrap();
+    assert!(app.session.active().unwrap().doc.layer(app.session.active().unwrap().active_layer.unwrap()).unwrap().sfx.is_some());
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn manga_icon_rail_and_toolbar_section_respect_seam_flags() {
+    use egui_kittest::kittest::Queryable as _;
+    let (app, _, _) = app_with_layers();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                return;
+            }
+            crate::panels::toolbar(app, ui);
+            crate::panels::dock_area(app, ui);
+            egui::CentralPanel::default().show(ui, |_| {});
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, ThemeKind::Pro);
+    h.state_mut().ui.theme = ThemeKind::Pro;
+    h.run_steps(4);
+
+    assert!(h.query_by_label("Manga").is_some(), "Manga icon rail button renders when seams enabled");
+    assert!(h.query_by_label_contains("Balloon Tool").is_some(), "dedicated Manga section renders Balloon Tool");
+
+    h.get_by_label("Manga").click();
+    h.run_steps(3);
+    assert!(h.state().ui.panels.manga, "clicking Manga rail button opens Group::Manga dock");
+
+    h.state_mut().session.prefs.edit(|p| p.seam = photocraft_manga_bridge::SeamFlags::all_disabled());
+    h.run_steps(3);
+    assert!(h.query_by_label("Manga").is_none(), "Manga icon rail button hides when seams disabled");
+    assert!(h.query_by_label_contains("Balloon Tool").is_none(), "Balloon Tool hides when seam.toolbar_tools = false");
 }

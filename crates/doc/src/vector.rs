@@ -893,6 +893,12 @@ pub struct LiveBalloon {
     pub stroke_width: f64,
     #[serde(default = "default_true")]
     pub auto_merge_overlapping: bool,
+    /// Optional ID of the `TextLayer` paired with this chamber (`Stories` link).
+    #[serde(default)]
+    pub linked_text_layer: Option<crate::LayerId>,
+    /// Automatically resize/reposition the linked `TextLayer`'s box when this balloon changes.
+    #[serde(default = "default_true")]
+    pub auto_follow_text: bool,
 }
 
 fn default_one() -> u32 {
@@ -1040,6 +1046,8 @@ impl Default for LiveBalloon {
             brush_preset_id: None,
             stroke_width: 3.0,
             auto_merge_overlapping: true,
+            linked_text_layer: None,
+            auto_follow_text: true,
         }
     }
 }
@@ -1244,6 +1252,14 @@ mod tests {
         assert_eq!(balloon.noise_scale, 1.0);
         assert!(balloon.brush_preset_id.is_none());
         assert!(balloon.auto_merge_overlapping);
+        assert!(balloon.linked_text_layer.is_none());
+        assert!(balloon.auto_follow_text);
+
+        let linked = LiveBalloon { linked_text_layer: Some(crate::LayerId(42)), auto_follow_text: false, ..LiveBalloon::default() };
+        let raw = serde_json::to_string(&linked).unwrap();
+        let decoded: LiveBalloon = serde_json::from_str(&raw).unwrap();
+        assert_eq!(decoded.linked_text_layer, Some(crate::LayerId(42)));
+        assert!(!decoded.auto_follow_text);
     }
 
     #[test]

@@ -32,8 +32,13 @@ pub struct MangaUiState {
     pub screentone_gizmo: comic_screentone_gizmo::ScreentoneGizmoState,
     pub pages_panel: comic_pages_panel::PagesPanelState,
     pub canvas_capsule: comic_canvas_capsule::CanvasCapsuleState,
+    pub sfx_panel: sfx_panel::SfxPanelState,
+    pub sfx_gizmo: sfx_gizmo::SfxGizmoState,
     pub layer_search_open: bool,
 }
+
+pub mod sfx_gizmo;
+pub mod sfx_panel;
 
 impl Default for MangaUiState {
     fn default() -> Self {
@@ -46,6 +51,8 @@ impl Default for MangaUiState {
             screentone_gizmo: comic_screentone_gizmo::ScreentoneGizmoState::default(),
             pages_panel: comic_pages_panel::PagesPanelState::default(),
             canvas_capsule: comic_canvas_capsule::CanvasCapsuleState::default(),
+            sfx_panel: sfx_panel::SfxPanelState::default(),
+            sfx_gizmo: sfx_gizmo::SfxGizmoState::default(),
             layer_search_open: false,
         }
     }

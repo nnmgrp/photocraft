@@ -5735,12 +5735,14 @@ dependencies = [
 name = "photocraft-manga-core"
 version = "0.23.1"
 dependencies = [
+ "photocraft-algo",
  "photocraft-color",
  "photocraft-doc",
  "photocraft-geom",
  "photocraft-raster",
  "photocraft-text",
  "photocraft-tone",
+ "photocraft-vector",
  "serde",
  "serde_json",
 ]

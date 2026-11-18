@@ -172,6 +172,7 @@ fn layer_pixels_cmp(a: &Layer, b: &Layer, surf: SurfaceCmp) -> bool {
         video: _,
         reference: _,
         xmp: _,
+        sfx,
     } = a;
     *id == b.id
         && *visible == b.visible
@@ -185,6 +186,7 @@ fn layer_pixels_cmp(a: &Layer, b: &Layer, surf: SurfaceCmp) -> bool {
         && *excluded_channels == b.excluded_channels
         && *blend_if == b.blend_if
         && *advanced == b.advanced
+        && *sfx == b.sfx
         && match (fill_cache, &b.fill_cache) {
             (None, None) => true,
             (Some(x), Some(y)) => x.fill == y.fill,

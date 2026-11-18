@@ -1,0 +1,663 @@
+//! Non-destructive geometry pipeline for Manga SFX lettering (`L3`, wasm-pure).
+//!
+//! Stages:
+//! 1. Text shaping via `photocraft-text` -> vector `GlyphOutline` contours.
+//! 2. Adaptive Bézier flattening + segment subdivision (when non-affine warps or distress apply).
+//! 3. `PerGlyph` local transform around each glyph's resting center.
+//! 4. `MeshLattice` (`Bilinear` / `Bicubic` Catmull-Rom) parametric UV deformation.
+//! 5. `LiquifyField` $C^2$ radial smoothstep brush displacements.
+//! 6. `FreeTransform` affine + skew + clamped perspective keystone around rest bounds center.
+//! 7. Deterministic `Distress` normal perturbation.
+
+use photocraft_doc::TextLayer;
+use photocraft_doc::sfx::{SfxData, SfxFreeTransform, SfxGlyphTransform, SfxMeshInterpolation, SfxMeshLattice};
+use photocraft_doc::text::{CharStyle, Orientation, TextRun};
+use photocraft_geom::Affine;
+use photocraft_text::TextEngine;
+use photocraft_text::render::{PathEl, glyph_outlines};
+use photocraft_vector::Polyline;
+
+const MAX_FLATTEN_DEPTH: u8 = 7;
+const MAX_CONTOUR_VERTS: usize = 4096;
+const MAX_TOTAL_VERTS: usize = 120_000;
+const SUBDIVIDE_STEP_PX: f64 = 4.0;
+const SMOOTH_CORNER_COS: f64 = 0.9396926207859084; // cos(20 deg)
+
+/// Prepared glyph outline in document space plus rest/warped hit boxes for `PerGlyph` gizmos.
+#[derive(Clone, Debug)]
+pub struct PreparedGlyph {
+    pub glyph_index: usize,
+    pub rest_bounds: [f64; 4],
+    pub rest_center: [f64; 2],
+    pub warped_bounds: [f64; 4],
+    pub warped_center: [f64; 2],
+    pub polylines: Vec<Polyline>,
+}
+
+/// Complete warped & flattened geometry of an [`SfxData`] ready for rendering and 2D gizmos.
+#[derive(Clone, Debug, Default)]
+pub struct PreparedSfx {
+    /// Unwarped axis-aligned bounding box in document space (`origin` + layout size).
+    pub rest_box: [f64; 4],
+    /// Final deformed bounding box enclosing all contours before border strokes.
+    pub warped_box: [f64; 4],
+    pub glyphs: Vec<PreparedGlyph>,
+    pub polylines: Vec<Polyline>,
+}
+
+impl PreparedSfx {
+    pub fn is_empty(&self) -> bool {
+        self.polylines.is_empty()
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ContourPt {
+    p: [f64; 2],
+    knot: bool,
+}
+
+fn push_pt(dst: &mut Vec<ContourPt>, p: [f64; 2], knot: bool) {
+    if !p[0].is_finite() || !p[1].is_finite() || dst.len() >= MAX_CONTOUR_VERTS {
+        return;
+    }
+    if let Some(last) = dst.last()
+        && (last.p[0] - p[0]).hypot(last.p[1] - p[1]) < 1e-4
+    {
+        if knot && let Some(prev) = dst.last_mut() {
+            prev.knot = true;
+        }
+        return;
+    }
+    dst.push(ContourPt { p, knot });
+}
+
+fn push_subdivided_line(dst: &mut Vec<ContourPt>, a: [f64; 2], b: [f64; 2], step: f64, end_knot: bool) {
+    let dist = (b[0] - a[0]).hypot(b[1] - a[1]);
+    if !dist.is_finite() || dist < 1e-4 {
+        return;
+    }
+    if step > 0.0 && dist > step {
+        let segs = ((dist / step).ceil() as usize).clamp(1, 128);
+        for i in 1..segs {
+            let t = i as f64 / segs as f64;
+            push_pt(dst, [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t], false);
+        }
+    }
+    push_pt(dst, b, end_knot);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn flatten_cubic(dst: &mut Vec<ContourPt>, p0: [f64; 2], p1: [f64; 2], p2: [f64; 2], p3: [f64; 2], tol: f64, step: f64, depth: u8, end_knot: bool) {
+    if dst.len() >= MAX_CONTOUR_VERTS {
+        return;
+    }
+    let d = point_line_dist(p1, p0, p3).max(point_line_dist(p2, p0, p3));
+    if depth >= MAX_FLATTEN_DEPTH || d <= tol {
+        push_subdivided_line(dst, p0, p3, step, end_knot);
+        return;
+    }
+    let m01 = mid(p0, p1);
+    let m12 = mid(p1, p2);
+    let m23 = mid(p2, p3);
+    let m012 = mid(m01, m12);
+    let m123 = mid(m12, m23);
+    let m0123 = mid(m012, m123);
+    flatten_cubic(dst, p0, m01, m012, m0123, tol, step, depth + 1, false);
+    flatten_cubic(dst, m0123, m123, m23, p3, tol, step, depth + 1, end_knot);
+}
+
+fn mid(a: [f64; 2], b: [f64; 2]) -> [f64; 2] {
+    [(a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5]
+}
+
+fn point_line_dist(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
+    let dx = b[0] - a[0];
+    let dy = b[1] - a[1];
+    let len2 = dx * dx + dy * dy;
+    if len2 < 1e-12 {
+        return (p[0] - a[0]).hypot(p[1] - a[1]);
+    }
+    ((p[0] - a[0]) * dy - (p[1] - a[1]) * dx).abs() / len2.sqrt()
+}
+
+fn flatten_elements(elements: &[PathEl], subdivide_step: f64) -> Vec<Vec<ContourPt>> {
+    let mut contours = Vec::new();
+    let mut cur: Vec<ContourPt> = Vec::new();
+    let mut start = [0.0_f64; 2];
+    let mut pos = [0.0_f64; 2];
+    let finish = |contours: &mut Vec<Vec<ContourPt>>, c: &mut Vec<ContourPt>, close_from: [f64; 2], close_to: [f64; 2]| {
+        if c.len() >= 2 && subdivide_step > 0.0 {
+            let d = (close_to[0] - close_from[0]).hypot(close_to[1] - close_from[1]);
+            if d > subdivide_step {
+                let segs = ((d / subdivide_step).ceil() as usize).clamp(1, 128);
+                for i in 1..segs {
+                    let t = i as f64 / segs as f64;
+                    push_pt(c, [close_from[0] + (close_to[0] - close_from[0]) * t, close_from[1] + (close_to[1] - close_from[1]) * t], false);
+                }
+            }
+        }
+        if c.len() >= 3 {
+            // Drop duplicate closing endpoint if identical to start.
+            if let (Some(first), Some(last)) = (c.first(), c.last())
+                && (first.p[0] - last.p[0]).hypot(first.p[1] - last.p[1]) < 1e-4
+            {
+                c.pop();
+            }
+            if c.len() >= 3 {
+                contours.push(std::mem::take(c));
+            }
+        }
+        c.clear();
+    };
+
+    for el in elements {
+        match *el {
+            PathEl::MoveTo(p) => {
+                if !cur.is_empty() {
+                    finish(&mut contours, &mut cur, pos, start);
+                }
+                start = p;
+                pos = p;
+                push_pt(&mut cur, p, true);
+            }
+            PathEl::LineTo(p) => {
+                push_subdivided_line(&mut cur, pos, p, subdivide_step, true);
+                pos = p;
+            }
+            PathEl::QuadTo(q, p) => {
+                let c1 = [pos[0] + (2.0 / 3.0) * (q[0] - pos[0]), pos[1] + (2.0 / 3.0) * (q[1] - pos[1])];
+                let c2 = [p[0] + (2.0 / 3.0) * (q[0] - p[0]), p[1] + (2.0 / 3.0) * (q[1] - p[1])];
+                flatten_cubic(&mut cur, pos, c1, c2, p, 0.25, subdivide_step, 0, true);
+                pos = p;
+            }
+            PathEl::CurveTo(c1, c2, p) => {
+                flatten_cubic(&mut cur, pos, c1, c2, p, 0.25, subdivide_step, 0, true);
+                pos = p;
+            }
+            PathEl::Close => {
+                finish(&mut contours, &mut cur, pos, start);
+                pos = start;
+            }
+        }
+    }
+    if !cur.is_empty() {
+        finish(&mut contours, &mut cur, pos, start);
+    }
+    contours
+}
+
+fn contour_bounds(pts: impl Iterator<Item = [f64; 2]>) -> Option<[f64; 4]> {
+    let mut b: Option<[f64; 4]> = None;
+    for p in pts {
+        if !p[0].is_finite() || !p[1].is_finite() {
+            continue;
+        }
+        b = Some(match b {
+            None => [p[0], p[1], p[0], p[1]],
+            Some(r) => [r[0].min(p[0]), r[1].min(p[1]), r[2].max(p[0]), r[3].max(p[1])],
+        });
+    }
+    b
+}
+
+/// Evaluates a per-glyph transform around `center`.
+pub fn apply_glyph_transform(gt: &SfxGlyphTransform, center: [f64; 2], p: [f64; 2]) -> [f64; 2] {
+    let lx = (p[0] - center[0]) * gt.scale_x;
+    let ly = (p[1] - center[1]) * gt.scale_y;
+    let sx = gt.skew_x_deg.to_radians().tan().clamp(-3.75, 3.75);
+    let sy = gt.skew_y_deg.to_radians().tan().clamp(-3.75, 3.75);
+    let kx = lx + ly * sx;
+    let ky = ly + lx * sy;
+    let (s, c) = gt.rotation_deg.to_radians().sin_cos();
+    let rx = kx * c - ky * s;
+    let ry = kx * s + ky * c;
+    [center[0] + rx + gt.dx, center[1] + ry + gt.dy]
+}
+
+fn catmull_rom_weights(t: f64) -> [f64; 4] {
+    let t2 = t * t;
+    let t3 = t2 * t;
+    [0.5 * (-t + 2.0 * t2 - t3), 0.5 * (2.0 - 5.0 * t2 + 3.0 * t3), 0.5 * (t + 4.0 * t2 - 3.0 * t3), 0.5 * (-t2 + t3)]
+}
+
+fn sample_col_linear(mesh: &SfxMeshLattice, r: usize, c: isize) -> [f64; 2] {
+    let rows = mesh.rows.max(2) as usize;
+    let cols = mesh.cols.max(2) as isize;
+    let get = |rr: usize, cc: usize| -> [f64; 2] {
+        mesh.points.get(rr * cols as usize + cc).copied().unwrap_or([cc as f64 / (cols - 1) as f64, rr as f64 / (rows - 1) as f64])
+    };
+    if c < 0 {
+        let p0 = get(r, 0);
+        let p1 = get(r, 1);
+        [p0[0] * 2.0 - p1[0], p0[1] * 2.0 - p1[1]]
+    } else if c >= cols {
+        let p0 = get(r, (cols - 1) as usize);
+        let p1 = get(r, (cols - 2) as usize);
+        [p0[0] * 2.0 - p1[0], p0[1] * 2.0 - p1[1]]
+    } else {
+        get(r, c as usize)
+    }
+}
+
+fn sample_grid_pt(mesh: &SfxMeshLattice, r: isize, c: isize) -> [f64; 2] {
+    let rows = mesh.rows.max(2) as isize;
+    if r < 0 {
+        let p0 = sample_col_linear(mesh, 0, c);
+        let p1 = sample_col_linear(mesh, 1, c);
+        [p0[0] * 2.0 - p1[0], p0[1] * 2.0 - p1[1]]
+    } else if r >= rows {
+        let p0 = sample_col_linear(mesh, (rows - 1) as usize, c);
+        let p1 = sample_col_linear(mesh, (rows - 2) as usize, c);
+        [p0[0] * 2.0 - p1[0], p0[1] * 2.0 - p1[1]]
+    } else {
+        sample_col_linear(mesh, r as usize, c)
+    }
+}
+
+/// Evaluates deformed normalized `[u, v]` inside `mesh` for normalized rest `[u, v]` (`0..=1`).
+pub fn eval_mesh_uv(mesh: &SfxMeshLattice, u: f64, v: f64) -> [f64; 2] {
+    let cols = mesh.cols.max(2) as usize;
+    let rows = mesh.rows.max(2) as usize;
+    if mesh.points.len() != cols * rows {
+        return [u, v];
+    }
+    let su = u.clamp(0.0, 1.0) * (cols - 1) as f64;
+    let sv = v.clamp(0.0, 1.0) * (rows - 1) as f64;
+    let ci = (su.floor() as usize).min(cols - 2);
+    let ri = (sv.floor() as usize).min(rows - 2);
+    let tu = su - ci as f64;
+    let tv = sv - ri as f64;
+
+    let out = match mesh.interpolation {
+        SfxMeshInterpolation::Bilinear => {
+            let p00 = sample_grid_pt(mesh, ri as isize, ci as isize);
+            let p10 = sample_grid_pt(mesh, ri as isize, ci as isize + 1);
+            let p01 = sample_grid_pt(mesh, ri as isize + 1, ci as isize);
+            let p11 = sample_grid_pt(mesh, ri as isize + 1, ci as isize + 1);
+            let top = [p00[0] + (p10[0] - p00[0]) * tu, p00[1] + (p10[1] - p00[1]) * tu];
+            let bot = [p01[0] + (p11[0] - p01[0]) * tu, p01[1] + (p11[1] - p01[1]) * tu];
+            [top[0] + (bot[0] - top[0]) * tv, top[1] + (bot[1] - top[1]) * tv]
+        }
+        SfxMeshInterpolation::Bicubic => {
+            let wu = catmull_rom_weights(tu);
+            let wv = catmull_rom_weights(tv);
+            let mut acc = [0.0_f64; 2];
+            for (dr, &wr) in wv.iter().enumerate() {
+                let mut row_pt = [0.0_f64; 2];
+                for (dc, &wc) in wu.iter().enumerate() {
+                    let pt = sample_grid_pt(mesh, ri as isize + dr as isize - 1, ci as isize + dc as isize - 1);
+                    row_pt[0] += pt[0] * wc;
+                    row_pt[1] += pt[1] * wc;
+                }
+                acc[0] += row_pt[0] * wr;
+                acc[1] += row_pt[1] * wr;
+            }
+            acc
+        }
+    };
+    // Preserve linear extrapolation beyond the [0..1] boundary (e.g. shifted per-glyph overflow).
+    [out[0] + (u - u.clamp(0.0, 1.0)), out[1] + (v - v.clamp(0.0, 1.0))]
+}
+
+/// Applies a displacement delta to node `(row, col)` honoring MediBang-style `link_h` and `link_v`.
+pub fn move_mesh_node_linked(mesh: &mut SfxMeshLattice, row: usize, col: usize, du: f64, dv: f64) {
+    let cols = usize::from(mesh.cols.max(2));
+    let rows = usize::from(mesh.rows.max(2));
+    if mesh.points.len() != cols * rows || row >= rows || col >= cols {
+        return;
+    }
+    for r in 0..rows {
+        for c in 0..cols {
+            let hit = (mesh.link_h || c == col) && r == row || (mesh.link_v && c == col);
+            if hit {
+                let p = &mut mesh.points[r * cols + c];
+                p[0] = (p[0] + du).clamp(-3.0, 4.0);
+                p[1] = (p[1] + dv).clamp(-3.0, 4.0);
+            }
+        }
+    }
+}
+
+/// Applies `FreeTransform` (scale, skew, rotation, clamped keystone perspective) around `rest_box` center.
+pub fn apply_free_transform_point(ft: &SfxFreeTransform, rest_box: [f64; 4], p: [f64; 2]) -> [f64; 2] {
+    let w = (rest_box[2] - rest_box[0]).max(1.0);
+    let h = (rest_box[3] - rest_box[1]).max(1.0);
+    let cx = (rest_box[0] + rest_box[2]) * 0.5;
+    let cy = (rest_box[1] + rest_box[3]) * 0.5;
+    let dx = p[0] - cx;
+    let dy = p[1] - cy;
+    let nx = dx / (w * 0.5);
+    let ny = dy / (h * 0.5);
+    let denom = (1.0 + ft.perspective_x * nx + ft.perspective_y * ny).max(0.15);
+    let px = dx / denom;
+    let py = dy / denom;
+    let lx = px * ft.scale_x;
+    let ly = py * ft.scale_y;
+    let sx = ft.skew_x_deg.to_radians().tan().clamp(-3.75, 3.75);
+    let sy = ft.skew_y_deg.to_radians().tan().clamp(-3.75, 3.75);
+    let kx = lx + ly * sx;
+    let ky = ly + lx * sy;
+    let (s, c) = ft.rotation_deg.to_radians().sin_cos();
+    [cx + kx * c - ky * s, cy + kx * s + ky * c]
+}
+
+/// Exact inverse of `apply_free_transform_point` for gizmo pointer hit-testing.
+pub fn invert_free_transform_point(ft: &SfxFreeTransform, rest_box: [f64; 4], q: [f64; 2]) -> Option<[f64; 2]> {
+    let w = (rest_box[2] - rest_box[0]).max(1.0);
+    let h = (rest_box[3] - rest_box[1]).max(1.0);
+    let cx = (rest_box[0] + rest_box[2]) * 0.5;
+    let cy = (rest_box[1] + rest_box[3]) * 0.5;
+    let (s, c) = (-ft.rotation_deg).to_radians().sin_cos();
+    let rx = q[0] - cx;
+    let ry = q[1] - cy;
+    let kx = rx * c - ry * s;
+    let ky = rx * s + ry * c;
+    let sx = ft.skew_x_deg.to_radians().tan().clamp(-3.75, 3.75);
+    let sy = ft.skew_y_deg.to_radians().tan().clamp(-3.75, 3.75);
+    let det = 1.0 - sx * sy;
+    if det.abs() < 1e-6 || ft.scale_x.abs() < 1e-6 || ft.scale_y.abs() < 1e-6 {
+        return None;
+    }
+    let px = ((kx - ky * sx) / det) / ft.scale_x;
+    let py = ((ky - kx * sy) / det) / ft.scale_y;
+    let denom = 1.0 - (ft.perspective_x * px / (w * 0.5)) - (ft.perspective_y * py / (h * 0.5));
+    if denom.abs() < 0.05 {
+        return None;
+    }
+    let dx = px / denom;
+    let dy = py / denom;
+    let out = [cx + dx, cy + dy];
+    (out[0].is_finite() && out[1].is_finite()).then_some(out)
+}
+
+/// Full spatial warp (`MeshLattice -> LiquifyField -> FreeTransform`) for a point in `rest_box` space.
+pub fn transform_point_full(data: &SfxData, rest_box: [f64; 4], mut p: [f64; 2]) -> [f64; 2] {
+    let w = (rest_box[2] - rest_box[0]).max(1.0);
+    let h = (rest_box[3] - rest_box[1]).max(1.0);
+    if !data.mesh.is_identity() {
+        let u = (p[0] - rest_box[0]) / w;
+        let v = (p[1] - rest_box[1]) / h;
+        let uv = eval_mesh_uv(&data.mesh, u, v);
+        p = [rest_box[0] + uv[0] * w, rest_box[1] + uv[1] * h];
+    }
+    for brush in &data.liquify_strokes {
+        let bx = rest_box[0] + brush.center_uv[0] * w;
+        let by = rest_box[1] + brush.center_uv[1] * h;
+        let d = (p[0] - bx).hypot(p[1] - by);
+        if d < brush.radius_px && brush.radius_px > 1e-6 {
+            let t = 1.0 - d / brush.radius_px;
+            let weight = t * t * (3.0 - 2.0 * t) * brush.strength;
+            p[0] += brush.delta_px[0] * weight;
+            p[1] += brush.delta_px[1] * weight;
+        }
+    }
+    apply_free_transform_point(&data.free_transform, rest_box, p)
+}
+
+/// Document-space center of mesh lattice node `(row, col)` after `FreeTransform` & `Liquify`.
+pub fn mesh_node_doc_pos(data: &SfxData, rest_box: [f64; 4], row: usize, col: usize) -> Option<[f64; 2]> {
+    let cols = usize::from(data.mesh.cols.max(2));
+    let rows = usize::from(data.mesh.rows.max(2));
+    let uv = data.mesh.points.get(row.checked_mul(cols)?.checked_add(col)?)?;
+    if row >= rows {
+        return None;
+    }
+    let w = (rest_box[2] - rest_box[0]).max(1.0);
+    let h = (rest_box[3] - rest_box[1]).max(1.0);
+    let p = [rest_box[0] + uv[0] * w, rest_box[1] + uv[1] * h];
+    Some(apply_free_transform_point(&data.free_transform, rest_box, p))
+}
+
+fn hash_unit(seed: u32, a: u32, b: u32) -> f64 {
+    let mut x = seed ^ a.wrapping_mul(0x9E37_79B1) ^ b.wrapping_mul(0x85EB_CA77);
+    x ^= x >> 16;
+    x = x.wrapping_mul(0x7FEB_352D);
+    x ^= x >> 15;
+    x = x.wrapping_mul(0x846C_A68B);
+    x ^= x >> 16;
+    (x & 0xFFFF) as f64 / 32767.5 - 1.0
+}
+
+fn apply_distress_to_contour(pts: &mut [ContourPt], seed: u32, amp: f64, chip: f64, c_idx: usize) {
+    let n = pts.len();
+    if n < 3 || amp <= 1e-4 {
+        return;
+    }
+    let orig: Vec<[f64; 2]> = pts.iter().map(|c| c.p).collect();
+    for i in 0..n {
+        let prev = orig[(i + n - 1) % n];
+        let next = orig[(i + 1) % n];
+        let tx = next[0] - prev[0];
+        let ty = next[1] - prev[1];
+        let len = tx.hypot(ty).max(1e-6);
+        let nx = -ty / len;
+        let ny = tx / len;
+        let h1 = hash_unit(seed, c_idx as u32, i as u32);
+        let notch = if chip > 0.05 && hash_unit(seed ^ 0x55AA_3311, c_idx as u32, i as u32) > 1.0 - chip * 0.45 { -amp * 1.4 } else { 0.0 };
+        let disp = h1 * amp + notch;
+        pts[i].p = [orig[i][0] + nx * disp, orig[i][1] + ny * disp];
+    }
+}
+
+fn to_polyline(pts: &[ContourPt]) -> Polyline {
+    let n = pts.len();
+    let mut knot = Vec::with_capacity(n);
+    for i in 0..n {
+        if pts[i].knot {
+            knot.push(true);
+            continue;
+        }
+        let a = pts[(i + n - 1) % n].p;
+        let b = pts[i].p;
+        let c = pts[(i + 1) % n].p;
+        let d1 = [b[0] - a[0], b[1] - a[1]];
+        let d2 = [c[0] - b[0], c[1] - b[1]];
+        let l1 = d1[0].hypot(d1[1]);
+        let l2 = d2[0].hypot(d2[1]);
+        let sharp = if l1 > 1e-6 && l2 > 1e-6 { ((d1[0] * d2[0] + d1[1] * d2[1]) / (l1 * l2)) < SMOOTH_CORNER_COS } else { false };
+        knot.push(sharp);
+    }
+    Polyline { pts: pts.iter().map(|c| (c.p[0], c.p[1])).collect(), knot, closed: true }
+}
+
+fn build_temp_text_layer(data: &SfxData) -> TextLayer {
+    let style = CharStyle {
+        font_family: data.font_family.clone(),
+        font_style: data.font_style.clone(),
+        postscript_name: data.postscript_name.clone(),
+        weight: data.weight,
+        italic: data.italic,
+        size_pt: data.size_pt,
+        tracking: data.tracking,
+        leading_pt: Some((data.size_pt * data.leading_scale).max(1.0)),
+        ..CharStyle::default()
+    };
+    let len = data.text.len();
+    TextLayer {
+        text: data.text.clone(),
+        font_family: data.font_family.clone(),
+        size_pt: data.size_pt,
+        runs: vec![TextRun { len, style }],
+        orientation: if data.vertical { Orientation::Vertical } else { Orientation::Horizontal },
+        ..TextLayer::default()
+    }
+}
+
+/// Builds non-destructive deformed geometry and gizmo metadata from [`SfxData`].
+pub fn build_sfx_geometry(data: &SfxData, engine: &mut TextEngine, dpi: f32) -> PreparedSfx {
+    if data.text.is_empty() {
+        return PreparedSfx::default();
+    }
+    let layer = build_temp_text_layer(data);
+    let layout = engine.layout(&layer, dpi.clamp(1.0, 1200.0));
+    let raw_outlines = glyph_outlines(&layout, &Affine::IDENTITY, None);
+    if raw_outlines.is_empty() {
+        return PreparedSfx::default();
+    }
+
+    let need_subdivide = !data.mesh.is_identity()
+        || !data.liquify_strokes.is_empty()
+        || data.free_transform.perspective_x.abs() > 1e-4
+        || data.free_transform.perspective_y.abs() > 1e-4
+        || (data.distress.enabled && data.distress.roughness > 1e-4);
+    let step = if need_subdivide { SUBDIVIDE_STEP_PX } else { 0.0 };
+
+    let mut raw_glyphs: Vec<(usize, Vec<Vec<ContourPt>>)> = Vec::with_capacity(raw_outlines.len());
+    let mut total_verts = 0usize;
+    let mut base_bounds: Option<[f64; 4]> = None;
+
+    for go in raw_outlines {
+        let mut contours = flatten_elements(&go.elements, step);
+        if total_verts >= MAX_TOTAL_VERTS {
+            break;
+        }
+        contours.retain(|c| !c.is_empty());
+        for c in &contours {
+            total_verts += c.len();
+            if let Some(cb) = contour_bounds(c.iter().map(|pt| pt.p)) {
+                base_bounds = Some(match base_bounds {
+                    None => cb,
+                    Some(b) => [b[0].min(cb[0]), b[1].min(cb[1]), b[2].max(cb[2]), b[3].max(cb[3])],
+                });
+            }
+        }
+        if !contours.is_empty() {
+            raw_glyphs.push((go.glyph_index, contours));
+        }
+    }
+
+    let Some(base_b) = base_bounds else {
+        return PreparedSfx::default();
+    };
+    let shift = [data.origin[0] - base_b[0], data.origin[1] - base_b[1]];
+    let rest_box = [data.origin[0], data.origin[1], data.origin[0] + (base_b[2] - base_b[0]), data.origin[1] + (base_b[3] - base_b[1])];
+
+    let mut glyphs = Vec::with_capacity(raw_glyphs.len());
+    let mut all_polylines = Vec::new();
+    let mut warped_box: Option<[f64; 4]> = None;
+    let mut contour_counter = 0usize;
+
+    for (g_idx, contours) in raw_glyphs {
+        let mut rest_pts = Vec::new();
+        for c in &contours {
+            for pt in c {
+                rest_pts.push([pt.p[0] + shift[0], pt.p[1] + shift[1]]);
+            }
+        }
+        let Some(g_rest_bounds) = contour_bounds(rest_pts.into_iter()) else { continue };
+        let g_rest_center = [(g_rest_bounds[0] + g_rest_bounds[2]) * 0.5, (g_rest_bounds[1] + g_rest_bounds[3]) * 0.5];
+        let per = data.per_glyph.iter().find(|pg| pg.glyph_index == g_idx).copied();
+
+        let mut g_polys = Vec::with_capacity(contours.len());
+        let mut g_warped_bounds: Option<[f64; 4]> = None;
+
+        for mut c in contours {
+            for pt in &mut c {
+                let mut p = [pt.p[0] + shift[0], pt.p[1] + shift[1]];
+                if let Some(pg) = &per {
+                    p = apply_glyph_transform(pg, g_rest_center, p);
+                }
+                pt.p = transform_point_full(data, rest_box, p);
+            }
+            if data.distress.enabled {
+                apply_distress_to_contour(&mut c, data.distress.seed, f64::from(data.distress.roughness), f64::from(data.distress.edge_chip), contour_counter);
+            }
+            contour_counter += 1;
+            if let Some(cb) = contour_bounds(c.iter().map(|pt| pt.p)) {
+                g_warped_bounds = Some(match g_warped_bounds {
+                    None => cb,
+                    Some(b) => [b[0].min(cb[0]), b[1].min(cb[1]), b[2].max(cb[2]), b[3].max(cb[3])],
+                });
+                warped_box = Some(match warped_box {
+                    None => cb,
+                    Some(b) => [b[0].min(cb[0]), b[1].min(cb[1]), b[2].max(cb[2]), b[3].max(cb[3])],
+                });
+            }
+            let pl = to_polyline(&c);
+            g_polys.push(pl.clone());
+            all_polylines.push(pl);
+        }
+        let wb = g_warped_bounds.unwrap_or(g_rest_bounds);
+        let wc = [(wb[0] + wb[2]) * 0.5, (wb[1] + wb[3]) * 0.5];
+        glyphs.push(PreparedGlyph {
+            glyph_index: g_idx,
+            rest_bounds: g_rest_bounds,
+            rest_center: g_rest_center,
+            warped_bounds: wb,
+            warped_center: wc,
+            polylines: g_polys,
+        });
+    }
+
+    PreparedSfx { rest_box, warped_box: warped_box.unwrap_or(rest_box), glyphs, polylines: all_polylines }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bicubic_and_bilinear_identity_mesh_preserve_points() {
+        for interp in [SfxMeshInterpolation::Bilinear, SfxMeshInterpolation::Bicubic] {
+            let mut mesh = SfxMeshLattice::identity(4, 4);
+            mesh.interpolation = interp;
+            for iu in 0..=10 {
+                for iv in 0..=10 {
+                    let u = iu as f64 / 10.0;
+                    let v = iv as f64 / 10.0;
+                    let out = eval_mesh_uv(&mesh, u, v);
+                    assert!((out[0] - u).abs() < 1e-9 && (out[1] - v).abs() < 1e-9, "{interp:?} ({u},{v}) -> {out:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn free_transform_inverse_roundtrips_with_skew_and_perspective() {
+        let ft = SfxFreeTransform {
+            scale_x: 1.4,
+            scale_y: 0.85,
+            rotation_deg: -18.0,
+            skew_x_deg: 22.0,
+            skew_y_deg: -9.0,
+            perspective_x: 0.18,
+            perspective_y: -0.12,
+        };
+        let rest_box = [100.0, 200.0, 340.0, 290.0];
+        let p = [175.0, 240.0];
+        let q = apply_free_transform_point(&ft, rest_box, p);
+        let back = invert_free_transform_point(&ft, rest_box, q).unwrap();
+        assert!((back[0] - p[0]).abs() < 1e-7 && (back[1] - p[1]).abs() < 1e-7, "{p:?} -> {q:?} -> {back:?}");
+    }
+
+    #[test]
+    fn move_mesh_node_linked_propagates_along_row_and_column() {
+        let mut mesh = SfxMeshLattice::identity(4, 4);
+        mesh.link_h = true;
+        mesh.link_v = false;
+        move_mesh_node_linked(&mut mesh, 1, 2, 0.0, -0.1);
+        for c in 0..4 {
+            assert!((mesh.points[4 + c][1] - (1.0 / 3.0 - 0.1)).abs() < 1e-9);
+        }
+        assert!((mesh.points[2 * 4 + 2][1] - (2.0 / 3.0)).abs() < 1e-9);
+
+        mesh.link_h = false;
+        mesh.link_v = true;
+        move_mesh_node_linked(&mut mesh, 1, 2, 0.08, 0.0);
+        for r in 0..4 {
+            assert!((mesh.points[r * 4 + 2][0] - (2.0 / 3.0 + 0.08)).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn build_sfx_geometry_produces_nonempty_warped_contours() {
+        let mut engine = TextEngine::new();
+        let data = SfxData { text: "BAM!".to_owned(), origin: [50.0, 80.0], ..SfxData::default() };
+        let geom = build_sfx_geometry(&data, &mut engine, 72.0);
+        assert!(!geom.is_empty());
+        assert_eq!(geom.glyphs.len(), 4);
+        assert!((geom.rest_box[0] - 50.0).abs() < 1e-4);
+        assert!((geom.rest_box[1] - 80.0).abs() < 1e-4);
+    }
+}

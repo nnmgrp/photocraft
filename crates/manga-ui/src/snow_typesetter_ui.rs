@@ -290,6 +290,7 @@ pub struct TypesetterUi {
     multi_bubble_capture_requested: bool,
     multi_bubble_fill_requested: bool,
     align_requested: bool,
+    create_sfx_requested: bool,
     /// Style to apply to the text layer already selected on the page.
     apply_style_requested: Option<TextStylePreset>,
     /// Pass number in which the auxiliary windows were last drawn.
@@ -354,6 +355,7 @@ impl Default for TypesetterUi {
             multi_bubble_capture_requested: false,
             multi_bubble_fill_requested: false,
             align_requested: false,
+            create_sfx_requested: false,
             apply_style_requested: None,
             aux_pass: u64::MAX,
             legacy_merged: false,
@@ -561,6 +563,10 @@ impl TypesetterUi {
 
     pub fn take_align_request(&mut self) -> bool {
         std::mem::take(&mut self.align_requested)
+    }
+
+    pub fn take_create_sfx_request(&mut self) -> bool {
+        std::mem::take(&mut self.create_sfx_requested)
     }
 
     pub fn take_multi_bubble_capture_request(&mut self) -> bool {
@@ -880,6 +886,8 @@ impl TypesetterUi {
 
     /// Основная точка отрисовки UI (поддержка свободного окна и плавающего режима).
     pub fn show(&mut self, ui: &mut egui::Ui, host: &mut dyn TypesetterHost) -> Option<TypesetterAction> {
+        // The typesetter panel's headings are controls, not browser-style selectable text.
+        ui.style_mut().interaction.selectable_labels = false;
         self.check_auto_save_debounce();
         if !self.is_open {
             self.flush_auto_save();
@@ -991,7 +999,7 @@ impl TypesetterUi {
             ui.heading("Горячие клавиши и подсказки");
             ui.add_space(6.0);
             ui.label("• Enter / ⤓ — вставить текущую строку в выделение/баллон");
-            ui.label("• ⇢ на стиле — применить стиль к выделенному тексту на странице");
+            ui.label("• → на стиле — применить стиль к выделенному тексту на странице");
             ui.label("• Клик по стилю — выбрать стиль для следующих реплик");
             ui.label("• Двойной клик по стилю — применить стиль и вставить строку");
             ui.label("• ✏ — открыть детальные настройки шрифта и стиля");
@@ -1286,8 +1294,9 @@ impl TypesetterUi {
             let avail = ui.available_width();
             let stepper_w = 68.0f32;
             let gap = 6.0f32;
-            let rem = (avail - stepper_w - gap * 2.0).max(10.0);
-            let insert_w = (rem * 0.58).floor().max(10.0);
+            let sfx_w = 46.0f32;
+            let rem = (avail - stepper_w - sfx_w - gap * 3.0).max(10.0);
+            let insert_w = (rem * 0.56).floor().max(10.0);
             let align_w = (rem - insert_w).floor().max(10.0);
 
             let insert = egui::Button::new(RichText::new(format!("⤓ {}", tl!("Insert"))).color(Color32::WHITE).size(12.0).strong())
@@ -1298,9 +1307,14 @@ impl TypesetterUi {
                 self.send_active_line(action);
             }
 
-            let align = egui::Button::new(RichText::new(format!("⊹ {}", tl!("Align"))).size(12.0).color(ty.text)).truncate().fill(ty.ui).corner_radius(2.0);
+            let align = egui::Button::new(RichText::new(format!("▪ {}", tl!("Align"))).size(12.0).color(ty.text)).truncate().fill(ty.ui).corner_radius(2.0);
             if ui.add_sized(vec2(align_w, 26.0), align).clicked() {
                 self.align_requested = true;
+            }
+
+            let sfx_btn = egui::Button::new(RichText::new(tl!("SFX")).size(12.0).strong().color(ty.text)).truncate().fill(ty.ui).corner_radius(2.0);
+            if ui.add_sized(vec2(sfx_w, 26.0), sfx_btn).on_hover_text(tl!("Create active text/line as non-destructive SFX layer")).clicked() {
+                self.create_sfx_requested = true;
             }
 
             let (stepper_rect, _) = ui.allocate_exact_size(vec2(stepper_w, 26.0), Sense::hover());
@@ -1342,8 +1356,8 @@ impl TypesetterUi {
                     }
                 });
                 let _ = ui.add(egui::Button::new("☆").frame(false));
-                let _ = ui.add(egui::Button::new("▦").frame(false));
-                let _ = ui.add(egui::Button::new("▤").frame(false));
+                let _ = ui.add(egui::Button::new("▪").frame(false));
+                let _ = ui.add(egui::Button::new("■").frame(false));
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     let total_pages = self.text_shape_candidates.len().div_ceil(3).max(1);
                     if ui.add(egui::Button::new("▶").frame(false)).on_hover_text(tl!("Next page")).clicked() && self.text_shape_page + 1 < total_pages {
@@ -1398,7 +1412,7 @@ impl TypesetterUi {
                                 ui.add(egui::Label::new(RichText::new(title).color(ty.muted).size(10.5)).truncate());
                             });
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                let send_btn = egui::Button::new(RichText::new("⇢").color(ty.text).size(12.0)).frame(false);
+                                let send_btn = egui::Button::new(RichText::new("→").color(ty.text).size(12.0)).frame(false);
                                 if ui.add(send_btn).on_hover_text("Вставить строку на холст").clicked() {
                                     self.send_active_line(action);
                                 }
@@ -1534,7 +1548,7 @@ impl TypesetterUi {
             if ui.small_button("📥").on_hover_text(tl!("Load script file (.txt)")).clicked() {
                 self.open_script_file_dialog();
             }
-            if ui.small_button("⚙").on_hover_text(tl!("Options")).clicked() {
+            if ui.small_button("◆").on_hover_text(tl!("Options")).clicked() {
                 self.current_tab = TypesetterTab::Settings;
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -1572,12 +1586,12 @@ impl TypesetterUi {
         let btn_w = ((ui.available_width() - gap) * 0.5).floor().max(10.0);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = gap;
-            let folder = egui::Button::new(RichText::new("＋ Добавить папку").size(11.0).color(ty.text)).truncate().fill(ty.ui).corner_radius(2.0);
+            let folder = egui::Button::new(RichText::new("+ Добавить папку").size(11.0).color(ty.text)).truncate().fill(ty.ui).corner_radius(2.0);
             if ui.add_sized(vec2(btn_w, 24.0), folder).clicked() {
                 self.creating_new_folder = true;
                 self.new_folder_name_buffer = tl!("New Folder").into();
             }
-            let style = egui::Button::new(RichText::new("＋ Добавить стиль").size(11.0).color(ty.text)).truncate().fill(ty.ui).corner_radius(2.0);
+            let style = egui::Button::new(RichText::new("+ Добавить стиль").size(11.0).color(ty.text)).truncate().fill(ty.ui).corner_radius(2.0);
             if ui.add_sized(vec2(btn_w, 24.0), style).clicked() {
                 self.state.presets.push(TextStylePreset { name: tl!("New Preset").to_string(), ..TextStylePreset::default() });
                 self.editing_preset_idx = Some(self.state.presets.len().saturating_sub(1));
@@ -2068,7 +2082,7 @@ impl TypesetterUi {
             }
             if total_lines > 0 {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.small_button("🗑").on_hover_text(tl!("Clear entire script")).clicked() {
+                    if ui.small_button("✖").on_hover_text(tl!("Clear entire script")).clicked() {
                         self.state.lines.clear();
                         self.state.current_line_idx = 0;
                         self.auto_save();
@@ -2192,7 +2206,7 @@ impl TypesetterUi {
                     last_rendered_page = line.page;
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new(format!("─── {} {} ───", tl!("Page"), line.page)).color(t.text_dim).strong().small());
+                        ui.label(RichText::new(format!("——— {} {} ———", tl!("Page"), line.page)).color(t.text_dim).strong().small());
                     });
                     ui.add_space(2.0);
                 }
@@ -2430,6 +2444,13 @@ impl TypesetterUi {
             self.auto_save();
         }
         if ui.checkbox(&mut self.state.options.line_spacing_sync, tl!("Sync line spacing")).on_hover_text(tl!("Sync line spacing with font size")).changed() {
+            self.auto_save();
+        }
+        if ui
+            .checkbox(&mut self.state.options.manga_rtl_reading_order, tl!("Manga R←L dual-bubble order"))
+            .on_hover_text(tl!("Order side-by-side chambers from right to left; top-to-bottom always wins when stacked"))
+            .changed()
+        {
             self.auto_save();
         }
         ui.label(tl!("Minimum size when fitting to a bubble"));
@@ -2802,7 +2823,7 @@ fn draw_style_card_body(
             ui.close();
         }
         ui.separator();
-        if ui.button(RichText::new("🗑 Удалить стиль").color(t.danger)).clicked() {
+        if ui.button(RichText::new("✖ Удалить стиль").color(t.danger)).clicked() {
             selection.delete = Some(ctx.p_idx);
             ui.close();
         }
@@ -2867,7 +2888,7 @@ fn paint_full_text_row(
     let row_resp = card_frame.show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.label(RichText::new(format!("{:2}", idx + 1)).color(num_color).monospace().small());
-            let target_icon = if is_active { "●" } else { "◎" };
+            let target_icon = if is_active { "●" } else { "○" };
             if ui.small_button(target_icon).on_hover_text(tl!("Make this line current")).clicked() {
                 result.set_line = Some((idx, true));
             }
@@ -3265,7 +3286,7 @@ fn modal_preview_section(ui: &mut egui::Ui, preset: &mut TextStylePreset, idx: u
             let btn_rect = egui::Rect::from_min_size(egui::pos2(frame_rect.max.x - 22.0, frame_rect.min.y + 4.0), vec2(18.0, 18.0));
             let btn = ui.interact(btn_rect, egui::Id::unique(("typesetter-preview-edit", idx)), Sense::click());
             ui.painter().rect_filled(btn_rect, CornerRadius::same(4), if btn.hovered() { t.hover } else { t.field });
-            ui.painter().text(btn_rect.center(), egui::Align2::CENTER_CENTER, "✎", egui::FontId::proportional(12.0), t.text_dim);
+            ui.painter().text(btn_rect.center(), egui::Align2::CENTER_CENTER, "✏", egui::FontId::proportional(12.0), t.text_dim);
             if btn.on_hover_text(tl!("Edit preview text")).clicked() {
                 begin_edit = true;
             }

@@ -74,6 +74,9 @@ pub struct BalloonGizmoState {
     pub hovered: Option<GizmoHit>,
     pub drag: Option<BalloonGizmoDrag>,
     pub next_gesture_id: u64,
+    /// Off by default: the gizmo manages the balloon's shape/body, not its 64 stipple dots or its
+    /// 20–32 individual vertices. The panel's "Edit individual points" toggle opts in to vertices.
+    pub show_vertex_handles: bool,
 }
 
 impl BalloonGizmoState {
@@ -92,6 +95,8 @@ pub struct BalloonView<'a> {
     pub active_layer: Option<LayerId>,
     pub tool_is_balloon: bool,
     pub view_xform: CanvasViewXform,
+    /// Pairs of document-space centers `([cx_a, cy_a], [cx_b, cy_b])` for `Stories` chamber links.
+    pub story_links: Vec<([f64; 2], [f64; 2])>,
 }
 
 /// Deferred result of one pointer event: whether the gizmo consumed it, the commands the host
@@ -147,7 +152,7 @@ fn vertex_handles_doc(balloon: &LiveBalloon) -> Vec<(u32, [f64; 2])> {
 }
 
 /// What the pointer hits on the gizmo of `balloon`.
-pub fn hit_test_balloon_gizmo(xf: &CanvasViewXform, balloon: &LiveBalloon, cursor_scr: Pos2) -> Option<GizmoHit> {
+pub fn hit_test_balloon_gizmo(xf: &CanvasViewXform, balloon: &LiveBalloon, cursor_scr: Pos2, show_vertex_handles: bool) -> Option<GizmoHit> {
     let hit_r = 8.5_f32;
     let bid = balloon.id;
 
@@ -207,19 +212,15 @@ pub fn hit_test_balloon_gizmo(xf: &CanvasViewXform, balloon: &LiveBalloon, curso
         }
     }
 
-    // The spikes and the cloud lobes.
-    for (v_idx, v_pt) in vertex_handles_doc(balloon) {
-        let v_scr = xf.to_screen(v_pt[0] as f32, v_pt[1] as f32);
-        if cursor_scr.distance(v_scr) <= hit_r {
-            return Some(GizmoHit::VertexHandle { balloon_id: bid, vertex_index: v_idx });
-        }
-    }
-
-    // Individual stipple dots when BalloonLineStyle::StippleDots is active.
-    for (d_idx, d_pt, _) in balloon.stipple_dot_positions() {
-        let d_scr = xf.to_screen(d_pt[0] as f32, d_pt[1] as f32);
-        if cursor_scr.distance(d_scr) <= hit_r {
-            return Some(GizmoHit::StippleDot { balloon_id: bid, dot_index: d_idx });
+    // Individual spike/cloud vertices are an explicit opt-in. Stipple dots are never draggable
+    // handles: their positions are derived from the body each frame, so a point edit could leave
+    // an override hanging after the dot count or the body changes.
+    if show_vertex_handles {
+        for (v_idx, v_pt) in vertex_handles_doc(balloon) {
+            let v_scr = xf.to_screen(v_pt[0] as f32, v_pt[1] as f32);
+            if cursor_scr.distance(v_scr) <= hit_r {
+                return Some(GizmoHit::VertexHandle { balloon_id: bid, vertex_index: v_idx });
+            }
         }
     }
 
@@ -336,37 +337,17 @@ pub fn draw_balloon_gizmo(painter: &egui::Painter, xf: &CanvasViewXform, balloon
         painter.rect_stroke(d_rect, 3.0, Stroke::new(1.0, Color32::BLACK), egui::StrokeKind::Outside);
     }
 
-    // 6. The draggable spikes and cloud lobes.
-    for (v_idx, v_pt) in vertex_handles_doc(balloon) {
-        let v_scr = xf.to_screen(v_pt[0] as f32, v_pt[1] as f32);
-        let v_hov = state.hovered == Some(GizmoHit::VertexHandle { balloon_id: bid, vertex_index: v_idx });
-        let sz = if v_hov { 5.5 } else { 3.5 };
-        painter.circle_filled(v_scr, sz, if v_hov { yellow } else { accent });
-        painter.circle_stroke(v_scr, sz, Stroke::new(1.0, white));
+    // 6. Individual spike/cloud vertices, only with "Edit individual points" on.
+    if state.show_vertex_handles {
+        for (v_idx, v_pt) in vertex_handles_doc(balloon) {
+            let v_scr = xf.to_screen(v_pt[0] as f32, v_pt[1] as f32);
+            let v_hov = state.hovered == Some(GizmoHit::VertexHandle { balloon_id: bid, vertex_index: v_idx });
+            let sz = if v_hov { 5.5 } else { 3.5 };
+            painter.circle_filled(v_scr, sz, if v_hov { yellow } else { accent });
+            painter.circle_stroke(v_scr, sz, Stroke::new(1.0, white));
+        }
     }
-
-    // 7. Draggable stipple dots in `BalloonLineStyle::StippleDots` mode.
-    for (d_idx, d_pt, _) in balloon.stipple_dot_positions() {
-        let d_scr = xf.to_screen(d_pt[0] as f32, d_pt[1] as f32);
-        let d_hov = state.hovered == Some(GizmoHit::StippleDot { balloon_id: bid, dot_index: d_idx });
-        let is_overridden = balloon.stipple_overrides.iter().any(|s| s.index == d_idx);
-        let sz = if d_hov {
-            5.5
-        } else if is_overridden {
-            4.0
-        } else {
-            3.0
-        };
-        let dot_fill = if d_hov {
-            yellow
-        } else if is_overridden {
-            Color32::from_rgb(255, 165, 60)
-        } else {
-            Color32::from_rgb(90, 200, 250)
-        };
-        painter.circle_filled(d_scr, sz, dot_fill);
-        painter.circle_stroke(d_scr, sz, Stroke::new(1.0, white));
-    }
+    // Stipple dots are part of the line style, not gizmo handles: no overlay, no hit target.
 }
 
 /// Starts a gizmo drag. `Alt` + click on a tail tip removes the tail (emitted as a command).
@@ -651,10 +632,10 @@ fn apply_body_resize(init: [f64; 4], corner: usize, dx: f64, dy: f64) -> [f64; 4
 }
 
 /// The handle under the pointer, if any.
-fn hover_at(balloons: &[LiveBalloon], xf: &CanvasViewXform, doc: [f64; 2]) -> Option<GizmoHit> {
+fn hover_at(balloons: &[LiveBalloon], xf: &CanvasViewXform, doc: [f64; 2], show_vertex_handles: bool) -> Option<GizmoHit> {
     let cursor = xf.to_screen(doc[0] as f32, doc[1] as f32);
     for b in balloons {
-        if let Some(hit) = hit_test_balloon_gizmo(xf, b, cursor) {
+        if let Some(hit) = hit_test_balloon_gizmo(xf, b, cursor, show_vertex_handles) {
             return Some(hit);
         }
     }
@@ -700,7 +681,7 @@ pub fn pointer(state: &mut BalloonGizmoState, view: &BalloonView<'_>, ev: Canvas
         CanvasToolEvent::Down { x, y, .. } => {
             let cursor = xf.to_screen(x as f32, y as f32);
             for b in &balloons {
-                if let Some(hit) = hit_test_balloon_gizmo(xf, b, cursor) {
+                if let Some(hit) = hit_test_balloon_gizmo(xf, b, cursor, state.show_vertex_handles) {
                     on_pointer_down(state, &mut out.commands, layer_id, b, hit, [x, y], mods.alt);
                     out.handled = true;
                     break;
@@ -713,7 +694,7 @@ pub fn pointer(state: &mut BalloonGizmoState, view: &BalloonView<'_>, ev: Canvas
                 out.handled = true;
             } else if view.tool_is_balloon {
                 // No drag: only remember what the pointer is over, so the handles light up.
-                let hovered = hover_at(&balloons, xf, [x, y]);
+                let hovered = hover_at(&balloons, xf, [x, y], state.show_vertex_handles);
                 if state.hovered != hovered {
                     state.hovered = hovered;
                 }
@@ -740,12 +721,61 @@ pub fn hover_cursor(state: &BalloonGizmoState, view: &BalloonView<'_>, cursor_sc
         let doc = view.doc?;
         let (_, balloons) = active_balloons_in_doc(doc, view.active_layer)?;
         let at = cursor_scr?;
-        balloons.iter().find_map(|b| hit_test_balloon_gizmo(&view.view_xform, b, at))
+        balloons.iter().find_map(|b| hit_test_balloon_gizmo(&view.view_xform, b, at, state.show_vertex_handles))
     }?;
     Some(cursor_of(hit))
 }
 
-/// Draws the gizmo for every balloon of the active balloon group.
+/// Draws the dashed `Stories` link arrow between two chamber centers in document space.
+fn draw_story_link(painter: &egui::Painter, xf: &CanvasViewXform, from_doc: [f64; 2], to_doc: [f64; 2]) {
+    let a = xf.to_screen(from_doc[0] as f32, from_doc[1] as f32);
+    let b = xf.to_screen(to_doc[0] as f32, to_doc[1] as f32);
+    let diff = b - a;
+    let dist = diff.length();
+    if dist < 6.0 || !dist.is_finite() {
+        return;
+    }
+    let dir = diff / dist;
+    let perp = vec2(-dir.y, dir.x);
+    let color = Color32::from_rgba_unmultiplied(70, 190, 255, 220);
+    let stroke = Stroke::new(1.6, color);
+
+    let dash = 7.0f32;
+    let gap = 5.0f32;
+    let mut pos = 0.0f32;
+    let stop = (dist - 8.0).max(0.0);
+    while pos < stop {
+        let end = (pos + dash).min(stop);
+        painter.line_segment([a + dir * pos, a + dir * end], stroke);
+        pos += dash + gap;
+    }
+
+    let head = [b, b - dir * 9.0 + perp * 4.5, b - dir * 9.0 - perp * 4.5];
+    painter.add(egui::Shape::convex_polygon(head.to_vec(), color, Stroke::NONE));
+}
+
+fn resolve_story_links(doc: &Document, balloons: &[LiveBalloon], explicit: &[([f64; 2], [f64; 2])]) -> Vec<([f64; 2], [f64; 2])> {
+    if !explicit.is_empty() {
+        return explicit.to_vec();
+    }
+    let center_of = |b: &LiveBalloon| {
+        let r = b.body.rect();
+        [r[0] + r[2] * 0.5, r[1] + r[3] * 0.5]
+    };
+    let mut links = Vec::new();
+    for b in balloons {
+        let Some(tid) = b.linked_text_layer else { continue };
+        let Some(layer) = doc.layer(tid) else { continue };
+        let photocraft_doc::LayerContent::Text(tl) = &layer.content else { continue };
+        let Some(next_id) = tl.next_story_layer else { continue };
+        if let Some(target_b) = balloons.iter().find(|cand| cand.linked_text_layer == Some(next_id)) {
+            links.push((center_of(b), center_of(target_b)));
+        }
+    }
+    links
+}
+
+/// Draws the gizmo for every balloon of the active balloon group, plus `Stories` link overlays.
 pub fn draw(painter: &egui::Painter, state: &BalloonGizmoState, view: &BalloonView<'_>) {
     if !showing(state, view) {
         return;
@@ -755,6 +785,9 @@ pub fn draw(painter: &egui::Painter, state: &BalloonGizmoState, view: &BalloonVi
     for b in &balloons {
         draw_balloon_gizmo(painter, &view.view_xform, b, state);
     }
+    for (from, to) in resolve_story_links(doc, &balloons, &view.story_links) {
+        draw_story_link(painter, &view.view_xform, from, to);
+    }
 }
 
 #[cfg(test)]
@@ -763,7 +796,7 @@ mod tests {
     use photocraft_doc::vector::{BalloonLineStyle, LiveBalloon, LiveBalloonBody, StippleDotOverride, VertexOverride};
     use photocraft_vector::balloon::LiveBalloonGeom;
 
-    use super::{GizmoHit, apply_body_resize, hit_test_balloon_gizmo, vertex_handles_doc};
+    use super::{BalloonGizmoState, GizmoHit, apply_body_resize, draw_balloon_gizmo, hit_test_balloon_gizmo, vertex_handles_doc};
     use crate::view::CanvasViewXform;
 
     fn balloon() -> LiveBalloon {
@@ -866,13 +899,127 @@ mod tests {
         let xf = one_to_one();
         let tip = b.tails[0].tip;
         let at: Pos2 = xf.to_screen(tip[0] as f32, tip[1] as f32);
-        assert_eq!(hit_test_balloon_gizmo(&xf, &b, at), Some(GizmoHit::TailTip { balloon_id: b.id, tail_id: b.tails[0].id }));
+        assert_eq!(hit_test_balloon_gizmo(&xf, &b, at, false), Some(GizmoHit::TailTip { balloon_id: b.id, tail_id: b.tails[0].id }));
     }
 
     #[test]
     fn far_away_points_hit_nothing() {
         let b = balloon();
         let xf = one_to_one();
-        assert_eq!(hit_test_balloon_gizmo(&xf, &b, pos2(780.0, 580.0)), None);
+        assert_eq!(hit_test_balloon_gizmo(&xf, &b, pos2(780.0, 580.0), false), None);
+    }
+
+    /// The gizmo manages the balloon's shape and body by default: no 64 stipple dots, no 20–32
+    /// individual vertices are drawn or hit-tested until "Edit individual points" is switched on.
+    #[test]
+    fn only_the_body_handles_are_live_until_individual_points_are_enabled() {
+        for body in [
+            LiveBalloonBody::Cloud { rect: [40.0, 40.0, 220.0, 140.0], bumps: 14, amplitude: 0.3, cusp_bite: 0.22, jitter: 0.2, seed: 7 },
+            LiveBalloonBody::Spiky {
+                rect: [40.0, 40.0, 220.0, 140.0],
+                spikes: 14,
+                length: 0.35,
+                sub_harmonic: 0.4,
+                concavity: 0.5,
+                jitter: 0.2,
+                smooth: false,
+                seed: 7,
+            },
+        ] {
+            let mut b = LiveBalloon { body, line_style: BalloonLineStyle::StippleDots, stipple_count: 64, ..LiveBalloon::default() };
+            let xf = one_to_one();
+            let v = vertex_handles_doc(&b);
+            assert!(!v.is_empty(), "the body has vertices");
+            assert!(!b.stipple_dot_positions().is_empty(), "the body has stipple dots");
+
+            let v_at = xf.to_screen(v[0].1[0] as f32, v[0].1[1] as f32);
+            let d_at = xf.to_screen(b.stipple_dot_positions()[0].1[0] as f32, b.stipple_dot_positions()[0].1[1] as f32);
+            assert_ne!(hit_test_balloon_gizmo(&xf, &b, v_at, false), Some(GizmoHit::VertexHandle { balloon_id: b.id, vertex_index: v[0].0 }));
+            assert_ne!(hit_test_balloon_gizmo(&xf, &b, d_at, false), Some(GizmoHit::StippleDot { balloon_id: b.id, dot_index: 0 }));
+            assert_eq!(hit_test_balloon_gizmo(&xf, &b, v_at, true), Some(GizmoHit::VertexHandle { balloon_id: b.id, vertex_index: v[0].0 }));
+            assert_ne!(hit_test_balloon_gizmo(&xf, &b, d_at, true), Some(GizmoHit::StippleDot { balloon_id: b.id, dot_index: 0 }));
+
+            // Drawing the default gizmo is also free of the extra point overlays.
+            let shapes_for = |show: bool| {
+                let ctx = egui::Context::default();
+                let state = BalloonGizmoState { show_vertex_handles: show, ..Default::default() };
+                let mut out = ctx.run_ui(Default::default(), |ui| draw_balloon_gizmo(ui.painter(), &xf, &b, &state));
+                let n = out.shapes.len();
+                out.textures_delta.clear();
+                n
+            };
+            assert!(shapes_for(true) > shapes_for(false), "the opt-in adds the vertex overlays");
+
+            b.stipple_count = 8;
+            assert!(vertex_handles_doc(&b).len() >= 10, "changing the dot count cannot leave dangling vertex overlays");
+        }
+    }
+
+    #[test]
+    fn story_links_render_dashed_segments_between_chained_chambers() {
+        use photocraft_doc::{ColorMode, Document, Layer, LayerContent, LayerId, LiveShape, SampleType, ShapeLayer, Size, TextLayer};
+        use photocraft_vector::balloon::LiveBalloonGroupGeom;
+
+        use super::{BalloonView, draw};
+
+        let mut doc = Document::new("StoryTest", Size { width: 500, height: 300 }, ColorMode::Rgb, SampleType::U8);
+        let t1 = TextLayer { text: "First".into(), size_pt: 14.0, story_threaded: true, next_story_layer: Some(LayerId(2)), ..Default::default() };
+        let t2 = TextLayer { text: "Second".into(), size_pt: 14.0, ..Default::default() };
+        let mut l1 = Layer::new("T1", LayerContent::Text(t1));
+        l1.id = LayerId(1);
+        let mut l2 = Layer::new("T2", LayerContent::Text(t2));
+        l2.id = LayerId(2);
+
+        let b1 = LiveBalloon {
+            id: 1,
+            body: LiveBalloonBody::Ellipse { rect: [40.0, 40.0, 120.0, 80.0], squircle: 0.25 },
+            linked_text_layer: Some(LayerId(1)),
+            ..LiveBalloon::default()
+        };
+        let b2 = LiveBalloon {
+            id: 2,
+            body: LiveBalloonBody::Ellipse { rect: [220.0, 40.0, 120.0, 80.0], squircle: 0.25 },
+            linked_text_layer: Some(LayerId(2)),
+            ..LiveBalloon::default()
+        };
+        let group = photocraft_doc::vector::LiveBalloonGroup::new(vec![b1, b2]);
+        let path = group.rebuild_group_path();
+        let sh = ShapeLayer { path, live: Some(LiveShape::BalloonGroup { group }), ..Default::default() };
+        let mut bl = Layer::new("B", LayerContent::Shape(sh));
+        bl.id = LayerId(3);
+        doc.layers.extend([l1, l2, bl]);
+
+        let ctx = egui::Context::default();
+        let state = BalloonGizmoState::default();
+        let linked_shapes = {
+            let view_linked = BalloonView {
+                doc_id: None,
+                doc: Some(&doc),
+                active_layer: Some(LayerId(3)),
+                tool_is_balloon: true,
+                view_xform: one_to_one(),
+                story_links: Vec::new(),
+            };
+            let mut out_linked = ctx.run_ui(Default::default(), |ui| draw(ui.painter(), &state, &view_linked));
+            let n = out_linked.shapes.len();
+            out_linked.textures_delta.clear();
+            n
+        };
+
+        if let Some(LayerContent::Text(tl)) = doc.layer_mut(LayerId(1)).map(|l| &mut l.content) {
+            tl.next_story_layer = None;
+        }
+        let view_unlinked = BalloonView {
+            doc_id: None,
+            doc: Some(&doc),
+            active_layer: Some(LayerId(3)),
+            tool_is_balloon: true,
+            view_xform: one_to_one(),
+            story_links: Vec::new(),
+        };
+        let mut out_unlinked = ctx.run_ui(Default::default(), |ui| draw(ui.painter(), &state, &view_unlinked));
+        let unlinked_shapes = out_unlinked.shapes.len();
+        out_unlinked.textures_delta.clear();
+        assert!(linked_shapes > unlinked_shapes, "dashed story link must add overlay shapes: {linked_shapes} vs {unlinked_shapes}");
     }
 }

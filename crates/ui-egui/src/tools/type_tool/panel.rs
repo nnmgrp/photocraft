@@ -4,7 +4,7 @@ use super::options_bar::{
     align_glyph, apply_kerning, direction_glyph, direction_items, icon_label, kerning_at, kerning_field, kerning_label, num_field, shown_family, styles_at,
     toggle_cell,
 };
-use super::{Color32, LayerId, PhotocraftApp, Stroke, json, text_layer};
+use super::{Color32, LayerId, PhotocraftApp, Point, Stroke, json, text_layer};
 
 /// The Character panel's OpenType buttons, in Photoshop's order: (feature tag, command id,
 /// tooltip). The tooltips are the Type › OpenType menu labels.
@@ -461,6 +461,23 @@ fn type_sections(app: &mut PhotocraftApp, ui: &mut egui::Ui, character: bool, pa
             }
         });
         ui.add_space(ROW_GAP);
+        // Vertical alignment: Top / Center / Bottom / Justify inside the paragraph box. When no
+        // type layer is targeted the buttons show/edit the default the next layer will inherit.
+        let cur_valign = styles_at(app).map(|(_, p)| p.vertical_align).unwrap_or_else(|| default_styles(app).1.vertical_align);
+        let vcw = cell_width(full, 4);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            for (key, tip, va) in vertical_align_items() {
+                let clicked = toggle_cell(ui, vcw, cur_valign == va, tip, |ui, r, col| {
+                    let g = egui::Rect::from_center_size(r.center(), egui::vec2(14.0, 16.0));
+                    vertical_align_glyph(ui.painter(), g, va, col);
+                });
+                if clicked {
+                    apply_vertical_align(app, ui.ctx(), key);
+                }
+            }
+        });
+        ui.add_space(ROW_GAP);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
             for (key, tip, d) in direction_items() {
@@ -567,27 +584,43 @@ fn type_options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
 }
 
-/// Apply vertical alignment to the active text layer (converting point text to box text if needed)
-/// and update default tool options.
-#[cfg(not(target_arch = "wasm32"))]
-fn apply_vertical_align(app: &mut PhotocraftApp, ctx: &egui::Context, key: &str) {
+/// Apply vertical alignment to the target text layers and remember the choice as the default for
+/// the next layer. Only *point* text is converted to paragraph text: the layout's vertical-align
+/// pass intentionally ignores point text, so a box is needed for the alignment to have any effect.
+/// Box and Area text keep their shape; Area's lines are placed by the area breaker.
+pub(super) fn apply_vertical_align(app: &mut PhotocraftApp, ctx: &egui::Context, key: &str) {
+    // Persisted through `tool_memory`: the last choice is also the default for new type layers.
     apply_defaults(app, &json!({"verticalAlign": key}));
-    if let Some((id, _)) = target(app) {
-        if super::pointer::box_shape(app, LayerId(id)).is_none()
-            && let Some((l, _, _)) = super::layout::layout(app, LayerId(id))
+    let Some((id, _)) = target(app) else { return };
+    let shape = app.session.active().and_then(|s| text_layer(&s.doc, LayerId(id)).map(|t| t.shape.clone()));
+    let multiple = formatting_params(app).and_then(|p| p.get("layers").and_then(serde_json::Value::as_array).map(|ids| ids.len() > 1)).unwrap_or(false);
+    if !multiple && matches!(shape, Some(photocraft_doc::text::TextShape::Point)) {
+        if let Some((l, aff, _)) = super::layout::layout(app, LayerId(id))
             && let Some([x0, y0, x1, y1]) = l.bounds()
         {
             let pad = 10.0;
             let w = ((x1 - x0) + pad * 2.0).max(60.0);
-            let h = ((y1 - y0) + pad * 2.0).max(40.0);
-            apply(app, ctx, json!({"box": [x0 - pad, y0 - pad, w, h], "verticalAlign": key}));
-        } else {
-            apply(app, ctx, json!({"verticalAlign": key}));
+            let h = ((y1 - y0) + pad * 2.0).max(80.0);
+            // `bounds()` is in text space: the box command takes document coordinates, so map the
+            // top-left corner through the layer's text → document transform (which also handles
+            // rotated/scaled layers).
+            let doc_tl = aff.apply(Point::new(f64::from(x0 - pad), f64::from(y0 - pad)));
+            let coalesce = format!("type-valign-{id}-{key}");
+            if let Err(e) = app.run("type.edit", json!({"layer": id, "box": [doc_tl.x, doc_tl.y, w, h], "coalesce": coalesce})) {
+                app.ui.status = e;
+                app.ui.status_error = true;
+                return;
+            }
+            if let Err(e) = app.run("type.setStyle", json!({"layer": id, "verticalAlign": key, "coalesce": coalesce})) {
+                app.ui.status = e;
+                app.ui.status_error = true;
+            }
         }
+    } else {
+        apply(app, ctx, json!({"verticalAlign": key}));
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn vertical_align_items() -> [(&'static str, &'static str, photocraft_doc::text::VerticalAlign); 4] {
     use photocraft_doc::text::VerticalAlign as V;
     [
@@ -598,7 +631,6 @@ fn vertical_align_items() -> [(&'static str, &'static str, photocraft_doc::text:
     ]
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn vertical_align_glyph(p: &egui::Painter, r: egui::Rect, a: photocraft_doc::text::VerticalAlign, c: Color32) {
     use photocraft_doc::text::VerticalAlign as V;
     let frame_stroke = Stroke::new(1.2, c);

@@ -13,6 +13,7 @@ pub mod gigapixel;
 pub mod layer_extras;
 pub mod mask_transfer;
 pub mod second_mask;
+pub mod sfx;
 pub mod timelapse;
 pub mod typesetter_adapter;
 pub mod vector_brush;
@@ -26,6 +27,7 @@ pub struct MangaSessionState {
     pub(crate) fill_gesture: std::sync::Mutex<Option<fill_tool::Gesture>>,
     pub timelapse: timelapse::recorder::Recorder,
     pub vector_brushes: vector_brush::VectorBrushLibrary,
+    pub sfx_presets: sfx::SfxPresetLibrary,
 }
 
 /// All manga command specifications registered into the engine command table.
@@ -40,6 +42,7 @@ pub fn specs() -> Vec<CommandSpec> {
     v.extend(fill_tool::specs());
     v.extend(vector_brush::specs());
     v.extend(balloon::specs());
+    v.extend(sfx::specs());
     v.extend(vector_curve::specs());
     v.extend(timelapse::specs());
     v.extend(gigapixel::presets::specs());

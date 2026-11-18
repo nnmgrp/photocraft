@@ -17,9 +17,10 @@
 //! spec (`ScreentoneUi::spec`), so a drag's live preview and its committed render share a source.
 
 use egui::{pos2, vec2};
-use photocraft_algo::{FilterParams, ScreentoneMode, ScreentoneSpec};
+use photocraft_algo::{FilterParams, ScreentoneBackend, ScreentoneMode, ScreentoneSpec};
+use photocraft_color::ColorMode;
 use photocraft_compose::Buffer;
-use photocraft_doc::{Document, Layer, LayerId, Rect};
+use photocraft_doc::{Document, Layer, LayerContent, LayerId, Rect};
 use photocraft_raster::Surface;
 use serde_json::json;
 
@@ -97,10 +98,11 @@ impl ScreentoneGizmoState {
 
     /// The screentone layer to hide in the composite during an active drag so the live preview
     /// mesh replaces it cleanly without double Multiply blending. `None` when idle, when `doc_id`
-    /// is not the bound document, or when there is no live target.
+    /// is not the bound document, or when there is no live target. A GPU drag keeps the real layer
+    /// in the composite: its spec is updated live in the shader, so there is no CPU mesh to swap in.
     pub fn hide_layer_during_drag(&self, doc_id: BridgeDocId, doc: &Document, active_layer: Option<LayerId>) -> Option<LayerId> {
-        self.drag.as_ref()?;
-        if self.target_doc.is_some_and(|bound| bound != doc_id) {
+        let drag = self.drag.as_ref()?;
+        if drag.gpu || self.target_doc.is_some_and(|bound| bound != doc_id) {
             return None;
         }
         self.target_layer(doc, active_layer)
@@ -153,6 +155,17 @@ struct Drag {
     kind: Handle,
     start_doc: [f64; 2],
     spec: ScreentoneSpec,
+    /// A GPU-backed layer is restyled live during the drag (no CPU preview); a CPU-backed one
+    /// keeps the old hide-layer + preview-mesh path and commits only on release.
+    gpu: bool,
+    /// The spec already reported to the composer this drag (the snapshot at press for CPU drags).
+    reported: ScreentoneSpec,
+}
+
+impl Drag {
+    fn new(kind: Handle, start_doc: [f64; 2], spec: ScreentoneSpec, gpu: bool) -> Self {
+        Self { kind, start_doc, reported: spec.clone(), spec, gpu }
+    }
 }
 
 struct PreviewCache {
@@ -188,6 +201,43 @@ fn sheet_bounds(view: &GizmoView<'_>, gizmo: &ScreentoneGizmoState) -> Option<Re
     let target = gizmo.target_layer(view.doc, view.active_layer);
     let bounds = screentone_sheet_bounds(view.doc, target);
     (!bounds.is_empty()).then_some(bounds)
+}
+
+/// Whether a drag can restyle its target through the GPU compositor instead of baking a CPU
+/// preview every frame. Mirrors the engine's `restyle_layer` (`is_gpu` / `skip_cpu_bake`) and the
+/// planner's `screentone_on_gpu`: GPU mode always, Auto only on a large enough sheet, native
+/// CMYK/Lab never, and an old raster layer cannot be restyled procedurally at all.
+pub fn gizmo_uses_gpu(view: &GizmoView<'_>, st: &ScreentoneUi, gizmo: &ScreentoneGizmoState) -> bool {
+    if matches!(view.doc.pixel_format().mode, ColorMode::Cmyk | ColorMode::Lab) {
+        return false;
+    }
+    let Some(target) = gizmo.target_layer(view.doc, view.active_layer) else { return false };
+    if !view.doc.layer(target).is_some_and(|l| matches!(l.content, LayerContent::Screentone(_))) {
+        return false;
+    }
+    match st.spec.backend {
+        ScreentoneBackend::Cpu => false,
+        ScreentoneBackend::Gpu => true,
+        ScreentoneBackend::Auto => sheet_bounds(view, gizmo).is_some_and(|b| b.width() >= 512 && b.height() >= 512),
+    }
+}
+
+/// The coalesce key one drag's live restyles share, so a whole drag is a single history step.
+fn drag_coalesce(view: &GizmoView<'_>, target: LayerId) -> String {
+    format!("screentone-gizmo:{}:{}", view.doc_id.0, target.0)
+}
+
+/// Builds the live `layer.screentone` command for the drag's current spec. The panel's own spec is
+/// sent unmodified — unlike the CPU preview it is never forced to `Sheet` with source luminance
+/// off, so a Shading tone keeps its shading mode while the handles move.
+fn restyle_command(view: &GizmoView<'_>, st: &ScreentoneUi, gizmo: &ScreentoneGizmoState, out: &mut Vec<OutCommand>) {
+    let Some(target) = gizmo.target_layer(view.doc, view.active_layer) else { return };
+    let mut p = params(st);
+    if let Some(map) = p.as_object_mut() {
+        map.insert("layer".into(), json!(target.0));
+        map.insert("coalesce".into(), json!(drag_coalesce(view, target)));
+    }
+    out.push(OutCommand::new(CMD_LAYER, p));
 }
 
 /// The lattice anchor in document coordinates: the engine anchors the sheet at the render
@@ -266,23 +316,32 @@ pub fn pointer(
         CanvasToolEvent::Down { x, y, .. } => {
             let Some(bounds) = sheet_bounds(view, gizmo) else { return false };
             let Some(kind) = hit(&st.spec, bounds, view.xf, [x, y]) else { return false };
-            gizmo.drag = Some(Drag { kind, start_doc: [x, y], spec: st.spec.clone() });
+            let gpu = gizmo_uses_gpu(view, st, gizmo);
+            gizmo.drag = Some(Drag::new(kind, [x, y], st.spec.clone(), gpu));
             true
         }
         CanvasToolEvent::Move { x, y, .. } => {
             let Some(drag) = gizmo.drag.clone() else { return false };
             let Some(bounds) = sheet_bounds(view, gizmo) else { return false };
             apply_drag(&drag, [x, y], mods.shift, bounds, st);
+            if drag.gpu && st.spec != drag.reported {
+                // A GPU restyle only rewrites the layer's spec: no CPU bake, no preview mesh, and
+                // no frame freeze, so the real layer can follow the pointer in the compositor.
+                restyle_command(view, st, gizmo, out);
+                if let Some(d) = gizmo.drag.as_mut() {
+                    d.reported = st.spec.clone();
+                }
+            }
             true
         }
         CanvasToolEvent::Up { x, y } => {
             let Some(drag) = gizmo.drag.clone() else { return false };
-            gizmo.drag = None;
-            gizmo.preview = None;
             if let Some(bounds) = sheet_bounds(view, gizmo) {
                 apply_drag(&drag, [x, y], mods.shift, bounds, st);
             }
             commit_drag(&drag, view, gizmo, st, out);
+            gizmo.drag = None;
+            gizmo.preview = None;
             true
         }
     }
@@ -330,27 +389,34 @@ fn apply_drag(drag: &Drag, at: [f64; 2], shift: bool, bounds: Rect, st: &mut Scr
     st.spec = spec;
 }
 
-/// The pointer-up commit: the pending spec runs the screentone layer command against the bound
-/// sheet — one outbound edit. Without a valid target or a moved spec there is nothing to write.
+/// The pointer-up commit: a CPU drag defers its only command to here, while a GPU drag has already
+/// sent each changed spec during `Move`. Either way a command is emitted only when the spec moved
+/// since the last report, so the whole drag shares one coalesce key and one history step.
 fn commit_drag(drag: &Drag, view: &GizmoView<'_>, gizmo: &ScreentoneGizmoState, st: &ScreentoneUi, out: &mut Vec<OutCommand>) {
-    if st.spec == drag.spec {
-        return; // nothing moved: no render, no journal entry
+    if st.spec == drag.reported {
+        return; // nothing moved since the last report: no render, no journal entry
     }
-    let Some(target) = gizmo.target_layer(view.doc, view.active_layer) else { return };
-    let mut p = params(st);
-    if let Some(map) = p.as_object_mut() {
-        map.insert("layer".into(), json!(target.0));
-    }
-    // `OutCommand` is the bridge's dispatch-buffer entry; the host runs `CMD_LAYER` and reports
-    // the produced layer back through `ScreentoneGizmoState::bind_layer`.
-    out.push(OutCommand::new(CMD_LAYER, p));
+    restyle_command(view, st, gizmo, out);
 }
 
 /// Escape (handled where the egui context is at hand) cancels the running drag and restores the
-/// spec it started from — no render, no journal entry.
-pub fn escape(ctx: &egui::Context, st: &mut ScreentoneUi, gizmo: &mut ScreentoneGizmoState) {
+/// spec it started from.
+pub fn escape(ctx: &egui::Context, view: &GizmoView<'_>, st: &mut ScreentoneUi, gizmo: &mut ScreentoneGizmoState, out: &mut Vec<OutCommand>) {
     if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-        gizmo.cancel_drag(st);
+        cancel_drag(view, st, gizmo, out);
+    }
+}
+
+/// Restores the spec from the press. A GPU drag has already rewritten the live layer on previous
+/// frames, so the original spec is sent back with the same coalesce key: the compositor returns to
+/// the pre-drag sheet at once, with no CPU bake. A CPU drag only had a temporary preview, so
+/// dropping it is enough.
+pub fn cancel_drag(view: &GizmoView<'_>, st: &mut ScreentoneUi, gizmo: &mut ScreentoneGizmoState, out: &mut Vec<OutCommand>) {
+    let Some(drag) = gizmo.drag.take() else { return };
+    gizmo.preview = None;
+    st.spec = drag.spec.clone();
+    if drag.gpu && drag.reported != drag.spec {
+        restyle_command(view, st, gizmo, out);
     }
 }
 
@@ -376,6 +442,13 @@ pub fn refresh_preview(
 ) {
     let view = input.view;
     if !showing(gizmo, view.panel_showing, view.doc, view.active_layer) || gizmo.drag.is_none() {
+        gizmo.preview = None;
+        return;
+    }
+    // A GPU drag updates the real layer's spec on every Move, so the shader draws the live sheet.
+    // Rendering a CPU copy here would freeze the UI and force `Sheet` + no source luminance,
+    // silently dropping the tone's Shading mode.
+    if gizmo.drag.as_ref().is_some_and(|d| d.gpu) {
         gizmo.preview = None;
         return;
     }
@@ -560,18 +633,34 @@ fn cursor_of(kind: Handle) -> egui::CursorIcon {
 #[cfg(test)]
 mod tests {
     use egui::{Pos2, Rect, pos2, vec2};
-    use photocraft_algo::{FilterParams, ScreentoneSpec};
-    use photocraft_doc::{LayerMask, Rect as DocRect};
+    use photocraft_algo::{FilterParams, ScreentoneBackend, ScreentoneMode, ScreentoneSpec};
+    use photocraft_doc::{ColorMode, Document, Layer, LayerContent, LayerMask, Rect as DocRect, SampleType, Size};
+    use photocraft_raster::Surface;
+    use serde_json::json;
 
     use super::{
-        Drag, HIT_PX, Handle, PREVIEW_CAP, ScreentoneGizmoState, anchor_doc, apply_drag, arm_dir, cursor_of, doc_to_local, escape, handles, hit, preview_rect,
-        render_preview, spec_with,
+        CMD_LAYER, Drag, GizmoView, HIT_PX, Handle, PREVIEW_CAP, PreviewInput, ScreentoneGizmoState, anchor_doc, apply_drag, arm_dir, cancel_drag, cursor_of,
+        doc_to_local, escape, gizmo_uses_gpu, handles, hit, pointer, preview_rect, refresh_preview, render_preview, spec_with,
     };
-    use crate::comic_screentone_panel::ScreentoneUi;
-    use crate::view::CanvasViewXform;
+    use crate::view::{CanvasToolEvent, CanvasViewXform};
+    use crate::{BridgeDocId, comic_screentone_panel::ScreentoneUi};
 
     fn spec() -> ScreentoneSpec {
         ScreentoneSpec { angle: 0.0, spacing_x: 8.0, spacing_y: 8.0, ..Default::default() }
+    }
+
+    /// A document with one live procedural tone, and that layer's id. `size` drives the Auto
+    /// backend's 512×512 threshold.
+    fn tone_doc(backend: ScreentoneBackend, size: (u32, u32)) -> (Document, photocraft_doc::LayerId) {
+        let mut doc = Document::new("tone", Size::new(size.0, size.1), ColorMode::Rgb, SampleType::U8);
+        let st = ScreentoneSpec { backend, mode: ScreentoneMode::Shading, use_source_luminance: true, ..spec() };
+        let tone = photocraft_doc::ScreentoneLayer::new(st, (0.0, 0.0), Surface::new(photocraft_color::PixelFormat::RGBA8));
+        let id = doc.insert_above(None, Layer::new("tone", LayerContent::Screentone(tone)));
+        (doc, id)
+    }
+
+    fn view<'a>(doc: &'a Document, xf: &'a CanvasViewXform, layer: photocraft_doc::LayerId) -> GizmoView<'a> {
+        GizmoView { panel_showing: true, doc, doc_id: BridgeDocId(42), active_layer: Some(layer), xf }
     }
 
     /// A 1:1 view with the document centered — handle/doc points coincide on screen.
@@ -680,7 +769,7 @@ mod tests {
     #[test]
     fn the_origin_shift_locks_the_dominant_document_axis() {
         let mut st = ScreentoneUi::default();
-        let drag = Drag { kind: Handle::Origin, start_doc: [48.0, 36.0], spec: spec() };
+        let drag = Drag::new(Handle::Origin, [48.0, 36.0], spec(), false);
         apply_drag(&drag, [74.0, 20.0], true, DocRect::new(0, 0, 96, 72), &mut st);
         assert!((st.spec.origin_x - 26.0).abs() < 1e-4, "{}", st.spec.origin_x);
         assert_eq!(st.spec.origin_y, 0.0, "the y component dropped on shift");
@@ -690,7 +779,7 @@ mod tests {
     fn an_arm_drag_sets_angle_and_spacing_but_not_the_other_axis() {
         let mut st = ScreentoneUi::default();
         let before = spec();
-        let drag = Drag { kind: Handle::ArmX, start_doc: [56.0, 36.0], spec: before.clone() };
+        let drag = Drag::new(Handle::ArmX, [56.0, 36.0], before.clone(), false);
         apply_drag(&drag, [68.0, 20.0], false, DocRect::new(0, 0, 96, 72), &mut st);
         assert!((st.spec.angle - 0.0).abs() > 1e-3, "the arm's direction set the angle");
         assert!((st.spec.spacing_x - 8.0).abs() > 1e-3, "the arm's length set the x spacing");
@@ -700,26 +789,33 @@ mod tests {
     #[test]
     fn shift_snaps_the_arm_angle_to_fifteen_degree_steps() {
         let mut st = ScreentoneUi::default();
-        let drag = Drag { kind: Handle::ArmX, start_doc: [56.0, 36.0], spec: spec() };
+        let drag = Drag::new(Handle::ArmX, [56.0, 36.0], spec(), false);
         apply_drag(&drag, [68.0, 20.0], true, DocRect::new(0, 0, 96, 72), &mut st);
         assert!(((st.spec.angle / 15.0).round() * 15.0 - st.spec.angle).abs() < 1e-4, "{}", st.spec.angle);
     }
 
     #[test]
     fn escape_restores_the_spec_the_drag_started_from() {
+        let (doc, id) = tone_doc(ScreentoneBackend::Cpu, (96, 72));
         let mut st = ScreentoneUi::default();
         let mut g = ScreentoneGizmoState::default();
+        g.bind_layer(BridgeDocId(42), id);
         let snapshot = st.spec.clone();
-        g.drag = Some(Drag { kind: Handle::Origin, start_doc: [48.0, 36.0], spec: snapshot.clone() });
+        g.drag = Some(Drag::new(Handle::Origin, [48.0, 36.0], snapshot.clone(), false));
         st.spec.angle = -120.0;
+        let xf = one_to_one();
+        let v = view(&doc, &xf, id);
         let ctx = egui::Context::default();
+        let mut out = Vec::new();
         // A context with no Escape keypress is a no-op.
-        escape(&ctx, &mut st, &mut g);
+        escape(&ctx, &v, &mut st, &mut g, &mut out);
         assert_eq!(st.spec.angle, -120.0);
+        assert!(out.is_empty());
         // Driving the state machine directly restores the snapshot.
-        g.cancel_drag(&mut st);
+        cancel_drag(&v, &mut st, &mut g, &mut out);
         assert_eq!(st.spec, snapshot);
         assert!(!g.has_active_drag(), "the drag cleared");
+        assert!(out.is_empty(), "a CPU drag's cancel has no document edit");
     }
 
     #[test]
@@ -772,9 +868,122 @@ mod tests {
     fn detach_clears_the_running_drag() {
         let mut g = ScreentoneGizmoState::default();
         assert!(!g.has_active_drag());
-        g.drag = Some(Drag { kind: Handle::Origin, start_doc: [0.0, 0.0], spec: spec() });
+        g.drag = Some(Drag::new(Handle::Origin, [0.0, 0.0], spec(), false));
         assert!(g.has_active_drag());
         g.detach();
         assert!(!g.has_active_drag(), "detach drops the drag");
+    }
+
+    #[test]
+    fn gpu_drag_restyles_live_without_hiding_or_baking() {
+        let (doc, id) = tone_doc(ScreentoneBackend::Gpu, (96, 72));
+        let mut st = ScreentoneUi {
+            spec: ScreentoneSpec { backend: ScreentoneBackend::Gpu, mode: ScreentoneMode::Shading, use_source_luminance: true, ..spec() },
+            ..Default::default()
+        };
+        let snapshot = st.spec.clone();
+        let mut g = ScreentoneGizmoState::default();
+        g.bind_layer(BridgeDocId(42), id);
+        let xf = one_to_one();
+        let v = view(&doc, &xf, id);
+        let mut out = Vec::new();
+        assert!(gizmo_uses_gpu(&v, &st, &g));
+
+        assert!(pointer(CanvasToolEvent::Down { x: 56.0, y: 36.0, pressure: 1.0 }, egui::Modifiers::NONE, &v, &mut st, &mut g, &mut out));
+        assert!(out.is_empty(), "the press alone changes nothing");
+        assert_eq!(g.hide_layer_during_drag(BridgeDocId(42), &doc, Some(id)), None, "the live GPU layer stays in the composite");
+
+        assert!(pointer(CanvasToolEvent::Move { x: 68.0, y: 20.0, pressure: 1.0 }, egui::Modifiers::NONE, &v, &mut st, &mut g, &mut out));
+        assert_eq!(out.len(), 1, "a GPU Move emits a live restyle");
+        assert_eq!(out[0].id, CMD_LAYER);
+        assert_eq!(out[0].params["layer"], json!(id.0));
+        assert_eq!(out[0].params["coalesce"], json!(format!("screentone-gizmo:42:{}", id.0)));
+        assert_eq!(out[0].params["mode"], json!("shading"), "Shading is not forced to Sheet");
+        assert_eq!(out[0].params["useSourceLuminance"], json!(true));
+        assert_ne!(st.spec, snapshot, "the pending spec moved");
+
+        let input = PreviewInput { view: &v, doc_index: 0, revision: 1, display_key: 1, texture_options: egui::TextureOptions::default() };
+        let to_image = |_: &photocraft_compose::Buffer| -> egui::ColorImage { panic!("a GPU drag must not build a CPU preview") };
+        refresh_preview(&egui::Context::default(), &input, &mut st, &mut g, &to_image);
+        assert!(g.preview.is_none(), "no CPU preview mesh on a GPU drag");
+
+        let reported = out.len();
+        assert!(pointer(CanvasToolEvent::Move { x: 68.0, y: 20.0, pressure: 1.0 }, egui::Modifiers::NONE, &v, &mut st, &mut g, &mut out));
+        assert_eq!(out.len(), reported, "an unchanged Move does not spam commands");
+        assert!(pointer(CanvasToolEvent::Up { x: 68.0, y: 20.0 }, egui::Modifiers::NONE, &v, &mut st, &mut g, &mut out));
+        assert_eq!(out.len(), reported, "the final spec was already reported on Move");
+    }
+
+    #[test]
+    fn cancelling_a_gpu_drag_sends_the_original_spec_back() {
+        let (doc, id) = tone_doc(ScreentoneBackend::Gpu, (96, 72));
+        let mut st = ScreentoneUi { spec: ScreentoneSpec { backend: ScreentoneBackend::Gpu, ..spec() }, ..Default::default() };
+        let snapshot = st.spec.clone();
+        let mut g = ScreentoneGizmoState::default();
+        g.bind_layer(BridgeDocId(42), id);
+        let xf = one_to_one();
+        let v = view(&doc, &xf, id);
+        let mut out = Vec::new();
+        pointer(CanvasToolEvent::Down { x: 56.0, y: 36.0, pressure: 1.0 }, egui::Modifiers::NONE, &v, &mut st, &mut g, &mut out);
+        pointer(CanvasToolEvent::Move { x: 68.0, y: 20.0, pressure: 1.0 }, egui::Modifiers::NONE, &v, &mut st, &mut g, &mut out);
+        assert_eq!(out.len(), 1);
+
+        cancel_drag(&v, &mut st, &mut g, &mut out);
+        assert_eq!(st.spec, snapshot);
+        assert_eq!(out.len(), 2, "the pre-drag spec is sent back at once");
+        assert_eq!(out[1].id, CMD_LAYER);
+        assert_eq!(out[1].params["coalesce"], out[0].params["coalesce"], "same history step");
+        assert_eq!(out[1].params["angle"], json!(snapshot.angle));
+        assert!(!g.has_active_drag());
+    }
+
+    #[test]
+    fn cpu_drag_defers_its_command_to_release_and_hides_the_layer() {
+        let (doc, id) = tone_doc(ScreentoneBackend::Cpu, (96, 72));
+        let mut st = ScreentoneUi { spec: ScreentoneSpec { backend: ScreentoneBackend::Cpu, ..spec() }, ..Default::default() };
+        let mut g = ScreentoneGizmoState::default();
+        g.bind_layer(BridgeDocId(42), id);
+        let xf = one_to_one();
+        let v = view(&doc, &xf, id);
+        let mut out = Vec::new();
+        assert!(!gizmo_uses_gpu(&v, &st, &g));
+
+        assert!(pointer(CanvasToolEvent::Down { x: 56.0, y: 36.0, pressure: 1.0 }, egui::Modifiers::NONE, &v, &mut st, &mut g, &mut out));
+        assert!(pointer(CanvasToolEvent::Move { x: 68.0, y: 20.0, pressure: 1.0 }, egui::Modifiers::NONE, &v, &mut st, &mut g, &mut out));
+        assert!(out.is_empty(), "a CPU Move keeps the deferred command path");
+        assert_eq!(g.hide_layer_during_drag(BridgeDocId(42), &doc, Some(id)), Some(id), "the CPU preview replaces the layer");
+
+        assert!(pointer(CanvasToolEvent::Up { x: 68.0, y: 20.0 }, egui::Modifiers::NONE, &v, &mut st, &mut g, &mut out));
+        assert_eq!(out.len(), 1, "the CPU bake is committed once on release");
+        assert_eq!(out[0].id, CMD_LAYER);
+        assert_eq!(out[0].params["coalesce"], json!(format!("screentone-gizmo:42:{}", id.0)));
+    }
+
+    #[test]
+    fn auto_backend_only_uses_gpu_on_a_large_sheet() {
+        let (small, small_id) = tone_doc(ScreentoneBackend::Auto, (96, 72));
+        let mut st = ScreentoneUi { spec: ScreentoneSpec { backend: ScreentoneBackend::Auto, ..spec() }, ..Default::default() };
+        let mut g = ScreentoneGizmoState::default();
+        g.bind_layer(BridgeDocId(42), small_id);
+        let xf = one_to_one();
+        assert!(!gizmo_uses_gpu(&view(&small, &xf, small_id), &st, &g), "small Auto stays on the CPU path");
+
+        let (large, large_id) = tone_doc(ScreentoneBackend::Auto, (512, 512));
+        let mut g = ScreentoneGizmoState::default();
+        g.bind_layer(BridgeDocId(42), large_id);
+        assert!(gizmo_uses_gpu(&view(&large, &xf, large_id), &st, &g), "large Auto uses the GPU");
+
+        // Native CMYK never uses the RGB shader, even with an explicit GPU backend.
+        let mut cmyk = Document::new("cmyk", Size::new(512, 512), ColorMode::Cmyk, SampleType::U8);
+        let tone = photocraft_doc::ScreentoneLayer::new(
+            ScreentoneSpec { backend: ScreentoneBackend::Gpu, ..spec() },
+            (0.0, 0.0),
+            Surface::new(photocraft_color::PixelFormat::CMYKA8),
+        );
+        let cmyk_id = cmyk.insert_above(None, Layer::new("tone", LayerContent::Screentone(tone)));
+        let mut g = ScreentoneGizmoState::default();
+        g.bind_layer(BridgeDocId(42), cmyk_id);
+        st.spec = ScreentoneSpec { backend: ScreentoneBackend::Gpu, ..spec() };
+        assert!(!gizmo_uses_gpu(&view(&cmyk, &xf, cmyk_id), &st, &g));
     }
 }

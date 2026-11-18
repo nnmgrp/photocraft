@@ -91,17 +91,29 @@ fn revealed_bounds(mask: &LayerMask, canvas: DocRect) -> Option<DocRect> {
     if !mask.enabled || canvas.is_empty() {
         return Some(canvas);
     }
-    if mask.surface.content_bounds().is_empty() {
-        return (mask.surface.default_pixel().first().copied().unwrap_or(1.0) > 0.0).then_some(canvas);
+    // A mask whose untouched pixels are revealed covers everything outside its stored content
+    // bounds, so its tight bounds are the whole canvas — no pixel scan needed (O(1) on 48 MP).
+    let revealed_by_default = mask.surface.default_pixel().first().copied().unwrap_or(1.0) > 1.0 / 255.0;
+    let content = mask.surface.content_bounds();
+    if content.is_empty() {
+        return revealed_by_default.then_some(canvas);
+    }
+    if revealed_by_default {
+        return Some(canvas);
+    }
+    // Hidden-by-default: only the stored selection can contain revealed pixels.
+    let scan = content.intersect(&canvas);
+    if scan.is_empty() {
+        return Some(DocRect::new(canvas.x0, canvas.y0, 0, 0));
     }
     let ch = mask.surface.channels().max(1);
-    let buf = mask.surface.read_region(canvas);
-    let w = canvas.width() as usize;
-    let (mut x0, mut y0, mut x1, mut y1) = (canvas.x1, canvas.y1, canvas.x0, canvas.y0);
+    let buf = mask.surface.read_region(scan);
+    let w = scan.width() as usize;
+    let (mut x0, mut y0, mut x1, mut y1) = (scan.x1, scan.y1, scan.x0, scan.y0);
     for (i, px) in buf.chunks_exact(ch).enumerate() {
         if px[0] > 0.0 {
-            let x = canvas.x0 + (i % w) as i32;
-            let y = canvas.y0 + (i / w) as i32;
+            let x = scan.x0 + (i % w) as i32;
+            let y = scan.y0 + (i / w) as i32;
             x0 = x0.min(x);
             y0 = y0.min(y);
             x1 = x1.max(x + 1);

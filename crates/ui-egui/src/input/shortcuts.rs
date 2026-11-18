@@ -792,7 +792,7 @@ fn handle_object_tool_keys(app: &mut PhotocraftApp, ctx: &egui::Context, focus: 
     if crate::magnetic_lasso_ui::keys(app, ctx) || handle_lasso_vertex_keys(app, ctx) {
         return true;
     }
-    if vector_curve_keys(app, ctx, focus) || crate::manga_seam::balloon_tail_delete_key(app, ctx) {
+    if vector_curve_keys(app, ctx, focus) || crate::manga_seam::balloon_tail_delete_key(app, ctx) || crate::manga_seam::sfx_escape_key(app, ctx) {
         return true;
     }
     // A selected guide: ⌫/Delete removes it (`guide_select`), never Edit › Clear's pixels.

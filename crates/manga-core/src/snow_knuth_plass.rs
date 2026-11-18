@@ -871,6 +871,102 @@ pub fn generate_textshaper_variants(text: &str, bubble_w: Option<f32>, bubble_h:
     picked
 }
 
+/// Splits one long line of dialogue between the two chambers of a double bubble.
+///
+/// `//` (and a blank line) are explicit chamber separators; otherwise the text is divided by
+/// words according to how much each box can hold at `font_size_pt`/`dpi`. Each part is then
+/// wrapped to its own box with the ordinary Knuth–Plass solver. `None` means everything fits in
+/// the first chamber, so the caller keeps a single text layer.
+pub fn knuth_plass_split_overflow(
+    text: &str,
+    first_box: (f32, f32),
+    second_box: (f32, f32),
+    font_size_pt: f32,
+    dpi: f32,
+    h_scale: f32,
+) -> (String, Option<String>) {
+    let source = text.trim();
+    if source.is_empty() {
+        return (String::new(), None);
+    }
+    let scale_pct = if h_scale.is_finite() && h_scale > 0.0 { h_scale } else { 100.0 };
+    let wrap = |part: &str, b: (f32, f32)| knuth_plass_bubble_wrap_ext(part, b.0.max(24.0), b.1.max(24.0), font_size_pt, dpi, scale_pct, false);
+
+    let explicit: Vec<String> = if source.contains("//") {
+        source.split("//").map(str::trim).filter(|s| !s.is_empty()).map(ToOwned::to_owned).collect()
+    } else if source.contains("\n\n") {
+        source.split("\n\n").flat_map(|p| p.lines()).map(str::trim).filter(|s| !s.is_empty()).map(ToOwned::to_owned).collect()
+    } else {
+        Vec::new()
+    };
+    if explicit.len() >= 2 {
+        let mut parts = explicit.into_iter();
+        let first = parts.next().unwrap_or_default();
+        let second = parts.collect::<Vec<_>>().join("\n");
+        return (wrap(&first, first_box), (!second.is_empty()).then(|| wrap(&second, second_box)));
+    }
+
+    let px_per_pt = if dpi.is_finite() && dpi > 0.0 { dpi / 72.0 } else { 1.0 };
+    let font_px = (font_size_pt * px_per_pt).max(6.0);
+    let glyph_w = measure_token_width("W", font_px, if scale_pct > 1.5 { scale_pct / 100.0 } else { 1.0 }).max(font_px * 0.55);
+    let capacity = |b: (f32, f32)| -> usize {
+        let per_line = ((b.0.max(24.0) / glyph_w).floor() as usize).max(4);
+        let lines = ((b.1.max(24.0) / (font_px * 1.2)).floor() as usize).max(1);
+        per_line.saturating_mul(lines)
+    };
+    let first_cap = capacity(first_box);
+    let words: Vec<&str> = source.split_whitespace().collect();
+    let total: usize = words.iter().map(|w| w.chars().count()).sum::<usize>() + words.len().saturating_sub(1);
+    if total <= first_cap || words.len() < 2 {
+        return (wrap(source, first_box), None);
+    }
+
+    let mut first_words = Vec::new();
+    let mut used = 0usize;
+    for word in &words {
+        let n = word.chars().count();
+        let need = if first_words.is_empty() { n } else { n + 1 };
+        if used + need > first_cap && !first_words.is_empty() {
+            break;
+        }
+        used += need;
+        first_words.push(*word);
+    }
+    let second_words = &words[first_words.len()..];
+    if second_words.is_empty() {
+        return (wrap(source, first_box), None);
+    }
+    let first = first_words.join(" ");
+    let second = second_words.join(" ");
+    (wrap(&first, first_box), Some(wrap(&second, second_box)))
+}
+
+/// Re-balances text between a threaded two-chamber balloon story pair (`text_a` -> `text_b`).
+///
+/// Unless `text_a` explicitly contains `"//"`, both strings' whitespace/soft wraps are normalized
+/// into words and re-flowed via [`knuth_plass_split_overflow`] so shrinking balloon A spills into
+/// balloon B and enlarging balloon A pulls words back from balloon B.
+#[must_use]
+pub fn reflow_story_pair_text(
+    text_a: &str,
+    text_b: &str,
+    first_box: (f32, f32),
+    second_box: (f32, f32),
+    font_size_pt: f32,
+    dpi: f32,
+    h_scale: f32,
+) -> (String, String) {
+    if text_a.contains("//") {
+        return (text_a.to_string(), text_b.to_string());
+    }
+    let combined = text_a.split_whitespace().chain(text_b.split_whitespace()).collect::<Vec<_>>().join(" ");
+    if combined.is_empty() {
+        return (String::new(), String::new());
+    }
+    let (first, second) = knuth_plass_split_overflow(&combined, first_box, second_box, font_size_pt, dpi, h_scale);
+    (first, second.unwrap_or_default())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -948,6 +1044,38 @@ mod tests {
         for line in &lines {
             assert!(!line.contains("--"));
         }
+    }
+
+    #[test]
+    fn split_overflow_uses_explicit_markers_and_word_capacity() {
+        let (a, b) = knuth_plass_split_overflow("Первый // Второй", (100.0, 80.0), (100.0, 80.0), 14.0, 72.0, 100.0);
+        assert!(a.contains("Первый"));
+        assert!(b.as_deref().is_some_and(|s| s.contains("Второй")));
+
+        let long = "Очень длинная реплика героя которая не помещается в один маленький баллон и должна перейти во второй";
+        let (a, b) = knuth_plass_split_overflow(long, (90.0, 60.0), (90.0, 60.0), 14.0, 72.0, 100.0);
+        assert!(!a.is_empty());
+        assert!(b.is_some(), "the overflow goes to the second chamber");
+        assert_eq!(format!("{a} {}", b.unwrap_or_default()).split_whitespace().count(), long.split_whitespace().count(), "no word is lost");
+
+        let (short, none) = knuth_plass_split_overflow("Коротко", (300.0, 200.0), (100.0, 80.0), 14.0, 72.0, 100.0);
+        assert!(!short.is_empty());
+        assert!(none.is_none(), "text that fits stays in one chamber");
+    }
+
+    #[test]
+    fn reflow_story_pair_text_spills_and_pulls_back_when_first_box_grows() {
+        let sentence = "Один два три четыре пять шесть семь восемь девять десять";
+        let (first_small, second_small) = reflow_story_pair_text(sentence, "", (95.0, 48.0), (220.0, 160.0), 14.0, 72.0, 100.0);
+        assert!(!second_small.is_empty(), "small first box must overflow into second box");
+
+        let (first_grown, second_grown) = reflow_story_pair_text(&first_small, &second_small, (360.0, 240.0), (220.0, 160.0), 14.0, 72.0, 100.0);
+        assert!(second_grown.is_empty(), "larger first box must pull words back from second box: {second_grown:?}");
+        assert!(first_grown.contains("десять"), "pulled-back text should recover trailing words: {first_grown:?}");
+
+        let (explicit_a, explicit_b) = reflow_story_pair_text("Первая // вручную", "Вторая", (95.0, 48.0), (220.0, 160.0), 14.0, 72.0, 100.0);
+        assert_eq!(explicit_a, "Первая // вручную");
+        assert_eq!(explicit_b, "Вторая");
     }
 
     #[test]

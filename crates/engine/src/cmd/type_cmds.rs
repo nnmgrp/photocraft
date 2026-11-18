@@ -963,8 +963,16 @@ pub(crate) fn new_text_layer(s: &Session, p: &Value, cmd: &str) -> Result<TextLa
         orientation,
         ..Default::default()
     };
+    apply_story_thread_params(&mut t, p);
     t.sync_summary();
     Ok(t)
+}
+
+/// Threaded `Stories` links are optional command params, so older scripts and saved actions that
+/// do not mention them keep a plain, unthreaded text layer.
+fn apply_story_thread_params(t: &mut TextLayer, p: &Value) {
+    t.next_story_layer = p.get("nextStoryLayer").and_then(Value::as_u64).map(LayerId);
+    t.story_threaded = p.get("storyThreaded").and_then(Value::as_bool).unwrap_or(false);
 }
 
 /// The name of the history state a new horizontal type layer makes: what `type.create` records
@@ -1177,6 +1185,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     }
                     // The rename lands in the same undo step as the edit (#497).
                     *rename = name.clone();
+                    apply_story_thread_params(t, p);
                     Ok(())
                 })?;
                 info(s, &json!({ "layer": id.0 }))

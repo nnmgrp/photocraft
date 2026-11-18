@@ -15,6 +15,7 @@
 //! Point-level editing of the result (Ctrl-drag, Alt-click toggling corners, deleting anchors)
 //! already lives in [`crate::edit`], which works on any [`Path`] this module returns.
 
+use std::collections::{BTreeMap, HashSet};
 use std::f64::consts::TAU;
 
 use photocraft_doc::vector::{
@@ -398,6 +399,43 @@ fn stitch(pieces: &[[P; 2]]) -> Vec<Vec<P>> {
     loops
 }
 
+/// Removes self-crossing loops from one closed polygon: splits its edges at proper crossings and
+/// keeps the largest simple loop. A burst valley and an arc tail can meet almost tangentially;
+/// without this the boolean union occasionally leaves a small crossed "bow tie" at the seam.
+fn strip_self_intersections(poly: &[P]) -> Vec<P> {
+    let poly = clean(poly);
+    let n = poly.len();
+    if n < 4 {
+        return poly;
+    }
+    let mut pieces: Vec<[P; 2]> = Vec::with_capacity(n);
+    for i in 0..n {
+        let a = poly[i];
+        let b = poly[(i + 1) % n];
+        let mut cuts: Vec<f64> = vec![0.0, 1.0];
+        for j in 0..n {
+            // Adjacent edges share an endpoint; that is not a self-intersection.
+            if j == i || (j + 1) % n == i || (i + 1) % n == j {
+                continue;
+            }
+            if let Some(t) = crossing_param(a, b, poly[j], poly[(j + 1) % n]) {
+                cuts.push(t);
+            }
+        }
+        cuts.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
+        for w in cuts.windows(2) {
+            if w[1] - w[0] > 1e-9 {
+                pieces.push([lerp(a, b, w[0]), lerp(a, b, w[1])]);
+            }
+        }
+    }
+    if pieces.len() <= n {
+        // No extra cuts: the input is already simple.
+        return poly;
+    }
+    stitch(&pieces).into_iter().max_by(|a, b| signed_area(a).abs().total_cmp(&signed_area(b).abs())).unwrap_or(poly)
+}
+
 /// Union of two simple closed polygons. Returns the boundary contours of the union (two contours
 /// when the inputs do not touch, one when they overlap or one contains the other). The inputs are
 /// treated as sets, so winding direction does not matter.
@@ -427,6 +465,7 @@ pub fn union_polygons(a: &[P], b: &[P]) -> Vec<Vec<P>> {
         return vec![a];
     }
     let loops = stitch(&pieces);
+    let loops: Vec<Vec<P>> = loops.iter().map(|l| strip_self_intersections(l)).collect();
     if loops.is_empty() { vec![a] } else { loops }
 }
 
@@ -1039,6 +1078,10 @@ pub struct BalloonGroupRenderPaths {
     pub fill_only_path: Path,
     /// Ink capsules/strands/ribbons/dots/stars rendered with `shape.stroke.paint` (no stroke).
     pub ink_from_stroke_path: Path,
+    /// A stylized `Uniflash` group. Documents saved before the fill/stroke fix can carry a black
+    /// fill and no stroke here: the renderer substitutes a white interior and black ink for that
+    /// combination so the needles never become one solid black blob.
+    pub uniflash_stylized: bool,
 }
 
 /// One sampled contour station along a balloon's welded outline (for raster dabbing / UV textures).
@@ -1415,6 +1458,9 @@ struct UniflashNeedle {
     outer: Point,
     inner: Point,
     half_outer: f64,
+    /// Half width at the middle of the ray: the needle's body is as wide as `needle_width`, even
+    /// when both ends are sharp. Without it a 4-point wedge with two sharp ends has zero area.
+    half_mid: f64,
     half_inner: f64,
     perp: [f64; 2],
 }
@@ -1450,12 +1496,13 @@ fn uniflash_needles(balloon: &LiveBalloon) -> Option<Vec<UniflashNeedle>> {
     // The end widths of a needle follow the sharpness: 1.0 = a point, 0.0 = the full needle
     // width, both through the mean half width `needle_width / 2`.
     let half_w = needle_width.clamp(0.2, 64.0) * 0.5;
+    let half_mid = half_w;
     let half_outer = match mode {
-        UniflashMode::InwardNeedles => half_w * (1.0 - outer_sharpness.clamp(0.0, 1.0)),
-        UniflashMode::SolidRingSpikes => half_w * (1.0 - outer_sharpness.clamp(0.0, 1.0)).min(0.12),
+        UniflashMode::InwardNeedles => half_w * (1.0 - outer_sharpness.clamp(0.0, 1.0)).max(0.05),
+        UniflashMode::SolidRingSpikes => half_w * (1.0 - outer_sharpness.clamp(0.0, 1.0)).clamp(0.05, 0.12),
     };
     let half_inner = match mode {
-        UniflashMode::InwardNeedles => half_w * (1.0 - inner_sharpness.clamp(0.0, 1.0)),
+        UniflashMode::InwardNeedles => half_w * (1.0 - inner_sharpness.clamp(0.0, 1.0)).max(0.05),
         UniflashMode::SolidRingSpikes => (half_w * 2.15).max(rx.min(ry) * step * 0.85),
     };
 
@@ -1492,7 +1539,7 @@ fn uniflash_needles(balloon: &LiveBalloon) -> Option<Vec<UniflashNeedle>> {
             }
         };
 
-        out.push(UniflashNeedle { outer, inner, half_outer, half_inner, perp: [-sin, cos] });
+        out.push(UniflashNeedle { outer, inner, half_outer, half_mid, half_inner, perp: [-sin, cos] });
     }
     Some(out)
 }
@@ -1526,12 +1573,19 @@ fn build_uniflash_paths(balloon: &LiveBalloon) -> Option<Path> {
         subpaths.push(Subpath::polygon(&ring_pts));
     }
 
-    for n in needles {
+    for n in &needles {
+        // A six-point spindle: sharp ends, full `needle_width` at the middle. The 4-point wedge
+        // collapsed to zero area when both sharpness values were 1.0, leaving only the blue vector
+        // skeleton visible instead of black ink.
+        let mid = Point::new((n.outer.x + n.inner.x) * 0.5, (n.outer.y + n.inner.y) * 0.5);
+        let at = |p: Point, h: f64, sign: f64| (p.x + n.perp[0] * h * sign, p.y + n.perp[1] * h * sign);
         subpaths.push(Subpath::polygon(&[
-            (n.outer.x + n.perp[0] * n.half_outer, n.outer.y + n.perp[1] * n.half_outer),
-            (n.inner.x + n.perp[0] * n.half_inner, n.inner.y + n.perp[1] * n.half_inner),
-            (n.inner.x - n.perp[0] * n.half_inner, n.inner.y - n.perp[1] * n.half_inner),
-            (n.outer.x - n.perp[0] * n.half_outer, n.outer.y - n.perp[1] * n.half_outer),
+            at(n.outer, n.half_outer, 1.0),
+            at(mid, n.half_mid, 1.0),
+            at(n.inner, n.half_inner, 1.0),
+            at(n.inner, n.half_inner, -1.0),
+            at(mid, n.half_mid, -1.0),
+            at(n.outer, n.half_outer, -1.0),
         ]));
     }
     Some(Path::new(subpaths))
@@ -1879,8 +1933,12 @@ fn body_outline_with_noise(balloon: &LiveBalloon) -> Path {
     path
 }
 
-/// Star polygon envelope for a `Uniflash` balloon when combined with stylized line styles
-/// (keeping knot count small for union & arc-length sampling).
+/// Outer envelope of a `Uniflash` balloon when combined with stylized line styles.
+///
+/// The old contour alternated outer tips with inner needle ends, producing a deeply notched star.
+/// Offset-based styles (`UkiyoBrush`, `Pencil`, mitred dashes) follow those notches and shoot long
+/// lines well past the body. Sampling only the outer rim, pulled slightly inward and lightly
+/// smoothed, keeps the ink on the balloon and leaves the interior free for the white fill.
 fn build_uniflash_contour_for_line_style(balloon: &LiveBalloon) -> Path {
     let Some(needles) = uniflash_needles(balloon) else {
         return Path::default();
@@ -1888,15 +1946,39 @@ fn build_uniflash_contour_for_line_style(balloon: &LiveBalloon) -> Path {
     if needles.len() < 3 {
         return Path::default();
     }
+    let rect = balloon.body.rect();
+    let cx = rect[0] + rect[2] * 0.5;
+    let cy = rect[1] + rect[3] * 0.5;
     let stride = (needles.len() / 72).max(1);
-    let mut pts = Vec::with_capacity((needles.len() / stride) * 2);
-    for (idx, n) in needles.iter().enumerate() {
-        if idx % stride != 0 {
-            continue;
+    let rx = (rect[2] * 0.5).abs().max(4.0);
+    let ry = (rect[3] * 0.5).abs().max(4.0);
+    let mut ring: Vec<P> = Vec::with_capacity(needles.len().div_ceil(stride));
+    for n in needles.iter().step_by(stride) {
+        // SolidRingSpikes can reach past the body; keep the sampling envelope inside it so
+        // offset-based styles cannot shoot long ink lines outside the balloon.
+        let nx = (n.outer.x - cx) / rx;
+        let ny = (n.outer.y - cy) / ry;
+        let r = nx.hypot(ny);
+        let k = if r > 0.94 { 0.94 / r } else { 1.0 };
+        let inward = (cx + (n.outer.x - cx) * k * 0.94, cy + (n.outer.y - cy) * k * 0.94);
+        if ring.last().is_none_or(|q| dist(*q, inward) > 1e-4) {
+            ring.push(inward);
         }
-        pts.push((n.outer.x, n.outer.y));
-        pts.push((n.inner.x, n.inner.y));
     }
+    if ring.len() < 3 {
+        return Path::default();
+    }
+    // One light averaging pass rounds needle tips without collapsing the envelope.
+    let n = ring.len();
+    let smoothed: Vec<P> = (0..n)
+        .map(|i| {
+            let a = ring[(i + n - 1) % n];
+            let b = ring[i];
+            let c = ring[(i + 1) % n];
+            (b.0 * 0.5 + (a.0 + c.0) * 0.25, b.1 * 0.5 + (a.1 + c.1) * 0.25)
+        })
+        .collect();
+    let pts = oriented(&smoothed);
     Path::new(vec![Subpath::polygon(&pts)])
 }
 
@@ -1943,14 +2025,21 @@ struct ContourArcSeg {
 struct ContourArcTable {
     segs: Vec<ContourArcSeg>,
     total_len: f64,
+    /// +1 / -1: the winding used for the stored segment normals.
+    orientation: f64,
 }
 
 impl ContourArcTable {
+    fn build(segs: Vec<ContourArcSeg>, total_len: f64) -> Self {
+        let orientation = segs.first().map(|s| -(s.tangent[0] * s.normal[1] - s.tangent[1] * s.normal[0])).unwrap_or(1.0);
+        Self { segs, total_len, orientation }
+    }
+
     fn from_subpath(sp: &Subpath) -> Self {
         let mut segs = Vec::new();
         let mut total_len = 0.0;
         Self::push_subpath(&mut segs, &mut total_len, sp);
-        Self { segs, total_len }
+        Self::build(segs, total_len)
     }
 
     fn from_paths(welded_base: &Path, detached: &[Subpath]) -> Self {
@@ -1959,7 +2048,7 @@ impl ContourArcTable {
         for sp in welded_base.subpaths.iter().chain(detached.iter()) {
             Self::push_subpath(&mut segs, &mut total_len, sp);
         }
-        Self { segs, total_len }
+        Self::build(segs, total_len)
     }
 
     fn push_subpath(segs: &mut Vec<ContourArcSeg>, total_len: &mut f64, sp: &Subpath) {
@@ -2013,6 +2102,40 @@ impl ContourArcTable {
         let px = seg.a.0 + (seg.b.0 - seg.a.0) * local_t;
         let py = seg.a.1 + (seg.b.1 - seg.a.1) * local_t;
         ([px, py], seg.normal, seg.tangent)
+    }
+
+    /// Samples every intermediate polyline vertex inside the arc interval `[u0, u0 + span]`.
+    /// Unlike three-point chords this keeps sharp spike tips and burst valleys on the outline,
+    /// which is essential for dash ribbons that must hug (and not cut through) the contour.
+    fn sample_range(&self, u0: f64, span: f64) -> Vec<P> {
+        if self.segs.is_empty() || self.total_len <= 1e-5 {
+            return Vec::new();
+        }
+        let s0 = u0.rem_euclid(1.0) * self.total_len;
+        let s1 = s0 + span.clamp(0.0, 1.0) * self.total_len;
+        let mut out: Vec<P> = Vec::new();
+        // The interval can wrap past the end of the contour (the last dash of a ring).
+        for pass in 0..2 {
+            let (a, b) = if pass == 0 { (s0, s1.min(self.total_len)) } else { (0.0, (s1 - self.total_len).min(self.total_len)) };
+            if b <= a {
+                continue;
+            }
+            for seg in &self.segs {
+                let lo = a.max(seg.s0);
+                let hi = b.min(seg.s0 + seg.len);
+                if hi <= lo {
+                    continue;
+                }
+                for s in [lo, hi] {
+                    let t = ((s - seg.s0) / seg.len.max(1e-6)).clamp(0.0, 1.0);
+                    let p = (seg.a.0 + (seg.b.0 - seg.a.0) * t, seg.a.1 + (seg.b.1 - seg.a.1) * t);
+                    if out.last().is_none_or(|q| dist(*q, p) > 1e-4) {
+                        out.push(p);
+                    }
+                }
+            }
+        }
+        out
     }
 }
 
@@ -2093,8 +2216,13 @@ fn offset_polygon_outward(pts: &[P], distance: f64) -> Vec<P> {
         let n2 = (d2.1 * sign, -d2.0 * sign);
         let bis = norm(add(n1, n2));
         let normal = if bis == (0.0, 0.0) { n1 } else { bis };
-        let dot = (n1.0 * normal.0 + n1.1 * normal.1).max(1.0 / 2.5);
-        let miter = (1.0 / dot).min(2.5);
+        let dot = (n1.0 * normal.0 + n1.1 * normal.1).max(1.0 / 3.0);
+        // A concave corner (the tail/body seam) makes the two edge normals point away from each
+        // other: a full miter there crosses the neighbouring edges and grows a long spike. Clip
+        // the offset to one step there (a bevel), and keep sharp convex corners modest too.
+        let turn = d1.0 * d2.1 - d1.1 * d2.0;
+        let convex = if ccw { turn >= 0.0 } else { turn <= 0.0 };
+        let miter = if convex { (1.0 / dot).min(1.8) } else { 1.0 };
         out.push(add(curr, mul(normal, distance * miter)));
     }
     out
@@ -2111,10 +2239,12 @@ fn apply_double_line_style(balloon: &LiveBalloon, mut welded_base: Path, detache
             let flat = flatten_subpath(sp, UNION_TOL);
             let poly = clean(&flat.pts);
             if poly.len() >= 3 {
-                let expanded = offset_polygon_outward(&poly, gap);
-                let mut echo = Subpath::polygon(&expanded);
-                echo.op = PathOp::Intersect;
-                outer_subpaths.push(echo);
+                let expanded = clean(&strip_self_intersections(&offset_polygon_outward(&poly, gap)));
+                if expanded.len() >= 3 {
+                    let mut echo = Subpath::polygon(&expanded);
+                    echo.op = PathOp::Intersect;
+                    outer_subpaths.push(echo);
+                }
             }
         }
     }
@@ -2123,8 +2253,32 @@ fn apply_double_line_style(balloon: &LiveBalloon, mut welded_base: Path, detache
     welded_base
 }
 
+/// Bevel normals for the stations of one dash. The normal at a station comes from the chord
+/// between its two neighbours, which averages the directions on either side of a spike tip or a
+/// burst valley. Using a single segment's normal instead makes the ribbon twist inside out when a
+/// dash crosses a corner: the old three-point dash cut straight across and made "butterflies".
+fn dash_station_normals(stations: &[P], orientation: f64) -> Vec<[f64; 2]> {
+    let m = stations.len();
+    (0..m)
+        .map(|i| {
+            let a = if i > 0 { stations[i - 1] } else { stations[i] };
+            let b = if i + 1 < m { stations[i + 1] } else { stations[i] };
+            let dx = b.0 - a.0;
+            let dy = b.1 - a.1;
+            let len = dx.hypot(dy);
+            if len < 1e-6 {
+                return [0.0, 0.0];
+            }
+            let (tx, ty) = (dx / len, dy / len);
+            [ty * orientation, -tx * orientation]
+        })
+        .collect()
+}
+
 /// `BalloonLineStyle::Whisper`: slices the actual welded body + tail contour into `whisper_dash_count`
-/// dashed capsule polygons with duty ratio `whisper_duty` (`0.20..=0.85`).
+/// dashed capsule polygons with duty ratio `whisper_duty` (`0.20..=0.85`). Each dash follows every
+/// intermediate vertex of the flattened contour (no three-point chord) and is split at sharp
+/// corners, so it hugs `Spiky`/`Burst` tips instead of cutting across and folding into a bow tie.
 fn apply_whisper_line_style(balloon: &LiveBalloon, welded_base: Path, detached: Vec<Subpath>) -> Path {
     let table = ContourArcTable::from_paths(&welded_base, &detached);
     let count = balloon.whisper_dash_count.clamp(6, 96);
@@ -2138,23 +2292,76 @@ fn apply_whisper_line_style(balloon: &LiveBalloon, welded_base: Path, detached: 
         let jit = (hash_f64(seed, i * 2) - 0.5) * 0.12 * step;
         let u0 = ((i as f64) * step + jit).rem_euclid(1.0);
         let span = step * duty;
-        let u_mid = (u0 + span * 0.5).rem_euclid(1.0);
-        let u1 = (u0 + span).rem_euclid(1.0);
+        let mut stations = table.sample_range(u0, span);
+        if stations.len() < 2 {
+            // Degenerate/empty table: keep the old three-point fallback for that dash.
+            let u_mid = (u0 + span * 0.5).rem_euclid(1.0);
+            let u1 = (u0 + span).rem_euclid(1.0);
+            stations = [u0, u_mid, u1]
+                .into_iter()
+                .map(|u| {
+                    let (p, _, _) = table.sample_at_u(u, balloon);
+                    (p[0], p[1])
+                })
+                .collect();
+        }
+        let m = stations.len();
+        if m < 2 {
+            continue;
+        }
+        // A ribbon can only wrap a gentle turn without its two sides crossing. Measure the turn at
+        // every interior station and start a fresh dash piece whenever the outline bends sharply.
+        let mut turns = vec![0.0_f64; m];
+        for j in 1..m - 1 {
+            let (a, p, b) = (stations[j - 1], stations[j], stations[j + 1]);
+            let (ax, ay) = (p.0 - a.0, p.1 - a.1);
+            let (bx, by) = (b.0 - p.0, b.1 - p.1);
+            let (al, bl) = (ax.hypot(ay), bx.hypot(by));
+            if al > 1e-6 && bl > 1e-6 {
+                turns[j] = ((ax * bx + ay * by) / (al * bl)).clamp(-1.0, 1.0).acos();
+            }
+        }
+        let mut start = 0;
+        let mut pieces: Vec<(usize, usize)> = Vec::new();
+        for (j, &turn) in turns.iter().enumerate().take(m - 1).skip(1) {
+            if turn > 0.85 {
+                pieces.push((start, j));
+                start = j;
+            }
+        }
+        pieces.push((start, m - 1));
 
-        let (p0, n0, _) = table.sample_at_u(u0, balloon);
-        let (pm, nm, _) = table.sample_at_u(u_mid, balloon);
-        let (p1, n1, _) = table.sample_at_u(u1, balloon);
-
-        let p0_out = (p0[0] + n0[0] * half_thick, p0[1] + n0[1] * half_thick);
-        let pm_out = (pm[0] + nm[0] * (half_thick * 1.15), pm[1] + nm[1] * (half_thick * 1.15));
-        let p1_out = (p1[0] + n1[0] * half_thick, p1[1] + n1[1] * half_thick);
-        let p1_in = (p1[0] - n1[0] * half_thick, p1[1] - n1[1] * half_thick);
-        let pm_in = (pm[0] - nm[0] * (half_thick * 1.15), pm[1] - nm[1] * (half_thick * 1.15));
-        let p0_in = (p0[0] - n0[0] * half_thick, p0[1] - n0[1] * half_thick);
-
-        let mut sp = Subpath::polygon(&[p0_out, pm_out, p1_out, p1_in, pm_in, p0_in]);
-        sp.op = PathOp::Combine;
-        subpaths.push(sp);
+        for (a, b) in pieces {
+            if b <= a {
+                continue;
+            }
+            let slice = &stations[a..=b];
+            let normals = dash_station_normals(slice, table.orientation);
+            let n = slice.len();
+            let mut left = Vec::with_capacity(n);
+            let mut right = Vec::with_capacity(n);
+            for j in 0..n {
+                let p = slice[j];
+                let turn = if j == 0 || j + 1 == n { 0.0 } else { turns[a + j] };
+                let run = [if j > 0 { dist(p, slice[j - 1]) } else { f64::INFINITY }, if j + 1 < n { dist(p, slice[j + 1]) } else { f64::INFINITY }]
+                    .into_iter()
+                    .fold(f64::INFINITY, f64::min);
+                let turn_factor = (1.0 - turn / std::f64::consts::PI).max(0.25);
+                let bulge = if j == 0 || j + 1 == n { 1.0 } else { 1.15 };
+                let thick = (half_thick.min(run * 0.9) * turn_factor * bulge).max(0.35);
+                left.push((p.0 + normals[j][0] * thick, p.1 + normals[j][1] * thick));
+                right.push((p.0 - normals[j][0] * thick, p.1 - normals[j][1] * thick));
+            }
+            right.reverse();
+            left.extend(right);
+            let polygon = clean(&left);
+            if polygon.len() < 3 {
+                continue;
+            }
+            let mut sp = Subpath::polygon(&polygon);
+            sp.op = PathOp::Combine;
+            subpaths.push(sp);
+        }
     }
     Path::new(subpaths)
 }
@@ -2325,45 +2532,82 @@ fn apply_pencil_line_style(balloon: &LiveBalloon, welded_base: Path, detached: V
     Path::new(subpaths)
 }
 
-/// `BalloonLineStyle::Pixel1Bit`: converts every closed contour into a crisp axis-aligned 1-bit
-/// pixel staircase with grid step `pixel_size_px`.
-fn apply_pixel_1bit_line_style(balloon: &LiveBalloon, welded_base: Path, detached: Vec<Subpath>) -> Path {
-    let step = balloon.pixel_size_px.clamp(2.0, 24.0);
-    let snap = |v: f64| (v / step).round() * step;
-    let mut out_subpaths = Vec::with_capacity(welded_base.subpaths.len() + detached.len());
-
-    for sp in welded_base.subpaths.into_iter().chain(detached) {
-        if !sp.closed || sp.knots.len() < 3 {
-            out_subpaths.push(sp);
-            continue;
+/// Integer Bresenham on the pixel grid (8-connected): mark every cell a flattened contour segment
+/// crosses. Working in whole cells keeps every emitted rectangle on exact document pixels.
+fn mark_pixel_line(a: (i32, i32), b: (i32, i32), cells: &mut HashSet<(i32, i32)>) {
+    let (mut x, mut y) = a;
+    let dx = (b.0 - a.0).abs();
+    let sx = if a.0 < b.0 { 1 } else { -1 };
+    let dy = -(b.1 - a.1).abs();
+    let sy = if a.1 < b.1 { 1 } else { -1 };
+    let mut err = dx + dy;
+    loop {
+        cells.insert((x, y));
+        if x == b.0 && y == b.1 {
+            return;
         }
-        let flat = flatten_subpath(&sp, 0.35);
-        let poly = clean(&flat.pts);
-        if poly.len() < 3 {
-            continue;
+        let e2 = 2 * err;
+        if e2 >= dy {
+            err += dy;
+            x += sx;
         }
-        let mut stair: Vec<P> = Vec::with_capacity(poly.len() * 2);
-        for i in 0..poly.len() {
-            let p0 = (snap(poly[i].0), snap(poly[i].1));
-            let p1 = (snap(poly[(i + 1) % poly.len()].0), snap(poly[(i + 1) % poly.len()].1));
-            if stair.last().copied() != Some(p0) {
-                stair.push(p0);
-            }
-            if (p0.0 - p1.0).abs() > 1e-4 && (p0.1 - p1.1).abs() > 1e-4 {
-                let corner = if i % 2 == 0 { (p1.0, p0.1) } else { (p0.0, p1.1) };
-                if stair.last().copied() != Some(corner) {
-                    stair.push(corner);
-                }
-            }
-        }
-        let cleaned = clean(&stair);
-        if cleaned.len() >= 3 {
-            let mut pixel_sp = Subpath::polygon(&cleaned);
-            pixel_sp.op = sp.op;
-            out_subpaths.push(pixel_sp);
+        if e2 <= dx {
+            err += dx;
+            y += sy;
         }
     }
-    Path::new(out_subpaths)
+}
+
+/// `BalloonLineStyle::Pixel1Bit`: an honest 1-bit pixel line. The contour is rasterized onto an
+/// integer grid with a whole-cell step; every occupied cell of a row is merged into one axis-aligned
+/// rectangle with integer corners. Such a rectangle has strictly 0/1 coverage in the vector
+/// rasterizer, so no antialiased grey fringe can appear around the black ink.
+fn apply_pixel_1bit_line_style(balloon: &LiveBalloon, welded_base: Path, detached: Vec<Subpath>) -> Path {
+    let cell = balloon.pixel_size_px.round().clamp(1.0, 24.0) as i32;
+    let mut cells: HashSet<(i32, i32)> = HashSet::new();
+    for sp in welded_base.subpaths.iter().chain(detached.iter()) {
+        if !sp.closed || sp.knots.len() < 3 {
+            continue;
+        }
+        let flat = flatten_subpath(sp, 0.35);
+        let poly = clean(&flat.pts);
+        if poly.len() < 2 {
+            continue;
+        }
+        let grid = |p: P| ((p.0 / cell as f64).round() as i32, (p.1 / cell as f64).round() as i32);
+        for pair in poly.windows(2) {
+            mark_pixel_line(grid(pair[0]), grid(pair[1]), &mut cells);
+        }
+        if poly.len() > 2 {
+            mark_pixel_line(grid(poly[poly.len() - 1]), grid(poly[0]), &mut cells);
+        }
+    }
+
+    let mut rows: BTreeMap<i32, Vec<i32>> = BTreeMap::new();
+    for &(gx, gy) in &cells {
+        rows.entry(gy).or_default().push(gx);
+    }
+    let mut out = Vec::new();
+    for (gy, mut xs) in rows {
+        xs.sort_unstable();
+        let mut run = (xs[0], xs[0]);
+        for &gx in &xs[1..] {
+            if gx == run.1 + 1 {
+                run.1 = gx;
+            } else {
+                push_pixel_rect(&mut out, run, gy, cell);
+                run = (gx, gx);
+            }
+        }
+        push_pixel_rect(&mut out, run, gy, cell);
+    }
+    Path::new(out)
+}
+
+fn push_pixel_rect(out: &mut Vec<Subpath>, run: (i32, i32), gy: i32, cell: i32) {
+    let (x0, x1) = (run.0 as f64 * cell as f64, (run.1 + 1) as f64 * cell as f64);
+    let (y0, y1) = (gy as f64 * cell as f64, (gy + 1) as f64 * cell as f64);
+    out.push(Subpath::polygon(&[(x0, y0), (x1, y0), (x1, y1), (x0, y1)]));
 }
 
 /// Subdivides polygon segments longer than `max_step` while preserving all sharp corners.
@@ -2386,7 +2630,7 @@ fn resample_preserve_corners(poly: &[P], max_step: f64, max_pts: usize) -> Vec<P
             continue;
         }
         out.push(a);
-        let divs = (d / eff_step).ceil().clamp(1.0, 64.0) as usize;
+        let divs = (d / eff_step).ceil().clamp(1.0, max_pts.max(64) as f64) as usize;
         for s in 1..divs {
             let t = (s as f64) / (divs as f64);
             out.push(lerp(a, b, t));
@@ -2564,6 +2808,50 @@ fn compute_stipple_dots_on_table(balloon: &LiveBalloon, table: &ContourArcTable)
     dots
 }
 
+/// `Uniflash + StippleDots`: dots live *near the needles*, not evenly around the body perimeter.
+/// Every dot deterministically picks one needle ray, a position along it (denser near the inner
+/// end and the middle) and a lateral offset clamped so it stays within `haze_spread` of the ray.
+pub fn compute_uniflash_stipple_dots(balloon: &LiveBalloon) -> Vec<(u32, [f64; 2], f64)> {
+    let Some(needles) = uniflash_needles(balloon) else { return Vec::new() };
+    let count = balloon.stipple_count.clamp(24, 600);
+    let max_lat = (balloon.haze_spread.clamp(0.0, 100.0) / 100.0 * 12.0).clamp(1.2, 14.0);
+    let grain = balloon.grain_size.clamp(5.0, 100.0) / 100.0;
+    let seed = balloon.noise_seed() ^ 0x5EED_0123;
+    let mut dots = Vec::with_capacity(count as usize);
+    for i in 0..count {
+        let n = &needles[(i as usize * 7919) % needles.len()];
+        let u = hash_f64(seed, i * 4);
+        let s = u.powf(0.65) * 0.96;
+        let lat = (hash_f64(seed, i * 4 + 1) - 0.5) * 2.0 * max_lat * (1.0 - 0.65 * s);
+        let along = (hash_f64(seed, i * 4 + 2) - 0.5) * 4.0;
+        let dir = (n.outer.x - n.inner.x, n.outer.y - n.inner.y);
+        let len = dir.0.hypot(dir.1).max(1.0);
+        let x = n.inner.x + dir.0 * s + n.perp[0] * lat + dir.0 / len * along;
+        let y = n.inner.y + dir.1 * s + n.perp[1] * lat + dir.1 / len * along;
+        let radius = (1.1 + grain * 4.6 * hash_f64(seed, i * 4 + 3)).clamp(0.9, 7.5);
+        dots.push((i, [x, y], radius));
+    }
+    dots
+}
+
+/// The inner ellipse of a Uniflash: the only region that may be filled when stipple dots are used,
+/// so the blob never spills past the needle rays.
+fn uniflash_inner_fill_subpath(balloon: &LiveBalloon) -> Option<Subpath> {
+    let LiveBalloonBody::Uniflash { rect, inner_ratio, .. } = &balloon.body else { return None };
+    let cx = rect[0] + rect[2] * 0.5;
+    let cy = rect[1] + rect[3] * 0.5;
+    let rx = (rect[2] * 0.5).abs().max(4.0) * inner_ratio.clamp(0.30, 0.90);
+    let ry = (rect[3] * 0.5).abs().max(4.0) * inner_ratio.clamp(0.30, 0.90);
+    let mut pts = Vec::with_capacity(48);
+    for k in 0..48 {
+        let a = TAU * (k as f64) / 48.0;
+        pts.push((cx + rx * a.cos(), cy + ry * a.sin()));
+    }
+    let mut sp = Subpath::polygon(&pts);
+    sp.op = PathOp::Combine;
+    Some(sp)
+}
+
 /// `BalloonLineStyle::StippleDots`: builds the stipple-dot contour path along the welded contour.
 fn apply_stipple_dots_line_style(balloon: &LiveBalloon, mut welded_base: Path, mut detached: Vec<Subpath>) -> Path {
     let table = ContourArcTable::from_paths(&welded_base, &detached);
@@ -2639,14 +2927,21 @@ fn apply_sparkle_glitter_line_style(balloon: &LiveBalloon, mut welded_base: Path
 
 /// Applies `balloon.line_style` to its welded contour and detached tail subpaths.
 fn apply_line_style_to_path(balloon: &LiveBalloon, welded_base: Path, detached: Vec<Subpath>) -> Path {
-    if matches!(balloon.body, LiveBalloonBody::Uniflash { .. }) && balloon.line_style == BalloonLineStyle::Solid {
+    let is_uniflash = matches!(balloon.body, LiveBalloonBody::Uniflash { .. });
+    // Uniflash only supports Solid and StippleDots. Any other style degrades to Solid; in
+    // particular we never replace the needles with the outer envelope contour.
+    let style = if is_uniflash && !matches!(balloon.line_style, BalloonLineStyle::Solid | BalloonLineStyle::StippleDots) {
+        BalloonLineStyle::Solid
+    } else {
+        balloon.line_style
+    };
+    if is_uniflash && style == BalloonLineStyle::Solid {
         let mut p = welded_base;
         p.subpaths.extend(detached);
         return p;
     }
-    let (welded_base, detached) =
-        if matches!(balloon.body, LiveBalloonBody::Uniflash { .. }) { build_welded_contour_for_sampling(balloon) } else { (welded_base, detached) };
-    match balloon.line_style {
+    let (welded_base, detached) = if is_uniflash { build_welded_contour_for_sampling(balloon) } else { (welded_base, detached) };
+    match style {
         BalloonLineStyle::Solid => {
             let mut p = welded_base;
             p.subpaths.extend(detached);
@@ -2999,6 +3294,7 @@ pub fn rebuild_group_render_paths(group: &LiveBalloonGroup) -> BalloonGroupRende
     let mut merged_standard: Option<Path> = None;
     let mut isolated_standard = Vec::new();
     let mut out = BalloonGroupRenderPaths::default();
+    let mut uniflash_stylized = false;
 
     for b in &group.items {
         if let Some(underlay) = build_underlay_path(b) {
@@ -3022,16 +3318,28 @@ pub fn rebuild_group_render_paths(group: &LiveBalloonGroup) -> BalloonGroupRende
                     isolated_standard.extend(p.subpaths);
                 }
             }
-            BalloonLineStyle::Double | BalloonLineStyle::Pixel1Bit => {
+            BalloonLineStyle::Double => {
                 isolated_standard.extend(b.rebuild_closed_path().subpaths);
             }
-            BalloonLineStyle::Whisper
+            BalloonLineStyle::Pixel1Bit
+            | BalloonLineStyle::Whisper
             | BalloonLineStyle::Pencil
             | BalloonLineStyle::UkiyoBrush
             | BalloonLineStyle::StippleDots
             | BalloonLineStyle::SparkleGlitter => {
+                let is_uniflash = matches!(b.body, LiveBalloonBody::Uniflash { .. });
+                if is_uniflash {
+                    uniflash_stylized = true;
+                }
                 let (welded_base, detached) = build_welded_contour_for_sampling(b);
-                if !b.stipple_fill_interior {
+                let uniflash_dots = is_uniflash && b.line_style == BalloonLineStyle::StippleDots;
+                if uniflash_dots {
+                    if !b.stipple_fill_interior
+                        && let Some(sp) = uniflash_inner_fill_subpath(b)
+                    {
+                        out.fill_only_path.subpaths.push(sp);
+                    }
+                } else if !b.stipple_fill_interior {
                     for sp in &welded_base.subpaths {
                         let mut fill_sp = sp.clone();
                         fill_sp.op = PathOp::Combine;
@@ -3043,13 +3351,37 @@ pub fn rebuild_group_render_paths(group: &LiveBalloonGroup) -> BalloonGroupRende
                         out.fill_only_path.subpaths.push(fill_sp);
                     }
                 }
+                if is_uniflash
+                    && b.line_style != BalloonLineStyle::Pixel1Bit
+                    && let Some(needles_path) = build_uniflash_paths(b)
+                {
+                    for mut sp in needles_path.subpaths {
+                        sp.op = PathOp::Combine;
+                        out.ink_from_stroke_path.subpaths.push(sp);
+                    }
+                }
                 match b.line_style {
+                    BalloonLineStyle::Pixel1Bit => {
+                        // Never add these integer rectangles to `standard_path`: the smoothed
+                        // `ShapeLayer::stroke` would paint a grey antialiasing fringe over them.
+                        out.ink_from_stroke_path.subpaths.extend(apply_pixel_1bit_line_style(b, welded_base.clone(), detached.clone()).subpaths);
+                    }
                     BalloonLineStyle::Whisper => out.ink_from_stroke_path.subpaths.extend(apply_whisper_line_style(b, welded_base, detached).subpaths),
                     BalloonLineStyle::Pencil => out.ink_from_stroke_path.subpaths.extend(build_pencil_ink_subpaths(b, &welded_base, &detached)),
                     BalloonLineStyle::UkiyoBrush => out.ink_from_stroke_path.subpaths.extend(build_ukiyo_ink_subpaths(b, &welded_base, &detached)),
-                    BalloonLineStyle::StippleDots => out.ink_from_stroke_path.subpaths.extend(apply_stipple_dots_line_style(b, welded_base, detached).subpaths),
+                    BalloonLineStyle::StippleDots => {
+                        if uniflash_dots {
+                            for (_, center, radius) in compute_uniflash_stipple_dots(b) {
+                                let mut sp = Subpath::polygon(&circle_contour((center[0], center[1]), radius, 8));
+                                sp.op = PathOp::Combine;
+                                out.ink_from_stroke_path.subpaths.push(sp);
+                            }
+                        } else {
+                            out.ink_from_stroke_path.subpaths.extend(apply_stipple_dots_line_style(b, welded_base, detached).subpaths);
+                        }
+                    }
                     BalloonLineStyle::SparkleGlitter => out.ink_from_stroke_path.subpaths.extend(build_sparkle_star_subpaths(b, &welded_base, &detached)),
-                    BalloonLineStyle::Solid | BalloonLineStyle::Double | BalloonLineStyle::Pixel1Bit => {}
+                    BalloonLineStyle::Solid | BalloonLineStyle::Double => {}
                 }
             }
         }
@@ -3057,6 +3389,7 @@ pub fn rebuild_group_render_paths(group: &LiveBalloonGroup) -> BalloonGroupRende
 
     out.standard_path = merged_standard.unwrap_or_default();
     out.standard_path.subpaths.extend(isolated_standard);
+    out.uniflash_stylized = uniflash_stylized;
     out
 }
 
@@ -3100,7 +3433,7 @@ pub fn merge_paths_union(a: &Path, b: &Path) -> Path {
         result_polys = next_result;
     }
 
-    let subpaths = result_polys.into_iter().filter(|c| c.len() >= 3).map(|c| Subpath::polygon(&c)).collect();
+    let subpaths = result_polys.into_iter().map(|c| strip_self_intersections(&c)).filter(|c| c.len() >= 3).map(|c| Subpath::polygon(&c)).collect();
     Path::new(subpaths)
 }
 
@@ -3378,13 +3711,13 @@ pub fn balloon_to_linework_strokes(b: &LiveBalloon) -> Vec<LiveVectorStroke> {
 
                 let is_sharp = if len1 > 1e-4 && len2 > 1e-4 {
                     let cos_a = (v1.0 * v2.0 + v1.1 * v2.1) / (len1 * len2);
-                    cos_a < 0.848 // a bend of more than about 32°
+                    cos_a < 0.94 // a bend of more than about 20°: keep burst/spiky tips as corners
                 } else {
                     false
                 };
 
                 let dist = (curr.x - pts[last_idx].x).hypot(curr.y - pts[last_idx].y);
-                if is_sharp || dist >= 16.0 {
+                if is_sharp || dist >= 10.0 {
                     simplified.push((curr, is_sharp));
                     last_idx = i;
                 }
@@ -3412,11 +3745,13 @@ pub fn balloon_to_linework_strokes(b: &LiveBalloon) -> Vec<LiveVectorStroke> {
             strokes.push(LiveVectorStroke {
                 nodes,
                 base_width: b.stroke_width,
-                min_ratio: 0.05,
+                min_ratio: 1.0,
                 base_density: 1.0,
                 min_density_ratio: 0.0,
                 curve_type: SaiCurveType::Normal,
-                tapered: true,
+                // A baked balloon outline keeps the real stroke width everywhere; pressure
+                // tapering would thin the tips and change the balloon's appearance.
+                tapered: false,
                 closed: subpath.closed,
                 tension: SAI_DEFAULT_TENSION,
             });
@@ -3463,11 +3798,11 @@ pub fn balloon_to_linework_strokes(b: &LiveBalloon) -> Vec<LiveVectorStroke> {
         strokes.push(LiveVectorStroke {
             nodes,
             base_width: b.stroke_width,
-            min_ratio: 0.05,
+            min_ratio: 1.0,
             base_density: 1.0,
             min_density_ratio: 0.0,
             curve_type: SaiCurveType::Normal,
-            tapered: true,
+            tapered: false,
             closed: subpath.closed,
             tension: SAI_DEFAULT_TENSION,
         });
@@ -4320,5 +4655,288 @@ mod tests {
         let split = rebuild_group_render_paths(&group);
         assert!(!split.fill_only_path.subpaths.is_empty(), "two-pass fill_only_path holds white balloon interiors");
         assert!(split.ink_from_stroke_path.subpaths.len() >= 6, "two-pass ink_from_stroke_path holds pencil + ukiyo ink");
+    }
+
+    /// Proper self-crossings of one closed polyline (adjacent edges are excluded).
+    fn self_crossings(poly: &[P]) -> usize {
+        let n = poly.len();
+        let mut count = 0;
+        for i in 0..n {
+            if (i + 1) % n == i {
+                continue;
+            }
+            for j in (i + 1)..n {
+                if j == i || (j + 1) % n == i || (i + 1) % n == j {
+                    continue;
+                }
+                if crossing_param(poly[i], poly[(i + 1) % n], poly[j], poly[(j + 1) % n]).is_some() {
+                    count += 1;
+                }
+            }
+        }
+        count
+    }
+
+    fn arc_tail() -> LiveBalloonTail {
+        LiveBalloonTail {
+            id: 1,
+            preset: TailPreset::Arc,
+            perimeter_t: 0.55,
+            mouth_width: 30.0,
+            tip: [220.0, 350.0],
+            bend: 0.2,
+            bubbles: 3,
+            bubble_radius: 10.0,
+        }
+    }
+
+    #[test]
+    fn whisper_dashes_hug_spiky_and_burst_tips_without_self_crossings() {
+        let rect = [100.0, 120.0, 240.0, 160.0];
+        let bodies = [
+            LiveBalloonBody::Burst { rect, rays: 14, length: 0.6, depth: 0.28, jitter: 0.4, seed: 17 },
+            LiveBalloonBody::Spiky { rect, spikes: 18, length: 0.4, sub_harmonic: 0.5, concavity: 0.6, jitter: 0.3, smooth: false, seed: 23 },
+        ];
+        for body in bodies {
+            let b = LiveBalloon {
+                id: 60,
+                body,
+                line_style: BalloonLineStyle::Whisper,
+                whisper_dash_count: 24,
+                whisper_duty: 0.7,
+                stroke_width: 4.0,
+                tails: vec![arc_tail()],
+                ..LiveBalloon::default()
+            };
+            let path = b.rebuild_closed_path();
+            assert!(path.subpaths.len() >= 20, "expected one dash per station, got {}", path.subpaths.len());
+            let mut checked = 0;
+            for sp in &path.subpaths {
+                let flat = flatten_subpath(sp, 0.35);
+                let poly = clean(&flat.pts);
+                if poly.len() >= 3 {
+                    assert_eq!(self_crossings(&poly), 0, "a whisper dash cuts through itself on {:?}", b.body);
+                    checked += 1;
+                }
+            }
+            assert!(checked >= 20);
+        }
+    }
+
+    #[test]
+    fn burst_with_arc_tail_union_has_no_self_crossing_loops() {
+        let rect = [100.0, 120.0, 240.0, 160.0];
+        let b = LiveBalloon {
+            id: 61,
+            body: LiveBalloonBody::Burst { rect, rays: 16, length: 0.6, depth: 0.3, jitter: 0.5, seed: 909 },
+            tails: vec![arc_tail()],
+            stroke_width: 2.5,
+            ..LiveBalloon::default()
+        };
+        let path = b.rebuild_closed_path();
+        assert!(!path.subpaths.is_empty());
+        for sp in &path.subpaths {
+            let flat = flatten_subpath(sp, 0.35);
+            let poly = clean(&flat.pts);
+            assert!(poly.len() >= 3);
+            assert_eq!(self_crossings(&poly), 0, "the burst valley / arc tail seam left a crossed loop");
+        }
+    }
+
+    #[test]
+    fn pixel_1bit_uses_only_whole_cell_rectangles() {
+        let b = LiveBalloon {
+            id: 62,
+            body: LiveBalloonBody::Ellipse { rect: [100.0, 120.0, 240.0, 160.0], squircle: 0.0 },
+            line_style: BalloonLineStyle::Pixel1Bit,
+            pixel_size_px: 2.0,
+            ..LiveBalloon::default()
+        };
+        let path = b.rebuild_closed_path();
+        assert!(path.subpaths.len() > 8, "the outline is made of merged whole-cell runs");
+        for sp in &path.subpaths {
+            assert_eq!(sp.knots.len(), 4, "one integer rectangle per run");
+            for k in &sp.knots {
+                assert!((k.anchor.x / 2.0 - (k.anchor.x / 2.0).round()).abs() < 1e-9, "x on the cell grid");
+                assert!((k.anchor.y / 2.0 - (k.anchor.y / 2.0).round()).abs() < 1e-9, "y on the cell grid");
+            }
+        }
+    }
+
+    #[test]
+    fn stylized_uniflash_contour_stays_inside_the_flash() {
+        let rect = [100.0, 120.0, 240.0, 160.0];
+        let b = LiveBalloon {
+            id: 63,
+            body: LiveBalloonBody::Uniflash {
+                rect,
+                mode: UniflashMode::InwardNeedles,
+                needles: 160,
+                inner_ratio: 0.62,
+                bundle_group: 0.4,
+                length_jitter: 0.5,
+                angle_jitter: 0.25,
+                needle_width: 2.2,
+                outer_sharpness: 1.0,
+                inner_sharpness: 1.0,
+                seed: 777,
+            },
+            line_style: BalloonLineStyle::UkiyoBrush,
+            stroke_width: 6.0,
+            ..LiveBalloon::default()
+        };
+        let contour = build_uniflash_contour_for_line_style(&b);
+        assert_eq!(contour.subpaths.len(), 1);
+        let pts: Vec<P> = contour.subpaths[0].knots.iter().map(|k| (k.anchor.x, k.anchor.y)).collect();
+        assert!(pts.len() >= 48 && pts.len() <= 160, "sampled outer rim, got {}", pts.len());
+        let (cx, cy) = (rect[0] + rect[2] * 0.5, rect[1] + rect[3] * 0.5);
+        for &p in &pts {
+            let nx = (p.0 - cx) / (rect[2] * 0.5);
+            let ny = (p.1 - cy) / (rect[3] * 0.5);
+            assert!(nx.hypot(ny) <= 1.0, "ink contour escaped the body: {p:?}");
+        }
+        let max_edge = pts.windows(2).map(|w| dist(w[0], w[1])).fold(0.0_f64, f64::max);
+        assert!(max_edge < 20.0, "notched star would make a {max_edge} px ink stroke");
+
+        let split = rebuild_group_render_paths(&LiveBalloonGroup { items: vec![b.clone()], ..LiveBalloonGroup::default() });
+        assert!(split.uniflash_stylized, "the renderer must know this is a stylized Uniflash");
+        assert!(!split.fill_only_path.subpaths.is_empty(), "the interior still needs a white fill");
+        assert!(!split.ink_from_stroke_path.subpaths.is_empty(), "ink must stay in the stroke pass");
+
+        let ring_spikes = LiveBalloon {
+            body: LiveBalloonBody::Uniflash {
+                rect,
+                mode: UniflashMode::SolidRingSpikes,
+                needles: 160,
+                inner_ratio: 0.62,
+                bundle_group: 0.4,
+                length_jitter: 0.5,
+                angle_jitter: 0.25,
+                needle_width: 2.2,
+                outer_sharpness: 1.0,
+                inner_sharpness: 1.0,
+                seed: 777,
+            },
+            ..b
+        };
+        let contour = build_uniflash_contour_for_line_style(&ring_spikes);
+        for sp in &contour.subpaths {
+            for k in &sp.knots {
+                let nx = (k.anchor.x - cx) / (rect[2] * 0.5);
+                let ny = (k.anchor.y - cy) / (rect[3] * 0.5);
+                assert!(nx.hypot(ny) <= 1.0, "solid-ring spikes escaped the body: {:?}", (k.anchor.x, k.anchor.y));
+            }
+        }
+    }
+
+    #[test]
+    fn linework_bake_keeps_real_width_and_burst_corners() {
+        let rect = [100.0, 120.0, 240.0, 160.0];
+        let b = LiveBalloon {
+            id: 64,
+            body: LiveBalloonBody::Burst { rect, rays: 14, length: 0.6, depth: 0.3, jitter: 0.4, seed: 31 },
+            stroke_width: 3.5,
+            ..LiveBalloon::default()
+        };
+        let strokes = balloon_to_linework_strokes(&b);
+        assert!(!strokes.is_empty());
+        assert!(strokes.iter().all(|s| !s.tapered), "a baked outline keeps its real width");
+        assert!(strokes.iter().all(|s| (s.base_width - 3.5).abs() < 1e-6));
+        assert!(strokes.iter().any(|s| s.nodes.iter().filter(|n| n.corner).count() >= 8), "burst tips must stay corners");
+        let baked = strokes.first().unwrap().rebuild_outline_path();
+        assert!(crate::flatten::validate_shape(&baked, None).is_ok());
+    }
+
+    /// `Double` on a tailed ellipse must not throw a long triangular spike out of the concave
+    /// tail/body seam: the miter is clipped there and the expanded ring is de-self-intersected.
+    #[test]
+    fn double_line_has_no_long_spike_at_the_tail_seam() {
+        let b = LiveBalloon {
+            id: 70,
+            body: LiveBalloonBody::Ellipse { rect: [100.0, 120.0, 240.0, 160.0], squircle: 0.0 },
+            tails: vec![arc_tail()],
+            line_style: BalloonLineStyle::Double,
+            double_gap_px: 6.0,
+            ..LiveBalloon::default()
+        };
+        let path = b.rebuild_closed_path();
+        let bbox_of = |op: PathOp| {
+            let mut b = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
+            for sp in path.subpaths.iter().filter(|sp| sp.op == op) {
+                for k in &sp.knots {
+                    b[0] = b[0].min(k.anchor.x);
+                    b[1] = b[1].min(k.anchor.y);
+                    b[2] = b[2].max(k.anchor.x);
+                    b[3] = b[3].max(k.anchor.y);
+                }
+            }
+            b
+        };
+        let inner = bbox_of(PathOp::Combine);
+        let outer = bbox_of(PathOp::Intersect);
+        assert!(inner[0].is_finite() && outer[0].is_finite(), "both contours exist");
+        let pad = 6.0 * 1.6;
+        assert!(outer[0] >= inner[0] - pad && outer[1] >= inner[1] - pad, "no left/top spike: {outer:?} vs {inner:?}");
+        assert!(outer[2] <= inner[2] + pad && outer[3] <= inner[3] + pad, "no right/bottom spike: {outer:?} vs {inner:?}");
+    }
+
+    #[test]
+    fn pixel_1bit_ink_rasterization_is_strictly_binary() {
+        let b = LiveBalloon {
+            id: 71,
+            body: LiveBalloonBody::Ellipse { rect: [20.0, 20.0, 160.0, 120.0], squircle: 0.0 },
+            line_style: BalloonLineStyle::Pixel1Bit,
+            pixel_size_px: 3.0,
+            ..LiveBalloon::default()
+        };
+        let (welded, detached) = build_welded_contour_for_sampling(&b);
+        let ink = apply_pixel_1bit_line_style(&b, welded, detached);
+        let canvas = photocraft_geom::Rect::new(0, 0, 200, 160);
+        let cov = crate::path_coverage(&ink, canvas);
+        assert!(cov.iter().any(|v| *v > 0.5), "there is ink");
+        for v in cov {
+            assert!(v < 1e-6 || (v - 1.0).abs() < 1e-6, "no antialiased grey: {v}");
+        }
+    }
+
+    #[test]
+    fn uniflash_needles_have_area_and_stipple_dots_hug_them() {
+        let b = LiveBalloon {
+            id: 72,
+            body: LiveBalloonBody::Uniflash {
+                rect: [100.0, 100.0, 300.0, 300.0],
+                inner_ratio: 0.62,
+                needles: 60,
+                needle_width: 3.0,
+                outer_sharpness: 1.0,
+                inner_sharpness: 1.0,
+                mode: UniflashMode::InwardNeedles,
+                bundle_group: 0.4,
+                length_jitter: 0.5,
+                angle_jitter: 0.25,
+                seed: 7,
+            },
+            line_style: BalloonLineStyle::Solid,
+            ..LiveBalloon::default()
+        };
+        let needles = uniflash_needles(&b).unwrap();
+        let solid = build_uniflash_paths(&b).unwrap();
+        let cov = crate::path_coverage(&solid, photocraft_geom::Rect::new(100, 100, 300, 300));
+        assert!(cov.iter().any(|v| *v > 0.5), "the solid needles have non-zero area");
+
+        let dots = compute_uniflash_stipple_dots(&b);
+        assert_eq!(dots.len() as u32, b.stipple_count.clamp(24, 600));
+        for (_, p, _) in dots {
+            let nearest = needles
+                .iter()
+                .map(|n| {
+                    let vx = n.outer.x - n.inner.x;
+                    let vy = n.outer.y - n.inner.y;
+                    let t = (((p[0] - n.inner.x) * vx + (p[1] - n.inner.y) * vy) / (vx * vx + vy * vy).max(1.0)).clamp(0.0, 1.0);
+                    ((p[0] - (n.inner.x + vx * t)).powi(2) + (p[1] - (n.inner.y + vy * t)).powi(2)).sqrt()
+                })
+                .fold(f64::MAX, f64::min);
+            assert!(nearest <= 16.0, "a dot drifted {nearest} px from every needle: {p:?}");
+        }
     }
 }

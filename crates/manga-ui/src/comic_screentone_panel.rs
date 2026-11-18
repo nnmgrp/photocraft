@@ -11,7 +11,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use photocraft_algo::{ScreentoneBackend, ScreentoneMode, ScreentoneSpec};
+use photocraft_algo::{SatelliteLayout, ScreentoneBackend, ScreentoneMode, ScreentoneSpec};
 
 use crate::theme::Tokens;
 
@@ -201,7 +201,7 @@ fn draw_engine_row(ui: &mut egui::Ui, st: &mut ScreentoneUi, t: Tokens) {
         {
             st.spec.backend = ScreentoneBackend::Gpu;
         }
-        if ui.selectable_label(st.spec.backend == ScreentoneBackend::Cpu, tl!("⚙ CPU")).on_hover_text(tl!("Exact reference CPU engine")).clicked() {
+        if ui.selectable_label(st.spec.backend == ScreentoneBackend::Cpu, tl!("◆ CPU")).on_hover_text(tl!("Exact reference CPU engine")).clicked() {
             st.spec.backend = ScreentoneBackend::Cpu;
         }
     });
@@ -245,8 +245,37 @@ fn draw_core_grid(ui: &mut egui::Ui, st: &mut ScreentoneUi, t: Tokens) {
         }
         ui.end_row();
 
+        row(ui, t, tl!("Auto dot size"));
+        crate::widgets::checkbox(ui, &mut st.spec.auto_dot_size, tl!("By area")).on_hover_text(tl!("Coverage = brightness × Density; dot size is ignored"));
+        ui.end_row();
+
         row(ui, t, &crate::i18n::param_label("dotSize"));
-        crate::widgets::value_field(ui, &mut st.spec.dot_size, 0.0..=500.0, "px", 76.0);
+        if st.spec.auto_dot_size {
+            ui.label(tl!("Derived from coverage"));
+        } else {
+            crate::widgets::value_field(ui, &mut st.spec.dot_size, 0.0..=500.0, "px", 76.0);
+        }
+        ui.end_row();
+
+        row(ui, t, tl!("Equalize area"));
+        if st.spec.auto_dot_size {
+            ui.label(tl!("Not used in auto mode"));
+        } else {
+            crate::widgets::checkbox(ui, &mut st.spec.equalize_area, tl!("Calibrate area by brightness"));
+        }
+        ui.end_row();
+
+        row(ui, t, tl!("Posterize steps"));
+        {
+            let mut steps = st.spec.posterize_steps as f32;
+            if crate::widgets::value_field(ui, &mut steps, 0.0..=8.0, "", 76.0).changed() {
+                st.spec.posterize_steps = steps.round().clamp(0.0, 8.0) as u8;
+            }
+        }
+        ui.end_row();
+
+        row(ui, t, tl!("Scrape / Kezuri"));
+        crate::widgets::value_field(ui, &mut st.spec.scrape_strength, 0.0..=1.0, "", 76.0);
         ui.end_row();
 
         row(ui, t, &crate::i18n::param_label("spacingX"));
@@ -356,10 +385,23 @@ fn draw_satellites(ui: &mut egui::Ui, st: &mut ScreentoneUi, t: Tokens) {
             crate::widgets::checkbox(ui, &mut st.spec.satellite_enabled, tl!("Enable"));
             ui.end_row();
 
+            row(ui, t, tl!("Layout:"));
+            ui.horizontal(|ui| {
+                if ui.selectable_label(st.spec.satellite_layout == SatelliteLayout::Cross, tl!("Cross")).clicked() {
+                    st.spec.satellite_layout = SatelliteLayout::Cross;
+                    st.spec.satellite_count = st.spec.satellite_count.min(4);
+                }
+                if ui.selectable_label(st.spec.satellite_layout == SatelliteLayout::Even, tl!("Even")).clicked() {
+                    st.spec.satellite_layout = SatelliteLayout::Even;
+                }
+            });
+            ui.end_row();
+
             row(ui, t, tl!("Count:"));
+            let max_count = if st.spec.satellite_layout == SatelliteLayout::Even { 8.0 } else { 4.0 };
             let mut count = st.spec.satellite_count as f32;
-            if crate::widgets::value_field(ui, &mut count, 1.0..=4.0, "", 76.0).changed() {
-                st.spec.satellite_count = count.round().clamp(1.0, 4.0) as u32;
+            if crate::widgets::value_field(ui, &mut count, 1.0..=max_count, "", 76.0).changed() {
+                st.spec.satellite_count = count.round().clamp(1.0, max_count) as u32;
             }
             ui.end_row();
 
@@ -506,33 +548,40 @@ fn action_command(action: &'static str, st: &ScreentoneUi) -> crate::OutCommand 
 /// No document is touched here: the host receives the returned commands and drives the gizmo
 /// according to `detach_gizmo` / `expect_new_layer_bind`.
 pub fn panel(ui: &mut egui::Ui, st: &mut ScreentoneUi, active_tone: Option<&ScreentoneTargetInfo>) -> ScreentonePanelOutput {
-    let t = Tokens::get(ui.ctx());
-    draw_mode_row(ui, st, t);
-    draw_engine_row(ui, st, t);
-    ui.add_space(4.0);
-    draw_core_grid(ui, st, t);
-    ui.add_space(4.0);
-    draw_satellites(ui, st, t);
-    draw_distortion(ui, st, t);
-    draw_gradient(ui, st, t);
-    let buttons = draw_action_buttons(ui, st, active_tone.is_some());
+    // Headings here are labels, not selectable prose; TextEdit keeps its own selection.
+    ui.style_mut().interaction.selectable_labels = false;
     let mut out = ScreentonePanelOutput { commands: Vec::new(), detach_gizmo: false, expect_new_layer_bind: false };
-    if buttons.freeze_clicked {
-        if let Some(active) = active_tone {
-            out.commands.push(freeze_layer_command(active.layer_id));
-            out.detach_gizmo = true;
+    // The dock does not always wrap a manga panel in a scroll area, so own one here: the tone
+    // controls are taller than most docks and must always remain reachable.
+    egui::ScrollArea::vertical().id_salt("comic_screentone_scroll").auto_shrink([false, false]).show(ui, |ui| {
+        let t = Tokens::get(ui.ctx());
+        draw_mode_row(ui, st, t);
+        draw_engine_row(ui, st, t);
+        ui.add_space(4.0);
+        draw_core_grid(ui, st, t);
+        ui.add_space(4.0);
+        draw_satellites(ui, st, t);
+        draw_distortion(ui, st, t);
+        draw_gradient(ui, st, t);
+        let buttons = draw_action_buttons(ui, st, active_tone.is_some());
+        if buttons.freeze_clicked {
+            if let Some(active) = active_tone {
+                out.commands.push(freeze_layer_command(active.layer_id));
+                out.detach_gizmo = true;
+            }
+        } else if let Some(action) = buttons.action {
+            // A New Layer run binds the gizmo to the generated sheet; drags restyle that layer.
+            out.expect_new_layer_bind = action == CMD_LAYER;
+            out.commands.push(action_command(action, st));
+        } else if (st.spec.backend != photocraft_algo::ScreentoneBackend::Cpu || !ui.input(|i| i.pointer.any_down()))
+            && let Some(active) = active_tone
+            && let Some(cmd) = sync_spec_command(st, active)
+        {
+            // A GPU/Auto restyle carries a coalesce key and is cheap, so it follows the slider
+            // live; only the full-canvas CPU bake waits for the drag to end.
+            out.commands.push(cmd);
         }
-    } else if let Some(action) = buttons.action {
-        // A New Layer run binds the gizmo to the generated sheet; drags restyle that layer.
-        out.expect_new_layer_bind = action == CMD_LAYER;
-        out.commands.push(action_command(action, st));
-    } else if !ui.input(|i| i.pointer.any_down())
-        && let Some(active) = active_tone
-        && let Some(cmd) = sync_spec_command(st, active)
-    {
-        // Defer the full-canvas CPU restyle while a slider is being dragged, then commit.
-        out.commands.push(cmd);
-    }
+    });
     out
 }
 

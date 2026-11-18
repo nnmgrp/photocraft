@@ -28,6 +28,17 @@ pub enum PatternType {
     Triangles,
 }
 
+/// Placement of orbit satellites around the main dot.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SatelliteLayout {
+    /// Legacy cardinal cross (up, down, right, left), at most four satellites.
+    #[default]
+    Cross,
+    /// Evenly spaced around the full circle, one to eight satellites.
+    Even,
+}
+
 /// Geometric dot shapes for raster dots and satellites.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -158,6 +169,18 @@ pub struct ScreentoneSpec {
     pub seed: u32,
     /// Execution backend: `Auto` (GPU on large canvases, CPU on small), `Gpu`, or `Cpu`.
     pub backend: ScreentoneBackend,
+
+    /// Calibrate dot area so brightness maps linearly to ink coverage (`sqrt` ink for radius
+    /// patterns). Off by default: older documents render bit-for-bit as before.
+    pub equalize_area: bool,
+    /// Derive the dot radius from cell area and target coverage `ink * density`.
+    pub auto_dot_size: bool,
+    /// Japanese film-style posterization of the ink ramp (0 = smooth, 2..=8 = steps).
+    pub posterize_steps: u8,
+    /// Blade scraping (Kezuri) strength at the light edge of the tone (0.0..=1.0).
+    pub scrape_strength: f32,
+    /// Satellite placement mode. `Cross` preserves every older document's layout.
+    pub satellite_layout: SatelliteLayout,
 }
 
 impl Default for ScreentoneSpec {
@@ -220,6 +243,11 @@ impl Default for ScreentoneSpec {
             smoothness: 1.0,
             seed: 42,
             backend: ScreentoneBackend::Auto,
+            equalize_area: false,
+            auto_dot_size: false,
+            posterize_steps: 0,
+            scrape_strength: 0.0,
+            satellite_layout: SatelliteLayout::Cross,
         }
     }
 }

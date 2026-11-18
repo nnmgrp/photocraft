@@ -255,7 +255,11 @@ fn rail_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: &Tokens) {
     ui.painter().line_segment([pos2(x, r.top()), pos2(x, r.bottom())], Stroke::new(1.0, t.separator));
     ui.spacing_mut().item_spacing.y = 4.0;
     use crate::dock::Group;
-    let entries: [(&str, &str, Group); 6] = [
+    let show_manga = !crate::manga_seam::MANGA_PANELS.is_empty() && {
+        let s = app.session.seam_flags();
+        s.canvas_gizmos || s.toolbar_tools || s.pages || s.timelapse || s.typesetter
+    };
+    let mut entries: Vec<(&str, &str, Group)> = vec![
         ("sliders-horizontal", tl!("Properties"), Group::Properties),
         ("navigation", tl!("Navigator"), Group::Navigator),
         ("palette", tl!("Color & Swatches"), Group::Color),
@@ -263,6 +267,9 @@ fn rail_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: &Tokens) {
         ("clock", tl!("History"), Group::History),
         ("brush", tl!("Brushes"), Group::Brushes),
     ];
+    if show_manga {
+        entries.push(("sparkles", tl!("Manga"), Group::Manga));
+    }
     for (icon, name, g) in entries {
         // Studio floats Properties outside the dock.
         let docked = t.pro || g != Group::Properties;
@@ -324,6 +331,7 @@ pub(crate) fn dock_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, group: crate
         (Group::History, 0) => history(app, ui),
         (Group::History, 1) => crate::actions::panel(app, ui),
         (Group::History, _) => crate::comps_ui::panel(app, ui),
+        (Group::Manga, tab) => crate::manga_seam::render_dock_tab(app, ui, tab),
         (Group::Layers, 0) => layers(app, ui),
         (Group::Layers, 1) => channels(app, ui),
         (Group::Layers, _) => crate::vector_ui::paths_panel(app, ui),

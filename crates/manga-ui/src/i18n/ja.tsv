@@ -327,18 +327,18 @@ cameraRaw	Color	カラー
 	Bubble Contour	吹き出しの輪郭
 	No contour variants	輪郭バリエーションなし
 	~ SCurve	~ SCurve
-	＋ Add tail	＋ Add tail
-	＋ Create balloon on canvas	＋ Create balloon on canvas
-	＋ Fit balloon	＋ Fit balloon
+	+ Add tail	+ Add tail
+	+ Create balloon on canvas	+ Create balloon on canvas
+	+ Fit balloon	+ Fit balloon
 	⊘ None	⊘ None
-	⌒ Arc	⌒ Arc
+	≈ Arc	≈ Arc
 	▽ Wedge	▽ Wedge
-	◎ Double outline	◎ Double outline
-	◌ Thought	◌ Thought
+	● Double outline	● Double outline
+	○ Thought	○ Thought
 	☁️ Cloud	☁️ Cloud
 	✓ Text fits: {lines} lines, {size} pt	✓ Text fits: {lines} lines, {size} pt
 	✴️ Burst	✴️ Burst
-	⑂ Double	⑂ Double
+	Y Double	Y Double
 	◽ Rect	◽ Rect
 	⚠ Text does not fit — enlarge the balloon or reduce the type size	⚠ Text does not fit — enlarge the balloon or reduce the type size
 	⚡ Bake to SAI Linework	⚡ Bake to SAI Linework
@@ -383,7 +383,7 @@ cameraRaw	Color	カラー
 	Valley depth:	Valley depth:
 	💥 Spiky	💥 Spiky
 	🔄 Reset to the manga default	🔄 Reset to the manga default
-	🦔 Uniflash	🦔 Uniflash
+	⚡ Uniflash	⚡ Uniflash
 	Align:	配置:
 	Batch balloons from script (one line per balloon):	台本から一括作成 (1行につき1吹き出し):
 	Brush contrast:	ブラシコントラスト:
@@ -414,7 +414,7 @@ cameraRaw	Color	カラー
 	Pencil strands:	鉛筆の重ね線:
 	Pixel step:	ピクセル幅:
 	Shrink text to shape	枠に合わせて文字を縮小
-	Solid ring + spikes	実線リング＋トゲ
+	Solid ring + spikes	実線リング+トゲ
 	Sparkle count:	キラキラ数:
 	Sparkle randomness:	キラキラの不規則さ:
 	Sparkle size:	キラキラサイズ:
@@ -427,9 +427,9 @@ cameraRaw	Color	カラー
 	Voice and intonation:	声質と抑揚:
 	Voice intensity:	効果の強さ:
 	Workflow: Presets, Script & SVG	ワークフロー: プリセット・台本・SVG
-	━ Solid	━ 実線
-	◌ Whisper	◌ ささやき (破線)
-	◎ Double	◎ 二重線
+	— Solid	— 実線
+	○ Whisper	○ ささやき (破線)
+	● Double	● 二重線
 	★ Save current style to favorites	★ 現在のスタイルをお気に入りに保存
 	⚠ Overflow by height (+{px} px needed)	⚠ 高さがはみ出しています (+{px} px 必要)
 	⚠ Overflow by width (+{px} px needed)	⚠ 幅がはみ出しています (+{px} px 必要)
@@ -438,14 +438,26 @@ cameraRaw	Color	カラー
 	✨ Sparkle / glitter	✨ キラキラ・グリッター
 	⬆ Import SVG contour	⬆ SVG輪郭をインポート
 	⬇ Export balloon SVG	⬇ 吹き出しSVGをエクスポート
-	＋ Create batch from script	＋ 台本から一括作成
-	＋ Import (.json/.png)	＋ インポート (.json/.png)
+	+ Create batch from script	+ 台本から一括作成
+	+ Import (.json/.png)	+ インポート (.json/.png)
 	👻 Eerie	👻 不気味
 	👾 1-bit pixel	👾 1ビットピクセル
 	💢 Irritated	💢 イライラ
 	💬 Neutral	💬 通常
 	📢 Shout	📢 叫び
 	📻 Broadcast	📻 機械音・通信
-	🖌 Ukiyo-e brush	🖌 浮世絵ブラシ
+	🎨 Ukiyo-e brush	🎨 浮世絵ブラシ
 	🤫 Whisper	🤫 ささやき
-	🪪 Chamfer rect	🪪 面取り矩形
+	◇ Chamfer rect	◇ 面取り矩形
+Auto dot size	Auto dot size
+By area	By area
+Coverage = brightness × Density; dot size is ignored	Coverage = brightness × Density; dot size is ignored
+Derived from coverage	Derived from coverage
+Equalize area	Equalize area
+Not used in auto mode	Not used in auto mode
+Calibrate area by brightness	Calibrate area by brightness
+Posterize steps	Posterize steps
+Scrape / Kezuri	Scrape / Kezuri
+Layout:	Layout:
+Cross	Cross
+Even	Even

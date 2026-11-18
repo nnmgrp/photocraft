@@ -75,6 +75,7 @@ pub const SHELL_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("window.panel.linework", "SAI Linework", &["Window"], None),
     ("window.panel.typesetter", "TypeR Manga", &["Window"], None),
     ("window.panel.pages", "Pages", &["Window"], None),
+    ("window.panel.sfx", "SFX", &["Window"], None),
     ("window.toggle.canvasCapsule", "Canvas Capsule", &["Window"], None),
     ("window.toggle.toolbar", "Tools", &["Window"], None),
     // Photoshop's Tab and ⇧Tab: all panels (Tools, options bar and the dock), or only the dock.
@@ -185,6 +186,7 @@ pub const TOOLS: &[(&str, &str, Option<&str>)] = &[
     ("tools.select.line", "Line Tool", Some("U")),
     ("tools.select.customShape", "Custom Shape Tool", Some("U")),
     ("tools.select.balloon", "Balloon Tool", Some("U")),
+    ("tools.select.sfx", "SFX Tool", None),
     ("tools.select.slice", "Slice Tool", Some("C")),
     ("tools.select.sliceSelect", "Slice Select Tool", Some("C")),
     ("tools.select.frame", "Frame Tool", Some("K")),

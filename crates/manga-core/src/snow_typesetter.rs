@@ -457,6 +457,9 @@ pub struct TypesetterOptions {
     /// Fill the balloon on a `TypeR Clean` layer before pasting, hiding the original lettering.
     #[serde(default = "default_true")]
     pub auto_clean: bool,
+    /// When a multi-chamber balloon sits side by side horizontally, read right-to-left (manga).
+    #[serde(default = "default_true")]
+    pub manga_rtl_reading_order: bool,
 }
 
 fn default_type_fit_min_percent() -> f32 {
@@ -477,6 +480,7 @@ impl Default for TypesetterOptions {
             minimum_fit_scale_percent: DEFAULT_TYPE_FIT_MIN_PERCENT,
             paste_on_click: false,
             auto_clean: true,
+            manga_rtl_reading_order: true,
         }
     }
 }
@@ -1332,7 +1336,8 @@ impl TypesetterState {
     }
 
     /// Ограничивает область вокруг якоря баббла, чтобы композит не строился на весь холст.
-    const BUBBLE_SEARCH_RADIUS: i32 = 300;
+    /// 300 px хватало для 72 DPI; страницы манги 300–600 DPI требуют радиуса до ~1200 px.
+    const BUBBLE_SEARCH_RADIUS: i32 = 1200;
 
     /// Вычисляет область композитинга вокруг `anchor` (документные пиксели) для поиска границ баббла.
     ///
@@ -1464,7 +1469,7 @@ pub fn detect_speech_bubble_bounds_in_surface(surface: &Surface, anchor_x: i32, 
     }
     let (seed_x, seed_y) = seed?;
 
-    let max_radius = max_radius.clamp(20, 300);
+    let max_radius = max_radius.clamp(20, 1200);
     let step_toward = |dx: i32, dy: i32| -> Option<i32> {
         let mut step = 1;
         while step <= max_radius {
@@ -1496,7 +1501,7 @@ pub fn detect_speech_bubble_bounds_in_surface(surface: &Surface, anchor_x: i32, 
     let max_y = seed_y.saturating_add(bottom.unwrap_or(0));
     let width = max_x.saturating_sub(min_x).saturating_add(1);
     let height = max_y.saturating_sub(min_y).saturating_add(1);
-    if width >= 20 && height >= 20 && width <= 500 && height <= 600 {
+    if width >= 20 && height >= 20 && width <= 2400 && height <= 2400 {
         Some(Rect::new(min_x, min_y, max_x.saturating_add(1), max_y.saturating_add(1)))
     } else {
         None
@@ -2083,7 +2088,7 @@ pub fn detect_speech_bubble_bounds(surface: &Surface, anchor_x: i32, anchor_y: i
         }
     }
     let (seed_x, seed_y) = seed?;
-    let max_r = max_radius.clamp(20, 260);
+    let max_r = max_radius.clamp(20, 1200);
     let mut min_x = seed_x;
     let mut hit_left = false;
     while min_x > seed_x - max_r && min_x > bounds.x0 {
@@ -2126,7 +2131,156 @@ pub fn detect_speech_bubble_bounds(surface: &Surface, anchor_x: i32, anchor_y: i
     }
     let w = max_x - min_x;
     let h = max_y - min_y;
-    if w >= 20 && h >= 20 && w <= 500 && h <= 600 { Some(Rect::new(min_x, min_y, max_x, max_y)) } else { None }
+    if w >= 20 && h >= 20 && w <= 2400 && h <= 2400 { Some(Rect::new(min_x, min_y, max_x, max_y)) } else { None }
+}
+
+/// Detects the individual chambers of a double/triple manga bubble from its selection mask.
+///
+/// A narrow tail is trimmed first (a scan dropping below 22% of the widest scan at the edge is a
+/// tail, not a chamber). A horizontal or vertical "waist" between joined circles then splits the
+/// remaining area into chambers, returned in Japanese reading order: top to bottom, then right to
+/// left for tall bubbles (left to right for wide ones). A single chamber returns one rectangle.
+pub fn detect_bubble_chambers(selection: &Surface, bounds: Rect) -> Vec<Rect> {
+    let b = bounds.intersect(&selection.content_bounds());
+    if b.is_empty() || b.width() < 20 || b.height() < 20 {
+        return Vec::new();
+    }
+    let bright = |x: i32, y: i32| surface_luma(selection, x, y) >= BUBBLE_FILL_LUMA;
+
+    let row_span = |y: i32| -> Option<(i32, i32)> {
+        let mut first = None;
+        let mut last = None;
+        for x in b.x0..b.x1 {
+            if bright(x, y) {
+                if first.is_none() {
+                    first = Some(x);
+                }
+                last = Some(x);
+            }
+        }
+        first.zip(last)
+    };
+    let span_width = |s: Option<(i32, i32)>| s.map_or(0, |(a, c)| c - a + 1);
+
+    let mut max_row = 0i32;
+    for y in b.y0..b.y1 {
+        max_row = max_row.max(span_width(row_span(y)));
+    }
+
+    // Trim a tail first: the scan there collapses below 22% of the widest scan. Column widths must
+    // be measured afterwards, or the tail inflates the narrow waist between joined chambers.
+    let (mut y0, mut y1) = (b.y0, b.y1);
+    if max_row > 0 {
+        let tail = (max_row as f32 * 0.22) as i32;
+        while y1 - y0 > 24 && span_width(row_span(y0)) < tail {
+            y0 += 1;
+        }
+        while y1 - y0 > 24 && span_width(row_span(y1 - 1)) < tail {
+            y1 -= 1;
+        }
+    }
+    let col_span = |x: i32| -> Option<(i32, i32)> {
+        let mut first = None;
+        let mut last = None;
+        for y in y0..y1 {
+            if bright(x, y) {
+                if first.is_none() {
+                    first = Some(y);
+                }
+                last = Some(y);
+            }
+        }
+        first.zip(last)
+    };
+    let mut max_col = 0i32;
+    for x in b.x0..b.x1 {
+        max_col = max_col.max(span_width(col_span(x)));
+    }
+    if max_row < 20 && max_col < 20 {
+        return Vec::new();
+    }
+    let (mut x0, mut x1) = (b.x0, b.x1);
+    if max_col > 0 {
+        let tail = (max_col as f32 * 0.22) as i32;
+        while x1 - x0 > 24 && span_width(col_span(x0)) < tail {
+            x0 += 1;
+        }
+        while x1 - x0 > 24 && span_width(col_span(x1 - 1)) < tail {
+            x1 -= 1;
+        }
+    }
+
+    // A waist is a local minimum clearly narrower than the scans just before and after it.
+    let find_waists = |start: i32, end: i32, width_at: &dyn Fn(i32) -> i32, max_width: i32| -> Vec<i32> {
+        let mut cuts = Vec::new();
+        let margin = 6i32;
+        if max_width < 20 || end - start < 4 * margin {
+            return cuts;
+        }
+        let mut y = start + margin;
+        while y < end - margin {
+            let here = width_at(y);
+            let before = (y - margin..y).map(&width_at).fold(0i32, i32::max);
+            let after = (y + 1..=y + margin).map(&width_at).fold(0i32, i32::max);
+            if here > 0 && here < (max_width as f32 * 0.75) as i32 && here * 100 < before.min(after) * 80 {
+                if cuts.last().is_none_or(|last| y - last >= 8) {
+                    cuts.push(y);
+                }
+                y += 8;
+            } else {
+                y += 1;
+            }
+        }
+        cuts
+    };
+    let row_waists = find_waists(y0, y1, &|y| span_width(row_span(y)), max_row);
+    let col_waists = find_waists(x0, x1, &|x| span_width(col_span(x)), max_col);
+
+    let mut chambers: Vec<Rect> = if !row_waists.is_empty() {
+        let mut edges = vec![y0];
+        edges.extend(row_waists);
+        edges.push(y1);
+        edges.windows(2).filter(|w| w[1] > w[0] + 4).map(|w| Rect::new(x0, w[0], x1, w[1])).collect()
+    } else if !col_waists.is_empty() {
+        let mut edges = vec![x0];
+        edges.extend(col_waists);
+        edges.push(x1);
+        edges.windows(2).filter(|w| w[1] > w[0] + 4).map(|w| Rect::new(w[0], y0, w[1], y1)).collect()
+    } else {
+        vec![Rect::new(x0, y0, x1, y1)]
+    };
+
+    chambers.sort_by(|a, c| {
+        let top_first = a.y0.cmp(&c.y0);
+        if top_first != std::cmp::Ordering::Equal {
+            return top_first;
+        }
+        // Manga panels read right-to-left when stacked vertically, left-to-right when side by side.
+        if b.width() >= b.height() { a.x0.cmp(&c.x0) } else { c.x0.cmp(&a.x0) }
+    });
+    chambers
+}
+
+/// Orders multi-chamber balloon rects `[x, y, w, h]` into reading order: vertical separation
+/// (>45 % of the shorter height) always goes top-to-bottom; side-by-side chambers follow `rtl`
+/// (`true` = right-to-left for manga, `false` = left-to-right).
+pub fn sort_chamber_indices_reading_order(rects: &[[f64; 4]], rtl: bool) -> Vec<usize> {
+    let mut indices: Vec<usize> = (0..rects.len()).collect();
+    indices.sort_by(|&ia, &ib| {
+        let a = rects[ia];
+        let b = rects[ib];
+        let (cxa, cya, ha) = (a[0] + a[2] * 0.5, a[1] + a[3] * 0.5, a[3].abs().max(1.0));
+        let (cxb, cyb, hb) = (b[0] + b[2] * 0.5, b[1] + b[3] * 0.5, b[3].abs().max(1.0));
+        if (cya - cyb).abs() > ha.min(hb) * 0.45 {
+            cya.total_cmp(&cyb)
+        } else if rtl {
+            cxb.total_cmp(&cxa)
+        } else {
+            cxa.total_cmp(&cxb)
+        }
+        .then_with(|| ia.cmp(&ib))
+    });
+    indices
 }
 
 pub fn text_shape_candidates(
@@ -2510,7 +2664,16 @@ mod tests {
         .unwrap();
         assert!(options.match_style_prefixes);
         assert!(!options.match_prefixes_across_folders);
+        assert!(options.manga_rtl_reading_order);
         assert_eq!(options.minimum_fit_scale_percent, DEFAULT_TYPE_FIT_MIN_PERCENT);
+
+        // Two side-by-side chambers flip between R<-L and L->R; stacked ones always read top-to-bottom.
+        let side = [[50.0, 100.0, 120.0, 100.0], [210.0, 105.0, 120.0, 100.0]];
+        assert_eq!(sort_chamber_indices_reading_order(&side, true), vec![1, 0]);
+        assert_eq!(sort_chamber_indices_reading_order(&side, false), vec![0, 1]);
+        let stacked = [[50.0, 220.0, 120.0, 100.0], [210.0, 40.0, 120.0, 100.0]];
+        assert_eq!(sort_chamber_indices_reading_order(&stacked, true), vec![1, 0]);
+        assert_eq!(sort_chamber_indices_reading_order(&stacked, false), vec![1, 0]);
     }
 
     #[test]
@@ -3217,6 +3380,23 @@ mod tests {
             s
         };
         assert_eq!(detect_speech_bubble_bounds_in_surface(&dark, 32, 32, 64), None, "no light seed means no bubble");
+    }
+
+    #[test]
+    fn detect_bubble_chambers_splits_joined_circles_and_trims_the_tail() {
+        let mut surface = Surface::new(photocraft_color::PixelFormat::RGBA32F);
+        surface.fill_rect(Rect::new(0, 0, 260, 160), &[0.0, 0.0, 0.0, 1.0]);
+        // Two joined circles side by side with a narrow waist at x=120..140.
+        surface.fill_rect(Rect::new(20, 20, 130, 140), &[1.0, 1.0, 1.0, 1.0]);
+        surface.fill_rect(Rect::new(140, 20, 250, 140), &[1.0, 1.0, 1.0, 1.0]);
+        surface.fill_rect(Rect::new(130, 60, 140, 100), &[1.0, 1.0, 1.0, 1.0]);
+        // A narrow tail at the bottom must not become a chamber.
+        surface.fill_rect(Rect::new(120, 140, 140, 160), &[1.0, 1.0, 1.0, 1.0]);
+
+        let chambers = detect_bubble_chambers(&surface, Rect::new(0, 0, 260, 160));
+        assert_eq!(chambers.len(), 2, "the waist splits the double bubble: {chambers:?}");
+        assert!(chambers.iter().all(|r| r.height() >= 60), "the tail was trimmed: {chambers:?}");
+        assert!(chambers[0].x0 < chambers[1].x0, "chambers stay in reading order");
     }
 
     #[test]

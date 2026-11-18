@@ -220,6 +220,7 @@ pub fn tool_icon(t: Tool) -> &'static str {
         Tool::Line => "slash",
         Tool::CustomShape => "cloud",
         Tool::Balloon => "message-square",
+        Tool::Sfx => "sparkles",
     }
 }
 

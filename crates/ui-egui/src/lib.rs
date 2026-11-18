@@ -438,6 +438,10 @@ pub struct PhotocraftApp {
     /// A live painting stroke started on the press (`canvas_view`): the drag egui recognises later,
     /// or the click, continues or ends it rather than starting another.
     press_stroke: bool,
+    /// A press handled immediately on pointer-down (a click Fill or Magic Wand) owns the matching
+    /// release: the canvas must not replay it as a second Down+Up click. Unlike `press_stroke`,
+    /// this also covers a wand click with no drag (`fill_drag == None`).
+    press_handled: bool,
     /// Position and pen pressure at the last stroke's endpoint: ⇧-click interpolates from them (#178, #2827).
     last_stroke_end: Option<(DocId, [f64; 3])>,
     /// Control+Alt-drag brush resize in progress (`brush_resize`, #231).

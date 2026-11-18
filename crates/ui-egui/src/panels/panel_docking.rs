@@ -43,6 +43,10 @@ const PANELS: &[(&str, &str, Group)] = &[
     ("brushes", "Brushes", Group::Brushes),
 ];
 
+fn all_panels() -> impl Iterator<Item = (&'static str, &'static str, Group)> {
+    PANELS.iter().copied().chain(crate::manga_seam::MANGA_PANELS.iter().copied())
+}
+
 /// PhotoCraft's wording of craft-ui's docking labels, translated through `tl!`. The others keep
 /// craft-ui's English.
 const DOCK_LABELS: &[(&str, &str)] = &[
@@ -294,8 +298,7 @@ fn docked(layout: &Layout<String>) -> Layout<String> {
 }
 
 pub(crate) fn normalize(raw: &str) -> Option<&'static str> {
-    PANELS
-        .iter()
+    all_panels()
         .find(|(id, label, _)| id.eq_ignore_ascii_case(raw.trim()) || label.eq_ignore_ascii_case(raw.trim()))
         .map(|p| p.0)
         .or_else(|| crate::manga_seam::normalize_panel(raw))
@@ -363,13 +366,6 @@ fn legacy_layout(app: &PhotocraftApp, all: bool) -> Layout<String> {
         groups.push(craft_ui::docking::Group { height, ..craft_ui::docking::Group::new(panels, active) });
     }
     let (columns, width) = if groups.is_empty() { (Vec::new(), 0.0) } else { (vec![Column::new(groups, default_width(pro))], default_width(pro)) };
-    if !all {
-        for &(id, _, _) in crate::manga_seam::MANGA_PANELS {
-            if crate::manga_seam::panel_shown(&app.ui.panels, id) == Some(true) {
-                floating.push(Floating::single(vec![id.to_owned()], 0, crate::manga_seam::panel_default_rect(app, id)));
-            }
-        }
-    }
     Layout { root: Some(with_canvas(Node::Dock { side: Side::End, columns }, width)), floating }
 }
 
@@ -423,7 +419,7 @@ fn collapsed_members(app: &PhotocraftApp, layout: &Layout<String>) -> std::colle
         collapsed.extend(group.panels);
     }
     for panels in root_groups(layout) {
-        let group = panels.first().and_then(|id| PANELS.iter().find(|p| p.0 == id)).map(|p| p.2);
+        let group = panels.first().and_then(|id| all_panels().find(|p| p.0 == id)).map(|p| p.2);
         if let Some(group) = group.filter(|group| app.ui.dock.is_collapsed(*group)) {
             let pro = app.ui.theme.is_pro();
             let native: Vec<_> = app.ui.dock.visible_tabs(group, pro).iter().filter_map(|(_, name)| normalize(name)).collect();
@@ -458,7 +454,7 @@ fn ensure(app: &PhotocraftApp, workspace: &mut Workspace, panel: &str) -> Result
 /// the one before it; else where craft-ui opens a panel.
 fn default_place(app: &PhotocraftApp, layout: &Layout<String>, panel: &str) -> Action<String> {
     let open = Action::Open { panel: panel.to_owned(), anchor: None };
-    let Some(group) = PANELS.iter().find(|p| p.0 == panel).map(|p| p.2) else { return open };
+    let Some(group) = all_panels().find(|p| p.0 == panel).map(|p| p.2) else { return open };
     let pro = app.ui.theme.is_pro();
     let tabs: Vec<&str> = app.ui.dock.ordered_tabs(group, pro).iter().filter_map(|(_, label)| normalize(label)).collect();
     if let Some(mate) = tabs.iter().find(|id| layout.contains(&id.to_string())) {
@@ -1349,15 +1345,15 @@ pub(crate) fn rail_on(app: &PhotocraftApp, group: Group) -> bool {
     app.ui.docking.as_ref().is_some_and(|workspace| {
         let layout = &workspace.layout;
         let collapsed = collapsed_members(app, layout);
-        PANELS.iter().filter(|p| p.2 == group).any(|p| layout.contains(&p.0.to_owned()) && !collapsed.contains(p.0))
+        all_panels().filter(|p| p.2 == group).any(|p| layout.contains(&p.0.to_owned()) && !collapsed.contains(p.0))
     })
 }
 
 pub(crate) fn rail_click(app: &mut PhotocraftApp, group: Group) {
     let Some(workspace) = app.ui.docking.as_ref() else { return };
     let layout = &workspace.layout;
-    let floating = PANELS.iter().filter(|p| p.2 == group).any(|p| floats(layout, p.0));
-    let existing = PANELS.iter().find(|p| p.2 == group && layout.contains(&p.0.to_owned())).map(|p| p.0);
+    let floating = all_panels().filter(|p| p.2 == group).any(|p| floats(layout, p.0));
+    let existing = all_panels().find(|p| p.2 == group && layout.contains(&p.0.to_owned())).map(|p| p.0);
     let panel = existing.or_else(|| group.tabs(app.ui.theme.is_pro()).get(*group.tab_mut(&mut app.ui.dock_tabs)).and_then(|label| normalize(label)));
     if let Some(panel) = panel {
         let result = if existing.is_some() && rail_on(app, group) {
@@ -1493,8 +1489,8 @@ pub(crate) fn prepare_legacy_update(
     for group in Group::ALL {
         let visibility = request.get("panels").and_then(|p| p.get(group.key())).and_then(Value::as_bool);
         let selected = request.get("dockTabs").and_then(|p| p.get(group.key())).is_some();
-        let group_panels: Vec<_> = PANELS.iter().filter(|p| p.2 == group).collect();
-        for &&(id, label, _) in &group_panels {
+        let group_panels: Vec<_> = all_panels().filter(|p| p.2 == group).collect();
+        for &(id, label, _) in &group_panels {
             let explicitly_hidden = dock.is_some_and(|d| d.hidden_tabs.get(&group).is_some_and(|names| names.iter().any(|name| name == label)));
             let explicitly_shown = dock.is_some() && !explicitly_hidden;
             if visibility == Some(false) || explicitly_hidden {
@@ -1511,6 +1507,7 @@ pub(crate) fn prepare_legacy_update(
                 Group::Character => tabs.character,
                 Group::Navigator => tabs.navigator,
                 Group::History => tabs.history,
+                Group::Manga => tabs.manga,
                 Group::Layers => tabs.layers,
                 Group::Brushes => tabs.brushes,
             };
@@ -1527,7 +1524,7 @@ pub(crate) fn prepare_legacy_update(
 
 pub(crate) fn commit_legacy_update(app: &mut PhotocraftApp, update: LegacyUpdate, request: &Value) {
     for group in update.clear_collapse {
-        let ids: Vec<_> = PANELS.iter().filter(|p| p.2 == group).map(|p| p.0).collect();
+        let ids: Vec<_> = all_panels().filter(|p| p.2 == group).map(|p| p.0).collect();
         app.ui.docking_collapsed.retain(|id| !ids.contains(&id.as_str()));
     }
     let returns = app.ui.docking_returns.clone();
@@ -1536,7 +1533,7 @@ pub(crate) fn commit_legacy_update(app: &mut PhotocraftApp, update: LegacyUpdate
         if request.get("dockTabs").and_then(|p| p.get(group.key())).is_some()
             || request.get("panels").and_then(|p| p.get(group.key())).and_then(Value::as_bool) == Some(true)
         {
-            let ids: Vec<_> = PANELS.iter().filter(|p| p.2 == group).map(|p| p.0).collect();
+            let ids: Vec<_> = all_panels().filter(|p| p.2 == group).map(|p| p.0).collect();
             app.ui.docking_collapsed.retain(|id| !ids.contains(&id.as_str()));
             app.ui.dock.set_collapsed(group, false);
         }
@@ -1673,7 +1670,7 @@ pub(crate) fn sync_visibility(app: &mut PhotocraftApp) {
         }
         let pro = app.ui.theme.is_pro();
         for group in Group::ALL {
-            *group.shown_mut(&mut app.ui.panels) = PANELS.iter().filter(|p| p.2 == group).any(|p| layout.contains(&p.0.to_owned()));
+            *group.shown_mut(&mut app.ui.panels) = all_panels().filter(|p| p.2 == group).any(|p| layout.contains(&p.0.to_owned()));
             for (index, label) in group.tabs(pro).iter().enumerate() {
                 if let Some(id) = normalize(label) {
                     if layout.contains(&id.to_owned()) {

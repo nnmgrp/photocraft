@@ -5,8 +5,10 @@
 //! [`ShapeLayer`](photocraft_doc::ShapeLayer) path, so Free Transform, history, PSD export and the
 //! rest of the shape tooling keep working unchanged.
 
+use std::collections::HashSet;
+
 use photocraft_doc::vector::{BalloonVoice, LiveBalloon, LiveBalloonBody, LiveBalloonGroup, LiveBalloonTail, TailPreset, TextDirection};
-use photocraft_doc::{Color, Fill, Layer, LayerContent, LayerId, LiveShape, ShapeLayer, ShapeStroke};
+use photocraft_doc::{Color, Document, Fill, Layer, LayerContent, LayerId, LiveShape, ShapeLayer, ShapeStroke, TextLayer};
 use photocraft_geom::Point;
 use photocraft_vector as vector;
 use photocraft_vector::balloon::{self, BalloonTail, BurstParams, CloudParams, LegacyTailPreset, LiveBalloonGeom, LiveBalloonGroupGeom, SaiPoint, SpikeParams};
@@ -15,12 +17,14 @@ use serde_json::{Value, json};
 
 use super::vector_brush::is_safe_single_filename;
 use super::vector_curve::set_live_linework;
+use crate::cmd::type_cmds::{apply_box, refresh_at, replace_text};
 use crate::cmd::vector_cmds::params::{layer_id, nums, parse_fill, pt};
 use crate::cmd::vector_cmds::shape::{refresh_shape, shape_info, with_shape};
 use crate::cmd::vector_cmds::{bad, has_doc};
 use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
 use photocraft_manga_core::balloon_fit::{body_size_for_text_oriented, fit_text_directed};
+use photocraft_manga_core::snow_knuth_plass::reflow_story_pair_text;
 
 macro_rules! spec {
     ($id:literal, $label:literal, [$($m:literal),*], $params:expr, $en:expr, $run:expr) => {
@@ -248,8 +252,8 @@ fn validate_balloon(b: &LiveBalloon) -> std::result::Result<(), String> {
     if !(1..=8).contains(&b.pencil_strands) || !b.pencil_roughness.is_finite() || !(0.0..=1.0).contains(&b.pencil_roughness) {
         return Err("pencil line style parameters are out of range".into());
     }
-    if !b.pixel_size_px.is_finite() || !(1.5..=32.0).contains(&b.pixel_size_px) {
-        return Err("pixel_size_px must be between 1.5 and 32 px".into());
+    if !b.pixel_size_px.is_finite() || !(1.0..=32.0).contains(&b.pixel_size_px) {
+        return Err("pixel_size_px must be between 1 and 32 px".into());
     }
     if !b.ukiyo_contrast.is_finite() || !(0.0..=1.0).contains(&b.ukiyo_contrast) {
         return Err("ukiyo_contrast must be between 0.0 and 1.0".into());
@@ -354,23 +358,395 @@ fn balloon_create_live(s: &mut Session, p: &Value) -> Result<Value> {
     shape_info(s, id)
 }
 
-/// `shape.balloon.update`: replaces one balloon of the layer's group and rebuilds the outline.
+fn check_layer_unlocked(doc: &Document, id: LayerId) -> Result<()> {
+    let locks = doc.effective_locks(id);
+    if locks.all || locks.pixels {
+        return Err(EngineError::Other("shape layer is locked".into()));
+    }
+    Ok(())
+}
+
+fn text_box_dims(tl: &TextLayer) -> (f32, f32) {
+    match tl.shape {
+        photocraft_doc::text::TextShape::Box { width, height, .. } => (width.max(8.0), height.max(8.0)),
+        _ => (120.0, 80.0),
+    }
+}
+
+fn sync_linked_text_box(doc: &mut Document, b: &LiveBalloon) {
+    if !b.auto_follow_text {
+        return;
+    }
+    let Some(tid) = b.linked_text_layer else {
+        return;
+    };
+    let locks = doc.effective_locks(tid);
+    if locks.all || locks.pixels {
+        return;
+    }
+    let r = b.safe_text_rect();
+    if !r.iter().all(|v| v.is_finite()) {
+        return;
+    }
+    let rect = [r[0], r[1], r[2].max(8.0), r[3].max(8.0)];
+    let dpi = doc.resolution_dpi.max(1.0);
+    let fmt = doc.pixel_format();
+    if let Some(layer) = doc.layer_mut(tid)
+        && let LayerContent::Text(ref mut tl) = layer.content
+    {
+        apply_box(tl, rect);
+        refresh_at(dpi, fmt, tl);
+    }
+}
+
+fn collect_story_pairs(doc: &Document, items: &[LiveBalloon]) -> Vec<(LayerId, LayerId)> {
+    let mut pairs = Vec::new();
+    let mut seen: HashSet<(u64, u64)> = HashSet::new();
+    let linked_ids: HashSet<LayerId> = items.iter().filter(|b| b.auto_follow_text).filter_map(|b| b.linked_text_layer).collect();
+    for &tid in &linked_ids {
+        if let Some(layer) = doc.layer(tid)
+            && let LayerContent::Text(tl) = &layer.content
+            && tl.story_threaded
+            && let Some(next_id) = tl.next_story_layer
+            && next_id != tid
+            && seen.insert((tid.0, next_id.0))
+        {
+            pairs.push((tid, next_id));
+        }
+        for (_, _, l) in doc.walk() {
+            if let LayerContent::Text(tl) = &l.content
+                && tl.story_threaded
+                && tl.next_story_layer == Some(tid)
+                && l.id != tid
+                && seen.insert((l.id.0, tid.0))
+            {
+                pairs.push((l.id, tid));
+            }
+        }
+    }
+    pairs
+}
+
+fn reflow_story_pair(doc: &mut Document, ta_id: LayerId, tb_id: LayerId) {
+    let locks_a = doc.effective_locks(ta_id);
+    let locks_b = doc.effective_locks(tb_id);
+    if locks_a.all || locks_a.pixels || locks_b.all || locks_b.pixels {
+        return;
+    }
+    let Some((text_a, box_a, size_pt, h_scale)) = doc.layer(ta_id).and_then(|l| match &l.content {
+        LayerContent::Text(tl) => {
+            let size = tl.runs.first().map_or(tl.size_pt, |r| r.style.size_pt).clamp(4.0, 200.0);
+            let h_scale = tl.runs.first().map_or(100.0, |r| r.style.horizontal_scale).clamp(20.0, 400.0);
+            Some((tl.text.clone(), text_box_dims(tl), size, h_scale))
+        }
+        _ => None,
+    }) else {
+        return;
+    };
+    let Some((text_b, box_b)) = doc.layer(tb_id).and_then(|l| match &l.content {
+        LayerContent::Text(tl) => Some((tl.text.clone(), text_box_dims(tl))),
+        _ => None,
+    }) else {
+        return;
+    };
+    let dpi = doc.resolution_dpi.max(1.0);
+    let fmt = doc.pixel_format();
+    let (new_a, new_b) = reflow_story_pair_text(&text_a, &text_b, box_a, box_b, size_pt, dpi, h_scale);
+    if new_a != text_a
+        && let Some(layer) = doc.layer_mut(ta_id)
+        && let LayerContent::Text(ref mut tl) = layer.content
+    {
+        replace_text(tl, 0, tl.text.len(), &new_a);
+        refresh_at(dpi, fmt, tl);
+    }
+    if new_b != text_b
+        && let Some(layer) = doc.layer_mut(tb_id)
+        && let LayerContent::Text(ref mut tl) = layer.content
+    {
+        replace_text(tl, 0, tl.text.len(), &new_b);
+        refresh_at(dpi, fmt, tl);
+    }
+}
+
+fn sync_balloon_group_linked_texts(doc: &mut Document, items: &[LiveBalloon], size_changed: bool) {
+    for b in items {
+        sync_linked_text_box(doc, b);
+    }
+    if !size_changed {
+        return;
+    }
+    let pairs = collect_story_pairs(doc, items);
+    for (ta_id, tb_id) in pairs {
+        reflow_story_pair(doc, ta_id, tb_id);
+    }
+}
+
+/// `shape.balloon.update`: replaces one balloon of the layer's group, rebuilds the outline, and
+/// keeps any linked TypeR boxes / `Stories` threads synchronized in the same history step.
 fn balloon_update(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "shape.balloon.update";
     let id = layer_id(s, p)?;
-    let updated = parse_balloon(CMD, p)?;
-    with_shape(s, id, "Update Balloon", |sh, _l| {
+    let mut updated = parse_balloon(CMD, p)?;
+    let link_explicit = p.get("balloon").and_then(Value::as_object).is_some_and(|o| o.contains_key("linkedTextLayer"));
+    if let Some(st) = s.active() {
+        check_layer_unlocked(&st.doc, id)?;
+    }
+    s.edit("Update Balloon", |doc, _| {
+        check_layer_unlocked(doc, id)?;
+        let snapshot = doc.clone();
+        let (items_copy, geometry_moved, size_changed) = {
+            let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
+            let LayerContent::Shape(mut sh) = std::mem::replace(&mut l.content, LayerContent::Fill(Fill::Solid(Color::BLACK))) else {
+                return Err(EngineError::Other(format!("layer {} is not a shape layer", id.0)));
+            };
+            let res = (|| -> Result<(Vec<LiveBalloon>, bool, bool)> {
+                let Some(LiveShape::BalloonGroup { ref mut group }) = sh.live else {
+                    return Err(bad(CMD, "the layer is not a balloon group"));
+                };
+                let (moved, resized) = match group.items.iter_mut().find(|it| it.id == updated.id) {
+                    Some(slot) => {
+                        if !link_explicit {
+                            updated.linked_text_layer = slot.linked_text_layer;
+                        }
+                        let old_r = slot.safe_text_rect();
+                        let new_r = updated.safe_text_rect();
+                        let pos_changed = old_r.iter().zip(new_r.iter()).any(|(a, b)| (a - b).abs() > 0.05);
+                        let dim_changed = (old_r[2] - new_r[2]).abs() > 0.5 || (old_r[3] - new_r[3]).abs() > 0.5;
+                        let follow_toggled = !slot.auto_follow_text && updated.auto_follow_text;
+                        *slot = updated;
+                        (pos_changed || follow_toggled, dim_changed || follow_toggled)
+                    }
+                    None => {
+                        group.items.push(updated);
+                        (true, false)
+                    }
+                };
+                let path = group.rebuild_group_path();
+                vector::flatten::validate_shape(&path, sh.stroke.as_ref()).map_err(|e| bad(CMD, e))?;
+                sh.path = path;
+                Ok((group.items.clone(), moved, resized))
+            })();
+            match res {
+                Ok(out) => {
+                    refresh_shape(&snapshot, &mut sh);
+                    l.content = LayerContent::Shape(sh);
+                    out
+                }
+                Err(e) => {
+                    l.content = LayerContent::Shape(sh);
+                    return Err(e);
+                }
+            }
+        };
+        if geometry_moved {
+            sync_balloon_group_linked_texts(doc, &items_copy, size_changed);
+        }
+        Ok(json!({ "ok": true }))
+    })
+}
+
+/// `shape.balloon.add`: adds a chamber to an existing `BalloonGroup` layer with a fresh `balloonId`.
+fn balloon_add(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "shape.balloon.add";
+    let id = layer_id(s, p)?;
+    let balloon = parse_balloon(CMD, p)?;
+    let mut assigned = 0u32;
+    with_shape(s, id, "Add Balloon Chamber", |sh, _l| {
         let Some(LiveShape::BalloonGroup { ref mut group }) = sh.live else {
             return Err(bad(CMD, "the layer is not a balloon group"));
         };
-        match group.items.iter_mut().find(|it| it.id == updated.id) {
-            Some(slot) => *slot = updated,
-            None => group.items.push(updated),
+        if group.items.len() >= 64 {
+            return Err(bad(CMD, "a balloon group may have at most 64 chambers"));
         }
+        assigned = group.push(balloon);
         let path = group.rebuild_group_path();
         vector::flatten::validate_shape(&path, sh.stroke.as_ref()).map_err(|e| bad(CMD, e))?;
         sh.path = path;
-        Ok(json!({ "ok": true }))
+        Ok(json!({ "balloonId": assigned }))
+    })
+}
+
+fn parse_merge_layer_ids(cmd: &str, p: &Value) -> Result<Vec<LayerId>> {
+    let arr = p.get("layers").and_then(Value::as_array).ok_or_else(|| bad(cmd, "missing `layers` array"))?;
+    let mut ids = Vec::with_capacity(arr.len());
+    for entry in arr {
+        let raw = entry.as_u64().ok_or_else(|| bad(cmd, "every `layers` entry must be a layer id"))?;
+        let lid = LayerId(raw);
+        if !ids.contains(&lid) {
+            ids.push(lid);
+        }
+    }
+    if ids.len() < 2 || ids.len() > 64 {
+        return Err(bad(cmd, "provide between 2 and 64 distinct balloon layers to merge"));
+    }
+    Ok(ids)
+}
+
+fn wire_merged_story_chain(doc: &mut Document, text_ids: &[LayerId]) {
+    if text_ids.len() < 2 {
+        return;
+    }
+    let dpi = doc.resolution_dpi.max(1.0);
+    let fmt = doc.pixel_format();
+    for pair in text_ids.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        if a == b || doc.effective_locks(a).all {
+            continue;
+        }
+        if let Some(layer) = doc.layer_mut(a)
+            && let LayerContent::Text(ref mut tl) = layer.content
+            && tl.next_story_layer.is_none()
+        {
+            tl.story_threaded = true;
+            tl.next_story_layer = Some(b);
+            refresh_at(dpi, fmt, tl);
+        }
+    }
+}
+
+/// `shape.balloon.merge`: merges 2+ `BalloonGroup` layers into the first layer's group while
+/// preserving each chamber's `linked_text_layer` and wiring consecutive texts as a `Stories` chain.
+fn balloon_merge(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "shape.balloon.merge";
+    let ids = parse_merge_layer_ids(CMD, p)?;
+    s.edit("Merge Balloons", |doc, active| {
+        for &lid in &ids {
+            check_layer_unlocked(doc, lid)?;
+            let l = doc.layer(lid).ok_or(EngineError::NoLayer(lid))?;
+            let LayerContent::Shape(sh) = &l.content else {
+                return Err(bad(CMD, format!("layer {} is not a shape layer", lid.0)));
+            };
+            if !matches!(sh.live, Some(LiveShape::BalloonGroup { .. })) {
+                return Err(bad(CMD, format!("layer {} is not a balloon group", lid.0)));
+            }
+        }
+        let target_id = ids[0];
+        let mut absorbed_items: Vec<LiveBalloon> = Vec::new();
+        for &src_id in &ids[1..] {
+            let Some(removed) = doc.remove(src_id) else {
+                return Err(EngineError::NoLayer(src_id));
+            };
+            if let LayerContent::Shape(sh) = removed.content
+                && let Some(LiveShape::BalloonGroup { group }) = sh.live
+            {
+                absorbed_items.extend(group.items);
+            }
+        }
+        let snapshot = doc.clone();
+        let (count, linked_texts) = {
+            let target_layer = doc.layer_mut(target_id).ok_or(EngineError::NoLayer(target_id))?;
+            let LayerContent::Shape(mut sh) = std::mem::replace(&mut target_layer.content, LayerContent::Fill(Fill::Solid(Color::BLACK))) else {
+                return Err(bad(CMD, "target layer is not a shape layer"));
+            };
+            let res = (|| -> Result<(usize, Vec<LayerId>)> {
+                let Some(LiveShape::BalloonGroup { ref mut group }) = sh.live else {
+                    return Err(bad(CMD, "target layer is not a balloon group"));
+                };
+                if group.items.len() + absorbed_items.len() > 64 {
+                    return Err(bad(CMD, "merged balloon group may have at most 64 chambers"));
+                }
+                for it in &mut group.items {
+                    it.auto_merge_overlapping = true;
+                }
+                for mut item in absorbed_items {
+                    item.auto_merge_overlapping = true;
+                    group.push(item);
+                }
+                let path = group.rebuild_group_path();
+                vector::flatten::validate_shape(&path, sh.stroke.as_ref()).map_err(|e| bad(CMD, e))?;
+                sh.path = path;
+                let texts: Vec<LayerId> = group.items.iter().filter_map(|b| b.linked_text_layer).collect();
+                Ok((group.items.len(), texts))
+            })();
+            match res {
+                Ok(out) => {
+                    refresh_shape(&snapshot, &mut sh);
+                    target_layer.content = LayerContent::Shape(sh);
+                    out
+                }
+                Err(e) => {
+                    target_layer.content = LayerContent::Shape(sh);
+                    return Err(e);
+                }
+            }
+        };
+        wire_merged_story_chain(doc, &linked_texts);
+        *active = Some(target_id);
+        Ok(json!({ "layer": target_id.0, "balloonCount": count }))
+    })
+}
+
+/// `shape.balloon.split`: detaches one chamber from a multi-chamber `BalloonGroup` layer into a
+/// new `BalloonGroup` shape layer above it, preserving `linked_text_layer`.
+fn balloon_split(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "shape.balloon.split";
+    let id = layer_id(s, p)?;
+    let requested_bid = opt_u32(p, "balloonId", CMD)?;
+    if let Some(st) = s.active() {
+        check_layer_unlocked(&st.doc, id)?;
+    }
+    s.edit("Split Balloon Chamber", |doc, active| {
+        check_layer_unlocked(doc, id)?;
+        let snapshot = doc.clone();
+        let (split_layer, remaining_bid) = {
+            let src_layer = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
+            let src_name = src_layer.name.clone();
+            let src_blend = src_layer.blend;
+            let src_opacity = src_layer.opacity;
+            let src_fill_opacity = src_layer.fill_opacity;
+            let LayerContent::Shape(mut sh) = std::mem::replace(&mut src_layer.content, LayerContent::Fill(Fill::Solid(Color::BLACK))) else {
+                return Err(bad(CMD, "the layer is not a shape layer"));
+            };
+            let res = (|| -> Result<(Layer, u32)> {
+                let Some(LiveShape::BalloonGroup { ref mut group }) = sh.live else {
+                    return Err(bad(CMD, "the layer is not a balloon group"));
+                };
+                if group.items.len() < 2 {
+                    return Err(bad(CMD, "cannot split a single-chamber balloon"));
+                }
+                let idx = match requested_bid {
+                    Some(bid) => group.items.iter().position(|b| b.id == bid).ok_or_else(|| bad(CMD, "the layer has no such balloon"))?,
+                    None => group.items.len() - 1,
+                };
+                let mut detached = group.items.remove(idx);
+                detached.id = 1;
+                let src_path = group.rebuild_group_path();
+                vector::flatten::validate_shape(&src_path, sh.stroke.as_ref()).map_err(|e| bad(CMD, e))?;
+                sh.path = src_path;
+
+                let split_group = LiveBalloonGroup::new(vec![detached]);
+                let split_path = split_group.rebuild_group_path();
+                vector::flatten::validate_shape(&split_path, sh.stroke.as_ref()).map_err(|e| bad(CMD, e))?;
+                let mut split_sh = ShapeLayer {
+                    path: split_path,
+                    fill: sh.fill.clone(),
+                    stroke: sh.stroke.clone(),
+                    live: Some(LiveShape::BalloonGroup { group: split_group }),
+                    ..Default::default()
+                };
+                refresh_shape(&snapshot, &mut split_sh);
+                let mut split_layer = Layer::new(format!("{src_name} Split"), LayerContent::Shape(split_sh));
+                split_layer.blend = src_blend;
+                split_layer.opacity = src_opacity;
+                split_layer.fill_opacity = src_fill_opacity;
+                let rem = group.items.first().map_or(1, |b| b.id);
+                Ok((split_layer, rem))
+            })();
+            match res {
+                Ok(pair) => {
+                    refresh_shape(&snapshot, &mut sh);
+                    src_layer.content = LayerContent::Shape(sh);
+                    pair
+                }
+                Err(e) => {
+                    src_layer.content = LayerContent::Shape(sh);
+                    return Err(e);
+                }
+            }
+        };
+        let new_id = doc.insert_above(Some(id), split_layer);
+        *active = Some(new_id);
+        Ok(json!({ "layer": id.0, "newLayer": new_id.0, "remainingBalloonId": remaining_bid, "balloonId": 1 }))
     })
 }
 
@@ -454,31 +830,68 @@ fn balloon_to_linework(s: &mut Session, p: &Value) -> Result<Value> {
     let id = layer_id(s, p)?;
     let fg = s.tools.foreground;
     let fgc = Color::rgba(fg[0], fg[1], fg[2], fg[3]);
-
-    with_shape(s, id, "Convert Balloon to Linework", |sh, layer| {
-        let Some(LiveShape::BalloonGroup { ref group }) = sh.live else {
-            return Err(bad(CMD, "the layer is not a balloon group"));
+    s.edit("Convert Balloon to Linework", |doc, active| {
+        let (value, fill_layer) = {
+            let layer = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
+            let source_name = layer.name.clone();
+            let LayerContent::Shape(sh) = &mut layer.content else {
+                return Err(bad(CMD, "layer is not a shape layer"));
+            };
+            let Some(LiveShape::BalloonGroup { ref group }) = sh.live else {
+                return Err(bad(CMD, "the layer is not a balloon group"));
+            };
+            let mut strokes = Vec::new();
+            for b in &group.items {
+                strokes.extend(balloon::balloon_to_linework_strokes(b));
+            }
+            if strokes.is_empty() {
+                return Err(bad(CMD, "the balloon produces no linework"));
+            }
+            // Keep the balloon's white/background interior as a separate lower fill layer before
+            // the shape becomes ink-coloured linework; otherwise the whole balloon turns black.
+            // Pure `Uniflash + Solid` layers have no interior fill (their fill was the black
+            // needles), so they do not get a backing fill layer.
+            let all_uniflash_solid = group
+                .items
+                .iter()
+                .all(|b| matches!(b.body, LiveBalloonBody::Uniflash { .. }) && b.line_style == photocraft_doc::vector::BalloonLineStyle::Solid);
+            let fill_layer = if all_uniflash_solid {
+                None
+            } else {
+                let render = balloon::rebuild_group_render_paths(group);
+                let body_fill_path = if render.fill_only_path.subpaths.is_empty() { sh.path.clone() } else { render.fill_only_path };
+                sh.fill.as_ref().map(|fill| {
+                    (
+                        format!("{source_name} fill"),
+                        ShapeLayer { path: body_fill_path, fill: Some(fill.clone()), stroke: None, live: None, ..ShapeLayer::default() },
+                    )
+                })
+            };
+            let lw = LiveLinework::new(strokes);
+            let path = lw.rebuild_path();
+            if path.is_empty() {
+                return Err(bad(CMD, "the balloon produces no drawable path"));
+            }
+            vector::flatten::validate_shape(&path, None).map_err(|e| bad(CMD, e))?;
+            sh.path = path;
+            sh.fill = Some(Fill::Solid(fgc));
+            sh.stroke = None;
+            // The balloon is now clean linework, so the live balloon no longer describes it.
+            sh.live = None;
+            set_live_linework(layer, &lw);
+            (json!({ "convertedStrokes": lw.strokes.len() }), fill_layer)
         };
-        let mut strokes = Vec::new();
-        for b in &group.items {
-            strokes.extend(balloon::balloon_to_linework_strokes(b));
+        let (fmt, bounds) = (doc.pixel_format(), doc.bounds());
+        if let Some(LayerContent::Shape(sh)) = doc.layer_mut(id).map(|l| &mut l.content) {
+            sh.cache = Some(vector::render_shape(sh, fmt, bounds));
         }
-        if strokes.is_empty() {
-            return Err(bad(CMD, "the balloon produces no linework"));
+        if let Some((name, mut shape)) = fill_layer {
+            refresh_shape(doc, &mut shape);
+            let layer = Layer::new(name, LayerContent::Shape(shape));
+            crate::layer_place::insert_new(doc, Some(id), layer, crate::layer_place::Place::Below);
         }
-        let lw = LiveLinework::new(strokes);
-        let path = lw.rebuild_path();
-        if path.is_empty() {
-            return Err(bad(CMD, "the balloon produces no drawable path"));
-        }
-        vector::flatten::validate_shape(&path, None).map_err(|e| bad(CMD, e))?;
-        sh.path = path;
-        sh.fill = Some(Fill::Solid(fgc));
-        sh.stroke = None;
-        // The balloon is now clean linework, so the live balloon no longer describes it.
-        sh.live = None;
-        set_live_linework(layer, &lw);
-        Ok(json!({ "convertedStrokes": lw.strokes.len() }))
+        *active = Some(id);
+        Ok(value)
     })
 }
 
@@ -863,9 +1276,33 @@ pub fn specs() -> Vec<CommandSpec> {
             "shape.balloon.update",
             "Update Balloon",
             [],
-            r##"{{"layer":id (required),"balloon":{id,body,tails,...} (required),"coalesce":str?}} -> {ok:true}. Replaces the balloon with the given id in the layer's group (or adds it) and rebuilds the outline. A drag sends the same "coalesce" key every frame, so the whole gesture is one history step."##,
+            r##"{{"layer":id (required),"balloon":{id,body,tails,...} (required),"coalesce":str?}} -> {ok:true}. Replaces the balloon with the given id in the layer's group (or adds it), rebuilds the outline and syncs linked TypeR/Stories text boxes. A drag sends the same "coalesce" key every frame, so the whole gesture is one history step."##,
             has_doc,
             balloon_update
+        ),
+        spec!(
+            "shape.balloon.add",
+            "Add Balloon Chamber",
+            [],
+            r##"{{"layer":id (required),"balloon":{body,tails,...} (required)}} -> {balloonId}. Appends a chamber to an existing BalloonGroup shape layer."##,
+            has_shape,
+            balloon_add
+        ),
+        spec!(
+            "shape.balloon.merge",
+            "Merge Balloons",
+            [],
+            r##"{{"layers":[id1,id2,...] (2..=64 required)}} -> {layer,balloonCount}. Merges multiple BalloonGroup layers into one group while preserving linked text layers and wiring Stories links."##,
+            has_doc,
+            balloon_merge
+        ),
+        spec!(
+            "shape.balloon.split",
+            "Split Balloon Chamber",
+            [],
+            r##"{{"layer":id (required),"balloonId":int?}} -> {layer,newLayer,balloonId}. Detaches a chamber from a multi-chamber balloon layer into a new shape layer while preserving its linked text layer."##,
+            has_shape,
+            balloon_split
         ),
         spec!(
             "shape.balloon.tail.add",

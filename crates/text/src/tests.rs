@@ -4013,5 +4013,45 @@ fn box_text_vertical_align_top_center_bottom_and_justify() {
 
     let pt_top = e.layout(&with_para(point("Point", 12.0), ParagraphStyle { vertical_align: VerticalAlign::Top, ..Default::default() }), 72.0);
     let pt_bot = e.layout(&with_para(point("Point", 12.0), ParagraphStyle { vertical_align: VerticalAlign::Bottom, ..Default::default() }), 72.0);
-    assert_eq!(pt_top.lines[0].baseline, pt_bot.lines[0].baseline);
+    assert_eq!(pt_top.lines[0].baseline, pt_bot.lines[0].baseline, "point text alone has no box to align inside");
+}
+
+/// The panel's vertical-align buttons work on the "Lorem ipsum" placeholder too, and each of the
+/// four choices moves a boxed line group to a different baseline (#4A). Point text is promoted to
+/// a box by the UI before this pass; on its own it deliberately stays put (see the test above).
+#[test]
+fn lorem_ipsum_box_baselines_follow_all_four_vertical_alignments() {
+    let mut e = TextEngine::new();
+    let make = |va| {
+        let mut t = point("Lorem ipsum dolor sit amet", 14.0);
+        t.shape = TextShape::Box { x: 0.0, y: 0.0, width: 120.0, height: 220.0 };
+        with_para(t, ParagraphStyle { vertical_align: va, ..Default::default() })
+    };
+    let layouts: Vec<_> =
+        [VerticalAlign::Top, VerticalAlign::Center, VerticalAlign::Bottom, VerticalAlign::Justify].into_iter().map(|va| e.layout(&make(va), 72.0)).collect();
+    let base = |i: usize| layouts[i].lines[0].baseline;
+
+    assert!(base(1) > base(0) + 1.0, "Center moves down from Top: {} → {}", base(0), base(1));
+    assert!(base(2) > base(1), "Bottom moves further than Center: {} → {}", base(1), base(2));
+    assert!((base(3) - base(0)).abs() < 1e-3, "Justify keeps its first line at the top");
+    assert!(layouts[3].lines.last().unwrap().baseline > layouts[0].lines.last().unwrap().baseline, "Justify spreads the later lines");
+}
+
+/// Area type keeps its own line placement: a vertical-align style in the paragraph must not turn
+/// the path into a box or lose the lines inside the contour (#4A). The UI no longer converts an
+/// `Area` shape to `Box` when one of the alignment buttons is pressed.
+#[test]
+fn area_text_keeps_its_path_when_a_vertical_alignment_is_set() {
+    let mut e = TextEngine::new();
+    let path = area_ellipse(0.0, 0.0, 260.0, 160.0);
+    let mut t = point(BUBBLE_TEXT, 18.0);
+    t.shape = TextShape::Area { path: path.clone() };
+    let shape = t.shape.clone();
+    let top = e.layout(&with_para(t.clone(), ParagraphStyle { vertical_align: VerticalAlign::Top, ..Default::default() }), 72.0);
+    let bottom = e.layout(&with_para(t, ParagraphStyle { vertical_align: VerticalAlign::Bottom, ..Default::default() }), 72.0);
+
+    assert!(matches!(shape, TextShape::Area { .. }), "the layout input is still an area path");
+    assert!(!top.lines.is_empty() && !bottom.lines.is_empty());
+    assert_eq!(top.lines.len(), bottom.lines.len(), "the line breaker is unchanged");
+    assert_lines_inside(&bottom, &path);
 }

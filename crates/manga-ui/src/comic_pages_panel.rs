@@ -444,6 +444,8 @@ impl PagesPanelState {
     /// Возвращает `Some(PagesPanelAction)`, если пользователь совершил действие.
     #[must_use]
     pub fn render_embedded(&mut self, ui: &mut Ui, view_info: &PagesViewInfo) -> Option<PagesPanelAction> {
+        // Page names and headings are labels, not selectable prose; TextEdit keeps its own selection.
+        ui.style_mut().interaction.selectable_labels = false;
         let mut triggered_action: Option<PagesPanelAction> = None;
 
         ui.spacing_mut().item_spacing = Vec2::new(6.0, 6.0);

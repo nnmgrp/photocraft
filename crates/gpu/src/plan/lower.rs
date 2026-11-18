@@ -480,7 +480,8 @@ pub fn pack_screentone_pass(p: &mut super::types::Pass<'_>, spec: &photocraft_do
         | ((spec.satellite_count.clamp(1, 4) & 0x7) << 5)
         | (screentone_grad_index(spec.grad_type) << 8)
         | (u32::from(spec.grad_reverse) << 10)
-        | (u32::from(spec.grad_color_trans) << 11);
+        | (u32::from(spec.grad_color_trans) << 11)
+        | (u32::from(matches!(spec.satellite_layout, photocraft_doc::SatelliteLayout::Even)) << 12);
 
     p.params[0] = [spacing_x, spec.angle.to_radians(), phase_x, phase_y];
     p.params[1] = [shape_bits as f32, spec.dot_size.clamp(0.0, 500.0), spec.smoothness.clamp(0.0, 1.0), spec.density.clamp(0.0, 1.0)];
@@ -517,6 +518,11 @@ pub fn pack_screentone_pass(p: &mut super::types::Pass<'_>, spec: &photocraft_do
     row[25] = if spec.preserve_lines { 1.0 } else { 0.0 };
     row[26] = spec.line_threshold;
     row[27] = spec.line_thickness;
+    row[28] = spec.satellite_count.clamp(1, 8) as f32;
+    row[29] = if spec.equalize_area { 1.0 } else { 0.0 };
+    row[30] = if spec.auto_dot_size { 1.0 } else { 0.0 };
+    row[31] = spec.posterize_steps.min(32) as f32;
+    row[32] = spec.scrape_strength.clamp(0.0, 1.0);
     p.lut = Some(vec![row]);
 }
 

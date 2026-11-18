@@ -16,7 +16,9 @@
 //! the app-level pattern library (the panel's `Save as Pattern`), so a favourite tone survives
 //! restarts and can fill layers and brush textures like any other library pattern.
 
-use photocraft_algo::{self as algo, DotShape, FilterParams, PatternType, ScreentoneBackend, ScreentoneGradientType, ScreentoneMode, ScreentoneSpec};
+use photocraft_algo::{
+    self as algo, DotShape, FilterParams, PatternType, SatelliteLayout, ScreentoneBackend, ScreentoneGradientType, ScreentoneMode, ScreentoneSpec,
+};
 use photocraft_color::PixelFormat;
 use photocraft_doc::{Layer, LayerContent, LayerMask, Pattern, Rect, ScreentoneLayer};
 use photocraft_raster::Surface;
@@ -38,13 +40,13 @@ const GRADIENTS: &str = "none|linear|radial";
 const MODES: &str = "shading|sheet";
 
 /// The flat parameter notation for [`FILTER`] (Photoshop-style dialog units).
-const FILTER_PARAMS: &str = r##"{"mode":"shading|sheet","patternType":"dots|lines|crosshatch|noise|gaussianNoise|stipple|hexgrid|checker|concentric|stars|hearts|triangles","dotShape":"circle|square|diamond|hexagon","dotSize":0..500=6,"spacingX":1..2000=16,"spacingY":1..2000=16,"density":0..1=0.5,"angle":-360..360=0,"lineWidth":0..200=1.5,"crossAngle":-360..360=45,"originX":-100000..100000=0,"originY":-100000..100000=0,"roundness":0..1=0,"smoothness":0..1=1,"brightness":-1..1=0,"contrast":0..4=1,"whiteThreshold":0..1=0.85,"blackThreshold":0..1=0.08,"toneGamma":0.01..10=1,"preserveLines":bool,"lineThreshold":0..1=0.24,"lineThickness":0.5..5=1,"useSourceLuminance":bool=true,"satelliteEnabled":bool,"satelliteSize":0..500=4,"satelliteDistance":0..2000=18,"satelliteCount":1..4=4,"satelliteAngle":-360..360=0,"satelliteShape":"circle|square|diamond|hexagon","satelliteStretch":0..10=0,"aspectX":0.05..20=1,"aspectY":0.05..20=1,"rowOffset":-1..1=0,"mergeFactor":0..1=0,"jitterPosition":0..100=0,"jitterSize":0..100=0,"gradientType":"none|linear|radial","gradientAngle":-360..360=90,"gradientReverse":bool,"gradientMidpoint":0..1=0.5,"gradientSizeStart":0..10=1,"gradientSizeEnd":0..10=0,"gradientStretchStart":0..10=1,"gradientStretchEnd":0..10=1,"gradientColorTransition":bool,"foreground":color=#000000,"background":color,"rotateCanvas":-360..360=0,"rotatePattern":-360..360=0,"seed":u32=42}"##;
+const FILTER_PARAMS: &str = r##"{"mode":"shading|sheet","patternType":"dots|lines|crosshatch|noise|gaussianNoise|stipple|hexgrid|checker|concentric|stars|hearts|triangles","dotShape":"circle|square|diamond|hexagon","dotSize":0..500=6,"spacingX":1..2000=16,"spacingY":1..2000=16,"density":0..1=0.5,"angle":-360..360=0,"lineWidth":0..200=1.5,"crossAngle":-360..360=45,"originX":-100000..100000=0,"originY":-100000..100000=0,"roundness":0..1=0,"smoothness":0..1=1,"brightness":-1..1=0,"contrast":0..4=1,"whiteThreshold":0..1=0.85,"blackThreshold":0..1=0.08,"toneGamma":0.01..10=1,"preserveLines":bool,"lineThreshold":0..1=0.24,"lineThickness":0.5..5=1,"useSourceLuminance":bool=true,"satelliteEnabled":bool,"satelliteSize":0..500=4,"satelliteDistance":0..2000=18,"satelliteCount":1..8=4,"satelliteAngle":-360..360=0,"satelliteShape":"circle|square|diamond|hexagon","satelliteStretch":0..10=0,"aspectX":0.05..20=1,"aspectY":0.05..20=1,"rowOffset":-1..1=0,"mergeFactor":0..1=0,"jitterPosition":0..100=0,"jitterSize":0..100=0,"gradientType":"none|linear|radial","gradientAngle":-360..360=90,"gradientReverse":bool,"gradientMidpoint":0..1=0.5,"gradientSizeStart":0..10=1,"gradientSizeEnd":0..10=0,"gradientStretchStart":0..10=1,"gradientStretchEnd":0..10=1,"gradientColorTransition":bool,"foreground":color=#000000,"background":color,"rotateCanvas":-360..360=0,"rotatePattern":-360..360=0,"seed":u32=42,"equalizeArea":bool,"autoDotSize":bool,"posterizeSteps":0..8=0,"scrapeStrength":0..1=0,"satelliteLayout":"cross|even"}"##;
 
 /// The flat parameter notation for [`LAYER`].
-const PARAMS: &str = r##"{"preset":text,"mode":"shading|sheet","patternType":"dots|lines|crosshatch|noise|gaussianNoise|stipple|hexgrid|checker|concentric|stars|hearts|triangles","dotShape":"circle|square|diamond|hexagon","dotSize":0..500=6,"spacingX":1..2000=16,"spacingY":1..2000=16,"density":0..1=0.5,"angle":-360..360=0,"lineWidth":0..200=1.5,"crossAngle":-360..360=45,"originX":-100000..100000=0,"originY":-100000..100000=0,"roundness":0..1=0,"smoothness":0..1=1,"brightness":-1..1=0,"contrast":0..4=1,"whiteThreshold":0..1=0.85,"blackThreshold":0..1=0.08,"toneGamma":0.01..10=1,"preserveLines":bool,"lineThreshold":0..1=0.24,"lineThickness":0.5..5=1,"useSourceLuminance":bool=true,"satelliteEnabled":bool,"satelliteSize":0..500=4,"satelliteDistance":0..2000=18,"satelliteCount":1..4=4,"satelliteAngle":-360..360=0,"satelliteShape":"circle|square|diamond|hexagon","satelliteStretch":0..10=0,"aspectX":0.05..20=1,"aspectY":0.05..20=1,"rowOffset":-1..1=0,"mergeFactor":0..1=0,"jitterPosition":0..100=0,"jitterSize":0..100=0,"gradientType":"none|linear|radial","gradientAngle":-360..360=90,"gradientReverse":bool,"gradientMidpoint":0..1=0.5,"gradientSizeStart":0..10=1,"gradientSizeEnd":0..10=0,"gradientStretchStart":0..10=1,"gradientStretchEnd":0..10=1,"gradientColorTransition":bool,"foreground":color=#000000,"background":color,"rotateCanvas":-360..360=0,"rotatePattern":-360..360=0,"seed":u32=42,"layer":id?,"name":text?} → {layer,bounds}"##;
+const PARAMS: &str = r##"{"preset":text,"mode":"shading|sheet","patternType":"dots|lines|crosshatch|noise|gaussianNoise|stipple|hexgrid|checker|concentric|stars|hearts|triangles","dotShape":"circle|square|diamond|hexagon","dotSize":0..500=6,"spacingX":1..2000=16,"spacingY":1..2000=16,"density":0..1=0.5,"angle":-360..360=0,"lineWidth":0..200=1.5,"crossAngle":-360..360=45,"originX":-100000..100000=0,"originY":-100000..100000=0,"roundness":0..1=0,"smoothness":0..1=1,"brightness":-1..1=0,"contrast":0..4=1,"whiteThreshold":0..1=0.85,"blackThreshold":0..1=0.08,"toneGamma":0.01..10=1,"preserveLines":bool,"lineThreshold":0..1=0.24,"lineThickness":0.5..5=1,"useSourceLuminance":bool=true,"satelliteEnabled":bool,"satelliteSize":0..500=4,"satelliteDistance":0..2000=18,"satelliteCount":1..8=4,"satelliteAngle":-360..360=0,"satelliteShape":"circle|square|diamond|hexagon","satelliteStretch":0..10=0,"aspectX":0.05..20=1,"aspectY":0.05..20=1,"rowOffset":-1..1=0,"mergeFactor":0..1=0,"jitterPosition":0..100=0,"jitterSize":0..100=0,"gradientType":"none|linear|radial","gradientAngle":-360..360=90,"gradientReverse":bool,"gradientMidpoint":0..1=0.5,"gradientSizeStart":0..10=1,"gradientSizeEnd":0..10=0,"gradientStretchStart":0..10=1,"gradientStretchEnd":0..10=1,"gradientColorTransition":bool,"foreground":color=#000000,"background":color,"rotateCanvas":-360..360=0,"rotatePattern":-360..360=0,"seed":u32=42,"equalizeArea":bool,"autoDotSize":bool,"posterizeSteps":0..8=0,"scrapeStrength":0..1=0,"satelliteLayout":"cross|even","layer":id?,"name":text?} → {layer,bounds}"##;
 
 /// [PATTERN]'s notation: the same dialog fields, but the pattern library is the target.
-const PATTERN_PARAMS: &str = r##"{"preset":text,"mode":"shading|sheet","patternType":"dots|lines|crosshatch|noise|gaussianNoise|stipple|hexgrid|checker|concentric|stars|hearts|triangles","dotShape":"circle|square|diamond|hexagon","dotSize":0..500=6,"spacingX":1..2000=16,"spacingY":1..2000=16,"density":0..1=0.5,"angle":-360..360=0,"lineWidth":0..200=1.5,"crossAngle":-360..360=45,"originX":-100000..100000=0,"originY":-100000..100000=0,"roundness":0..1=0,"smoothness":0..1=1,"brightness":-1..1=0,"contrast":0..4=1,"whiteThreshold":0..1=0.85,"blackThreshold":0..1=0.08,"toneGamma":0.01..10=1,"preserveLines":bool,"lineThreshold":0..1=0.24,"lineThickness":0.5..5=1,"useSourceLuminance":bool=true,"satelliteEnabled":bool,"satelliteSize":0..500=4,"satelliteDistance":0..2000=18,"satelliteCount":1..4=4,"satelliteAngle":-360..360=0,"satelliteShape":"circle|square|diamond|hexagon","satelliteStretch":0..10=0,"aspectX":0.05..20=1,"aspectY":0.05..20=1,"rowOffset":-1..1=0,"mergeFactor":0..1=0,"jitterPosition":0..100=0,"jitterSize":0..100=0,"gradientType":"none|linear|radial","gradientAngle":-360..360=90,"gradientReverse":bool,"gradientMidpoint":0..1=0.5,"gradientSizeStart":0..10=1,"gradientSizeEnd":0..10=0,"gradientStretchStart":0..10=1,"gradientStretchEnd":0..10=1,"gradientColorTransition":bool,"foreground":color=#000000,"background":color,"rotateCanvas":-360..360=0,"rotatePattern":-360..360=0,"seed":u32=42,"name":text?} → {pattern,bounds}"##;
+const PATTERN_PARAMS: &str = r##"{"preset":text,"mode":"shading|sheet","patternType":"dots|lines|crosshatch|noise|gaussianNoise|stipple|hexgrid|checker|concentric|stars|hearts|triangles","dotShape":"circle|square|diamond|hexagon","dotSize":0..500=6,"spacingX":1..2000=16,"spacingY":1..2000=16,"density":0..1=0.5,"angle":-360..360=0,"lineWidth":0..200=1.5,"crossAngle":-360..360=45,"originX":-100000..100000=0,"originY":-100000..100000=0,"roundness":0..1=0,"smoothness":0..1=1,"brightness":-1..1=0,"contrast":0..4=1,"whiteThreshold":0..1=0.85,"blackThreshold":0..1=0.08,"toneGamma":0.01..10=1,"preserveLines":bool,"lineThreshold":0..1=0.24,"lineThickness":0.5..5=1,"useSourceLuminance":bool=true,"satelliteEnabled":bool,"satelliteSize":0..500=4,"satelliteDistance":0..2000=18,"satelliteCount":1..8=4,"satelliteAngle":-360..360=0,"satelliteShape":"circle|square|diamond|hexagon","satelliteStretch":0..10=0,"aspectX":0.05..20=1,"aspectY":0.05..20=1,"rowOffset":-1..1=0,"mergeFactor":0..1=0,"jitterPosition":0..100=0,"jitterSize":0..100=0,"gradientType":"none|linear|radial","gradientAngle":-360..360=90,"gradientReverse":bool,"gradientMidpoint":0..1=0.5,"gradientSizeStart":0..10=1,"gradientSizeEnd":0..10=0,"gradientStretchStart":0..10=1,"gradientStretchEnd":0..10=1,"gradientColorTransition":bool,"foreground":color=#000000,"background":color,"rotateCanvas":-360..360=0,"rotatePattern":-360..360=0,"seed":u32=42,"equalizeArea":bool,"autoDotSize":bool,"posterizeSteps":0..8=0,"scrapeStrength":0..1=0,"satelliteLayout":"cross|even","name":text?} → {pattern,bounds}"##;
 
 fn f_any(p: &Value, keys: &[&str], d: f32) -> f32 {
     for &k in keys {
@@ -182,6 +184,12 @@ pub fn spec(p: &Value) -> ScreentoneSpec {
             _ => None,
         })
         .unwrap_or(base.backend);
+    let satellite_layout = match p.get("satelliteLayout").and_then(Value::as_str) {
+        Some("even") | Some("Even") => SatelliteLayout::Even,
+        Some("cross") | Some("Cross") => SatelliteLayout::Cross,
+        _ => base.satellite_layout,
+    };
+    let max_satellites = if satellite_layout == SatelliteLayout::Even { 8 } else { 4 };
     ScreentoneSpec {
         pattern_type: pattern(p, base.pattern_type),
         dot_shape: shape(p, "dotShape", base.dot_shape),
@@ -197,7 +205,7 @@ pub fn spec(p: &Value) -> ScreentoneSpec {
         satellite_enabled: b_any(p, &["satelliteEnabled"], base.satellite_enabled),
         satellite_size: f_any(p, &["satelliteSize"], base.satellite_size).clamp(0.0, 500.0),
         satellite_distance: f_any(p, &["satelliteDistance"], base.satellite_distance).clamp(0.0, 2000.0),
-        satellite_count: whole(p, "satelliteCount", base.satellite_count).clamp(1, 4),
+        satellite_count: whole(p, "satelliteCount", base.satellite_count).clamp(1, max_satellites),
         satellite_angle: f_any(p, &["satelliteAngle"], base.satellite_angle).clamp(-360.0, 360.0),
         satellite_dot_shape: shape_any(p, &["satelliteShape", "satelliteDotShape"], base.satellite_dot_shape),
         satellite_stretch: f_any(p, &["satelliteStretch"], base.satellite_stretch).clamp(0.0, 10.0),
@@ -234,6 +242,11 @@ pub fn spec(p: &Value) -> ScreentoneSpec {
         smoothness: f_any(p, &["smoothness"], base.smoothness).clamp(0.0, 1.0),
         seed: whole(p, "seed", base.seed),
         backend,
+        equalize_area: b_any(p, &["equalizeArea"], base.equalize_area),
+        auto_dot_size: b_any(p, &["autoDotSize"], base.auto_dot_size),
+        posterize_steps: whole(p, "posterizeSteps", u32::from(base.posterize_steps)).clamp(0, 8) as u8,
+        scrape_strength: f_any(p, &["scrapeStrength"], base.scrape_strength).clamp(0.0, 1.0),
+        satellite_layout,
     }
 }
 
@@ -602,12 +615,15 @@ fn create_layer(s: &mut Session, p: &Value) -> Result<Value> {
     let name = requested_name(p);
     // An active selection keeps shaping the sheet for good: the layer carries it as its mask
     // (as in Photoshop), so the tone shows only inside the selection now and later.
-    let mask = selection.as_ref().map(|sel| {
-        let r = doc_bounds;
+    let mask = selection.as_ref().filter(|sel| !sel.content_bounds().is_empty()).map(|sel| {
+        // Start from a hidden mask and write only the selection's own bounds. Revealing the whole
+        // document first inflated the mask surface to the full canvas (48 MP at 300+ DPI) and
+        // cost hundreds of milliseconds per creation.
+        let r = sel.content_bounds().intersect(&doc_bounds);
         let ch = sel.channels().max(1);
         let v = sel.read_region(r);
         let coverage: Vec<f32> = v.chunks_exact(ch).map(|px| px[0]).collect();
-        let mut mask = LayerMask::reveal_all();
+        let mut mask = LayerMask::hide_all();
         mask.surface.write_region(r, &coverage);
         mask.surface.prune();
         mask
@@ -658,17 +674,28 @@ fn revealed_bounds(mask: &LayerMask, canvas: Rect) -> Option<Rect> {
     if !mask.enabled || canvas.is_empty() {
         return Some(canvas);
     }
-    if mask.surface.content_bounds().is_empty() {
-        return (mask.surface.default_pixel().first().copied().unwrap_or(1.0) > 0.0).then_some(canvas);
+    // Revealed-by-default masks cover everything outside their stored content, so their tight
+    // bounds are the canvas itself (O(1) instead of scanning 48 MP every UI frame).
+    let revealed_by_default = mask.surface.default_pixel().first().copied().unwrap_or(1.0) > 1.0 / 255.0;
+    let content = mask.surface.content_bounds();
+    if content.is_empty() {
+        return revealed_by_default.then_some(canvas);
+    }
+    if revealed_by_default {
+        return Some(canvas);
+    }
+    let scan = content.intersect(&canvas);
+    if scan.is_empty() {
+        return Some(Rect::new(canvas.x0, canvas.y0, 0, 0));
     }
     let ch = mask.surface.channels().max(1);
-    let buf = mask.surface.read_region(canvas);
-    let w = canvas.width() as usize;
-    let (mut x0, mut y0, mut x1, mut y1) = (canvas.x1, canvas.y1, canvas.x0, canvas.y0);
+    let buf = mask.surface.read_region(scan);
+    let w = scan.width() as usize;
+    let (mut x0, mut y0, mut x1, mut y1) = (scan.x1, scan.y1, scan.x0, scan.y0);
     for (i, px) in buf.chunks_exact(ch).enumerate() {
         if px[0] > 0.0 {
-            let x = canvas.x0 + (i % w) as i32;
-            let y = canvas.y0 + (i / w) as i32;
+            let x = scan.x0 + (i % w) as i32;
+            let y = scan.y0 + (i / w) as i32;
             x0 = x0.min(x);
             y0 = y0.min(y);
             x1 = x1.max(x + 1);

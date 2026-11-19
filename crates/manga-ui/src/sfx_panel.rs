@@ -7,8 +7,8 @@
 use egui::{Color32, RichText, Stroke, Ui, vec2};
 use photocraft_algo::{DotShape, PatternType};
 use photocraft_doc::sfx::{
-    MAX_SFX_SPLINE_POINTS, ScreentoneSpec, SfxData, SfxDistress, SfxDryBrushEngine, SfxFillSource, SfxFreeTransform, SfxGlyphTransform, SfxLineJoin,
-    SfxLineStyle, SfxMeshInterpolation, SfxPreset, SfxShtackVariant, SfxSpikeShape, SfxStylePass, SfxWarpMode,
+    MAX_SFX_SIZE_PT, MAX_SFX_SPLINE_POINTS, ScreentoneSpec, SfxData, SfxDistress, SfxDryBrushEngine, SfxFillSource, SfxFreeTransform,
+    SfxGlyphTransform, SfxLineJoin, SfxLineStyle, SfxMeshInterpolation, SfxPreset, SfxShtackVariant, SfxSpikeShape, SfxStylePass, SfxWarpMode,
 };
 use photocraft_doc::{Color, LayerId};
 use serde_json::{Value, json};
@@ -161,6 +161,12 @@ fn enum_id<T: serde::Serialize>(v: &T) -> String {
 
 fn enum_from_id<T: serde::de::DeserializeOwned>(s: &str) -> Option<T> {
     serde_json::from_value(Value::String(s.to_owned())).ok()
+}
+
+/// Pixel-effect slider ranges follow the lettering size: a 600-DPI / 12303×17499 page creates
+/// large SFX (hundreds of points), so fixed 14–64 px maxima would be unusably small.
+fn ui_scale(st: &SfxPanelState) -> f32 {
+    (st.draft.size_pt / 54.0).clamp(1.0, 256.0)
 }
 
 fn section_card(ui: &mut Ui, t: Tokens, add_contents: impl FnOnce(&mut Ui)) {
@@ -382,6 +388,7 @@ pub fn panel(ui: &mut Ui, st: &mut SfxPanelState, gizmo: &mut SfxGizmoState, tar
 }
 
 fn draw_header_and_tabs(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens, target: &SfxTargetInfo<'_>) {
+    let scale = ui_scale(st);
     ui.horizontal(|ui| {
         ui.strong("SFX Lettering");
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -399,11 +406,11 @@ fn draw_header_and_tabs(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens, target: 
     ui.horizontal(|ui| {
         dim_label(ui, t, "Ореол:");
         color_swatch_compact(ui, &mut st.draft.line_effect.halo_color);
-        crate::widgets::value_field(ui, &mut st.draft.line_effect.halo_width_px, 0.0..=64.0, "px", 46.0);
+        crate::widgets::value_field(ui, &mut st.draft.line_effect.halo_width_px, 0.0..=64.0 * scale, "px", 46.0);
         ui.add_space(4.0);
         dim_label(ui, t, "Лайн:");
         color_swatch_compact(ui, &mut st.draft.line_effect.line_color);
-        crate::widgets::value_field(ui, &mut st.draft.line_effect.line_width_px, 0.0..=64.0, "px", 46.0);
+        crate::widgets::value_field(ui, &mut st.draft.line_effect.line_width_px, 0.0..=64.0 * scale, "px", 46.0);
     });
 
     ui.add_space(2.0);
@@ -488,7 +495,7 @@ fn draw_presets_card(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens, target: &Sf
 
 fn draw_gizmo_card(ui: &mut Ui, st: &mut SfxPanelState, gizmo: &mut SfxGizmoState, t: Tokens) {
     section_card(ui, t, |ui| {
-        section_header(ui, t, "GIZMO НА ХОЛСТЕ", "Неаффинный FT", TEXT_SKY);
+        section_header(ui, t, "GIZMO НА ХОЛСТЕ", "Перспектива (4 угла)", TEXT_SKY);
         ui.add_space(3.0);
 
         ui.columns(2, |cols| {
@@ -671,6 +678,7 @@ fn draw_gizmo_card(ui: &mut Ui, st: &mut SfxPanelState, gizmo: &mut SfxGizmoStat
 }
 
 fn draw_line_effect_card(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens) {
+    let scale = ui_scale(st);
     section_card(ui, t, |ui| {
         let badge = line_style_badge(&st.draft);
         section_header(ui, t, "ЛАЙН / ОБВОДКА", badge, TEXT_AMBER);
@@ -722,8 +730,8 @@ fn draw_line_effect_card(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens) {
                         }
                     });
                 });
-                slider_row_f32(ui, t, "Длина шипов:", &mut le.spike_length_px, 2.0..=28.0, "px");
-                slider_row_f32(ui, t, "Размер шипов:", &mut le.spike_size_px, 2.0..=20.0, "px");
+                slider_row_f32(ui, t, "Длина шипов:", &mut le.spike_length_px, 2.0..=28.0 * scale, "px");
+                slider_row_f32(ui, t, "Размер шипов:", &mut le.spike_size_px, 2.0..=20.0 * scale, "px");
                 slider_row_u16(ui, t, "Кол-во шипов:", &mut le.spike_count, 2..=40, "");
                 slider_row_f32(ui, t, "Рандом (Гаусс):", &mut le.spike_random_pct, 0.0..=100.0, "%");
             }
@@ -734,7 +742,7 @@ fn draw_line_effect_card(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens) {
                 slider_row_f32(ui, t, "Угол пера:", &mut le.gpen_angle_deg, -90.0..=90.0, "°");
                 slider_row_f32(ui, t, "Прогиб граней:", &mut le.gpen_pinch_pct, 0.0..=100.0, "%");
                 crate::widgets::hairline(ui);
-                slider_row_f32(ui, t, "Длина перекрестий:", &mut le.gpen_overshoot_px, 0.0..=14.0, "px");
+                slider_row_f32(ui, t, "Длина перекрестий:", &mut le.gpen_overshoot_px, 0.0..=14.0 * scale, "px");
                 slider_row_f32(ui, t, "Кол-во перекрестий:", &mut le.gpen_overshoot_count_pct, 0.0..=100.0, "%");
                 slider_row_f32(ui, t, "Рандом перекрестий:", &mut le.gpen_overshoot_random_pct, 0.0..=100.0, "%");
             }
@@ -745,7 +753,7 @@ fn draw_line_effect_card(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens) {
                 slider_row_f32(ui, t, "Прорывы туши:", &mut le.ink_brush_dropout_pct, 0.0..=100.0, "%");
                 slider_row_f32(ui, t, "Вар. нажима:", &mut le.ink_brush_pressure_pct, 0.0..=100.0, "%");
                 crate::widgets::hairline(ui);
-                slider_row_f32(ui, t, "Длина перекрестий:", &mut le.ink_brush_overshoot_px, 0.0..=14.0, "px");
+                slider_row_f32(ui, t, "Длина перекрестий:", &mut le.ink_brush_overshoot_px, 0.0..=14.0 * scale, "px");
                 slider_row_f32(ui, t, "Кол-во перекрестий:", &mut le.ink_brush_overshoot_count_pct, 0.0..=100.0, "%");
                 slider_row_f32(ui, t, "Рандом перекрестий:", &mut le.ink_brush_overshoot_random_pct, 0.0..=100.0, "%");
             }
@@ -762,9 +770,9 @@ fn draw_line_effect_card(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens) {
                 });
                 slider_row_u8(ui, t, "Игл на торце:", &mut le.shtack_bristles, 2..=6, "");
                 slider_row_f32(ui, t, "Расщепление:", &mut le.shtack_split_pct, 0.0..=100.0, "%");
-                slider_row_f32(ui, t, "Вылет штрихов:", &mut le.shtack_overshoot_px, 0.0..=34.0, "px");
+                slider_row_f32(ui, t, "Вылет штрихов:", &mut le.shtack_overshoot_px, 0.0..=34.0 * scale, "px");
                 if le.shtack_variant == SfxShtackVariant::Ribbon {
-                    slider_row_f32(ui, t, "Толщина ленты:", &mut le.shtack_thickness_px, 6.0..=24.0, "px");
+                    slider_row_f32(ui, t, "Толщина ленты:", &mut le.shtack_thickness_px, 6.0..=24.0 * scale, "px");
                 }
                 slider_row_f32(ui, t, "Прожилки внутри:", &mut le.shtack_dryness_pct, 0.0..=100.0, "%");
             }
@@ -773,6 +781,7 @@ fn draw_line_effect_card(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens) {
 }
 
 fn draw_fill_card(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens) {
+    let scale = ui_scale(st);
     section_card(ui, t, |ui| {
         let badge = fill_style_badge(&st.draft);
         section_header(ui, t, "ЗАЛИВКА (FILL)", badge, TEXT_SKY);
@@ -845,7 +854,7 @@ fn draw_fill_card(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens) {
                 SfxDryBrushEngine::SdfPhysics | SfxDryBrushEngine::SdfSeg | SfxDryBrushEngine::SdfEtf => {
                     slider_row_f32(ui, t, "Плотность щетины:", &mut db.freq_pct, 10.0..=100.0, "%");
                     if db.engine == SfxDryBrushEngine::SdfEtf {
-                        slider_row_f32(ui, t, "Длина LIC:", &mut db.lic_length_px, 6.0..=26.0, "px");
+                        slider_row_f32(ui, t, "Длина LIC:", &mut db.lic_length_px, 6.0..=26.0 * scale, "px");
                     }
                     slider_row_f32(ui, t, "Изгиб (Warp):", &mut db.warp_pct, 0.0..=100.0, "%");
                     slider_row_f32(ui, t, "Зерно бумаги:", &mut db.paper_grain_pct, 0.0..=100.0, "%");
@@ -891,6 +900,7 @@ fn draw_fill_card(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens) {
 }
 
 fn draw_vector_shadow_card(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens) {
+    let scale = ui_scale(st);
     section_card(ui, t, |ui| {
         let sh = &mut st.draft.vector_shadow;
         ui.horizontal(|ui| {
@@ -900,10 +910,10 @@ fn draw_vector_shadow_card(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens) {
                 ui.label(RichText::new(readout).monospace().size(10.0).color(t.text_dim));
             });
         });
-        slider_row_f32(ui, t, "3D Extrude:", &mut sh.extrude_depth_px, 0.0..=32.0, "px");
+        slider_row_f32(ui, t, "3D Extrude:", &mut sh.extrude_depth_px, 0.0..=32.0 * scale, "px");
         if sh.enabled {
             slider_row_f32(ui, t, "Угол тени:", &mut sh.angle_deg, -180.0..=180.0, "°");
-            slider_row_f32(ui, t, "Дистанция тени:", &mut sh.distance_px, 0.0..=96.0, "px");
+            slider_row_f32(ui, t, "Дистанция тени:", &mut sh.distance_px, 0.0..=96.0 * scale, "px");
             color_swatch(ui, "Цвет тени:", &mut sh.color);
         }
     });
@@ -982,7 +992,7 @@ fn draw_character_tab(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens) {
         });
 
         ui.add_space(4.0);
-        slider_row_f32(ui, t, "Кегль:", &mut st.draft.size_pt, 12.0..=260.0, "pt");
+        slider_row_f32(ui, t, "Кегль:", &mut st.draft.size_pt, 12.0..=MAX_SFX_SIZE_PT, "pt");
         slider_row_f32(ui, t, "Трекинг:", &mut st.draft.tracking, -40.0..=120.0, "px");
         ui.horizontal(|ui| {
             dim_label(ui, t, "Интерлиньяж:");
@@ -1038,6 +1048,7 @@ fn draw_character_tab(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens) {
 }
 
 fn draw_color_tab(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens) {
+    let scale = ui_scale(st);
     section_card(ui, t, |ui| {
         section_header(ui, t, "ЦВЕТА И ТОЛЩИНЫ СЛОЁВ", "2-Pass Halo + Ink", TEXT_SKY);
         ui.add_space(4.0);
@@ -1045,10 +1056,10 @@ fn draw_color_tab(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens) {
         draw_fill_source_editor(ui, "sfx-color-tab-fill", &mut st.draft.fill, t);
         crate::widgets::hairline(ui);
         color_swatch(ui, "Цвет ореола (Pass 1):", &mut st.draft.line_effect.halo_color);
-        slider_row_f32(ui, t, "Толщина ореола:", &mut st.draft.line_effect.halo_width_px, 0.0..=36.0, "px");
+        slider_row_f32(ui, t, "Толщина ореола:", &mut st.draft.line_effect.halo_width_px, 0.0..=36.0 * scale, "px");
         crate::widgets::hairline(ui);
         color_swatch(ui, "Цвет лайна (Pass 2):", &mut st.draft.line_effect.line_color);
-        slider_row_f32(ui, t, "Толщина лайна:", &mut st.draft.line_effect.line_width_px, 0.0..=24.0, "px");
+        slider_row_f32(ui, t, "Толщина лайна:", &mut st.draft.line_effect.line_width_px, 0.0..=24.0 * scale, "px");
         crate::widgets::hairline(ui);
         color_swatch(ui, "Цвет тени / 3D:", &mut st.draft.vector_shadow.color);
     });

@@ -422,7 +422,10 @@ impl VectorBrushLibrary {
         color: [f32; 4],
         paint_presets: &[BrushPreset],
     ) -> Rect {
-        let step_px = (balloon.stroke_width * 0.45).clamp(1.5, 12.0);
+        // A thick 600-DPI balloon stroke (e.g. 200 px) must not stall at a tiny 12 px stamp
+        // spacing: that produced enormous stamp counts and quadratic slowdowns. Spacing grows
+        // with the stroke; only the sub-pixel lower bound is kept so thin strokes still sample.
+        let step_px = (balloon.stroke_width * 0.45).max(1.5);
         let rings = sample_balloon_contour_for_brush(balloon, step_px);
         let brush = self.brush_settings_for_preset(preset, balloon.stroke_width as f32, color, paint_presets);
 

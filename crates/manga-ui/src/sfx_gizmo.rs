@@ -12,7 +12,8 @@ use std::sync::atomic::{AtomicU8, Ordering};
 
 use egui::{Color32, CursorIcon, Pos2, Rect, Stroke, pos2, vec2};
 use photocraft_doc::sfx::{
-    MAX_SFX_LIQUIFY_STROKES, MAX_SFX_SPLINE_POINTS, SfxData, SfxFreeTransform, SfxGlyphTransform, SfxLiquifyBrush, SfxMeshLattice, SfxWarpMode,
+    MAX_SFX_EFFECT_PX, MAX_SFX_LIQUIFY_STROKES, MAX_SFX_SPLINE_POINTS, SfxData, SfxFreeTransform, SfxGlyphTransform, SfxLiquifyBrush,
+    SfxMeshLattice, SfxWarpMode,
 };
 use photocraft_doc::{Document, LayerId};
 use photocraft_manga_core::sfx_geom::{
@@ -31,6 +32,8 @@ const HANDLE_HIT_PX: f32 = 10.0;
 const ARC_HIT_PX: f32 = 9.0;
 const ROTATE_STEM_PX: f32 = 24.0;
 const MIN_LIQUIFY_STEP_PX: f64 = 12.0;
+/// A dragged quad may never collapse below this absolute area (px²).
+const MIN_QUAD_AREA: f64 = 1.0;
 
 const COLOR_CYAN: Color32 = Color32::from_rgb(34, 211, 238);
 const COLOR_AMBER: Color32 = Color32::from_rgb(245, 158, 11);
@@ -495,6 +498,99 @@ fn edge_delta_signs(kind: FreeHandle) -> (f64, f64) {
     }
 }
 
+// --- Strict convexity / positive-orientation guards for 4-corner drags -----------------------
+// In document space Y grows down, so the TL→TR→BR→BL loop has positive cross products when the
+// quad is strictly convex and not mirrored. A corner crossing an edge inverts one of them.
+
+fn cross2d(a: [f64; 2], b: [f64; 2], c: [f64; 2]) -> f64 {
+    (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+}
+
+fn rest_quad(rb: [f64; 4]) -> [[f64; 2]; 4] {
+    [[rb[0], rb[1]], [rb[2], rb[1]], [rb[2], rb[3]], [rb[0], rb[3]]]
+}
+
+fn quad_from_deltas(rb: [f64; 4], deltas: &[[f64; 2]; 4]) -> [[f64; 2]; 4] {
+    let rest = rest_quad(rb);
+    std::array::from_fn(|i| [rest[i][0] + deltas[i][0], rest[i][1] + deltas[i][1]])
+}
+
+fn quad_is_convex_positive(quad: &[[f64; 2]; 4], rb: [f64; 4]) -> bool {
+    if quad.iter().any(|p| !p[0].is_finite() || !p[1].is_finite()) {
+        return false;
+    }
+    let rest_area = (rb[2] - rb[0]).abs() * (rb[3] - rb[1]).abs();
+    let min_area = (rest_area * 1e-4).max(MIN_QUAD_AREA);
+    let mut twice_area = 0.0;
+    for i in 0..4 {
+        let a = quad[i];
+        let b = quad[(i + 1) % 4];
+        let c = quad[(i + 2) % 4];
+        if cross2d(a, b, c) <= 0.0 {
+            return false;
+        }
+        twice_area += a[0] * b[1] - b[0] * a[1];
+    }
+    twice_area > 0.0 && twice_area * 0.5 >= min_area
+}
+
+fn lerp_deltas(a: [[f64; 2]; 4], b: [[f64; 2]; 4], t: f64) -> [[f64; 2]; 4] {
+    std::array::from_fn(|i| [a[i][0] + (b[i][0] - a[i][0]) * t, a[i][1] + (b[i][1] - a[i][1]) * t])
+}
+
+/// Binary-search `t in 0..=1` along the drag so the resulting quad stays strictly convex.
+fn clamp_corner_deltas(rb: [f64; 4], base: [[f64; 2]; 4], candidate: [[f64; 2]; 4]) -> [[f64; 2]; 4] {
+    if quad_is_convex_positive(&quad_from_deltas(rb, &candidate), rb) {
+        return candidate;
+    }
+    let origin = if quad_is_convex_positive(&quad_from_deltas(rb, &base), rb) {
+        base
+    } else {
+        [[0.0; 2]; 4]
+    };
+    let mut lo = 0.0;
+    let mut hi = 1.0;
+    for _ in 0..24 {
+        let t = (lo + hi) * 0.5;
+        if quad_is_convex_positive(&quad_from_deltas(rb, &lerp_deltas(origin, candidate, t)), rb) {
+            lo = t;
+        } else {
+            hi = t;
+        }
+    }
+    lerp_deltas(origin, candidate, lo)
+}
+
+fn ft_world_quad(ft: &SfxFreeTransform, rb: [f64; 4]) -> [[f64; 2]; 4] {
+    let rest = rest_quad(rb);
+    std::array::from_fn(|i| apply_free_transform_point(ft, rb, rest[i]))
+}
+
+/// Ctrl-keystone changes `perspective_*`, not the corner deltas: clamp those scalars instead.
+fn clamp_perspective(rb: [f64; 4], base: SfxFreeTransform, candidate: (f64, f64)) -> (f64, f64) {
+    let quad_at = |px: f64, py: f64| -> [[f64; 2]; 4] {
+        ft_world_quad(&SfxFreeTransform { perspective_x: px, perspective_y: py, ..base }, rb)
+    };
+    let identity_at = || quad_is_convex_positive(&quad_at(0.0, 0.0), rb);
+    let origin = if identity_at() { (base.perspective_x, base.perspective_y) } else { (0.0, 0.0) };
+    if quad_is_convex_positive(&quad_at(candidate.0, candidate.1), rb) {
+        return candidate;
+    }
+    let mut lo = 0.0;
+    let mut hi = 1.0;
+    for _ in 0..24 {
+        let t = (lo + hi) * 0.5;
+        let px = origin.0 + (candidate.0 - origin.0) * t;
+        let py = origin.1 + (candidate.1 - origin.1) * t;
+        if quad_is_convex_positive(&quad_at(px, py), rb) {
+            lo = t;
+        } else {
+            hi = t;
+        }
+    }
+    (origin.0 + (candidate.0 - origin.0) * lo, origin.1 + (candidate.1 - origin.1) * lo)
+}
+
 fn apply_free_drag(drag: &ActiveDrag, at_doc: [f64; 2], mods: egui::Modifiers, next: &mut SfxData) {
     let rb = drag.rest_box;
     let w = (rb[2] - rb[0]).max(1.0);
@@ -531,9 +627,9 @@ fn apply_free_drag(drag: &ActiveDrag, at_doc: [f64; 2], mods: egui::Modifiers, n
             let p1 = invert_free_transform_point(&ft_no_corners, rb, at_doc).unwrap_or(at_doc);
             let dp = [p1[0] - p0[0], p1[1] - p0[1]];
             let base = drag.initial_sfx.free_transform.corners;
-            next.free_transform.corners = base;
-            next.free_transform.corners[c_idx][0] = base[c_idx][0] + dp[0];
-            next.free_transform.corners[c_idx][1] = base[c_idx][1] + dp[1];
+            let mut candidate = base;
+            candidate[c_idx][0] = base[c_idx][0] + dp[0];
+            candidate[c_idx][1] = base[c_idx][1] + dp[1];
             if mods.shift {
                 // Symmetric trapezoid perspective on paired top/bottom corner.
                 let pair = match c_idx {
@@ -542,9 +638,12 @@ fn apply_free_drag(drag: &ActiveDrag, at_doc: [f64; 2], mods: egui::Modifiers, n
                     2 => 3,
                     _ => 2,
                 };
-                next.free_transform.corners[pair][0] = base[pair][0] - dp[0];
-                next.free_transform.corners[pair][1] = base[pair][1] + dp[1];
+                candidate[pair][0] = base[pair][0] - dp[0];
+                candidate[pair][1] = base[pair][1] + dp[1];
             }
+            // Dragging past an opposite edge used to flip/invert the homography (mirrored or
+            // vanished lettering). Keep the quad strictly convex and positively oriented.
+            next.free_transform.corners = clamp_corner_deltas(rb, base, candidate);
         }
         edge_or_ctrl_corner => {
             let (s, c) = (-drag.initial_sfx.free_transform.rotation_deg).to_radians().sin_cos();
@@ -578,8 +677,13 @@ fn apply_free_drag(drag: &ActiveDrag, at_doc: [f64; 2], mods: egui::Modifiers, n
                         next.free_transform.skew_y_deg = (ft0.skew_y_deg + skew_delta).clamp(-75.0, 75.0);
                     }
                     FreeHandle::Corner(_) => {
-                        next.free_transform.perspective_x = (ft0.perspective_x - sx_sign * d[0] / (w * 0.5)).clamp(-0.75, 0.75);
-                        next.free_transform.perspective_y = (ft0.perspective_y - sy_sign * d[1] / (h * 0.5)).clamp(-0.75, 0.75);
+                        let candidate = (
+                            (ft0.perspective_x - sx_sign * d[0] / (w * 0.5)).clamp(-0.75, 0.75),
+                            (ft0.perspective_y - sy_sign * d[1] / (h * 0.5)).clamp(-0.75, 0.75),
+                        );
+                        let (px, py) = clamp_perspective(rb, ft0, candidate);
+                        next.free_transform.perspective_x = px;
+                        next.free_transform.perspective_y = py;
                     }
                     FreeHandle::Rotate | FreeHandle::Body => {}
                 }
@@ -631,7 +735,8 @@ fn apply_shadow_drag(drag: &ActiveDrag, at_doc: [f64; 2], mods: egui::Modifiers,
     if mods.shift {
         deg = (deg / 15.0).round() * 15.0;
     }
-    let dist = dx.hypot(dy).clamp(0.0, 256.0);
+    let shadow_max = (256.0_f64 * f64::from(next.size_pt / 54.0).max(1.0)).min(f64::from(MAX_SFX_EFFECT_PX));
+    let dist = dx.hypot(dy).clamp(0.0, shadow_max);
     next.vector_shadow.enabled = true;
     next.vector_shadow.angle_deg = deg as f32;
     next.vector_shadow.distance_px = dist as f32;
@@ -716,10 +821,14 @@ fn apply_glyph_drag(drag: &ActiveDrag, at_doc: [f64; 2], mods: egui::Modifiers, 
             let (s, c) = (-total_angle).sin_cos();
             let lx = (dlx * c - dly * s) / base.scale_x.abs().max(0.1);
             let ly = (dlx * s + dly * c) / base.scale_y.abs().max(0.1);
+            let mut candidate = base.corners;
+            candidate[c_idx][0] = base.corners[c_idx][0] + lx;
+            candidate[c_idx][1] = base.corners[c_idx][1] + ly;
+            // Glyph corners live in a unit rest box; the same strict convexity rule applies so a
+            // single letter can never turn inside-out and disappear.
+            let glyph_rb = [-1.0, -1.0, 1.0, 1.0];
             let entry = find_or_insert_glyph_mut(next, idx);
-            entry.corners = base.corners;
-            entry.corners[c_idx][0] = base.corners[c_idx][0] + lx;
-            entry.corners[c_idx][1] = base.corners[c_idx][1] + ly;
+            entry.corners = clamp_corner_deltas(glyph_rb, base.corners, candidate);
         }
         GlyphHandle::Corner(_, _) => {}
     }
@@ -1472,6 +1581,54 @@ mod tests {
         // Paired TR corner must mirror X delta symmetrically under Shift.
         assert!((u.free_transform.corners[1][0] + 18.0).abs() < 1e-6);
         assert!((u.free_transform.corners[1][1] + 12.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn free_corner_drag_past_opposite_edge_keeps_quad_convex() {
+        let sfx = SfxData { text: "BAM".to_owned(), origin: [100.0, 100.0], ..SfxData::default() };
+        let (doc, id) = sfx_doc(sfx.clone());
+        let mut gizmo = SfxGizmoState::default();
+        let geom = gizmo.ensure_geom(&sfx, 72.0).clone();
+        let rb = geom.rest_box;
+        let tl = geom.world_corners[0];
+        let view = view_for(&doc, id);
+        let far = [tl[0] + (rb[2] - rb[0]) * 3.0, tl[1] + (rb[3] - rb[1]) * 3.0];
+
+        assert!(pointer(&mut gizmo, &view, CanvasToolEvent::Down { x: tl[0], y: tl[1], pressure: 1.0 }, Modifiers::NONE).handled);
+        let moved = pointer(&mut gizmo, &view, CanvasToolEvent::Move { x: far[0], y: far[1], pressure: 1.0 }, Modifiers::NONE);
+        let u = moved.updated_sfx.expect("far 4-corner drag update");
+        let quad = quad_from_deltas(rb, &u.free_transform.corners);
+        assert!(quad_is_convex_positive(&quad, rb), "TL dragged past BR must not flip: {:?}", u.free_transform.corners);
+        assert!(u.free_transform.corners[0][0].is_finite());
+
+        // Shift trapezoid mirrors the delta onto the paired TR corner; the same guard must hold.
+        let _ = cancel_drag(&mut gizmo, &view);
+        assert!(pointer(&mut gizmo, &view, CanvasToolEvent::Down { x: tl[0], y: tl[1], pressure: 1.0 }, Modifiers::NONE).handled);
+        let shifted = pointer(&mut gizmo, &view, CanvasToolEvent::Move { x: far[0], y: far[1], pressure: 1.0 }, Modifiers::SHIFT);
+        let u = shifted.updated_sfx.expect("far shift-trapezoid drag update");
+        let quad = quad_from_deltas(rb, &u.free_transform.corners);
+        assert!(quad_is_convex_positive(&quad, rb), "shift trapezoid must not invert: {:?}", u.free_transform.corners);
+    }
+
+    #[test]
+    fn per_glyph_corner_drag_cannot_invert_the_glyph() {
+        let sfx = SfxData { text: "AB".to_owned(), origin: [100.0, 100.0], warp_mode: SfxWarpMode::PerGlyph, ..SfxData::default() };
+        let (doc, id) = sfx_doc(sfx.clone());
+        let mut gizmo = SfxGizmoState::default();
+        gizmo.set_glyph_tool(SfxGlyphTool::FreeTransform);
+        let geom = gizmo.ensure_geom(&sfx, 72.0).clone();
+        let g0 = &geom.glyphs[0];
+        gizmo.selected_glyph = Some(g0.glyph_index);
+        let tl = g0.quad_doc[0];
+        let view = view_for(&doc, id);
+
+        assert!(pointer(&mut gizmo, &view, CanvasToolEvent::Down { x: tl[0], y: tl[1], pressure: 1.0 }, Modifiers::NONE).handled);
+        let moved = pointer(&mut gizmo, &view, CanvasToolEvent::Move { x: tl[0] + 400.0, y: tl[1] + 400.0, pressure: 1.0 }, Modifiers::NONE);
+        let u = moved.updated_sfx.expect("far glyph corner drag update");
+        let glyph_rb = [-1.0, -1.0, 1.0, 1.0];
+        let corners = u.per_glyph.first().map(|g| g.corners).unwrap_or([[0.0; 2]; 4]);
+        let quad = quad_from_deltas(glyph_rb, &corners);
+        assert!(quad_is_convex_positive(&quad, glyph_rb), "per-glyph corner must stay convex: {corners:?}");
     }
 
     #[test]

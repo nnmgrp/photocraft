@@ -972,5 +972,19 @@ mod tests {
         assert!((geom.rest_box[1] - 80.0).abs() < 1e-4);
         assert!(geom.world_corners.iter().all(|c| c[0].is_finite() && c[1].is_finite()));
         assert!(geom.glyphs[0].quad_doc.iter().all(|c| c[0].is_finite() && c[1].is_finite()));
+
+        // Document space is Y-down; the TL→TR→BR→BL loop must keep a positive signed area. A
+        // mirrored or upside-down default would flip this sign and make fresh lettering vanish.
+        let signed_area = |q: &[[f64; 2]; 4]| -> f64 {
+            let mut acc = 0.0;
+            for i in 0..4 {
+                let p = q[i];
+                let n = q[(i + 1) % 4];
+                acc += p[0] * n[1] - n[0] * p[1];
+            }
+            acc * 0.5
+        };
+        assert!(signed_area(&geom.world_corners) > 0.0, "default FT quad must not be mirrored");
+        assert!(signed_area(&geom.glyphs[0].quad_doc) > 0.0, "default glyph quad must not be mirrored");
     }
 }

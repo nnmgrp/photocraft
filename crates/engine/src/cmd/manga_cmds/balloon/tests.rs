@@ -316,6 +316,26 @@ fn batch_from_script_and_svg_import_export_roundtrip() {
 }
 
 #[test]
+fn batch_from_script_scales_geometry_on_a_large_canvas() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 12_303, "height": 17_499, "background": "transparent"})).unwrap();
+    let info = s.execute("shape.balloon.batchFromScript", json!({"lines": ["Hi!"]})).unwrap();
+    let id = info["layer"].as_u64().unwrap();
+    let sh = shape(&s, id);
+    let stroke_width = sh.stroke.as_ref().map(|st| st.width).unwrap_or(0.0);
+    assert!(stroke_width > 2.5 * 10.0, "stroke width scales with the page: {stroke_width}");
+    let Some(LiveShape::BalloonGroup { group }) = sh.live.as_ref() else {
+        panic!("batch created a BalloonGroup");
+    };
+    let item = &group.items[0];
+    let tail = item.tails.first().expect("batch balloons carry an Arc tail");
+    assert!(tail.mouth_width > 24.0 * 10.0, "mouth width scales: {}", tail.mouth_width);
+    assert!(tail.bubble_radius > 10.0 * 10.0, "bubble radius scales: {}", tail.bubble_radius);
+    let rect = item.body.rect();
+    assert!(tail.tip[1] - (rect[1] + rect[3]) > 36.0 * 10.0, "tail tip offset scales: {}", tail.tip[1] - (rect[1] + rect[3]));
+}
+
+#[test]
 fn double_outline_chamfer_rect_and_brush_preset_validation() {
     let mut s = session(400, 400);
     let dbl = s.execute("shape.balloon.create", json!({"kind": "doubleOutline", "rect": [40, 40, 160, 100], "gap": 6.0})).unwrap();

@@ -26,6 +26,9 @@ use crate::sfx_geom::{PreparedSfx, build_sfx_geometry};
 
 const MAX_RENDER_EXTENT: i32 = 8192;
 const MAX_RENDER_PIXELS: usize = 16 * 1024 * 1024;
+/// Hard safety ceiling for the *returned* document-space rect. The surface stays sparse: only
+/// proxy-derived ink rows are written, so a gigapixel layer does not allocate a gigapixel buffer.
+const MAX_FULL_RENDER_EXTENT: i32 = 65_536;
 const SKELETON_MAX_GRID_DIM: usize = 256;
 
 /// Output of rendering an [`SfxData`] stack into document-space surfaces.
@@ -452,12 +455,10 @@ fn compute_render_bounds(data: &SfxData, geom: &PreparedSfx) -> Rect {
     if x1 <= x0 || y1 <= y0 {
         return Rect::EMPTY;
     }
-    let w = (x1 - x0).min(MAX_RENDER_EXTENT);
-    let h = (y1 - y0).min(MAX_RENDER_EXTENT);
-    let area = (w as usize).saturating_mul(h as usize);
-    if area > MAX_RENDER_PIXELS {
-        return Rect::EMPTY;
-    }
+    // Return the full document-space rect. Large layers are rendered through a bounded proxy and
+    // upsampled in `render_sfx`; returning EMPTY here used to make >16 MP SFX layers vanish.
+    let w = (x1 - x0).min(MAX_FULL_RENDER_EXTENT);
+    let h = (y1 - y0).min(MAX_FULL_RENDER_EXTENT);
     Rect::from_xywh(x0, y0, w as u32, h as u32)
 }
 
@@ -687,6 +688,197 @@ fn rgba_to_surface(rgba: &[[f32; 4]], rect: Rect, format: PixelFormat) -> Surfac
         s.write_region(rect, &vals);
         s.prune();
     }
+    s
+}
+
+/// Proxy dimensions for a full document-space target. `proxy_scale == 1.0` keeps the exact
+/// historical fast path; otherwise the target is bounded to `MAX_RENDER_EXTENT`² / `MAX_RENDER_PIXELS`.
+fn proxy_target(bounds: Rect) -> (usize, usize, f64) {
+    let tw = bounds.width() as usize;
+    let th = bounds.height() as usize;
+    let mut scale = 1.0_f64;
+    if tw > MAX_RENDER_EXTENT as usize {
+        scale = scale.min(MAX_RENDER_EXTENT as f64 / tw as f64);
+    }
+    if th > MAX_RENDER_EXTENT as usize {
+        scale = scale.min(MAX_RENDER_EXTENT as f64 / th as f64);
+    }
+    if tw.saturating_mul(th) > MAX_RENDER_PIXELS {
+        let area_scale = (MAX_RENDER_PIXELS as f64 / (tw.saturating_mul(th) as f64)).sqrt();
+        scale = scale.min(area_scale);
+    }
+    if scale >= 1.0 {
+        return (tw, th, 1.0);
+    }
+    let mut pw = ((tw as f64 * scale).round() as usize).clamp(1, MAX_RENDER_EXTENT as usize);
+    let mut ph = ((th as f64 * scale).round() as usize).clamp(1, MAX_RENDER_EXTENT as usize);
+    while pw.saturating_mul(ph) > MAX_RENDER_PIXELS {
+        if pw >= ph && pw > 1 {
+            pw -= 1;
+        } else if ph > 1 {
+            ph -= 1;
+        } else {
+            break;
+        }
+    }
+    (pw, ph, scale)
+}
+
+fn scale_box(box4: [f64; 4], origin: [f64; 2], scale: f64) -> [f64; 4] {
+    [
+        origin[0] + (box4[0] - origin[0]) * scale,
+        origin[1] + (box4[1] - origin[1]) * scale,
+        origin[0] + (box4[2] - origin[0]) * scale,
+        origin[1] + (box4[3] - origin[1]) * scale,
+    ]
+}
+
+/// Geometry mapped into the proxy buffer around the target's origin. Pixel-sized effect widths
+/// are scaled separately in [`proxy_scaled_data`] so upsampled ink keeps its exact thickness.
+fn scaled_geometry(geom: &PreparedSfx, origin: [f64; 2], scale: f64) -> PreparedSfx {
+    let map_pt = |p: (f64, f64)| -> (f64, f64) {
+        (origin[0] + (p.0 - origin[0]) * scale, origin[1] + (p.1 - origin[1]) * scale)
+    };
+    let map = |p: [f64; 2]| -> [f64; 2] {
+        let q = map_pt((p[0], p[1]));
+        [q.0, q.1]
+    };
+    let mut out = geom.clone();
+    for pl in &mut out.polylines {
+        for p in &mut pl.pts {
+            *p = map_pt(*p);
+        }
+    }
+    for g in &mut out.glyphs {
+        for pl in &mut g.polylines {
+            for p in &mut pl.pts {
+                *p = map_pt(*p);
+            }
+        }
+        g.rest_bounds = scale_box(g.rest_bounds, origin, scale);
+        g.rest_center = map(g.rest_center);
+        g.warped_bounds = scale_box(g.warped_bounds, origin, scale);
+        g.warped_center = map(g.warped_center);
+        for q in &mut g.quad_doc {
+            *q = map(*q);
+        }
+    }
+    out.rest_box = scale_box(out.rest_box, origin, scale);
+    out.warped_box = scale_box(out.warped_box, origin, scale);
+    for q in &mut out.world_corners {
+        *q = map(*q);
+    }
+    out
+}
+
+/// Scales every pixel-sized effect width by `proxy_scale` for rendering into a downsampled proxy.
+/// Without this, geometry shrinks by `proxy_scale` while halo/line/spike/shadow widths stay in
+/// document pixels, so upsampled >16 MP lettering looks `1/proxy_scale` times fatter.
+fn proxy_scaled_data(data: &SfxData, scale: f64) -> SfxData {
+    let mut out = data.clone();
+    let px = |v: f32| -> f32 { (f64::from(v) * scale).max(0.0) as f32 };
+    let signed = |v: f32| -> f32 { (f64::from(v) * scale) as f32 };
+    {
+        let le = &mut out.line_effect;
+        le.halo_width_px = px(le.halo_width_px);
+        le.line_width_px = px(le.line_width_px);
+        le.spike_length_px = px(le.spike_length_px);
+        le.spike_size_px = px(le.spike_size_px);
+        le.gpen_overshoot_px = px(le.gpen_overshoot_px);
+        le.ink_brush_overshoot_px = px(le.ink_brush_overshoot_px);
+        le.shtack_overshoot_px = px(le.shtack_overshoot_px);
+        le.shtack_thickness_px = px(le.shtack_thickness_px);
+    }
+    out.dry_brush.lic_length_px = px(out.dry_brush.lic_length_px);
+    out.vector_shadow.distance_px = px(out.vector_shadow.distance_px);
+    out.vector_shadow.extrude_depth_px = px(out.vector_shadow.extrude_depth_px);
+    for pass in &mut out.styles {
+        match pass {
+            SfxStylePass::Stroke { width_px, .. } => *width_px = px(*width_px),
+            SfxStylePass::Extrude3D { dx_px, dy_px, .. } => {
+                *dx_px = signed(*dx_px);
+                *dy_px = signed(*dy_px);
+            }
+            SfxStylePass::Shadow { dx_px, dy_px, blur_px, .. } => {
+                *dx_px = signed(*dx_px);
+                *dy_px = signed(*dy_px);
+                *blur_px = px(*blur_px);
+            }
+            SfxStylePass::InnerGlow { width_px, .. } => *width_px = px(*width_px),
+            SfxStylePass::NegativeInvert { .. } => {}
+        }
+    }
+    out
+}
+
+/// Bilinear upsample of a bounded RGBA proxy onto the full clipped target rect.
+///
+/// Only rows/columns that contain proxy ink are written, so the returned `Surface` stays sparse
+/// even when `bounds` spans tens of millions of pixels.
+fn upsample_rgba_to_surface(proxy: &[[f32; 4]], pw: usize, ph: usize, target: Rect, format: PixelFormat) -> Surface {
+    let mut s = Surface::new(format);
+    if proxy.len() < pw.saturating_mul(ph) || target.is_empty() {
+        return s;
+    }
+    let tw = target.width() as usize;
+    let th = target.height() as usize;
+    let mut sx0 = pw;
+    let mut sy0 = ph;
+    let mut sx1 = 0_usize;
+    let mut sy1 = 0_usize;
+    for y in 0..ph {
+        for x in 0..pw {
+            if proxy[y * pw + x][3] > 1e-6 {
+                sx0 = sx0.min(x);
+                sy0 = sy0.min(y);
+                sx1 = sx1.max(x);
+                sy1 = sy1.max(y);
+            }
+        }
+    }
+    if sx0 > sx1 || sy0 > sy1 {
+        return s;
+    }
+    let first = |s: usize, sn: usize, tn: usize| -> usize {
+        (((s as f32 + 0.5) * tn as f32 / sn as f32 - 0.5).floor() as isize).clamp(0, tn as isize) as usize
+    };
+    let last = |s: usize, sn: usize, tn: usize| -> usize {
+        (((s as f32 + 0.5) * tn as f32 / sn as f32 + 0.5).ceil() as isize).clamp(0, tn as isize) as usize
+    };
+    let x0 = first(sx0.saturating_sub(1), pw, tw);
+    let x1 = last((sx1 + 1).min(pw - 1), pw, tw).max(x0 + 1).min(tw);
+    let y0 = first(sy0.saturating_sub(1), ph, th);
+    let y1 = last((sy1 + 1).min(ph - 1), ph, th).max(y0 + 1).min(th);
+    let ch = format.channels();
+    let mut row_vals = vec![0.0_f32; (x1 - x0) * ch];
+    for ty in y0..y1 {
+        let sy = ((ty as f32 + 0.5) * ph as f32 / th as f32 - 0.5).clamp(0.0, (ph - 1) as f32);
+        let iy = (sy as usize).min(ph - 1);
+        let ny = (iy + 1).min(ph - 1);
+        let wy = sy - iy as f32;
+        for tx in x0..x1 {
+            let fx = ((tx as f32 + 0.5) * pw as f32 / tw as f32 - 0.5).clamp(0.0, (pw - 1) as f32);
+            let ix = (fx as usize).min(pw - 1);
+            let nx = (ix + 1).min(pw - 1);
+            let wx = fx - ix as f32;
+            let p00 = proxy[iy * pw + ix];
+            let p10 = proxy[iy * pw + nx];
+            let p01 = proxy[ny * pw + ix];
+            let p11 = proxy[ny * pw + nx];
+            let base = (tx - x0) * ch;
+            let mut px = [0.0_f32; 4];
+            for c in 0..4 {
+                px[c] = p00[c] * (1.0 - wx) * (1.0 - wy)
+                    + p10[c] * wx * (1.0 - wy)
+                    + p01[c] * (1.0 - wx) * wy
+                    + p11[c] * wx * wy;
+            }
+            from_rgba_into(&format, px, &mut row_vals[base..base + ch]);
+        }
+        let r = Rect::from_xywh(target.x0 + x0 as i32, target.y0 + ty as i32, (x1 - x0) as u32, 1);
+        s.write_region(r, &row_vals);
+    }
+    s.prune();
     s
 }
 
@@ -1831,18 +2023,43 @@ fn render_inner_glow_passes(data: &SfxData, base_cov: &[f32], w: usize, h: usize
     }
 }
 
+fn prepare_proxy_setup(orig_data: &SfxData, full_geom: &PreparedSfx, full_bounds: Rect) -> (Rect, PreparedSfx, f64, Option<SfxData>) {
+    let (pw, ph, proxy_scale) = proxy_target(full_bounds);
+    if proxy_scale >= 1.0 {
+        return (full_bounds, full_geom.clone(), 1.0, None);
+    }
+    let bounds = Rect::from_xywh(full_bounds.x0, full_bounds.y0, pw as u32, ph as u32);
+    let geom = scaled_geometry(full_geom, [full_bounds.x0 as f64, full_bounds.y0 as f64], proxy_scale);
+    // Effect widths must shrink with the proxy geometry, otherwise upsampling grows them by
+    // 1/proxy_scale and the lettering's halo / outline / shadow is far too thick.
+    (bounds, geom, proxy_scale, Some(proxy_scaled_data(orig_data, proxy_scale)))
+}
+
+fn finish_sfx_surface(rgba: &[[f32; 4]], bounds: Rect, full_bounds: Rect, proxy_scale: f64, format: PixelFormat) -> Surface {
+    if proxy_scale < 1.0 {
+        upsample_rgba_to_surface(rgba, bounds.width() as usize, bounds.height() as usize, full_bounds, format)
+    } else {
+        rgba_to_surface(rgba, bounds, format)
+    }
+}
+
 /// Renders an [`SfxData`] non-destructively into offscreen document [`Surface`]`(s)`.
 pub fn render_sfx(data: &SfxData, engine: &mut TextEngine, format: PixelFormat, dpi: f32) -> SfxRenderOutput {
-    let geom = build_sfx_geometry(data, engine, dpi);
-    let bounds = compute_render_bounds(data, &geom);
-    if bounds.is_empty() {
+    let full_geom = build_sfx_geometry(data, engine, dpi);
+    let full_bounds = compute_render_bounds(data, &full_geom);
+    if full_bounds.is_empty() {
         let s = Surface::new(format);
         return if data.has_negative_invert() {
-            SfxRenderOutput::InvertPair { under: s.clone(), invert: s, bounds: Rect::EMPTY, geom }
+            SfxRenderOutput::InvertPair { under: s.clone(), invert: s, bounds: Rect::EMPTY, geom: full_geom }
         } else {
-            SfxRenderOutput::Single { surface: s, bounds: Rect::EMPTY, geom }
+            SfxRenderOutput::Single { surface: s, bounds: Rect::EMPTY, geom: full_geom }
         };
     }
+
+    // A >16 MP / >8192 px lettering layer used to be dropped silently. Render it into a bounded
+    // proxy, then upsample onto the full clipped rect so the layer stays visible and editable.
+    let (bounds, geom, proxy_scale, scaled_data) = prepare_proxy_setup(data, &full_geom, full_bounds);
+    let data = scaled_data.as_ref().unwrap_or(data);
 
     let w = bounds.width() as usize;
     let h = bounds.height() as usize;
@@ -1980,9 +2197,9 @@ pub fn render_sfx(data: &SfxData, engine: &mut TextEngine, format: PixelFormat, 
         if let Some(lc) = &line_cov {
             paint_solid_over(&mut under_rgba, lc, color_rgba(le.line_color), 1.0);
         }
-        let under = rgba_to_surface(&under_rgba, bounds, format);
-        let invert = rgba_to_surface(&invert_rgba, bounds, format);
-        SfxRenderOutput::InvertPair { under, invert, bounds, geom }
+        let under = finish_sfx_surface(&under_rgba, bounds, full_bounds, proxy_scale, format);
+        let invert = finish_sfx_surface(&invert_rgba, bounds, full_bounds, proxy_scale, format);
+        SfxRenderOutput::InvertPair { under, invert, bounds: full_bounds, geom: full_geom }
     } else {
         let face_paint = eval_fill_rgba(&data.fill, bounds);
         paint_over(&mut under_rgba, &face_cov, &face_paint);
@@ -1992,8 +2209,8 @@ pub fn render_sfx(data: &SfxData, engine: &mut TextEngine, format: PixelFormat, 
         if let Some(lc) = &line_cov {
             paint_solid_over(&mut under_rgba, lc, color_rgba(le.line_color), 1.0);
         }
-        let surface = rgba_to_surface(&under_rgba, bounds, format);
-        SfxRenderOutput::Single { surface, bounds, geom }
+        let surface = finish_sfx_surface(&under_rgba, bounds, full_bounds, proxy_scale, format);
+        SfxRenderOutput::Single { surface, bounds: full_bounds, geom: full_geom }
     }
 }
 
@@ -2032,6 +2249,44 @@ mod tests {
             assert!(surface.tile_count() > 0);
             assert!(!surface.content_bounds().is_empty());
         }
+    }
+
+    /// Regression: a >16 MP / >8192 px SFX bbox used to return `Rect::EMPTY` and silently vanish.
+    #[test]
+    fn render_sfx_beyond_16mp_upsamples_from_proxy_and_keeps_ink() {
+        let mut engine = TextEngine::new();
+        let data = SfxData {
+            text: "BOOM!".to_owned(),
+            size_pt: 6_000.0,
+            origin: [120.0, 120.0],
+            ..SfxData::default()
+        };
+        let out = render_sfx(&data, &mut engine, PixelFormat::RGBA8, 72.0);
+        let bounds = out.bounds();
+        assert!(!bounds.is_empty(), "a large SFX layer must never vanish");
+        assert!(bounds.width() as usize * bounds.height() as usize > MAX_RENDER_PIXELS, "bbox must exceed 16 MP");
+        assert!(
+            bounds.width() > MAX_RENDER_EXTENT as u32 || bounds.height() > MAX_RENDER_EXTENT as u32,
+            "bbox must exceed 8192 px on at least one axis"
+        );
+        let SfxRenderOutput::Single { surface, .. } = out else {
+            panic!("default SFX has no negative-invert pass");
+        };
+        let ink = surface.content_bounds();
+        assert!(!ink.is_empty(), "proxy must be upsampled into the full target rect");
+        let mut visible = false;
+        for y in ink.y0..ink.y1 {
+            for x in ink.x0..ink.x1 {
+                if surface.sample_channel(x, y, 3) > 0.05 {
+                    visible = true;
+                    break;
+                }
+            }
+            if visible {
+                break;
+            }
+        }
+        assert!(visible, "the upsampled layer must contain visible ink pixels");
     }
 
     #[test]

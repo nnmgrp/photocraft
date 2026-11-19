@@ -9,7 +9,7 @@ use photocraft_algo::{PatternType, ScreentoneSpec};
 use photocraft_color::{BlendMode, Color, PixelFormat};
 use photocraft_doc::sfx::{
     SfxData, SfxDryBrushEngine, SfxDryBrushSpec, SfxFillSource, SfxLineEffect, SfxLineStyle, SfxPreset, SfxShtackVariant, SfxSpikeShape,
-    SfxVectorShadow,
+    SfxVectorShadow, reset_sfx_warps_for_new_layer, scale_new_sfx_for_document,
 };
 use photocraft_doc::text::Orientation;
 use photocraft_doc::{Group, Layer, LayerContent, LayerId, Rect};
@@ -449,12 +449,19 @@ fn parse_sfx_data(cmd: &str, p: &Value) -> Result<SfxData> {
 
 fn sfx_create(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "sfx.create";
-    let data = parse_sfx_data(CMD, p)?;
+    // An explicit `sfx` object is caller-owned: never overwrite values it supplied. Freshly derived
+    // defaults (from `text`/`x`/`y`) scale to the document so 600-DPI canvases stay legible.
+    let explicit_sfx = p.get("sfx").is_some();
+    let mut data = parse_sfx_data(CMD, p)?;
     let custom_name = p.get("name").and_then(Value::as_str).map(|s| s.trim().to_owned()).filter(|s| !s.is_empty());
-    let (fmt, dpi) = {
+    let (fmt, dpi, width, height) = {
         let st = s.active().ok_or(EngineError::NoDocument)?;
-        (st.doc.pixel_format(), st.doc.resolution_dpi)
+        (st.doc.pixel_format(), st.doc.resolution_dpi, st.doc.size.width, st.doc.size.height)
     };
+    if !explicit_sfx {
+        reset_sfx_warps_for_new_layer(&mut data);
+        scale_new_sfx_for_document(&mut data, width, height);
+    }
     let rendered = render_with_shared_text(&data, fmt, dpi);
     let bounds = rendered.bounds();
 
@@ -539,6 +546,8 @@ fn sfx_convert_from_text(s: &mut Session, p: &Value) -> Result<Value> {
             fill: SfxFillSource::Solid { color: first_style.color },
             ..SfxData::default()
         };
+        // A converted type layer is a new SFX layer: never inherit warp deltas from tool state.
+        reset_sfx_warps_for_new_layer(&mut sfx);
         sfx.validate();
         (id, st.doc.pixel_format(), st.doc.resolution_dpi, sfx)
     };
@@ -792,6 +801,28 @@ mod tests {
         assert!(after_save["presets"].as_array().unwrap().iter().any(|p| p["name"] == "Custom SFX Test"));
         let del = s.execute("sfx.presets.delete", json!({ "name": "Custom SFX Test" })).unwrap();
         assert_eq!(del["ok"], true);
+    }
+
+    #[test]
+    fn sfx_create_scales_fresh_defaults_but_preserves_explicit_payload() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({ "width": 12303, "height": 17499 })).unwrap();
+
+        let fresh = s.execute("sfx.create", json!({ "text": "BAM", "x": 40.0, "y": 60.0 })).unwrap();
+        let fresh_id = LayerId(fresh["layer"].as_u64().unwrap());
+        let scaled = s.active().unwrap().doc.layer(fresh_id).unwrap().sfx.as_deref().unwrap().clone();
+        assert!(scaled.size_pt > 54.0 * 5.0, "fresh defaults scale on a large page: {}", scaled.size_pt);
+        assert!(scaled.line_effect.halo_width_px > 10.0, "halo scales too");
+
+        let mut explicit = SfxData::default();
+        explicit.text = "BOOM".to_owned();
+        explicit.size_pt = 72.0;
+        explicit.free_transform.corners[0] = [3.0, 4.0];
+        let made = s.execute("sfx.create", json!({ "sfx": explicit })).unwrap();
+        let explicit_id = LayerId(made["layer"].as_u64().unwrap());
+        let got = s.active().unwrap().doc.layer(explicit_id).unwrap().sfx.as_deref().unwrap();
+        assert_eq!(got.size_pt, 72.0, "explicit point size is never overwritten");
+        assert_eq!(got.free_transform.corners[0], [3.0, 4.0], "explicit corner warp is preserved");
     }
 
     #[test]

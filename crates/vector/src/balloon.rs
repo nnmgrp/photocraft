@@ -1527,6 +1527,81 @@ struct UniflashNeedle {
     perp: [f64; 2],
 }
 
+/// Shortest signed angular difference `a - b` folded into `(-PI, PI]`.
+fn angle_delta(a: f64, b: f64) -> f64 {
+    let d = (a - b).rem_euclid(TAU);
+    if d > std::f64::consts::PI { d - TAU } else { d }
+}
+
+fn uniflash_needle_count(balloon: &LiveBalloon) -> u32 {
+    match &balloon.body {
+        LiveBalloonBody::Uniflash { needles, .. } => (*needles).clamp(24, 450),
+        _ => 160,
+    }
+}
+
+/// The angular cone (base direction plus relative min/max offsets) covered by one tail's mouth
+/// and tip, measured from the Uniflash centre. Using relative offsets makes the cone robust to
+/// the `[-PI, PI]` wrap-around at the left edge.
+fn tail_wedge_range(balloon: &LiveBalloon, t: &LiveBalloonTail) -> Option<(f64, f64, f64)> {
+    if t.preset == TailPreset::None {
+        return None;
+    }
+    let r = balloon.body.rect();
+    let cx = r[0] + r[2] * 0.5;
+    let cy = r[1] + r[3] * 0.5;
+    let (mouth, normal) = balloon.point_and_normal_on_body(t.perimeter_t);
+    let base = (mouth[1] - cy).atan2(mouth[0] - cx);
+    let tangent = [-normal[1], normal[0]];
+    let min_half = (r[2].abs().min(r[3].abs()) * 0.5).max(4.0);
+    let half_w = t.mouth_width.clamp(4.0, min_half * 1.6) * 0.5;
+    let left = [mouth[0] - tangent[0] * half_w, mouth[1] - tangent[1] * half_w];
+    let right = [mouth[0] + tangent[0] * half_w, mouth[1] + tangent[1] * half_w];
+    let mut lo = 0.0f64;
+    let mut hi = 0.0f64;
+    for p in [left, right, t.tip] {
+        let d = angle_delta((p[1] - cy).atan2(p[0] - cx), base);
+        lo = lo.min(d);
+        hi = hi.max(d);
+    }
+    Some((base, lo, hi))
+}
+
+/// Whether a radial needle at `theta` sits inside an active tail's angular cone. Needles in the
+/// cone are dropped so they part around the tail opening instead of stabbing through its walls.
+fn needle_angle_in_tail(balloon: &LiveBalloon, theta: f64) -> bool {
+    let margin = (TAU / (uniflash_needle_count(balloon) as f64)).clamp(0.06, 0.6);
+    balloon.tails.iter().filter(|t| t.preset != TailPreset::None).any(|t| {
+        tail_wedge_range(balloon, t).is_some_and(|(base, lo, hi)| {
+            let d = angle_delta(theta, base);
+            d >= lo - margin && d <= hi + margin
+        })
+    })
+}
+
+/// Test hook: how many of a Uniflash body's radial needles still cross an explicit tail's cone.
+/// A correctly carved flash reports zero.
+#[cfg(test)]
+fn needle_intersects_tail(balloon: &LiveBalloon, tail: &LiveBalloonTail) -> usize {
+    let Some((base, lo, hi)) = tail_wedge_range(balloon, tail) else {
+        return 0;
+    };
+    let r = balloon.body.rect();
+    let cx = r[0] + r[2] * 0.5;
+    let cy = r[1] + r[3] * 0.5;
+    let margin = (TAU / (uniflash_needle_count(balloon) as f64)).clamp(0.06, 0.6);
+    uniflash_needles(balloon).map_or(0, |needles| {
+        needles
+            .iter()
+            .filter(|n| {
+                let theta = (n.outer.y - cy).atan2(n.outer.x - cx);
+                let d = angle_delta(theta, base);
+                d >= lo - margin && d <= hi + margin
+            })
+            .count()
+    })
+}
+
 /// The needle geometry of a Uniflash body: straight rays from the outer rim to the inner mask
 /// ellipse, with bundles and jitter. Shared by the closed-polygon renderer
 /// ([`build_uniflash_paths`]) and the Linework bake ([`balloon_to_linework_strokes`]).
@@ -1578,6 +1653,11 @@ fn uniflash_needles(balloon: &LiveBalloon) -> Option<Vec<UniflashNeedle>> {
         let bundle_shift = bundle_phase * step * 0.35 * bundle_group.clamp(0.0, 1.0);
 
         let theta = (i as f64) * step + bundle_shift + rand_a * step * angle_jitter.clamp(0.0, 1.0);
+        // Carve the tail opening out of the ray fan: needles whose angle falls inside an explicit
+        // tail's cone are omitted so they part around the tail instead of crossing its walls.
+        if needle_angle_in_tail(balloon, theta) {
+            continue;
+        }
         let cos = theta.cos();
         let sin = theta.sin();
 
@@ -1725,6 +1805,85 @@ fn uniflash_tail_geoms(balloon: &LiveBalloon, t: &LiveBalloonTail) -> UniflashTa
     }
 }
 
+/// How far a tail's base is buried inside the body, proportional to the balloon's smaller half
+/// side. The old fixed `min(32.0)` cap made 600-DPI tails detach from large bodies.
+fn tail_base_inset(balloon: &LiveBalloon) -> f64 {
+    let r = balloon.body.rect();
+    let min_half = (r[2].abs().min(r[3].abs()) * 0.5).max(4.0);
+    (min_half * 0.28).clamp(0.0, min_half * 0.45)
+}
+
+/// For axis-aligned bodies, the usable half-length of the straight wall the mouth sits on. The
+/// mouth half-width is clamped to this so a tail near a corner cannot wrap around it and grow a
+/// backward "ear" outside the wall. Curved bodies return `None` (no straight-wall constraint).
+fn tail_wall_half_extent(balloon: &LiveBalloon, mouth: [f64; 2], normal: [f64; 2]) -> Option<f64> {
+    match &balloon.body {
+        LiveBalloonBody::Rect { .. } | LiveBalloonBody::ChamferRect { .. } => {
+            let r = balloon.body.rect();
+            let cx = r[0] + r[2] * 0.5;
+            let cy = r[1] + r[3] * 0.5;
+            let rx = (r[2] * 0.5).abs().max(1.0);
+            let ry = (r[3] * 0.5).abs().max(1.0);
+            let chamfer = match &balloon.body {
+                LiveBalloonBody::ChamferRect { chamfer, .. } => chamfer.abs().max(0.0),
+                _ => 0.0,
+            };
+            let extent = if normal[0].abs() >= normal[1].abs() {
+                ry - (mouth[1] - cy).abs() - chamfer
+            } else {
+                rx - (mouth[0] - cx).abs() - chamfer
+            };
+            Some(extent.max(0.0))
+        }
+        _ => None,
+    }
+}
+
+/// Clamps a bezier control handle so it cannot sit behind its base anchor relative to the tip
+/// (which would fold the tail wall backward), and bounds its lateral excursion.
+fn clamp_tail_handle(anchor: Point, tip: Point, handle: Point, max_lateral: f64) -> Point {
+    let dx = tip.x - anchor.x;
+    let dy = tip.y - anchor.y;
+    let len = (dx * dx + dy * dy).sqrt();
+    if len < 1e-6 {
+        return anchor;
+    }
+    let dir = (dx / len, dy / len);
+    let perp = (-dir.1, dir.0);
+    let rel = (handle.x - anchor.x, handle.y - anchor.y);
+    let along = (rel.0 * dir.0 + rel.1 * dir.1).clamp(0.0, len);
+    let lateral = (rel.0 * perp.0 + rel.1 * perp.1).clamp(-max_lateral.abs(), max_lateral.abs());
+    Point::new(anchor.x + dir.0 * along + perp.0 * lateral, anchor.y + dir.1 * along + perp.1 * lateral)
+}
+
+/// The two Arc bezier handles, clamped so they never cross each other (the S-pinch seen when a
+/// tip is short or sideways) and never fold behind their base anchors.
+fn arc_tail_handles(base_l: Point, base_r: Point, tip: Point, ctrl: Point, half_w: f64) -> (Point, Point) {
+    // Both handles start from the bend control. Clamping each against its own base→tip axis keeps
+    // them in the outward half-space (never behind the base) for short or sideways tips.
+    let lateral = half_w * 0.5;
+    let mut c_l = clamp_tail_handle(base_l, tip, ctrl, lateral);
+    let mut c_r = clamp_tail_handle(base_r, tip, ctrl, lateral);
+
+    // Enforce left-to-right ordering along the base chord with a minimum separation, so the two
+    // controls cannot collapse or swap sides — the crossover that produced the S-pinch.
+    let ax = base_r.x - base_l.x;
+    let ay = base_r.y - base_l.y;
+    let al = (ax * ax + ay * ay).sqrt().max(1e-6);
+    let axis = (ax / al, ay / al);
+    let sep = half_w * 0.5;
+    let proj = |p: Point| (p.x - base_l.x) * axis.0 + (p.y - base_l.y) * axis.1;
+    let (pl, pr) = (proj(c_l), proj(c_r));
+    if pr - pl < sep {
+        let mid = (pl + pr) * 0.5;
+        let shift_l = (mid - sep * 0.5) - pl;
+        let shift_r = (mid + sep * 0.5) - pr;
+        c_l = clamp_tail_handle(base_l, tip, Point::new(c_l.x + axis.0 * shift_l, c_l.y + axis.1 * shift_l), lateral);
+        c_r = clamp_tail_handle(base_r, tip, Point::new(c_r.x + axis.0 * shift_r, c_r.y + axis.1 * shift_r), lateral);
+    }
+    (c_l, c_r)
+}
+
 /// One tail's geometry: the outline welded to the body (if any) and the detached thought
 /// bubbles (if any).
 fn build_single_tail_path(balloon: &LiveBalloon, t: &LiveBalloonTail) -> (Option<Path>, Option<Path>) {
@@ -1744,7 +1903,13 @@ fn build_single_tail_path(balloon: &LiveBalloon, t: &LiveBalloonTail) -> (Option
     let tangent = [-normal[1], normal[0]];
     let r = balloon.body.rect();
     let min_half = (r[2].abs().min(r[3].abs()) * 0.5).max(4.0);
-    let half_w = t.mouth_width.clamp(4.0, min_half * 1.6) * 0.5;
+    let mut half_w = t.mouth_width.clamp(4.0, min_half * 1.6) * 0.5;
+    // On Rect / ChamferRect the mouth must stay on its straight wall. Near a corner the raw
+    // mouth width would push an anchor around the corner and grow a backward "ear" outside the
+    // wall; clamping to the wall's usable half-length keeps the base on the wall.
+    if let Some(wall_half) = tail_wall_half_extent(balloon, mouth_center, normal) {
+        half_w = half_w.min((wall_half * 0.92).max(1.0));
+    }
 
     // Keep the effective tip strictly in front of the mouth along `normal` so drags
     // inside the balloon body cannot invert `chord_perp` against `tangent` (figure-8 cross).
@@ -1810,7 +1975,7 @@ fn build_single_tail_path(balloon: &LiveBalloon, t: &LiveBalloonTail) -> (Option
         return (None, Some(Path::new(subpaths)));
     }
 
-    let inset = (min_half * 0.28).min(32.0);
+    let inset = tail_base_inset(balloon);
     let anchor = [mouth_center[0] - normal[0] * inset, mouth_center[1] - normal[1] * inset];
 
     let p_left = Point::new(anchor[0] - tangent[0] * half_w, anchor[1] - tangent[1] * half_w);
@@ -1824,8 +1989,9 @@ fn build_single_tail_path(balloon: &LiveBalloon, t: &LiveBalloonTail) -> (Option
             op: PathOp::Combine,
         },
         TailPreset::Arc => {
-            let c_l = Point::new(ctrl[0] - chord_perp[0] * half_w * 0.25, ctrl[1] - chord_perp[1] * half_w * 0.25);
-            let c_r = Point::new(ctrl[0] + chord_perp[0] * half_w * 0.25, ctrl[1] + chord_perp[1] * half_w * 0.25);
+            // Clamp the handles into the outward half-space and keep them ordered; without this a
+            // short or sideways tip makes them cross and the closed bezier folds into an S-pinch.
+            let (c_l, c_r) = arc_tail_handles(p_left, p_right, p_tip, Point::new(ctrl[0], ctrl[1]), half_w);
             Subpath {
                 knots: vec![
                     Knot { anchor: p_left, in_ctrl: p_left, out_ctrl: c_l, smooth: false },
@@ -4256,6 +4422,24 @@ mod tests {
         contours.iter().map(|c| signed_area(c).abs()).sum()
     }
 
+    fn is_simple_polygon(poly: &[P]) -> bool {
+        let n = poly.len();
+        if n < 3 {
+            return false;
+        }
+        for i in 0..n {
+            for j in (i + 1)..n {
+                if (i + 1) % n == j || (j + 1) % n == i {
+                    continue;
+                }
+                if segments_cross(poly[i], poly[(i + 1) % n], poly[j], poly[(j + 1) % n]) {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
     #[test]
     fn union_of_two_overlapping_squares_is_one_contour() {
         let a = square(0.0, 0.0, 10.0);
@@ -4407,6 +4591,122 @@ mod tests {
                 assert!(area(&polygons) > 1000.0, "positive contour area for {preset:?}");
             }
         }
+    }
+
+    #[test]
+    fn rect_and_chamfer_tails_near_edges_and_corners_do_not_loop_backward() {
+        let rect = [100.0, 100.0, 2400.0, 1600.0];
+        for body in [
+            LiveBalloonBody::Rect { rect, corner_radius: 12.0 },
+            LiveBalloonBody::ChamferRect { rect, chamfer: 24.0, concave: 0.3 },
+        ] {
+            for perimeter_t in [0.50, 0.56, 0.62] {
+                for tip in [
+                    [rect[0] + rect[2] * 0.25, rect[1] + rect[3] + 48.0], // straight out
+                    [rect[0] + rect[2] * 0.95, rect[1] + rect[3] + 12.0], // shallow + sideways near a corner
+                    [rect[0] + rect[2] + 8.0, rect[1] + rect[3] * 0.98],  // beside the corner
+                ] {
+                    for preset in [TailPreset::Wedge, TailPreset::Arc] {
+                        let balloon = LiveBalloon {
+                            id: 1,
+                            body: body.clone(),
+                            tails: vec![LiveBalloonTail {
+                                id: 1,
+                                preset,
+                                perimeter_t,
+                                mouth_width: 640.0, // deliberately wider than the wall half-length
+                                tip,
+                                bend: 0.85,
+                                bubbles: 3,
+                                bubble_radius: 10.0,
+                            }],
+                            stroke_width: 2.5,
+                            ..LiveBalloon::default()
+                        };
+                        let path = build_single_tail_path(&balloon, &balloon.tails[0]).0.expect("tail path");
+                        let polys = closed_contours(&path);
+                        assert_eq!(polys.len(), 1, "one closed tail polygon for {preset:?} t={perimeter_t} tip={tip:?}");
+                        assert!(is_simple_polygon(&polys[0]), "tail must not self-intersect: {preset:?} t={perimeter_t} tip={tip:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn arc_tail_short_sideways_tip_keeps_handles_ordered() {
+        let rect = [100.0, 100.0, 800.0, 600.0];
+        let balloon = LiveBalloon {
+            id: 1,
+            body: LiveBalloonBody::Rect { rect, corner_radius: 0.0 },
+            tails: vec![LiveBalloonTail {
+                id: 1,
+                preset: TailPreset::Arc,
+                perimeter_t: 0.54,
+                mouth_width: 60.0,
+                tip: [rect[0] + rect[2] * 0.98, rect[1] + rect[3] + 6.0],
+                bend: 0.8,
+                bubbles: 3,
+                bubble_radius: 10.0,
+            }],
+            stroke_width: 2.5,
+            ..LiveBalloon::default()
+        };
+        let path = build_single_tail_path(&balloon, &balloon.tails[0]).0.expect("tail path");
+        let knots = &path.subpaths[0].knots;
+        assert_eq!(knots.len(), 3);
+        let (base_l, base_r, tip) = (knots[0].anchor, knots[2].anchor, knots[1].anchor);
+        let (c_l, c_r) = (knots[0].out_ctrl, knots[2].in_ctrl);
+        let axis = (base_r.x - base_l.x, base_r.y - base_l.y);
+        let axis_len = (axis.0 * axis.0 + axis.1 * axis.1).sqrt().max(1e-6);
+        let proj = |p: Point| ((p.x - base_l.x) * axis.0 + (p.y - base_l.y) * axis.1) / axis_len;
+        assert!(proj(c_l) < proj(c_r), "Arc controls crossed (S-pinch): c_l={c_l:?} c_r={c_r:?}");
+        let forward = |p: Point| (p.x - base_l.x) * (tip.x - base_l.x) + (p.y - base_l.y) * (tip.y - base_l.y) >= -1e-6;
+        assert!(forward(c_l) && forward(c_r), "Arc controls folded behind the base");
+    }
+
+    #[test]
+    fn uniflash_explicit_tail_carves_radial_needles() {
+        let rect = [0.0, 0.0, 400.0, 400.0];
+        let body = || LiveBalloonBody::Uniflash {
+            rect,
+            mode: UniflashMode::InwardNeedles,
+            needles: 160,
+            inner_ratio: 0.62,
+            bundle_group: 0.0,
+            length_jitter: 0.0,
+            angle_jitter: 0.0,
+            needle_width: 4.0,
+            outer_sharpness: 1.0,
+            inner_sharpness: 1.0,
+            seed: 777,
+        };
+        let plain = LiveBalloon { id: 1, body: body(), tails: Vec::new(), stroke_width: 4.0, ..LiveBalloon::default() };
+        assert_eq!(uniflash_needles(&plain).map_or(0, |v| v.len()), 160);
+
+        let tail = LiveBalloonTail {
+            id: 1,
+            preset: TailPreset::Wedge,
+            perimeter_t: 0.0,
+            mouth_width: 90.0,
+            tip: [200.0, -80.0],
+            bend: 0.0,
+            bubbles: 0,
+            bubble_radius: 10.0,
+        };
+        let with_tail = LiveBalloon { id: 1, body: body(), tails: vec![tail.clone()], stroke_width: 4.0, ..LiveBalloon::default() };
+        let remaining = uniflash_needles(&with_tail).map_or(0, |v| v.len());
+        assert!(remaining < 160, "needles inside the tail cone were omitted, got {remaining}");
+        assert_eq!(needle_intersects_tail(&with_tail, &tail), 0, "no needle crosses the tail cone");
+        assert!(balloon_to_linework_strokes(&with_tail).len() < 162, "linework bake also omits the carved needles");
+    }
+
+    #[test]
+    fn tail_base_inset_scales_proportionally_on_large_balloons() {
+        let small = LiveBalloon { id: 1, body: LiveBalloonBody::Rect { rect: [0.0, 0.0, 200.0, 140.0], corner_radius: 0.0 }, ..LiveBalloon::default() };
+        let large = LiveBalloon { id: 1, body: LiveBalloonBody::Rect { rect: [0.0, 0.0, 4000.0, 4000.0], corner_radius: 0.0 }, ..LiveBalloon::default() };
+        assert!(tail_base_inset(&large) > 32.0, "large tail inset must exceed the old 32 px cap");
+        assert!(tail_base_inset(&large) > tail_base_inset(&small) * 10.0);
     }
 
     #[test]
@@ -5377,6 +5677,9 @@ mod tests {
             },
             line_style: BalloonLineStyle::UkiyoBrush,
             stroke_width: 6.0,
+            // This measures the stylized rim density, not tail carving: a flash has no default
+            // tail, and a tail would deliberately leave a needle-free gap in the rim.
+            tails: Vec::new(),
             ..LiveBalloon::default()
         };
         let contour = build_uniflash_contour_for_line_style(&b);

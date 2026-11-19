@@ -20,6 +20,15 @@ pub const MAX_SFX_LIQUIFY_STROKES: usize = 512;
 pub const MAX_SFX_STYLE_PASSES: usize = 16;
 /// Maximum number of Catmull-Rom arc spline control points stored on one layer.
 pub const MAX_SFX_SPLINE_POINTS: usize = 64;
+/// Safe upper bound for pixel-sized effect fields on 600-DPI / gigapixel canvases.
+///
+/// Small canvases keep their original values; this only lifts the old low ceilings so an artist
+/// can author lettering on a 12303×17499 document without effects becoming invisible.
+pub const MAX_SFX_EFFECT_PX: f32 = 16_384.0;
+/// Document min-side (px) at which new SFX defaults start to scale up.
+pub const SFX_REFERENCE_MIN_SIDE: f64 = 1200.0;
+/// Maximum point size of a newly created SFX layer.
+pub const MAX_SFX_SIZE_PT: f32 = 10_000.0;
 
 fn default_one_f64() -> f64 {
     1.0
@@ -393,36 +402,36 @@ impl Default for SfxLineEffect {
 
 impl SfxLineEffect {
     pub fn validate(&mut self) {
-        self.halo_width_px = finite_f32(self.halo_width_px, 0.0).clamp(0.0, 64.0);
+        self.halo_width_px = finite_f32(self.halo_width_px, 0.0).clamp(0.0, MAX_SFX_EFFECT_PX);
         self.halo_color = finite_color(self.halo_color);
-        self.line_width_px = finite_f32(self.line_width_px, 0.0).clamp(0.0, 64.0);
+        self.line_width_px = finite_f32(self.line_width_px, 0.0).clamp(0.0, MAX_SFX_EFFECT_PX);
         self.line_color = finite_color(self.line_color);
 
         self.one_bit_intensity = finite_f32(self.one_bit_intensity, 55.0).clamp(0.0, 100.0);
 
-        self.spike_length_px = finite_f32(self.spike_length_px, 12.0).clamp(2.0, 28.0);
-        self.spike_size_px = finite_f32(self.spike_size_px, 7.0).clamp(2.0, 20.0);
+        self.spike_length_px = finite_f32(self.spike_length_px, 12.0).clamp(2.0, MAX_SFX_EFFECT_PX);
+        self.spike_size_px = finite_f32(self.spike_size_px, 7.0).clamp(2.0, MAX_SFX_EFFECT_PX);
         self.spike_count = self.spike_count.clamp(2, 40);
         self.spike_random_pct = finite_f32(self.spike_random_pct, 45.0).clamp(0.0, 100.0);
 
         self.gpen_contrast_pct = finite_f32(self.gpen_contrast_pct, 78.0).clamp(0.0, 100.0);
         self.gpen_angle_deg = finite_f32(self.gpen_angle_deg, -35.0).clamp(-90.0, 90.0);
         self.gpen_pinch_pct = finite_f32(self.gpen_pinch_pct, 45.0).clamp(0.0, 100.0);
-        self.gpen_overshoot_px = finite_f32(self.gpen_overshoot_px, 6.0).clamp(0.0, 14.0);
+        self.gpen_overshoot_px = finite_f32(self.gpen_overshoot_px, 6.0).clamp(0.0, MAX_SFX_EFFECT_PX);
         self.gpen_overshoot_count_pct = finite_f32(self.gpen_overshoot_count_pct, 85.0).clamp(0.0, 100.0);
         self.gpen_overshoot_random_pct = finite_f32(self.gpen_overshoot_random_pct, 45.0).clamp(0.0, 100.0);
 
         self.ink_brush_roughness_pct = finite_f32(self.ink_brush_roughness_pct, 45.0).clamp(0.0, 100.0);
         self.ink_brush_dropout_pct = finite_f32(self.ink_brush_dropout_pct, 35.0).clamp(0.0, 100.0);
         self.ink_brush_pressure_pct = finite_f32(self.ink_brush_pressure_pct, 60.0).clamp(0.0, 100.0);
-        self.ink_brush_overshoot_px = finite_f32(self.ink_brush_overshoot_px, 7.0).clamp(0.0, 14.0);
+        self.ink_brush_overshoot_px = finite_f32(self.ink_brush_overshoot_px, 7.0).clamp(0.0, MAX_SFX_EFFECT_PX);
         self.ink_brush_overshoot_count_pct = finite_f32(self.ink_brush_overshoot_count_pct, 85.0).clamp(0.0, 100.0);
         self.ink_brush_overshoot_random_pct = finite_f32(self.ink_brush_overshoot_random_pct, 45.0).clamp(0.0, 100.0);
 
         self.shtack_bristles = self.shtack_bristles.clamp(2, 6);
         self.shtack_split_pct = finite_f32(self.shtack_split_pct, 78.0).clamp(0.0, 100.0);
-        self.shtack_overshoot_px = finite_f32(self.shtack_overshoot_px, 20.0).clamp(0.0, 34.0);
-        self.shtack_thickness_px = finite_f32(self.shtack_thickness_px, 14.0).clamp(6.0, 24.0);
+        self.shtack_overshoot_px = finite_f32(self.shtack_overshoot_px, 20.0).clamp(0.0, MAX_SFX_EFFECT_PX);
+        self.shtack_thickness_px = finite_f32(self.shtack_thickness_px, 14.0).clamp(6.0, MAX_SFX_EFFECT_PX);
         self.shtack_dryness_pct = finite_f32(self.shtack_dryness_pct, 26.0).clamp(0.0, 100.0);
     }
 }
@@ -488,7 +497,7 @@ impl SfxDryBrushSpec {
     pub fn validate(&mut self) {
         self.dryness_pct = finite_f32(self.dryness_pct, 44.0).clamp(0.0, 100.0);
         self.freq_pct = finite_f32(self.freq_pct, 60.0).clamp(10.0, 100.0);
-        self.lic_length_px = finite_f32(self.lic_length_px, 14.0).clamp(4.0, 32.0);
+        self.lic_length_px = finite_f32(self.lic_length_px, 14.0).clamp(4.0, MAX_SFX_EFFECT_PX);
         self.warp_pct = finite_f32(self.warp_pct, 32.0).clamp(0.0, 100.0);
         self.paper_grain_pct = finite_f32(self.paper_grain_pct, 40.0).clamp(0.0, 100.0);
         self.edge_wear_pct = finite_f32(self.edge_wear_pct, 42.0).clamp(0.0, 100.0);
@@ -529,8 +538,8 @@ impl Default for SfxVectorShadow {
 impl SfxVectorShadow {
     pub fn validate(&mut self) {
         self.angle_deg = finite_f32(self.angle_deg, 52.0).clamp(-360.0, 360.0);
-        self.distance_px = finite_f32(self.distance_px, 0.0).clamp(0.0, 256.0);
-        self.extrude_depth_px = finite_f32(self.extrude_depth_px, 0.0).clamp(0.0, 128.0);
+        self.distance_px = finite_f32(self.distance_px, 0.0).clamp(0.0, MAX_SFX_EFFECT_PX);
+        self.extrude_depth_px = finite_f32(self.extrude_depth_px, 0.0).clamp(0.0, MAX_SFX_EFFECT_PX);
         self.color = finite_color(self.color);
     }
 
@@ -935,25 +944,25 @@ impl SfxStylePass {
     pub fn validate(&mut self) {
         match self {
             Self::Stroke { width_px, miter_limit, fill, .. } => {
-                *width_px = finite_f32(*width_px, 4.0).clamp(0.0, 256.0);
+                *width_px = finite_f32(*width_px, 4.0).clamp(0.0, MAX_SFX_EFFECT_PX);
                 *miter_limit = finite_f32(*miter_limit, 4.0).clamp(1.0, 24.0);
                 fill.validate();
             }
             Self::Extrude3D { dx_px, dy_px, steps, fill, .. } => {
-                *dx_px = finite_f32(*dx_px, 6.0).clamp(-512.0, 512.0);
-                *dy_px = finite_f32(*dy_px, 6.0).clamp(-512.0, 512.0);
+                *dx_px = finite_f32(*dx_px, 6.0).clamp(-MAX_SFX_EFFECT_PX, MAX_SFX_EFFECT_PX);
+                *dy_px = finite_f32(*dy_px, 6.0).clamp(-MAX_SFX_EFFECT_PX, MAX_SFX_EFFECT_PX);
                 *steps = (*steps).clamp(1, 128);
                 fill.validate();
             }
             Self::Shadow { dx_px, dy_px, blur_px, color, opacity, .. } => {
-                *dx_px = finite_f32(*dx_px, 5.0).clamp(-512.0, 512.0);
-                *dy_px = finite_f32(*dy_px, 5.0).clamp(-512.0, 512.0);
-                *blur_px = finite_f32(*blur_px, 0.0).clamp(0.0, 128.0);
+                *dx_px = finite_f32(*dx_px, 5.0).clamp(-MAX_SFX_EFFECT_PX, MAX_SFX_EFFECT_PX);
+                *dy_px = finite_f32(*dy_px, 5.0).clamp(-MAX_SFX_EFFECT_PX, MAX_SFX_EFFECT_PX);
+                *blur_px = finite_f32(*blur_px, 0.0).clamp(0.0, MAX_SFX_EFFECT_PX);
                 *color = finite_color(*color);
                 *opacity = finite_f32(*opacity, 0.75).clamp(0.0, 1.0);
             }
             Self::InnerGlow { width_px, color, opacity, .. } => {
-                *width_px = finite_f32(*width_px, 3.0).clamp(0.0, 128.0);
+                *width_px = finite_f32(*width_px, 3.0).clamp(0.0, MAX_SFX_EFFECT_PX);
                 *color = finite_color(*color);
                 *opacity = finite_f32(*opacity, 0.85).clamp(0.0, 1.0);
             }
@@ -1091,7 +1100,7 @@ impl SfxData {
             self.font_family = default_font_family();
         }
         self.weight = self.weight.clamp(100, 900);
-        self.size_pt = finite_f32(self.size_pt, 48.0).clamp(4.0, 1000.0);
+        self.size_pt = finite_f32(self.size_pt, 48.0).clamp(4.0, MAX_SFX_SIZE_PT);
         self.tracking = finite_f32(self.tracking, 0.0).clamp(-500.0, 2000.0);
         self.leading_scale = finite_f32(self.leading_scale, 1.05).clamp(0.4, 4.0);
         self.free_transform.validate();
@@ -1168,6 +1177,67 @@ impl SfxData {
     }
 }
 
+/// Scale the pixel-sized defaults of a **newly created** SFX layer to the document's min side.
+///
+/// `scale = (min_side / SFX_REFERENCE_MIN_SIDE).max(1.0)`, so canvases at or below 1200 px keep
+/// their exact historical values. Call this only for freshly derived defaults: caller-supplied
+/// values in an `sfx.create` payload are already explicit and must not be overwritten.
+pub fn scale_new_sfx_for_document(data: &mut SfxData, doc_width: u32, doc_height: u32) {
+    let scale = (f64::from(doc_width.min(doc_height)) / SFX_REFERENCE_MIN_SIDE).max(1.0);
+    if scale <= 1.0 {
+        return;
+    }
+    let cap = f64::from(MAX_SFX_EFFECT_PX);
+    let scaled = |v: f32| -> f32 { (f64::from(finite_f32(v, 0.0)) * scale).clamp(0.0, cap) as f32 };
+    let scaled_signed = |v: f32| -> f32 { (f64::from(finite_f32(v, 0.0)) * scale).clamp(-cap, cap) as f32 };
+
+    data.size_pt = (f64::from(finite_f32(data.size_pt, 54.0)) * scale).clamp(4.0, f64::from(MAX_SFX_SIZE_PT)) as f32;
+    data.line_effect.halo_width_px = scaled(data.line_effect.halo_width_px);
+    data.line_effect.line_width_px = scaled(data.line_effect.line_width_px);
+    data.line_effect.spike_length_px = scaled(data.line_effect.spike_length_px).max(2.0);
+    data.line_effect.spike_size_px = scaled(data.line_effect.spike_size_px).max(2.0);
+    data.line_effect.gpen_overshoot_px = scaled(data.line_effect.gpen_overshoot_px);
+    data.line_effect.ink_brush_overshoot_px = scaled(data.line_effect.ink_brush_overshoot_px);
+    data.line_effect.shtack_overshoot_px = scaled(data.line_effect.shtack_overshoot_px);
+    data.line_effect.shtack_thickness_px = scaled(data.line_effect.shtack_thickness_px).max(6.0);
+    data.dry_brush.lic_length_px = scaled(data.dry_brush.lic_length_px).max(4.0);
+    data.vector_shadow.distance_px = scaled(data.vector_shadow.distance_px);
+    data.vector_shadow.extrude_depth_px = scaled(data.vector_shadow.extrude_depth_px);
+    for pass in &mut data.styles {
+        match pass {
+            SfxStylePass::Stroke { width_px, .. } => *width_px = scaled(*width_px),
+            SfxStylePass::Extrude3D { dx_px, dy_px, .. } => {
+                *dx_px = scaled_signed(*dx_px);
+                *dy_px = scaled_signed(*dy_px);
+            }
+            SfxStylePass::Shadow { dx_px, dy_px, blur_px, .. } => {
+                *dx_px = scaled_signed(*dx_px);
+                *dy_px = scaled_signed(*dy_px);
+                *blur_px = scaled(*blur_px);
+            }
+            SfxStylePass::InnerGlow { width_px, .. } => *width_px = scaled(*width_px),
+            SfxStylePass::NegativeInvert { .. } => {}
+        }
+    }
+}
+
+/// Clear per-instance warps when a *new* SFX layer is created from tool state.
+///
+/// A panel draft can still carry the 4-corner / per-glyph / mesh / liquify / arc deltas of a
+/// previously edited layer; inheriting them makes a fresh lettering layer look mirrored or
+/// collapsed. Style settings (font, size, effects) are intentionally preserved.
+pub fn reset_sfx_warps_for_new_layer(data: &mut SfxData) {
+    data.free_transform.corners = [[0.0; 2]; 4];
+    data.free_transform.perspective_x = 0.0;
+    data.free_transform.perspective_y = 0.0;
+    data.spline.points.clear();
+    data.per_glyph.clear();
+    data.liquify_strokes.clear();
+    let cols = data.mesh.cols;
+    let rows = data.mesh.rows;
+    data.mesh.points = SfxMeshLattice::rest_grid(cols, rows);
+}
+
 /// Reusable deterministic JSON preset for SFX styling (`sfx.presets.*`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -1230,6 +1300,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn new_sfx_defaults_scale_only_on_large_documents_and_warps_reset() {
+        let mut small = SfxData::default();
+        let original = small.clone();
+        scale_new_sfx_for_document(&mut small, 1200, 1200);
+        assert_eq!(small, original, "documents at or below the reference keep exact defaults");
+
+        let mut large = SfxData::default();
+        scale_new_sfx_for_document(&mut large, 12303, 17499);
+        assert!(large.size_pt > 54.0 * 5.0, "size_pt must scale with min side");
+        assert!(large.line_effect.halo_width_px > 10.0);
+        assert!(large.line_effect.spike_size_px > 7.0);
+        large.validate();
+        assert!(large.size_pt <= MAX_SFX_SIZE_PT);
+
+        large.free_transform.corners = [[9.0, -9.0]; 4];
+        large.per_glyph.push(SfxGlyphTransform { glyph_index: 0, ..Default::default() });
+        large.spline.points.push([1.0, 1.0]);
+        large.liquify_strokes.push(Default::default());
+        large.mesh.points[0] = [-3.0, -3.0];
+        reset_sfx_warps_for_new_layer(&mut large);
+        assert_eq!(large.free_transform.corners, [[0.0; 2]; 4]);
+        assert!(large.per_glyph.is_empty());
+        assert!(large.spline.points.is_empty());
+        assert!(large.liquify_strokes.is_empty());
+        assert!(large.mesh.is_identity());
+        assert!(large.size_pt > 54.0 * 5.0, "reset must preserve scaled style defaults");
+    }
+
+    #[test]
     fn sfx_data_roundtrips_and_validates_nans() {
         let mut data = SfxData {
             text: "ドカーン".to_owned(),
@@ -1277,7 +1376,9 @@ mod tests {
         assert!(data.free_transform.has_corner_warp());
         assert!(data.spline.is_curved());
         assert_eq!(data.line_effect.shtack_bristles, 6);
-        assert_eq!(data.line_effect.gpen_overshoot_px, 14.0);
+        // Large-canvas effect fields are no longer capped at the old 14 px ceiling.
+        assert_eq!(data.line_effect.gpen_overshoot_px, 999.0);
+        assert!(data.line_effect.gpen_overshoot_px <= MAX_SFX_EFFECT_PX);
         assert_eq!(data.dry_brush.vec_bristle_count, 4);
 
         let json = serde_json::to_value(&data).unwrap();

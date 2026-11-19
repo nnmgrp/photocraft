@@ -948,8 +948,8 @@ fn balloon_tail(s: &mut Session, p: &Value) -> Result<Value> {
     let curve = opt_f64(p, "curve", CMD)?.map(|c| c.clamp(0.0, 1.0));
     let bubbles = opt_u32(p, "bubbles", CMD)?.map_or(3, |b| b.clamp(1, 12));
     let bubble_radius = opt_f64(p, "bubbleRadius", CMD)?.unwrap_or(6.0);
-    if !(0.5..=200.0).contains(&bubble_radius) {
-        return Err(bad(CMD, "`bubbleRadius` must be between 0.5 and 200 px"));
+    if !(0.5..=1.0e4).contains(&bubble_radius) {
+        return Err(bad(CMD, "`bubbleRadius` must be between 0.5 and 10000 px"));
     }
     let mut tail = BalloonTail { preset, base, tip: (tip.x, tip.y), curve: curve.unwrap_or(0.12), bubbles, bubble_radius };
     if let Some(curve) = curve {
@@ -1076,6 +1076,10 @@ fn balloon_batch_from_script(s: &mut Session, p: &Value) -> Result<Value> {
     let vertical = opt_bool(p, "vertical", CMD)?.unwrap_or(false);
     let direction = if vertical { TextDirection::Vertical } else { TextDirection::Horizontal };
     let (doc_w, doc_h, dpi) = s.active().map(|a| (a.doc.size.width as f64, a.doc.size.height as f64, a.doc.resolution_dpi)).ok_or(EngineError::NoDocument)?;
+    // Balloon geometry is authored against a 1200 px reference canvas. On a 600-DPI / large page
+    // the mouth, tail tip, thought bubbles and ink must grow with the page, or the batch appears
+    // as microscopic specks. Canvases at or below 1200 px keep the exact historical values.
+    let doc_scale = (doc_w.min(doc_h) / 1200.0).max(1.0);
 
     let mut items = Vec::with_capacity(lines.len());
     let mut cur_y = (doc_h * 0.08).max(24.0);
@@ -1105,11 +1109,11 @@ fn balloon_batch_from_script(s: &mut Session, p: &Value) -> Result<Value> {
                 id: 1,
                 preset: TailPreset::Arc,
                 perimeter_t: 0.56,
-                mouth_width: 24.0,
-                tip: [x + w * 0.35, rect[1] + h + 36.0],
+                mouth_width: 24.0 * doc_scale,
+                tip: [x + w * 0.35, rect[1] + h + 36.0 * doc_scale],
                 bend: 0.16,
                 bubbles: 3,
-                bubble_radius: 10.0,
+                bubble_radius: 10.0 * doc_scale,
             }],
             next_tail_id: 2,
             voice: if is_shout { BalloonVoice::Shout } else { BalloonVoice::Neutral },
@@ -1126,7 +1130,7 @@ fn balloon_batch_from_script(s: &mut Session, p: &Value) -> Result<Value> {
     let mut sh = ShapeLayer {
         path,
         fill: Some(Fill::Solid(Color::WHITE)),
-        stroke: Some(ShapeStroke { width: 2.5, paint: Fill::Solid(Color::BLACK), ..Default::default() }),
+        stroke: Some(ShapeStroke { width: (2.5 * doc_scale) as f32, paint: Fill::Solid(Color::BLACK), ..Default::default() }),
         live: Some(LiveShape::BalloonGroup { group }),
         ..Default::default()
     };

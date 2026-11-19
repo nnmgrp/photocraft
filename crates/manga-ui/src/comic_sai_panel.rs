@@ -262,7 +262,11 @@ pub fn draw_sai_preview(ui: &mut Ui, base_width: f32, min_ratio: f32, base_densi
     let eff_density = (min_density + (1.0 - min_density) * base_density).clamp(0.0, 1.0);
     let alpha = (eff_density * 255.0).clamp(0.0, 255.0) as u8;
     let stroke_color = Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), alpha);
-    let eff_width = (base_width * (0.35 + 0.65 * (1.0 - min_ratio * 0.5))).clamp(1.0, 28.0);
+    // Keep the preview proportional on large / 600-DPI canvases: the old fixed 28 px ceiling
+    // flattened every thick stroke into the same hairline. Bound by the preview height instead so
+    // the glyph stays inside its 53 px box while wide linework still reads as wide.
+    let preview_max = (rect.height() * 0.8).max(28.0);
+    let eff_width = (base_width * (0.35 + 0.65 * (1.0 - min_ratio * 0.5))).clamp(1.0, preview_max);
 
     painter.add(egui::Shape::CubicBezier(egui::epaint::CubicBezierShape::from_points_stroke(
         [p0, p1, p2, p3],
@@ -742,6 +746,8 @@ fn draw_quick_sizes_grid(ui: &mut Ui, state: &mut LineworkPanelState, output: &m
 
 /// The vector-brush preset combo and the import button, emitting an import command for the host.
 fn draw_vector_brush_row(ui: &mut Ui, id_salt: &str, presets: &[(String, String)], selected_id: &mut Option<String>, commands: &mut Vec<OutCommand>) {
+    #[cfg(target_arch = "wasm32")]
+    let _ = commands; // no blocking import dialog in the browser
     let current_label = selected_id
         .as_deref()
         .and_then(|id| presets.iter().find(|(pid, _)| pid == id).map(|(_, n)| n.clone()))
@@ -761,12 +767,17 @@ fn draw_vector_brush_row(ui: &mut Ui, id_salt: &str, presets: &[(String, String)
             }
         });
         let import = ui.button("+ Import (.json/.png)").on_hover_text("Import a VectorBrushPreset JSON or grayscale PNG ribbon texture");
+        // A native file dialog is blocking and unavailable in the browser; keep the button visible
+        // on both targets but only pick a path where rfd exposes `FileDialog` (never on wasm32).
+        #[cfg(not(target_arch = "wasm32"))]
         if import.clicked()
             && let Some(path) = rfd::FileDialog::new().add_filter("Vector Brush", &["json", "png"]).pick_file()
         {
             let path_str = path.to_string_lossy().into_owned();
             commands.push(OutCommand::new("shape.vectorBrush.import", json!({ "path": path_str })));
         }
+        #[cfg(target_arch = "wasm32")]
+        let _ = import;
     });
 }
 

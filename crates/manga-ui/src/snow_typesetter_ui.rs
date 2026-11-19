@@ -302,7 +302,7 @@ pub struct TypesetterUi {
     /// Script line the editor caret was on last frame.
     caret_line: Option<usize>,
     save_dirty: bool,
-    save_dirty_until: Option<std::time::Instant>,
+    save_dirty_until: Option<web_time::Instant>,
 }
 
 impl Default for TypesetterUi {
@@ -750,14 +750,14 @@ impl TypesetterUi {
     /// Автоматическое сохранение состояния и пресетов в файл настроек (дебаунс 300 мс).
     pub fn auto_save(&mut self) {
         self.save_dirty = true;
-        self.save_dirty_until = Some(std::time::Instant::now() + std::time::Duration::from_millis(300));
+        self.save_dirty_until = Some(web_time::Instant::now() + std::time::Duration::from_millis(300));
     }
 
     /// Проверяет таймер дебаунса автосохранения и сохраняет при истечении.
     pub fn check_auto_save_debounce(&mut self) {
         if self.save_dirty
             && let Some(deadline) = self.save_dirty_until
-            && std::time::Instant::now() >= deadline
+            && web_time::Instant::now() >= deadline
         {
             self.save_now();
             self.save_dirty = false;

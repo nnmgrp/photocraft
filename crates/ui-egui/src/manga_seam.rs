@@ -1,8 +1,8 @@
-//! Desktop host bridge to `photocraft-manga-ui` and `photocraft-manga-core`.
+//! Host bridge to `photocraft-manga-ui` and `photocraft-manga-core`.
 //!
-//! `photocraft-manga-ui` and `photocraft-manga-core` are desktop-only dependencies in
-//! `crates/ui-egui/Cargo.toml`, so this module compiles against `manga-ui` on native targets and
-//! provides empty wasm stubs to keep the browser build green.
+//! The real Manga panels, gizmos and typesetter UI run on both native and wasm targets. Desktop-only
+//! filesystem and blocking-dialog paths are gated with `#[cfg(not(target_arch = "wasm32"))]` and
+//! fall back to a clean no-op in the browser. This keeps native behaviour untouched.
 
 /// PaintTool SAI Linework Curve parameters bridged from the Linework dock panel.
 #[derive(Clone, Copy, Debug)]
@@ -35,12 +35,12 @@ pub struct ScrubOutcome {
     pub is_scrubbing: bool,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 mod native {
     use std::collections::HashMap;
     use std::sync::Arc;
 
     use photocraft_color::PixelFormat;
+    use photocraft_doc::sfx::{reset_sfx_warps_for_new_layer, scale_new_sfx_for_document};
     use photocraft_doc::vector::{BalloonLineStyle, LiveBalloon, LiveBalloonBody, LiveBalloonGroup};
     use photocraft_doc::{DocId, Document, Fill, Layer, LayerContent, LayerId, LiveShape, ShapeLayer};
     use photocraft_engine::DocState;
@@ -71,8 +71,11 @@ mod native {
     use serde_json::{Value, json};
 
     use crate::PhotocraftApp;
-    use crate::canvas::{ToolEvent, ViewXform, canvas_display, canvas_texture_options, display_image};
+    use crate::canvas::{ToolEvent, ViewXform, canvas_display, display_image};
     use crate::dock::Group;
+    // The cached, face-specific font-name previews use native font libraries; the browser uses a
+    // proportional-font fallback in the `TypesetterHost` impl below.
+    #[cfg(not(target_arch = "wasm32"))]
     use crate::font_preview::{NameStyle, name_size, paint_centered, paint_name};
     use crate::jobs_ui;
     use crate::notices;
@@ -109,6 +112,22 @@ mod native {
 
     fn to_manga_xf(xf: &ViewXform) -> CanvasViewXform {
         CanvasViewXform { rect: xf.rect, zoom: xf.zoom, center: xf.center, flip: xf.flip, rotation: xf.rotation, aspect: xf.aspect }
+    }
+
+    /// Canvas sampling used by the screentone live-drag preview. The native helper is gated out on
+    /// wasm, so the browser reproduces its two-line policy locally (identical values).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn host_texture_options(factor: u32) -> egui::TextureOptions {
+        crate::canvas::canvas_texture_options(factor)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn host_texture_options(factor: u32) -> egui::TextureOptions {
+        if factor > 1 {
+            egui::TextureOptions::LINEAR
+        } else {
+            egui::TextureOptions { magnification: egui::TextureFilter::Nearest, ..egui::TextureOptions::LINEAR }
+        }
     }
 
     /// Captures a read-only [`photocraft_manga_bridge::HostSnapshot`] from `app`.
@@ -683,17 +702,39 @@ mod native {
 
     impl TypesetterHost for AppTypesetterHost<'_> {
         fn paint_centered(&self, ui: &mut egui::Ui, family: &str, text: &str, size_pt: f32, rect: egui::Rect, color: egui::Color32) {
+            #[cfg(not(target_arch = "wasm32"))]
             paint_centered(ui, family, text, size_pt, rect, color);
+            #[cfg(target_arch = "wasm32")]
+            {
+                let _ = family;
+                ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, text, egui::FontId::proportional(size_pt), color);
+            }
         }
 
         fn name_size(&self, ctx: &egui::Context, spec: FontSampleSpec<'_>) -> Option<[f32; 2]> {
-            let ns = NameStyle { family: spec.family, text: spec.text, size: spec.size_pt, bold: spec.bold, italic: spec.italic };
-            name_size(ctx, &ns)
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let ns = NameStyle { family: spec.family, text: spec.text, size: spec.size_pt, bold: spec.bold, italic: spec.italic };
+                name_size(ctx, &ns)
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                let _ = (ctx, spec.family, spec.bold, spec.italic);
+                Some([spec.text.chars().count() as f32 * spec.size_pt * 0.6, spec.size_pt * 1.2])
+            }
         }
 
         fn paint_name(&self, ui: &mut egui::Ui, spec: FontSampleSpec<'_>, rect: egui::Rect, color: egui::Color32) {
-            let ns = NameStyle { family: spec.family, text: spec.text, size: spec.size_pt, bold: spec.bold, italic: spec.italic };
-            paint_name(ui, &ns, rect, color);
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let ns = NameStyle { family: spec.family, text: spec.text, size: spec.size_pt, bold: spec.bold, italic: spec.italic };
+                paint_name(ui, &ns, rect, color);
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                let _ = (spec.family, spec.bold, spec.italic);
+                ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, spec.text, egui::FontId::proportional(spec.size_pt), color);
+            }
         }
 
         fn is_favorite_font(&self, _ctx: &egui::Context, family: &str) -> bool {
@@ -705,11 +746,24 @@ mod native {
         }
 
         fn font_family_picker(&mut self, ui: &mut egui::Ui, id_salt: &str, family: &mut String, width: f32) -> bool {
+            #[cfg(not(target_arch = "wasm32"))]
             if let Some(style) = crate::type_tool::family_picker(self.app, ui, id_salt, family, width) {
                 self.picked_style = style;
                 true
             } else {
                 false
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                // The full picker walks native font libraries; offer a plain family field so the
+                // TypeR Manga dock stays usable in the browser.
+                let _ = (id_salt, &self.picked_style);
+                let before = family.clone();
+                ui.horizontal(|ui| {
+                    ui.label("Font:");
+                    ui.add_sized([width, 0.0], egui::TextEdit::singleline(family));
+                });
+                *family != before
             }
         }
 
@@ -751,6 +805,9 @@ mod native {
             let line_idx = app.manga.ui.typesetter.state.current_line_idx;
             let preset = app.manga.ui.typesetter.state.preset_for_line(line_idx).cloned().unwrap_or_default();
             let mut sfx = app.manga.ui.sfx_panel.draft.clone();
+            // Each typesetter line becomes a brand-new SFX layer: drop warps inherited from the
+            // panel draft so the new lettering is never mirrored or collapsed on creation.
+            reset_sfx_warps_for_new_layer(&mut sfx);
             sfx.text = line.text;
             if !preset.font_family.trim().is_empty() {
                 sfx.font_family = preset.font_family;
@@ -965,7 +1022,7 @@ mod native {
         let panel_showing = is_panel_active(app, "screentone");
         let mxf = to_manga_xf(xf);
         let view = GizmoView { panel_showing, doc: &doc, doc_id: BridgeDocId(doc.id.0), active_layer, xf: &mxf };
-        let input = PreviewInput { view: &view, doc_index: doc_idx, revision, display_key, texture_options: canvas_texture_options(factor) };
+        let input = PreviewInput { view: &view, doc_index: doc_idx, revision, display_key, texture_options: host_texture_options(factor) };
         let to_image = |buf: &photocraft_compose::Buffer| display_image(display.as_deref(), buf);
         comic_screentone_gizmo::refresh_preview(ctx, &input, &mut app.manga.ui.screentone_ui, &mut app.manga.ui.screentone_gizmo, &to_image);
     }
@@ -1183,6 +1240,16 @@ mod native {
         }
         let mut sfx = app.manga.ui.sfx_panel.draft.clone();
         sfx.origin = doc_pt;
+        // A panel draft can still hold the warps of the previously selected layer. A new layer
+        // starts with clean geometry; only its style/text settings carry over.
+        reset_sfx_warps_for_new_layer(&mut sfx);
+        // Scale fresh (unbound) tool defaults to the document so a 600-DPI page is not lettered
+        // with microscopic type. An already-synced draft carries scaled values from its layer.
+        if app.manga.ui.sfx_panel.bound_target.is_none()
+            && let Some(st) = app.session.active()
+        {
+            scale_new_sfx_for_document(&mut sfx, st.doc.size.width, st.doc.size.height);
+        }
         sfx.validate();
         let _ = app.run("sfx.create", json!({ "sfx": sfx }));
     }
@@ -1437,7 +1504,12 @@ mod native {
         }
 
         fn draw_type_controls(&mut self, ui: &mut egui::Ui) {
+            #[cfg(not(target_arch = "wasm32"))]
             crate::type_tool::capsule_controls(self.app, ui);
+            // The desktop Type capsule is driven by native font/options panels; the browser keeps
+            // the other capsule controls and skips this one.
+            #[cfg(target_arch = "wasm32")]
+            let _ = (&self.app, ui);
         }
     }
 
@@ -1504,7 +1576,9 @@ mod native {
         }
         dispatch_commands(app, out.commands);
         if out.action_remove_selection {
+            #[cfg(not(target_arch = "wasm32"))]
             let _ = crate::retouch_ui::remove_selection(app);
+            // The native retouch helper is desktop-only; the browser ignores this capsule action.
         }
         if out.open_screentone_panel {
             let _ = app.run("window.panel.activate", json!({ "panel": "screentone" }));
@@ -2726,118 +2800,198 @@ mod native {
             assert!(tl_left.text.contains("Left"), "RTL puts second part into left chamber: {:?}", tl_left.text);
             assert!(!l_left.effects.items.is_empty(), "stroke effect applied to second chamber too");
         }
+
+        /// The Manga dock exposes SFX, Balloons and Linework (plus the other manga panels) as
+        /// first-class tabs, and the legacy panel command opens the unified dock on the right tab.
+        #[test]
+        fn manga_dock_tabs_expose_sfx_balloons_linework_and_open_on_command() {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
+            app.run("file.new", json!({ "width": 256, "height": 256 })).unwrap();
+
+            for (id, title) in [
+                ("sfx", "SFX"),
+                ("balloon", "Balloons"),
+                ("linework", "Linework"),
+                ("screentone", "Screentones"),
+                ("typesetter", "TypeR Manga"),
+            ] {
+                assert!(MANGA_PANELS.iter().any(|p| p.0 == id && p.1 == title), "{id}/{title} must be a manga dock tab");
+                assert!(panel_owns(id), "{id} must be owned by the manga seam");
+                assert_eq!(panel_group(id), Some(Group::Manga));
+                assert_eq!(panel_title(id), Some(title));
+                assert!(manga_tab_index(id).is_some(), "{id} needs a canonical tab index");
+                let rect = panel_default_rect(&app, id);
+                assert_eq!(rect.len(), 4);
+                assert!(rect[2] > 0.0 && rect[3] > 0.0, "{id} needs a positive default rect");
+            }
+
+            assert_eq!(normalize_panel("SFX"), Some("sfx"));
+            assert_eq!(normalize_panel("Balloons"), Some("balloon"));
+            assert_eq!(normalize_panel("Linework"), Some("linework"));
+            assert_eq!(normalize_panel("TypeR"), Some("typesetter"));
+
+            // Opening the SFX tab creates the unified Manga dock and marks it active/checked.
+            let opened = panel_command(&mut app, "window.panel.sfx", &json!({ "show": true })).expect("dock command").expect("ok");
+            assert_eq!(opened["showing"], true);
+            assert!(app.ui.panels.manga);
+            assert_eq!(app.ui.dock_tabs.manga, manga_tab_index("sfx").unwrap());
+            assert_eq!(panel_checked(&app, "window.panel.sfx"), Some(true));
+            assert_eq!(panel_checked(&app, "window.panel.balloon"), Some(false));
+        }
+
+        /// Pressing the canvas with the SFX tool creates an SFX layer at the press point; the
+        /// draft's text and origin travel onto that layer through the `sfx.create` command.
+        #[test]
+        fn manga_sfx_canvas_press_creates_layer_at_point() {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
+            app.run("file.new", json!({ "width": 256, "height": 256 })).unwrap();
+            assert!(app.session.active().unwrap().doc.layers.iter().all(|l| l.sfx.is_none()));
+
+            app.manga.ui.sfx_panel.draft.text = "BAM!".into();
+            app.manga.ui.sfx_panel.draft.validate();
+            sfx_canvas_press(&mut app, [48.0, 64.0]);
+
+            let st = app.session.active().unwrap();
+            let sfx_layers: Vec<_> = st.doc.layers.iter().filter(|l| l.sfx.is_some()).collect();
+            assert_eq!(sfx_layers.len(), 1, "one canvas press creates exactly one SFX layer");
+            let data = sfx_layers[0].sfx.as_ref().unwrap();
+            assert_eq!(data.text, "BAM!");
+            assert_eq!(data.origin, [48.0, 64.0]);
+            assert_eq!(st.active_layer, Some(sfx_layers[0].id), "the new SFX layer becomes active");
+        }
+
+        /// A press on a 600-DPI / 12303×17499 page must scale fresh SFX defaults up, and a new
+        /// layer must not inherit the distorted warps still held in the panel draft.
+        #[test]
+        fn sfx_canvas_press_scales_defaults_and_resets_stale_warps_on_large_canvas() {
+            use photocraft_doc::sfx::SfxGlyphTransform;
+
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
+            app.run("file.new", json!({ "width": 12303, "height": 17499 })).unwrap();
+
+            let mut draft = app.manga.ui.sfx_panel.draft.clone();
+            draft.text = "BAM".into();
+            draft.free_transform.corners = [[120.0, -40.0]; 4];
+            draft.free_transform.perspective_x = 0.4;
+            draft.spline.points = vec![[10.0, 10.0], [-10.0, -10.0]];
+            draft.per_glyph = vec![SfxGlyphTransform { glyph_index: 0, dx: 30.0, corners: [[9.0, 9.0]; 4], ..SfxGlyphTransform::default() }];
+            draft.liquify_strokes.push(Default::default());
+            draft.mesh.points[0] = [-2.0, -2.0];
+            app.manga.ui.sfx_panel.draft = draft;
+
+            sfx_canvas_press(&mut app, [100.0, 100.0]);
+
+            let st = app.session.active().unwrap();
+            let data = st
+                .doc
+                .layers
+                .iter()
+                .filter_map(|l| l.sfx.as_deref())
+                .next()
+                .expect("one SFX layer on the large canvas");
+            assert!(data.size_pt > 54.0 * 5.0, "size_pt must scale with the document: {}", data.size_pt);
+            assert_eq!(data.free_transform.corners, [[0.0; 2]; 4]);
+            assert_eq!(data.free_transform.perspective_x, 0.0);
+            assert!(data.spline.points.is_empty(), "arc points must be reset");
+            assert!(data.per_glyph.is_empty(), "per-glyph deltas must be reset");
+            assert!(data.liquify_strokes.is_empty(), "liquify strokes must be reset");
+            assert!(data.mesh.is_identity(), "mesh offsets must be reset");
+        }
+
+        /// The top Options Bar renders its mode selector and switching a mode updates the SFX draft.
+        #[test]
+        fn manga_sfx_options_bar_renders_and_switches_mode() {
+            use egui_kittest::kittest::Queryable;
+            use egui_kittest::Harness;
+            use photocraft_doc::sfx::SfxWarpMode;
+
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
+            app.run("file.new", json!({ "width": 256, "height": 256 })).unwrap();
+            app.manga.ui.sfx_panel.draft.warp_mode = SfxWarpMode::FreeTransform;
+
+            let mut h = Harness::builder().with_size(egui::vec2(900.0, 110.0)).with_max_steps(6).build_ui_state(
+                |ui, app: &mut PhotocraftApp| sfx_options_bar(app, ui),
+                app,
+            );
+            PhotocraftApp::setup_context(&h.ctx, Default::default());
+            h.run_steps(2);
+            assert!(h.query_by_label("SFX Mode:").is_some(), "the mode selector is labelled");
+            h.get_by_label("Per-Glyph").click();
+            h.run_steps(2);
+            assert_eq!(h.state().manga.ui.sfx_panel.draft.warp_mode, SfxWarpMode::PerGlyph);
+        }
+
+        /// Every `Group::Manga` tab (and the `photocraft-manga-ui` panels behind them) renders for
+        /// several frames without panicking when hosted by PhotoCraft's shell.
+        #[test]
+        fn manga_panels_render_without_panic() {
+            use egui_kittest::Harness;
+
+            let _ = photocraft_text::shared();
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
+            app.run("file.new", json!({ "width": 320, "height": 240 })).unwrap();
+            app.run("type.create", json!({ "text": "BAM!", "x": 40.0, "y": 60.0 })).unwrap();
+            app.ui.panels.manga = true;
+
+            // `build_ui_state` lays out frame 0 before `setup_context` installs PhotoCraft's
+            // bundled fonts. Skip that frame (the project's standard guard) so glyphs such as "●"
+            // are only laid out once the real font families are present.
+            let steps = MANGA_PANELS.len() * 2;
+            let mut h = Harness::builder().with_size(egui::vec2(1100.0, 820.0)).with_max_steps(steps as u64).allow_missing_glyphs().build_ui_state(
+                move |ui, app: &mut PhotocraftApp| {
+                    if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                        return;
+                    }
+                    let idx = app.ui.dock_tabs.manga.min(MANGA_PANELS.len() - 1);
+                    let id = MANGA_PANELS[idx].0;
+                    assert!(render_panel(app, ui, id), "{id} must render through the manga seam");
+                    app.ui.dock_tabs.manga = (idx + 1) % MANGA_PANELS.len();
+                },
+                app,
+            );
+            PhotocraftApp::setup_context(&h.ctx, Default::default());
+            h.run_steps(steps);
+        }
+
+        /// Switching the unified Manga dock's tabs renders real egui controls for each panel.
+        #[test]
+        fn manga_dock_tab_switching_renders_controls_without_panic() {
+            use egui::accesskit::Role;
+            use egui_kittest::kittest::Queryable as _;
+            use egui_kittest::Harness;
+
+            let _ = photocraft_text::shared();
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
+            app.run("file.new", json!({ "width": 320, "height": 240 })).unwrap();
+            app.ui.panels.manga = true;
+            app.ui.dock_tabs.manga = 0;
+
+            let mut h = Harness::builder().with_size(egui::vec2(1100.0, 820.0)).with_max_steps(4).allow_missing_glyphs().build_ui_state(
+                |ui, app: &mut PhotocraftApp| {
+                    if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                        return;
+                    }
+                    let idx = app.ui.dock_tabs.manga.min(MANGA_PANELS.len() - 1);
+                    render_dock_tab(app, ui, idx);
+                },
+                app,
+            );
+            PhotocraftApp::setup_context(&h.ctx, Default::default());
+
+            let mut total = 0usize;
+            for tab in 0..MANGA_PANELS.len() {
+                h.state_mut().ui.dock_tabs.manga = tab;
+                h.run_steps(2);
+                let controls = h.query_all_by_role(Role::Button).count()
+                    + h.query_all_by_role(Role::SpinButton).count()
+                    + h.query_all_by_role(Role::Slider).count()
+                    + h.query_all_by_role(Role::TextInput).count();
+                assert!(controls > 0, "{} tab must render real controls", MANGA_PANELS[tab].0);
+                total += controls;
+            }
+            assert!(total > 0);
+        }
     }
 }
 
-#[cfg(target_arch = "wasm32")]
-mod wasm {
-    use std::sync::Arc;
-
-    use photocraft_doc::{Document, Layer};
-    use serde_json::Value;
-
-    use crate::PhotocraftApp;
-    use crate::canvas::{ToolEvent, ViewXform};
-    use crate::dock::Group;
-    use crate::state::Panels;
-
-    use super::{SaiCurveParams, ScrubOutcome};
-
-    /// Empty wasm placeholder for manga panel/gizmo runtime state.
-    #[derive(Default)]
-    pub struct MangaSeamState;
-
-    pub const MANGA_PANELS: &[(&str, &str, Group)] = &[];
-
-    pub fn sync_tokens(_app: &mut PhotocraftApp, _ctx: &egui::Context) {}
-    pub fn panel_owns(_id: &str) -> bool {
-        false
-    }
-    pub fn panel_title(_id: &str) -> Option<&'static str> {
-        None
-    }
-    pub fn panel_group(_id: &str) -> Option<Group> {
-        None
-    }
-    pub fn normalize_panel(_raw: &str) -> Option<&'static str> {
-        None
-    }
-    pub fn panel_default_rect(_app: &PhotocraftApp, _id: &str) -> [f32; 4] {
-        [140.0, 140.0, 300.0, 420.0]
-    }
-    pub fn panel_shown(_panels: &Panels, _id: &str) -> Option<bool> {
-        None
-    }
-    pub fn panel_shown_mut<'a>(_panels: &'a mut Panels, _id: &str) -> Option<&'a mut bool> {
-        None
-    }
-    pub fn panel_checked(_app: &PhotocraftApp, _id: &str) -> Option<bool> {
-        None
-    }
-    pub fn render_panel(_app: &mut PhotocraftApp, _ui: &mut egui::Ui, _id: &str) -> bool {
-        false
-    }
-    pub fn render_dock_tab(_app: &mut PhotocraftApp, _ui: &mut egui::Ui, _tab: usize) {}
-    pub fn panel_menu(_app: &mut PhotocraftApp, _ui: &mut egui::Ui, _id: &str) {}
-    pub fn panel_command(_app: &mut PhotocraftApp, _id: &str, _params: &Value) -> Option<Result<Value, String>> {
-        None
-    }
-    pub fn active_balloon_id(_app: &PhotocraftApp) -> Option<u32> {
-        None
-    }
-    pub fn create_live_balloon_in_rect(_app: &mut PhotocraftApp, _rect: [f64; 4]) {}
-    pub fn sai_curve_params(_app: &PhotocraftApp, tension: f64, min_ratio: f32) -> SaiCurveParams {
-        SaiCurveParams { min_ratio: f64::from(min_ratio), effective_tension: tension, ..SaiCurveParams::default() }
-    }
-    pub fn sai_snap_close(_app: &PhotocraftApp) -> bool {
-        true
-    }
-    pub fn sync_sai_base_width(_app: &mut PhotocraftApp, _width: f32) {}
-    pub fn sync_sai_auto_taper(_app: &mut PhotocraftApp, _auto_taper: bool) {}
-    pub fn sync_sai_tension(_app: &mut PhotocraftApp, _tension: f64) {}
-    pub fn sync_sai_snap_close(_app: &mut PhotocraftApp, _snap_close: bool) {}
-    pub fn screentone_display_doc(_app: &PhotocraftApp, _idx: usize) -> Option<(Arc<Document>, u64)> {
-        None
-    }
-    pub fn screentone_refresh_preview(_app: &mut PhotocraftApp, _ctx: &egui::Context, _xf: &ViewXform, _output: Option<u32>) {}
-    pub fn screentone_escape(_app: &mut PhotocraftApp, _ctx: &egui::Context) {}
-    pub fn canvas_pointer(_app: &mut PhotocraftApp, _ev: ToolEvent, _mods: egui::Modifiers) -> bool {
-        false
-    }
-    pub fn canvas_hover_cursor(_app: &PhotocraftApp, _xf: &ViewXform, _cursor_scr: egui::Pos2) -> Option<egui::CursorIcon> {
-        None
-    }
-    pub fn draw_canvas_overlays(_app: &PhotocraftApp, _painter: &egui::Painter, _xf: &ViewXform) {}
-    pub fn layers_footer_linework_button(_app: &mut PhotocraftApp, _ui: &mut egui::Ui, _actions: &mut Vec<(String, Value)>) {}
-    pub fn effect_row_scrub(
-        _ui: &egui::Ui,
-        _l: &Layer,
-        _fx_idx: Option<usize>,
-        _rect: egui::Rect,
-        resp: &egui::Response,
-        _actions: &mut Vec<(String, Value)>,
-    ) -> ScrubOutcome {
-        ScrubOutcome { trigger_dnd: resp.drag_started(), is_scrubbing: false }
-    }
-    pub fn effect_row_value_text(_l: &Layer, _fx_idx: Option<usize>) -> Option<String> {
-        None
-    }
-    pub fn effect_row_context_hud(_ui: &mut egui::Ui, _l: &Layer, _fx_idx: Option<usize>, _rect: egui::Rect) {}
-    pub fn render_fx_hud(_ui: &egui::Ui, _doc: &Document, _actions: &mut Vec<(String, Value)>) {}
-    pub fn open_layer_search(_app: &mut PhotocraftApp) {}
-    pub fn balloon_tail_delete_key(_app: &mut PhotocraftApp, _ctx: &egui::Context) -> bool {
-        false
-    }
-    pub fn sfx_escape_key(_app: &mut PhotocraftApp, _ctx: &egui::Context) -> bool {
-        false
-    }
-    pub fn sfx_escape(_app: &mut PhotocraftApp, _ctx: &egui::Context) {}
-    pub fn sfx_canvas_press(_app: &mut PhotocraftApp, _doc_pt: [f64; 2]) {}
-    pub fn sfx_options_bar(_app: &mut PhotocraftApp, _ui: &mut egui::Ui) {}
-    pub fn frame_overlays(_app: &mut PhotocraftApp, _ctx: &egui::Context) {}
-}
-
-#[cfg(not(target_arch = "wasm32"))]
 pub use native::*;
-#[cfg(target_arch = "wasm32")]
-pub use wasm::*;

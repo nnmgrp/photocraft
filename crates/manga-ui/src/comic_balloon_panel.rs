@@ -33,6 +33,64 @@ pub const BALLOON_COLOR_TAB: usize = 5;
 /// Minimum allowed dimensions for a balloon body to protect against collapse/deletion.
 pub const MIN_BALLOON_SIZE: f64 = 24.0;
 
+/// Balloon geometry is authored against a 1200 px reference canvas. Large / 600-DPI pages need
+/// proportionally larger defaults, while smaller pages must keep the exact historical values.
+pub fn document_scale(doc: Option<&photocraft_doc::Document>) -> f64 {
+    doc.map_or(1.0, |d| (f64::from(d.size.width.min(d.size.height)) / 1200.0).max(1.0))
+}
+
+/// Dynamic UI ceiling derived from the active balloon's smaller side and the document scale.
+/// Bounded so sliders stay usable even on a gigapixel page.
+pub fn ui_scale(rect: [f64; 4], doc_scale: f64) -> f64 {
+    let min_side = rect[2].abs().min(rect[3].abs());
+    ((min_side / 180.0).max(doc_scale)).min(256.0)
+}
+
+/// Dynamic pixel ceilings used by the balloon sliders and by the geometry that consumes them.
+pub fn stroke_width_max(ui_scale: f64) -> f64 {
+    (40.0 * ui_scale).clamp(20.0, 2000.0)
+}
+
+pub fn corner_max(ui_scale: f64) -> f64 {
+    (120.0 * ui_scale).min(2000.0)
+}
+
+pub fn tail_width_max(ui_scale: f64) -> f64 {
+    (120.0 * ui_scale).min(2000.0)
+}
+
+pub fn tail_bubble_radius_max() -> f64 {
+    2000.0
+}
+
+pub fn needle_width_max(ui_scale: f64) -> f64 {
+    (12.0 * ui_scale).min(200.0)
+}
+
+/// Whether a tail is still the untouched default the panel itself creates. Switching a balloon to
+/// UniFlash drops such a tail (flash bursts float) but preserves a deliberately authored one.
+fn is_default_unmodified_tail(t: &LiveBalloonTail, rect: [f64; 4], doc_scale: f64) -> bool {
+    t.preset == TailPreset::Arc
+        && (t.mouth_width - 28.0 * doc_scale).abs() <= 1e-3
+        && (t.bubble_radius - 10.0 * doc_scale).abs() <= 1e-3
+        && (t.tip[0] - (rect[0] + rect[2] * 0.25)).abs() <= 1e-3
+        && (t.tip[1] - (rect[1] + rect[3] + 48.0 * doc_scale)).abs() <= 1e-3
+}
+
+/// The document scale plus a UI scale based on the active balloon's rect (or the document's min
+/// side when nothing is selected, so sliders are already usable before a balloon exists).
+fn panel_scales(host: &BalloonHostContext<'_>) -> (f64, f64) {
+    let doc_scale = document_scale(host.doc);
+    let rect = active_balloon_target(host).map_or_else(
+        || {
+            let min_side = host.doc.map_or(1200.0, |d| f64::from(d.size.width.min(d.size.height)));
+            [0.0, 0.0, min_side, min_side]
+        },
+        |t| t.balloon.body.rect(),
+    );
+    (doc_scale, ui_scale(rect, doc_scale))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum BalloonBodyKindChoice {
     #[default]
@@ -423,12 +481,12 @@ fn selected_balloon_layer_ids(host: &BalloonHostContext<'_>) -> Vec<u64> {
     ids
 }
 
-fn body_from_state(st: &BalloonPanelUi, rect: [f64; 4]) -> LiveBalloonBody {
+fn body_from_state(st: &BalloonPanelUi, rect: [f64; 4], ui_scale: f64) -> LiveBalloonBody {
     match st.body_choice {
         BalloonBodyKindChoice::Ellipse => LiveBalloonBody::Ellipse { rect, squircle: st.squircle },
         BalloonBodyKindChoice::Rect => LiveBalloonBody::Rect { rect, corner_radius: st.corner_radius },
         BalloonBodyKindChoice::ChamferRect => {
-            LiveBalloonBody::ChamferRect { rect, chamfer: st.chamfer_size.clamp(1.0, 60.0), concave: st.chamfer_concave.clamp(0.0, 1.0) }
+            LiveBalloonBody::ChamferRect { rect, chamfer: st.chamfer_size.clamp(1.0, corner_max(ui_scale)), concave: st.chamfer_concave.clamp(0.0, 1.0) }
         }
         BalloonBodyKindChoice::Cloud => LiveBalloonBody::Cloud {
             rect,
@@ -595,7 +653,9 @@ pub fn hydrate_geometry_from_balloon(state: &mut BalloonPanelUi, balloon: &LiveB
         state.tail_bubbles = t.bubbles;
         state.tail_bubble_radius = t.bubble_radius;
     }
-    state.stroke_width = balloon.stroke_width.clamp(0.5, 20.0);
+    // Never clamp to the historical 20 px ceiling: a 600-DPI balloon can legitimately carry a
+    // 200 px stroke and selecting it must not silently rewrite it to 20 px.
+    state.stroke_width = balloon.stroke_width.max(0.1);
     state.hand_drawn_noise = balloon.hand_drawn_noise.clamp(0.0, 1.0);
     state.hand_drawn_warp = balloon.hand_drawn_warp.clamp(0.0, 1.0);
     state.noise_scale = balloon.noise_scale.clamp(0.25, 4.0);
@@ -618,7 +678,7 @@ pub fn hydrate_geometry_from_balloon(state: &mut BalloonPanelUi, balloon: &LiveB
 
 fn hydrate_state_from_balloon(state: &mut BalloonPanelUi, target: &ActiveBalloonTarget) {
     hydrate_geometry_from_balloon(state, &target.balloon);
-    state.stroke_width = target.stroke_width.map(f64::from).unwrap_or(target.balloon.stroke_width).clamp(0.5, 20.0);
+    state.stroke_width = target.stroke_width.map(f64::from).unwrap_or(target.balloon.stroke_width).max(0.1);
     state.fill_mode = match &target.fill {
         None => BalloonFillMode::Transparent,
         Some(photocraft_doc::Fill::Solid(c)) if c.c[0] > 0.98 && c.c[1] > 0.98 && c.c[2] > 0.98 => BalloonFillMode::White,
@@ -671,6 +731,7 @@ fn apply_panel_to_active_layer(state: &BalloonPanelUi, prev: &BalloonPanelUi, ho
     let Some(ActiveBalloonTarget { layer_id, mut balloon, .. }) = active_balloon_target(host) else {
         return false;
     };
+    let (doc_scale, scale) = panel_scales(host);
     let tail_changed = state.tail_preset != prev.tail_preset
         || (state.tail_mouth_width - prev.tail_mouth_width).abs() > 1e-4
         || (state.tail_bend - prev.tail_bend).abs() > 1e-4
@@ -691,15 +752,19 @@ fn apply_panel_to_active_layer(state: &BalloonPanelUi, prev: &BalloonPanelUi, ho
     if state.body_choice != prev.body_choice {
         balloon.vertex_overrides.clear();
     }
-    apply_geometry_to_balloon(state, &mut balloon);
-    if state.tail_preset != TailPreset::None && balloon.tails.is_empty() {
+    apply_geometry_to_balloon(state, &mut balloon, scale);
+    if body_became_uniflash {
+        let rect = balloon.body.rect();
+        balloon.tails.retain(|t| !is_default_unmodified_tail(t, rect, doc_scale));
+    }
+    if state.tail_preset != TailPreset::None && !is_uniflash && balloon.tails.is_empty() {
         let rect = balloon.body.rect();
         balloon.tails.push(LiveBalloonTail {
             id: balloon.next_tail_id,
             preset: state.tail_preset,
             perimeter_t: 0.58,
             mouth_width: state.tail_mouth_width,
-            tip: [rect[0] + rect[2] * 0.25, rect[1] + rect[3] + 48.0],
+            tip: [rect[0] + rect[2] * 0.25, rect[1] + rect[3] + 48.0 * doc_scale],
             bend: state.tail_bend,
             bubbles: state.tail_bubbles,
             bubble_radius: state.tail_bubble_radius,
@@ -733,8 +798,8 @@ fn apply_panel_to_active_layer(state: &BalloonPanelUi, prev: &BalloonPanelUi, ho
     true
 }
 
-fn apply_geometry_to_balloon(state: &BalloonPanelUi, balloon: &mut LiveBalloon) {
-    balloon.body = body_from_state(state, balloon.body.rect());
+fn apply_geometry_to_balloon(state: &BalloonPanelUi, balloon: &mut LiveBalloon, ui_scale: f64) {
+    balloon.body = body_from_state(state, balloon.body.rect(), ui_scale);
     balloon.line_style = state.line_style;
     balloon.double_gap_px = state.double_gap_px.clamp(0.5, 64.0);
     balloon.whisper_dash_count = state.whisper_dashes.clamp(6, 96);
@@ -866,6 +931,8 @@ pub fn vector_brush_picker_row(
     selected_id: &mut Option<String>,
     commands: &mut Vec<OutCommand>,
 ) -> Option<String> {
+    #[cfg(target_arch = "wasm32")]
+    let _ = commands; // no blocking import dialog in the browser
     let current_label = selected_id
         .as_deref()
         .and_then(|id| presets.iter().find(|(pid, _)| pid == id).map(|(_, n)| n.as_str()))
@@ -888,11 +955,16 @@ pub fn vector_brush_picker_row(
             }
         });
         let import = ui.button(tl!("+ Import (.json/.png)")).on_hover_text(tl!("Import a VectorBrushPreset JSON or grayscale PNG ribbon texture"));
+        // A native file dialog is blocking and unavailable in the browser; keep the button visible
+        // on both targets but only pick a path where rfd exposes `FileDialog` (never on wasm32).
+        #[cfg(not(target_arch = "wasm32"))]
         if import.clicked()
             && let Some(path) = rfd::FileDialog::new().add_filter("Vector Brush", &["json", "png"]).pick_file()
         {
             commands.push(OutCommand::new("shape.vectorBrush.import", json!({ "path": path.to_string_lossy().into_owned() })));
         }
+        #[cfg(target_arch = "wasm32")]
+        let _ = import;
     });
     newly_picked
 }
@@ -908,22 +980,25 @@ pub fn create_live_balloon_in_rect_commands(
     fg_color: [f32; 4],
     bg_color: [f32; 4],
 ) -> Vec<OutCommand> {
-    let _ = doc;
+    let doc_scale = document_scale(doc);
+    let scale = ui_scale(rect, doc_scale);
     let [bx, by, bw, bh] = rect;
-    let body = body_from_state(st, rect);
+    let body = body_from_state(st, rect, scale);
     let is_uniflash = matches!(body, LiveBalloonBody::Uniflash { .. });
-    let tails = if st.tail_preset == TailPreset::None {
+    // Pro manga tools create flash bursts without a speech tail; the artist adds one explicitly
+    // with "+ Add tail" when the story needs it.
+    let tails = if st.tail_preset == TailPreset::None || is_uniflash {
         Vec::new()
     } else {
         vec![LiveBalloonTail {
             id: 1,
             preset: st.tail_preset,
             perimeter_t: 0.58,
-            mouth_width: st.tail_mouth_width,
-            tip: [bx + bw * 0.25, by + bh + 48.0],
+            mouth_width: st.tail_mouth_width * doc_scale,
+            tip: [bx + bw * 0.25, by + bh + 48.0 * doc_scale],
             bend: st.tail_bend,
             bubbles: st.tail_bubbles,
-            bubble_radius: st.tail_bubble_radius,
+            bubble_radius: st.tail_bubble_radius * doc_scale,
         }]
     };
     let underlay = if st.underlay_enabled {
@@ -1011,8 +1086,9 @@ fn create_balloon_on_canvas_commands(st: &BalloonPanelUi, host: &BalloonHostCont
             (r.x0 as f64, r.y0 as f64, w, h)
         }
         None => {
-            let w = 240.0f64.min(doc_size.width as f64 * 0.8).max(MIN_BALLOON_SIZE);
-            let h = 160.0f64.min(doc_size.height as f64 * 0.8).max(MIN_BALLOON_SIZE);
+            let doc_scale = document_scale(Some(doc));
+            let w = (240.0 * doc_scale).min(doc_size.width as f64 * 0.8).max(MIN_BALLOON_SIZE);
+            let h = (160.0 * doc_scale).min(doc_size.height as f64 * 0.8).max(MIN_BALLOON_SIZE);
             let x = (doc_size.width as f64 - w) * 0.5;
             let y = (doc_size.height as f64 - h) * 0.5;
             (x, y, w, h)
@@ -1025,15 +1101,31 @@ fn add_tail_commands(st: &BalloonPanelUi, host: &BalloonHostContext<'_>) -> Vec<
     let Some(layer_id) = host.active_layer else {
         return Vec::new();
     };
-    let balloon_id = active_balloon_target(host).map_or(1, |t| t.balloon.id);
+    let doc_scale = document_scale(host.doc);
+    let target = active_balloon_target(host);
+    let balloon_id = target.as_ref().map_or(1, |t| t.balloon.id);
+    // Anchor the added tail relative to the active balloon so large / offset chambers do not shoot
+    // their first tip across the page to [200, 300].
+    let tip = match &target {
+        Some(t) => {
+            let [bx, by, bw, bh] = t.balloon.body.rect();
+            [bx + bw * 0.25, by + bh + 48.0 * doc_scale]
+        }
+        None => [200.0 * doc_scale, 300.0 * doc_scale],
+    };
+    let first_tail = target.as_ref().is_none_or(|t| t.balloon.tails.is_empty());
+    let mouth_width = if first_tail { st.tail_mouth_width.max(28.0 * doc_scale) } else { st.tail_mouth_width };
+    let bubble_radius = if first_tail { st.tail_bubble_radius.max(10.0 * doc_scale) } else { st.tail_bubble_radius };
+    let preset = if st.tail_preset == TailPreset::None { TailPreset::Arc } else { st.tail_preset };
     vec![OutCommand::new(
         "shape.balloon.tail.add",
         json!({
             "layer": layer_id.0,
             "balloonId": balloon_id,
-            "preset": st.tail_preset.id(),
-            "mouthWidth": st.tail_mouth_width,
-            "tip": [200.0, 300.0],
+            "preset": preset.id(),
+            "mouthWidth": mouth_width,
+            "bubbleRadius": bubble_radius,
+            "tip": tip,
         }),
     )]
 }
@@ -1053,9 +1145,10 @@ fn draw_dual_chambers_row(ui: &mut Ui, state: &BalloonPanelUi, host: &BalloonHos
                 let nh = (r[3] * 0.90).max(MIN_BALLOON_SIZE);
                 let nx = r[0] - nw * 0.72;
                 let ny = r[1] + r[3] * 0.55;
+                let (_, scale) = panel_scales(host);
                 let next_b = LiveBalloon {
                     id: 0,
-                    body: body_from_state(state, [nx, ny, nw, nh]),
+                    body: body_from_state(state, [nx, ny, nw, nh], scale),
                     line_style: state.line_style,
                     double_gap_px: state.double_gap_px.clamp(0.5, 64.0),
                     whisper_dash_count: state.whisper_dashes.clamp(6, 96),
@@ -1134,6 +1227,7 @@ fn draw_dual_chambers_row(ui: &mut Ui, state: &BalloonPanelUi, host: &BalloonHos
 
 fn draw_body_section(ui: &mut Ui, state: &mut BalloonPanelUi, host: &BalloonHostContext<'_>, output: &mut BalloonPanelOutput) {
     let t = Tokens::get(ui.ctx());
+    let (_, scale) = panel_scales(host);
     ui.label(RichText::new(tl!("Balloon body:")).strong().color(t.text));
     ui.horizontal_wrapped(|ui| {
         let bodies = [
@@ -1162,10 +1256,10 @@ fn draw_body_section(ui: &mut Ui, state: &mut BalloonPanelUi, host: &BalloonHost
             adaptive_slider(ui, tl!("Squircle:"), &mut state.squircle, 0.0..=1.0, "", false);
         }
         BalloonBodyKindChoice::Rect => {
-            adaptive_slider(ui, tl!("Corner radius:"), &mut state.corner_radius, 0.0..=60.0, " px", false);
+            adaptive_slider(ui, tl!("Corner radius:"), &mut state.corner_radius, 0.0..=corner_max(scale), " px", false);
         }
         BalloonBodyKindChoice::ChamferRect => {
-            adaptive_slider(ui, tl!("Chamfer size:"), &mut state.chamfer_size, 1.0..=60.0, " px", false);
+            adaptive_slider(ui, tl!("Chamfer size:"), &mut state.chamfer_size, 1.0..=corner_max(scale), " px", false);
             adaptive_slider(ui, tl!("Corner scoop:"), &mut state.chamfer_concave, 0.0..=1.0, "", false);
         }
         BalloonBodyKindChoice::Cloud => draw_cloud_params(ui, state),
@@ -1175,7 +1269,7 @@ fn draw_body_section(ui: &mut Ui, state: &mut BalloonPanelUi, host: &BalloonHost
             adaptive_slider(ui, tl!("Squircle:"), &mut state.squircle, 0.0..=1.0, "", false);
             adaptive_slider(ui, tl!("Outline gap:"), &mut state.double_gap, 0.5..=64.0, " px", false);
         }
-        BalloonBodyKindChoice::Uniflash => draw_uniflash_params(ui, state),
+        BalloonBodyKindChoice::Uniflash => draw_uniflash_params(ui, state, scale),
     }
     ui.add_space(4.0);
     ui.label(RichText::new(tl!("Gizmo mode:")).strong().color(t.text));
@@ -1241,7 +1335,7 @@ fn draw_burst_params(ui: &mut Ui, state: &mut BalloonPanelUi) {
     draw_jitter_row(ui, &mut state.burst_jitter, &mut state.burst_seed, tl!("Random ray variation"));
 }
 
-fn draw_uniflash_params(ui: &mut Ui, state: &mut BalloonPanelUi) {
+fn draw_uniflash_params(ui: &mut Ui, state: &mut BalloonPanelUi, ui_scale: f64) {
     ui.horizontal_wrapped(|ui| {
         ui.label(tl!("Uniflash mode:"));
         ui.selectable_value(&mut state.uniflash_mode, UniflashMode::InwardNeedles, tl!("Inward needles"));
@@ -1253,15 +1347,16 @@ fn draw_uniflash_params(ui: &mut Ui, state: &mut BalloonPanelUi) {
         state.uniflash_inner_ratio = pct / 100.0;
     }
     adaptive_slider(ui, tl!("Bundle:"), &mut state.uniflash_bundle, 0.0..=1.0, "", false);
-    adaptive_slider(ui, tl!("Needle width:"), &mut state.uniflash_needle_width, 1.0..=8.0, " px", false);
+    adaptive_slider(ui, tl!("Needle width:"), &mut state.uniflash_needle_width, 1.0..=needle_width_max(ui_scale), " px", false);
     adaptive_slider(ui, tl!("Outer sharpness:"), &mut state.uniflash_outer_sharpness, 0.0..=1.0, "", false);
     adaptive_slider(ui, tl!("Inner sharpness:"), &mut state.uniflash_inner_sharpness, 0.0..=1.0, "", false);
 }
 
 fn draw_line_style_section(ui: &mut Ui, state: &mut BalloonPanelUi, host: &BalloonHostContext<'_>, output: &mut BalloonPanelOutput) {
     let t = Tokens::get(ui.ctx());
+    let (_, scale) = panel_scales(host);
     ui.label(RichText::new(tl!("Line:")).strong().color(t.text));
-    adaptive_slider(ui, tl!("Width:"), &mut state.stroke_width, 0.5..=20.0, " px", false);
+    adaptive_slider(ui, tl!("Width:"), &mut state.stroke_width, 0.5..=stroke_width_max(scale), " px", false);
     ui.horizontal_wrapped(|ui| {
         for w in [1.5, 2.0, 3.0, 4.0] {
             let is_cur = (state.stroke_width - w).abs() < 0.1;
@@ -1362,7 +1457,7 @@ fn draw_line_style_params(ui: &mut Ui, state: &mut BalloonPanelUi) {
     }
 }
 
-fn draw_tail_section(ui: &mut Ui, state: &mut BalloonPanelUi) {
+fn draw_tail_section(ui: &mut Ui, state: &mut BalloonPanelUi, ui_scale: f64) {
     let t = Tokens::get(ui.ctx());
     ui.label(RichText::new(tl!("Tail type:")).strong().color(t.text));
     ui.horizontal_wrapped(|ui| {
@@ -1382,12 +1477,12 @@ fn draw_tail_section(ui: &mut Ui, state: &mut BalloonPanelUi) {
         }
     });
     if state.tail_preset != TailPreset::None {
-        adaptive_slider(ui, tl!("Mouth width:"), &mut state.tail_mouth_width, 6.0..=120.0, " px", false);
+        adaptive_slider(ui, tl!("Mouth width:"), &mut state.tail_mouth_width, 6.0..=tail_width_max(ui_scale), " px", false);
         adaptive_slider(ui, tl!("Bend:"), &mut state.tail_bend, -1.0..=1.0, "", false);
     }
     if state.tail_preset == TailPreset::Thought {
         adaptive_slider(ui, tl!("Thought bubbles:"), &mut state.tail_bubbles, 1..=8, "", false);
-        adaptive_slider(ui, tl!("Bubble radius:"), &mut state.tail_bubble_radius, 4.0..=30.0, " px", false);
+        adaptive_slider(ui, tl!("Bubble radius:"), &mut state.tail_bubble_radius, 4.0..=tail_bubble_radius_max(), " px", false);
     }
 }
 
@@ -1623,7 +1718,8 @@ pub fn panel(ui: &mut Ui, state: &mut BalloonPanelUi, host: &BalloonHostContext<
         ui.add_space(6.0);
         ui.separator();
 
-        draw_tail_section(ui, state);
+        let (_, scale) = panel_scales(host);
+        draw_tail_section(ui, state, scale);
         ui.add_space(6.0);
         ui.separator();
 
@@ -1668,6 +1764,7 @@ pub fn panel(ui: &mut Ui, state: &mut BalloonPanelUi, host: &BalloonHostContext<
 #[cfg(test)]
 mod tests {
     use photocraft_doc::vector::{BalloonLineStyle, LiveBalloon, UniflashMode};
+    use photocraft_vector::balloon::LiveBalloonGroupGeom;
 
     use super::{
         BALLOON_COLOR_TAB, BalloonBodyKindChoice, BalloonFillMode, BalloonPanelOutput, BalloonPanelUi, MIN_BALLOON_SIZE, PANEL, body_from_state,
@@ -1808,7 +1905,7 @@ mod tests {
                     brush_preset_id: Some("fukidashi-fude".into()),
                     ..BalloonPanelUi::default()
                 };
-                let body = body_from_state(&st, [40.0, 40.0, 200.0, 140.0]);
+                let body = body_from_state(&st, [40.0, 40.0, 200.0, 140.0], 1.0);
                 let b = LiveBalloon { body, line_style: style, brush_preset_id: st.brush_preset_id.clone(), ..LiveBalloon::default() };
                 let mut hydrated = BalloonPanelUi::default();
                 hydrate_geometry_from_balloon(&mut hydrated, &b);
@@ -1840,6 +1937,159 @@ mod tests {
         assert_eq!(cmds.len(), 1);
         assert_eq!(cmds[0].params.get("fill").and_then(|v| v.as_str()), Some("#000000"));
         assert!(cmds[0].params.get("stroke").is_some_and(|v| v.is_null()));
+        // Flash bursts float by default: creating a UniFlash must not attach a speech tail.
+        let created: LiveBalloon = serde_json::from_value(cmds[0].params["balloon"].clone()).unwrap();
+        assert!(created.tails.is_empty(), "a new UniFlash has no tail");
+    }
+
+    #[test]
+    fn uniflash_explicit_add_tail_still_works() {
+        let st = BalloonPanelUi { body_choice: BalloonBodyKindChoice::Uniflash, ..BalloonPanelUi::default() };
+        let cmds = super::add_tail_commands(&st, &super::BalloonHostContext {
+            doc: None,
+            doc_id: None,
+            active_layer: None,
+            selected_layers: &[],
+            active_balloon_id: None,
+            doc_dpi: 72.0,
+            fg_color: [0.0, 0.0, 0.0, 1.0],
+            bg_color: [1.0, 1.0, 1.0, 1.0],
+            vector_brush_presets: &[],
+            tool_is_balloon: true,
+        });
+        assert!(cmds.is_empty(), "without an active layer there is nothing to add a tail to");
+
+        let mut doc = photocraft_doc::Document::new(
+            "UniTail",
+            photocraft_doc::Size { width: 400, height: 300 },
+            photocraft_doc::ColorMode::Rgb,
+            photocraft_doc::SampleType::U8,
+        );
+        let group = photocraft_doc::vector::LiveBalloonGroup::new(vec![LiveBalloon {
+            id: 1,
+            body: super::body_from_state(&st, [40.0, 40.0, 200.0, 140.0], 1.0),
+            ..LiveBalloon::default()
+        }]);
+        let path = group.rebuild_group_path();
+        let sh = photocraft_doc::ShapeLayer {
+            path,
+            fill: Some(photocraft_doc::Fill::Solid(photocraft_doc::Color::BLACK)),
+            live: Some(photocraft_doc::LiveShape::BalloonGroup { group }),
+            ..Default::default()
+        };
+        let mut layer = photocraft_doc::Layer::new("Flash", photocraft_doc::LayerContent::Shape(sh));
+        layer.id = photocraft_doc::LayerId(42);
+        doc.layers.push(layer);
+        let host = super::BalloonHostContext {
+            doc: Some(&doc),
+            doc_id: None,
+            active_layer: Some(photocraft_doc::LayerId(42)),
+            selected_layers: &[photocraft_doc::LayerId(42)],
+            active_balloon_id: Some(1),
+            doc_dpi: 72.0,
+            fg_color: [0.0, 0.0, 0.0, 1.0],
+            bg_color: [1.0, 1.0, 1.0, 1.0],
+            vector_brush_presets: &[],
+            tool_is_balloon: true,
+        };
+        let cmds = super::add_tail_commands(&st, &host);
+        assert_eq!(cmds.len(), 1, "an explicit + Add tail still dispatches a tail command for UniFlash");
+        assert_eq!(cmds[0].id, "shape.balloon.tail.add");
+        let tip = cmds[0].params["tip"].as_array().expect("tip array");
+        assert_eq!(tip[0].as_f64(), Some(40.0 + 200.0 * 0.25));
+        assert_eq!(tip[1].as_f64(), Some(40.0 + 140.0 + 48.0));
+    }
+
+    #[test]
+    fn large_canvas_balloon_creation_scales_defaults() {
+        use photocraft_doc::{ColorMode, Document, SampleType, Size};
+
+        let doc = Document::new("Large600Dpi", Size { width: 12_303, height: 17_499 }, ColorMode::Rgb, SampleType::U8);
+        let host = super::BalloonHostContext {
+            doc: Some(&doc),
+            doc_id: None,
+            active_layer: None,
+            selected_layers: &[],
+            active_balloon_id: None,
+            doc_dpi: 600.0,
+            fg_color: [0.0, 0.0, 0.0, 1.0],
+            bg_color: [1.0, 1.0, 1.0, 1.0],
+            vector_brush_presets: &[],
+            tool_is_balloon: false,
+        };
+        let st = BalloonPanelUi::default();
+        let cmds = super::create_balloon_on_canvas_commands(&st, &host);
+        assert_eq!(cmds.len(), 1);
+        let created: LiveBalloon = serde_json::from_value(cmds[0].params["balloon"].clone()).unwrap();
+        let rect = created.body.rect();
+        assert!(rect[2] > 240.0 && rect[3] > 160.0, "default body scales past 240x160: {rect:?}");
+        let tail = created.tails.first().expect("a non-Uniflash default carries an Arc tail");
+        assert!(tail.mouth_width > st.tail_mouth_width, "mouth width scales with the page");
+        assert!(tail.tip[1] > rect[1] + rect[3] + 48.0, "the tail tip offset scales with the page");
+    }
+
+    #[test]
+    fn selecting_a_200px_stroke_on_a_large_canvas_never_clamps_to_20() {
+        use photocraft_doc::{ColorMode, Document, Fill, Layer, LayerContent, LayerId, LiveShape, SampleType, ShapeLayer, ShapeStroke, Size};
+
+        let mut doc = Document::new("LargeStroke", Size { width: 12_303, height: 17_499 }, ColorMode::Rgb, SampleType::U8);
+        let balloon = LiveBalloon {
+            id: 1,
+            body: photocraft_doc::vector::LiveBalloonBody::Rect { rect: [4000.0, 4000.0, 6000.0, 8000.0], corner_radius: 10.0 },
+            stroke_width: 200.0,
+            ..LiveBalloon::default()
+        };
+        let group = photocraft_doc::vector::LiveBalloonGroup::new(vec![balloon.clone()]);
+        let path = group.rebuild_group_path();
+        let sh = ShapeLayer {
+            path,
+            fill: Some(Fill::Solid(photocraft_doc::Color::WHITE)),
+            stroke: Some(ShapeStroke { width: 200.0, paint: Fill::Solid(photocraft_doc::Color::BLACK), ..Default::default() }),
+            live: Some(LiveShape::BalloonGroup { group }),
+            ..Default::default()
+        };
+        let mut layer = Layer::new("BigStroke", LayerContent::Shape(sh));
+        layer.id = LayerId(7);
+        doc.layers.push(layer);
+
+        let host = super::BalloonHostContext {
+            doc: Some(&doc),
+            doc_id: None,
+            active_layer: Some(LayerId(7)),
+            selected_layers: &[LayerId(7)],
+            active_balloon_id: Some(1),
+            doc_dpi: 600.0,
+            fg_color: [0.0, 0.0, 0.0, 1.0],
+            bg_color: [1.0, 1.0, 1.0, 1.0],
+            vector_brush_presets: &[],
+            tool_is_balloon: true,
+        };
+
+        // Geometry hydration must keep the wide stroke.
+        let mut st = BalloonPanelUi::default();
+        hydrate_geometry_from_balloon(&mut st, &balloon);
+        assert!((st.stroke_width - 200.0).abs() < 1e-6, "geometry hydration kept {}", st.stroke_width);
+
+        // Layer-level hydration (shape stroke wins) must keep it too.
+        let target = super::active_balloon_target(&host).expect("target");
+        let mut st2 = BalloonPanelUi::default();
+        super::hydrate_state_from_balloon(&mut st2, &target);
+        assert!((st2.stroke_width - 200.0).abs() < 1e-6, "state hydration kept {}", st2.stroke_width);
+
+        // Rendering the panel on the large canvas must not clamp it through the slider range.
+        let ctx = egui::Context::default();
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(360.0, 900.0))),
+            ..Default::default()
+        };
+        let mut rendered = BalloonPanelUi::default();
+        let mut frame = ctx.run_ui(input, |ui| {
+            let _ = egui::CentralPanel::default().show(ui, |ui| {
+                let _ = super::panel(ui, &mut rendered, &host);
+            });
+        });
+        frame.textures_delta.clear();
+        assert!((rendered.stroke_width - 200.0).abs() < 1e-6, "panel kept {}", rendered.stroke_width);
     }
 
     #[test]
@@ -1962,5 +2212,55 @@ mod tests {
         assert!(super::apply_panel_to_active_layer(&st, &prev, &host, &mut out_cmds));
         let edit_cmd = out_cmds.iter().find(|c| c.id == "shape.edit").expect("shape.edit");
         assert_eq!(edit_cmd.params["fill"].as_str(), Some("#000000"));
+    }
+
+    /// All four real `photocraft-manga-ui` panels render for several frames without panicking on
+    /// an empty target — the state the browser starts in before a document is opened.
+    #[test]
+    fn manga_ui_panels_render_without_panic_on_empty_target() {
+        use crate::comic_sai_panel::{LineworkHostContext, LineworkPanelState, panel as linework_panel};
+        use crate::comic_screentone_panel::{ScreentoneUi, panel as screentone_panel};
+        use crate::sfx_gizmo::SfxGizmoState;
+        use crate::sfx_panel::{SfxPanelState, SfxTargetInfo, panel as sfx_panel};
+        use photocraft_doc::sfx::SfxPreset;
+
+        let mut balloon = BalloonPanelUi::default();
+        let mut linework = LineworkPanelState::default();
+        let mut screentone = ScreentoneUi::default();
+        let mut sfx = SfxPanelState::default();
+        let mut sfx_gizmo = SfxGizmoState::default();
+        let presets: Vec<SfxPreset> = Vec::new();
+
+        let host = super::BalloonHostContext {
+            doc: None,
+            doc_id: None,
+            active_layer: None,
+            selected_layers: &[],
+            active_balloon_id: None,
+            doc_dpi: 72.0,
+            fg_color: [0.0, 0.0, 0.0, 1.0],
+            bg_color: [1.0, 1.0, 1.0, 1.0],
+            vector_brush_presets: &[],
+            tool_is_balloon: false,
+        };
+        let linework_host = LineworkHostContext { vector_brush_presets: &[], selected_stroke_width: None, active_curve_sync: None };
+        let sfx_target = SfxTargetInfo { doc_id: None, layer_id: None, data: None, active_is_text: false, presets: &presets };
+
+        let ctx = egui::Context::default();
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(360.0, 900.0))),
+            ..Default::default()
+        };
+        for _ in 0..3 {
+            let mut out = ctx.run_ui(input.clone(), |ui| {
+                let _ = egui::CentralPanel::default().show(ui, |ui| {
+                    let _ = super::panel(ui, &mut balloon, &host);
+                    let _ = linework_panel(ui, &mut linework, &linework_host);
+                    let _ = screentone_panel(ui, &mut screentone, None);
+                    let _ = sfx_panel(ui, &mut sfx, &mut sfx_gizmo, &sfx_target);
+                });
+            });
+            out.textures_delta.clear();
+        }
     }
 }

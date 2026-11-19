@@ -941,7 +941,6 @@ fn a_workspace_from_a_newer_version_shows_the_default_and_stays_saved() {
     assert_eq!(docking["version"], json!(craft_ui::docking::Workspace::<String>::VERSION), "a changed layout replaces it: {docking}");
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn manga_panels_open_in_unified_manga_dock_and_toggle_cleanly() {
     let (mut app, _, _) = app_with_layers();
@@ -977,7 +976,6 @@ fn manga_panels_open_in_unified_manga_dock_and_toggle_cleanly() {
     assert!(app.session.active().unwrap().doc.layer(app.session.active().unwrap().active_layer.unwrap()).unwrap().sfx.is_some());
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn manga_icon_rail_and_toolbar_section_respect_seam_flags() {
     use egui_kittest::kittest::Queryable as _;

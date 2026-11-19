@@ -1,5 +1,5 @@
-//! Manga SFX tool commands: non-destructive vector lettering with 4 warp modes, stacked border/extrude/shadow
-//! effects, screentone fills, deterministic distress, and explicit JSON presets.
+//! Manga SFX tool commands: non-destructive vector lettering with warp modes, 6 stylized ink line
+//! modes, 4 Dry Brush engines, vector shadow/3D, screentone fills, and explicit JSON presets.
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::{Path, PathBuf};
@@ -7,7 +7,10 @@ use std::sync::Arc;
 
 use photocraft_algo::{PatternType, ScreentoneSpec};
 use photocraft_color::{BlendMode, Color, PixelFormat};
-use photocraft_doc::sfx::{SfxData, SfxFillSource, SfxLineJoin, SfxPreset, SfxStylePass};
+use photocraft_doc::sfx::{
+    SfxData, SfxDryBrushEngine, SfxDryBrushSpec, SfxFillSource, SfxLineEffect, SfxLineStyle, SfxPreset, SfxShtackVariant, SfxSpikeShape,
+    SfxVectorShadow,
+};
 use photocraft_doc::text::Orientation;
 use photocraft_doc::{Group, Layer, LayerContent, LayerId, Rect};
 use photocraft_manga_core::sfx_render::{SfxRenderOutput, render_sfx};
@@ -19,6 +22,10 @@ use crate::{EngineError, Result, Session};
 const MAX_PRESETS: usize = 256;
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_PRESET_JSON_BYTES: u64 = 1 << 20;
+
+fn ink_color() -> Color {
+    Color::rgb(15.0 / 255.0, 23.0 / 255.0, 42.0 / 255.0)
+}
 
 fn sfx_bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     bad(cmd, msg)
@@ -68,89 +75,229 @@ impl SfxPresetLibrary {
     }
 
     pub fn built_in_presets() -> Vec<SfxPreset> {
+        let ink = ink_color();
         vec![
             SfxPreset {
-                name: "Manga Impact (B/W)".to_owned(),
-                font_family: "Inter".to_owned(),
+                name: "⚡ SHTACK (Торцы)".to_owned(),
+                description: "Вариант 1: Caps + иглы".to_owned(),
+                font_family: "Impact".to_owned(),
                 weight: 800,
-                italic: false,
-                size_pt: 54.0,
-                tracking: 10.0,
-                leading_scale: 1.0,
-                vertical: false,
-                fill: SfxFillSource::Solid { color: Color::BLACK },
-                styles: vec![
-                    SfxStylePass::Stroke {
-                        enabled: true,
-                        width_px: 4.0,
-                        join: SfxLineJoin::Round,
-                        miter_limit: 4.0,
-                        fill: SfxFillSource::Solid { color: Color::WHITE },
-                    },
-                    SfxStylePass::Stroke {
-                        enabled: true,
-                        width_px: 2.5,
-                        join: SfxLineJoin::Round,
-                        miter_limit: 4.0,
-                        fill: SfxFillSource::Solid { color: Color::BLACK },
-                    },
-                ],
-                distress: Default::default(),
+                size_pt: 64.0,
+                tracking: 4.0,
+                fill: SfxFillSource::Solid { color: ink },
+                line_effect: SfxLineEffect {
+                    style: SfxLineStyle::Shtack,
+                    halo_width_px: 10.0,
+                    halo_color: Color::WHITE,
+                    line_width_px: 0.0,
+                    line_color: ink,
+                    shtack_variant: SfxShtackVariant::Caps,
+                    shtack_bristles: 3,
+                    shtack_split_pct: 78.0,
+                    shtack_overshoot_px: 20.0,
+                    shtack_dryness_pct: 26.0,
+                    ..SfxLineEffect::default()
+                },
+                dry_brush: SfxDryBrushSpec::default(),
+                vector_shadow: SfxVectorShadow::default(),
+                ..SfxPreset::default()
             },
             SfxPreset {
-                name: "Negative Drama".to_owned(),
-                font_family: "Inter".to_owned(),
-                weight: 900,
-                italic: true,
-                size_pt: 60.0,
-                tracking: 0.0,
-                leading_scale: 1.0,
-                vertical: false,
+                name: "⚡ SHTACK (Лента)".to_owned(),
+                description: "Вариант 2: Скелет-лента".to_owned(),
+                font_family: "Impact".to_owned(),
+                weight: 800,
+                size_pt: 64.0,
+                tracking: 4.0,
+                fill: SfxFillSource::Solid { color: ink },
+                line_effect: SfxLineEffect {
+                    style: SfxLineStyle::Shtack,
+                    halo_width_px: 8.0,
+                    halo_color: Color::WHITE,
+                    line_width_px: 0.0,
+                    line_color: ink,
+                    shtack_variant: SfxShtackVariant::Ribbon,
+                    shtack_bristles: 3,
+                    shtack_split_pct: 72.0,
+                    shtack_overshoot_px: 16.0,
+                    shtack_thickness_px: 13.0,
+                    shtack_dryness_pct: 28.0,
+                    ..SfxLineEffect::default()
+                },
+                dry_brush: SfxDryBrushSpec::default(),
+                vector_shadow: SfxVectorShadow::default(),
+                ..SfxPreset::default()
+            },
+            SfxPreset {
+                name: "Manga Impact".to_owned(),
+                description: "Двойной контур + 3D".to_owned(),
+                font_family: "Impact".to_owned(),
+                weight: 800,
+                size_pt: 64.0,
+                tracking: 6.0,
+                fill: SfxFillSource::Solid { color: ink },
+                line_effect: SfxLineEffect {
+                    style: SfxLineStyle::Clean,
+                    halo_width_px: 14.0,
+                    halo_color: Color::WHITE,
+                    line_width_px: 6.0,
+                    line_color: ink,
+                    ..SfxLineEffect::default()
+                },
+                dry_brush: SfxDryBrushSpec::default(),
+                vector_shadow: SfxVectorShadow {
+                    enabled: true,
+                    angle_deg: 52.0,
+                    distance_px: 12.0,
+                    extrude_depth_px: 8.0,
+                    color: ink,
+                },
+                ..SfxPreset::default()
+            },
+            SfxPreset {
+                name: "1-Bit 600dpi".to_owned(),
+                description: "Рубленый край + Solid".to_owned(),
+                font_family: "Impact".to_owned(),
+                weight: 800,
+                size_pt: 64.0,
+                tracking: 4.0,
+                fill: SfxFillSource::Solid { color: ink },
+                line_effect: SfxLineEffect {
+                    style: SfxLineStyle::OneBit,
+                    halo_width_px: 11.0,
+                    halo_color: Color::WHITE,
+                    line_width_px: 2.0,
+                    line_color: ink,
+                    one_bit_intensity: 68.0,
+                    ..SfxLineEffect::default()
+                },
+                dry_brush: SfxDryBrushSpec::default(),
+                vector_shadow: SfxVectorShadow::default(),
+                ..SfxPreset::default()
+            },
+            SfxPreset {
+                name: "✒ Наст. G-Pen".to_owned(),
+                description: "Нажим + перекрестья #".to_owned(),
+                font_family: "Impact".to_owned(),
+                weight: 800,
+                size_pt: 64.0,
+                tracking: 4.0,
                 fill: SfxFillSource::Solid { color: Color::WHITE },
-                styles: vec![
-                    SfxStylePass::Stroke {
-                        enabled: true,
-                        width_px: 4.0,
-                        join: SfxLineJoin::Miter,
-                        miter_limit: 4.0,
-                        fill: SfxFillSource::Solid { color: Color::WHITE },
-                    },
-                    SfxStylePass::NegativeInvert { enabled: true },
-                ],
-                distress: Default::default(),
+                line_effect: SfxLineEffect {
+                    style: SfxLineStyle::GPenNib,
+                    halo_width_px: 10.0,
+                    halo_color: Color::WHITE,
+                    line_width_px: 5.0,
+                    line_color: ink,
+                    gpen_contrast_pct: 82.0,
+                    gpen_angle_deg: -35.0,
+                    gpen_pinch_pct: 48.0,
+                    gpen_overshoot_px: 7.0,
+                    gpen_overshoot_count_pct: 85.0,
+                    gpen_overshoot_random_pct: 45.0,
+                    ..SfxLineEffect::default()
+                },
+                dry_brush: SfxDryBrushSpec::default(),
+                vector_shadow: SfxVectorShadow::default(),
+                ..SfxPreset::default()
             },
             SfxPreset {
-                name: "Screentone Shout".to_owned(),
-                font_family: "Inter".to_owned(),
+                name: "🖌 Кисть-штрих".to_owned(),
+                description: "Живой лайн + перекрестья #".to_owned(),
+                font_family: "Impact".to_owned(),
                 weight: 800,
-                italic: false,
-                size_pt: 58.0,
-                tracking: 20.0,
-                leading_scale: 1.05,
-                vertical: false,
+                size_pt: 64.0,
+                tracking: 4.0,
+                fill: SfxFillSource::Solid { color: Color::WHITE },
+                line_effect: SfxLineEffect {
+                    style: SfxLineStyle::BrushStroke,
+                    halo_width_px: 11.0,
+                    halo_color: Color::WHITE,
+                    line_width_px: 5.0,
+                    line_color: ink,
+                    ink_brush_roughness_pct: 42.0,
+                    ink_brush_dropout_pct: 35.0,
+                    ink_brush_pressure_pct: 60.0,
+                    ink_brush_overshoot_px: 8.0,
+                    ink_brush_overshoot_count_pct: 85.0,
+                    ink_brush_overshoot_random_pct: 45.0,
+                    ..SfxLineEffect::default()
+                },
+                dry_brush: SfxDryBrushSpec::default(),
+                vector_shadow: SfxVectorShadow::default(),
+                ..SfxPreset::default()
+            },
+            SfxPreset {
+                name: "Сухая кисть (А/Б1)".to_owned(),
+                description: "1-Bit + Б1: Штрихи".to_owned(),
+                font_family: "Impact".to_owned(),
+                weight: 800,
+                size_pt: 64.0,
+                tracking: 4.0,
+                fill: SfxFillSource::Solid { color: ink },
+                line_effect: SfxLineEffect {
+                    style: SfxLineStyle::OneBit,
+                    halo_width_px: 12.0,
+                    halo_color: Color::WHITE,
+                    line_width_px: 2.0,
+                    line_color: ink,
+                    one_bit_intensity: 55.0,
+                    ..SfxLineEffect::default()
+                },
+                dry_brush: SfxDryBrushSpec {
+                    enabled: true,
+                    engine: SfxDryBrushEngine::SdfSeg,
+                    dryness_pct: 44.0,
+                    freq_pct: 62.0,
+                    warp_pct: 30.0,
+                    paper_grain_pct: 38.0,
+                    edge_wear_pct: 44.0,
+                    ..SfxDryBrushSpec::default()
+                },
+                vector_shadow: SfxVectorShadow::default(),
+                ..SfxPreset::default()
+            },
+            SfxPreset {
+                name: "Скринтон Крик".to_owned(),
+                description: "Шипы + Screentone".to_owned(),
+                font_family: "Impact".to_owned(),
+                weight: 800,
+                size_pt: 64.0,
+                tracking: 6.0,
                 fill: SfxFillSource::Screentone {
                     spec: ScreentoneSpec {
                         pattern_type: PatternType::Dots,
-                        dot_size: 4.0,
-                        spacing_x: 10.0,
-                        spacing_y: 10.0,
+                        dot_size: 3.0,
+                        spacing_x: 5.0,
+                        spacing_y: 5.0,
                         density: 0.65,
                         angle: 45.0,
                         ..Default::default()
                     },
                     opacity: 1.0,
                 },
-                styles: vec![
-                    SfxStylePass::Stroke {
-                        enabled: true,
-                        width_px: 3.5,
-                        join: SfxLineJoin::Round,
-                        miter_limit: 4.0,
-                        fill: SfxFillSource::Solid { color: Color::WHITE },
-                    },
-                    SfxStylePass::Extrude3D { enabled: true, dx_px: 6.0, dy_px: 6.0, steps: 10, fill: SfxFillSource::Solid { color: Color::BLACK } },
-                ],
-                distress: Default::default(),
+                line_effect: SfxLineEffect {
+                    style: SfxLineStyle::Spikes,
+                    halo_width_px: 12.0,
+                    halo_color: Color::WHITE,
+                    line_width_px: 3.0,
+                    line_color: ink,
+                    spike_shape: SfxSpikeShape::Triangle,
+                    spike_length_px: 13.0,
+                    spike_size_px: 7.0,
+                    spike_count: 20,
+                    spike_random_pct: 45.0,
+                    ..SfxLineEffect::default()
+                },
+                dry_brush: SfxDryBrushSpec::default(),
+                vector_shadow: SfxVectorShadow {
+                    enabled: true,
+                    angle_deg: 48.0,
+                    distance_px: 8.0,
+                    extrude_depth_px: 5.0,
+                    color: ink,
+                },
+                ..SfxPreset::default()
             },
         ]
     }
@@ -161,7 +308,18 @@ impl SfxPresetLibrary {
 
     pub fn find(&self, name: &str) -> Option<&SfxPreset> {
         let q = name.trim();
-        self.presets.iter().find(|p| p.name.eq_ignore_ascii_case(q))
+        if let Some(p) = self.presets.iter().find(|p| p.name.eq_ignore_ascii_case(q)) {
+            return Some(p);
+        }
+        // Backwards-compatible aliases for legacy preset names in tests/scripts.
+        let alias = if q.eq_ignore_ascii_case("Screentone Shout") {
+            Some("Скринтон Крик")
+        } else if q.eq_ignore_ascii_case("Manga Impact (B/W)") {
+            Some("Manga Impact")
+        } else {
+            None
+        };
+        alias.and_then(|target| self.presets.iter().find(|p| p.name.eq_ignore_ascii_case(target)))
     }
 
     pub fn insert_or_replace(&mut self, mut preset: SfxPreset) {
@@ -258,7 +416,12 @@ fn apply_render_to_layer(layer: &mut Layer, data: SfxData, rendered: SfxRenderOu
             let mut invert_layer = Layer::new("SFX Invert", LayerContent::Raster(invert));
             invert_layer.blend = BlendMode::Difference;
             let _ = fmt;
-            layer.content = LayerContent::Group(Group { children: vec![under_layer, invert_layer], expanded: false, artboard: None, frame_stroke: None });
+            layer.content = LayerContent::Group(Group {
+                children: vec![under_layer, invert_layer],
+                expanded: false,
+                artboard: None,
+                frame_stroke: None,
+            });
         }
     }
 }
@@ -568,6 +731,8 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests {
+    use photocraft_doc::sfx::SfxStylePass;
+
     use super::*;
 
     #[test]
@@ -615,7 +780,7 @@ mod tests {
         assert_eq!(s.active().unwrap().doc.layer(sfx_from_type).unwrap().sfx.as_deref().unwrap().text, "WHOOSH");
 
         let list = s.execute("sfx.presets.list", json!({})).unwrap();
-        assert!(list["presets"].as_array().unwrap().len() >= 3);
+        assert!(list["presets"].as_array().unwrap().len() >= 8);
         s.execute("sfx.presets.apply", json!({ "layer": sfx_from_type.0, "name": "Screentone Shout" })).unwrap();
         assert_eq!(s.active().unwrap().doc.layer(sfx_from_type).unwrap().sfx.as_deref().unwrap().text, "WHOOSH");
 

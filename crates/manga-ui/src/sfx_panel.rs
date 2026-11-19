@@ -1,13 +1,14 @@
 //! Non-destructive Manga SFX Panel for `Group::Manga` (`crates/manga-ui`).
 //!
+//! Full `egui 0.37` port of the Manga SFX & Diagonal Gizmo dock UI.
 //! Emits deferred [`OutCommand`]s (`sfx.create`, `sfx.update`, `sfx.convertFromText`,
 //! `sfx.bakeToRaster`, `sfx.presets.*`) and syncs bi-directionally with [`SfxGizmoState`].
 
-use egui::Color32;
+use egui::{Color32, RichText, Stroke, Ui, vec2};
 use photocraft_algo::{DotShape, PatternType};
 use photocraft_doc::sfx::{
-    ScreentoneSpec, SfxData, SfxDistress, SfxFillSource, SfxFreeTransform, SfxGlyphTransform, SfxLineJoin, SfxMeshInterpolation, SfxPreset, SfxStylePass,
-    SfxWarpMode,
+    MAX_SFX_SPLINE_POINTS, ScreentoneSpec, SfxData, SfxDistress, SfxDryBrushEngine, SfxFillSource, SfxFreeTransform, SfxGlyphTransform, SfxLineJoin,
+    SfxLineStyle, SfxMeshInterpolation, SfxPreset, SfxShtackVariant, SfxSpikeShape, SfxStylePass, SfxWarpMode,
 };
 use photocraft_doc::{Color, LayerId};
 use serde_json::{Value, json};
@@ -18,6 +19,43 @@ use crate::{BridgeDocId, OutCommand};
 
 const SCREENTONE_PATTERNS: [&str; 4] = ["dots", "lines", "crosshatch", "noise"];
 const SCREENTONE_SHAPES: [&str; 4] = ["circle", "square", "diamond", "hexagon"];
+const GLYPH_TOOL_KEY: &str = "photocraft-manga-ui-sfx-glyph-tool";
+
+const ACCENT_SKY: Color32 = Color32::from_rgb(2, 132, 199);
+const ACCENT_AMBER: Color32 = Color32::from_rgb(217, 119, 6);
+const TEXT_AMBER: Color32 = Color32::from_rgb(252, 211, 77);
+const TEXT_SKY: Color32 = Color32::from_rgb(125, 211, 252);
+const TEXT_CYAN: Color32 = Color32::from_rgb(103, 232, 249);
+const TEXT_EMERALD: Color32 = Color32::from_rgb(110, 231, 183);
+const TEXT_ROSE: Color32 = Color32::from_rgb(253, 164, 175);
+
+/// Active sub-tool inside `SfxWarpMode::PerGlyph` (`Move` | `Skew` | `FT 4-Corner`),
+/// shared with `sfx_gizmo` through `egui::Context` temp storage.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SfxGlyphTool {
+    #[default]
+    Move,
+    Skew,
+    FreeTransform,
+}
+
+impl SfxGlyphTool {
+    pub fn get(ctx: &egui::Context) -> Self {
+        ctx.data(|d| d.get_temp::<Self>(egui::Id::unique(GLYPH_TOOL_KEY))).unwrap_or_default()
+    }
+
+    pub fn set(ctx: &egui::Context, tool: Self) {
+        ctx.data_mut(|d| d.insert_temp(egui::Id::unique(GLYPH_TOOL_KEY), tool));
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum DockTab {
+    #[default]
+    Sfx,
+    Character,
+    Color,
+}
 
 /// Read-only view of the active layer & preset library supplied by the host app.
 pub struct SfxTargetInfo<'a> {
@@ -37,6 +75,7 @@ pub struct SfxPanelState {
     pub font_query: String,
     pub cached_fonts: Option<Vec<String>>,
     pub preset_name: String,
+    active_tab: DockTab,
 }
 
 impl SfxPanelState {
@@ -92,21 +131,28 @@ fn c32_to_color(c: Color32) -> Color {
     Color::rgba(f32::from(r) / 255.0, f32::from(g) / 255.0, f32::from(b) / 255.0, f32::from(a) / 255.0)
 }
 
-fn color_swatch(ui: &mut egui::Ui, label: &str, color: &mut Color) -> bool {
+fn color_swatch_compact(ui: &mut Ui, color: &mut Color) -> bool {
     let mut c32 = color_to_c32(*color);
+    if ui.color_edit_button_srgba(&mut c32).changed() {
+        *color = c32_to_color(c32);
+        return true;
+    }
+    false
+}
+
+fn color_swatch(ui: &mut Ui, label: &str, color: &mut Color) -> bool {
     let mut changed = false;
     ui.horizontal(|ui| {
         ui.label(label);
-        if ui.color_edit_button_srgba(&mut c32).changed() {
-            *color = c32_to_color(c32);
+        if color_swatch_compact(ui, color) {
             changed = true;
         }
     });
     changed
 }
 
-fn dim_label(ui: &mut egui::Ui, t: Tokens, text: &str) {
-    ui.label(egui::RichText::new(text).color(t.text_dim).size(11.5));
+fn dim_label(ui: &mut Ui, t: Tokens, text: &str) {
+    ui.label(RichText::new(text).color(t.text_dim).size(11.0));
 }
 
 fn enum_id<T: serde::Serialize>(v: &T) -> String {
@@ -117,28 +163,203 @@ fn enum_from_id<T: serde::de::DeserializeOwned>(s: &str) -> Option<T> {
     serde_json::from_value(Value::String(s.to_owned())).ok()
 }
 
+fn section_card(ui: &mut Ui, t: Tokens, add_contents: impl FnOnce(&mut Ui)) {
+    egui::Frame::group(ui.style())
+        .fill(t.dock)
+        .stroke(Stroke::new(1.0, t.card_border))
+        .corner_radius(t.radius)
+        .inner_margin(egui::Margin::same(7))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width().max(1.0));
+            add_contents(ui);
+        });
+}
+
+fn section_header(ui: &mut Ui, t: Tokens, title: &str, badge: &str, badge_color: Color32) {
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(title).strong().size(10.5).color(t.text_dim));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(RichText::new(badge).monospace().size(10.0).color(badge_color));
+        });
+    });
+}
+
+fn seg_button(ui: &mut Ui, active: bool, active_fill: Color32, label: &str, t: Tokens) -> egui::Response {
+    let fill = if active { active_fill } else { t.field };
+    let text_col = if active { Color32::WHITE } else { t.text_dim };
+    let btn = egui::Button::new(RichText::new(label).size(10.5).strong().color(text_col))
+        .fill(fill)
+        .stroke(Stroke::new(1.0, if active { active_fill } else { t.card_border }))
+        .min_size(vec2(ui.available_width().max(24.0), 22.0));
+    ui.add(btn)
+}
+
+fn slider_row_f32(ui: &mut Ui, t: Tokens, label: &str, val: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str) -> bool {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(label).size(10.5).color(t.text_dim));
+        let readout = format!("{:.0}{suffix}", *val);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.add_sized([34.0, 18.0], egui::Label::new(RichText::new(readout).monospace().size(10.0).color(t.text)));
+            let w = (ui.available_width() - 4.0).max(48.0);
+            ui.spacing_mut().slider_width = w;
+            if ui.add(egui::Slider::new(val, range).show_value(false)).changed() {
+                changed = true;
+            }
+        });
+    });
+    changed
+}
+
+fn slider_row_u8(ui: &mut Ui, t: Tokens, label: &str, val: &mut u8, range: std::ops::RangeInclusive<u8>, suffix: &str) -> bool {
+    let mut f = f32::from(*val);
+    let r = f32::from(*range.start())..=f32::from(*range.end());
+    let changed = slider_row_f32(ui, t, label, &mut f, r, suffix);
+    if changed {
+        *val = f.round().clamp(f32::from(*range.start()), f32::from(*range.end())) as u8;
+    }
+    changed
+}
+
+fn slider_row_u16(ui: &mut Ui, t: Tokens, label: &str, val: &mut u16, range: std::ops::RangeInclusive<u16>, suffix: &str) -> bool {
+    let mut f = f32::from(*val);
+    let r = f32::from(*range.start())..=f32::from(*range.end());
+    let changed = slider_row_f32(ui, t, label, &mut f, r, suffix);
+    if changed {
+        *val = f.round().clamp(f32::from(*range.start()), f32::from(*range.end())) as u16;
+    }
+    changed
+}
+
+fn reroll_seed_button(ui: &mut Ui, seed: &mut u32, tooltip: &str) {
+    if ui.add_sized([24.0, 22.0], egui::Button::new("🎲")).on_hover_text(tooltip).clicked() {
+        *seed = seed.wrapping_add(1).max(1);
+    }
+}
+
+/// Lays out `add_left` in a vertical (`top_down`) column next to a compact `🎲` seed reroll button.
+fn row_with_reroll(ui: &mut Ui, height: f32, seed: &mut u32, tooltip: &str, add_left: impl FnOnce(&mut Ui)) {
+    ui.horizontal(|ui| {
+        let spacing = ui.spacing().item_spacing.x;
+        let avail = (ui.available_width() - 24.0 - spacing).max(120.0);
+        ui.allocate_ui_with_layout(vec2(avail, height), egui::Layout::top_down(egui::Align::Min), |ui| {
+            ui.set_width(avail);
+            add_left(ui);
+        });
+        reroll_seed_button(ui, seed, tooltip);
+    });
+}
+
+fn add_spline_point(draft: &mut SfxData) {
+    if draft.spline.points.len() >= MAX_SFX_SPLINE_POINTS {
+        return;
+    }
+    if draft.spline.points.len() < 2 {
+        draft.spline.points = vec![[-160.0, 18.0], [0.0, -24.0], [160.0, 14.0]];
+        draft.spline.show_arc = true;
+        return;
+    }
+    let mut best_i = 0usize;
+    let mut best_d = -1.0_f64;
+    for i in 0..(draft.spline.points.len() - 1) {
+        let a = draft.spline.points[i];
+        let b = draft.spline.points[i + 1];
+        let d = (b[0] - a[0]).hypot(b[1] - a[1]);
+        if d > best_d {
+            best_d = d;
+            best_i = i;
+        }
+    }
+    let a = draft.spline.points[best_i];
+    let b = draft.spline.points[best_i + 1];
+    draft.spline.points.insert(best_i + 1, [(a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5]);
+    draft.spline.show_arc = true;
+}
+
+fn face_color_mut(fill: &mut SfxFillSource) -> Option<&mut Color> {
+    match fill {
+        SfxFillSource::Solid { color } => Some(color),
+        SfxFillSource::Gradient { start, .. } => Some(start),
+        SfxFillSource::Screentone { .. } => None,
+    }
+}
+
+fn face_color_copy(fill: &SfxFillSource) -> Color {
+    match fill {
+        SfxFillSource::Solid { color } => *color,
+        SfxFillSource::Gradient { start, .. } => *start,
+        SfxFillSource::Screentone { .. } => Color::rgb(15.0 / 255.0, 23.0 / 255.0, 42.0 / 255.0),
+    }
+}
+
+fn line_style_badge(draft: &SfxData) -> &'static str {
+    match draft.line_effect.style {
+        SfxLineStyle::Clean => "Clean",
+        SfxLineStyle::OneBit => "1-Bit",
+        SfxLineStyle::Spikes => "Шипы",
+        SfxLineStyle::GPenNib => "G-Pen",
+        SfxLineStyle::BrushStroke => "Кисть-штрих",
+        SfxLineStyle::Shtack => match draft.line_effect.shtack_variant {
+            SfxShtackVariant::Caps => "SHTACK (Торцы)",
+            SfxShtackVariant::Ribbon => "SHTACK (Лента)",
+        },
+    }
+}
+
+fn fill_style_badge(draft: &SfxData) -> &'static str {
+    if draft.dry_brush.enabled {
+        match draft.dry_brush.engine {
+            SfxDryBrushEngine::SdfPhysics => "Dry: А SDF",
+            SfxDryBrushEngine::SdfSeg => "Dry: Б1 Seg",
+            SfxDryBrushEngine::SdfEtf => "Dry: Б2 ETF",
+            SfxDryBrushEngine::Vector => "Dry: Вектор",
+        }
+    } else {
+        match draft.fill {
+            SfxFillSource::Solid { .. } => "Solid",
+            SfxFillSource::Gradient { .. } => "Gradient",
+            SfxFillSource::Screentone { .. } => "Screentone",
+        }
+    }
+}
+
+fn preset_title_color(preset: &SfxPreset, t: Tokens) -> Color32 {
+    if preset.dry_brush.enabled {
+        return TEXT_CYAN;
+    }
+    if matches!(preset.fill, SfxFillSource::Screentone { .. }) {
+        return TEXT_ROSE;
+    }
+    match preset.line_effect.style {
+        SfxLineStyle::Shtack => TEXT_AMBER,
+        SfxLineStyle::GPenNib => TEXT_SKY,
+        SfxLineStyle::BrushStroke => TEXT_EMERALD,
+        SfxLineStyle::Spikes => TEXT_ROSE,
+        SfxLineStyle::Clean | SfxLineStyle::OneBit => t.text,
+    }
+}
+
 /// Renders the SFX authoring dock panel and emits deferred engine commands.
-pub fn panel(ui: &mut egui::Ui, st: &mut SfxPanelState, gizmo: &mut SfxGizmoState, target: &SfxTargetInfo<'_>) -> SfxPanelOutput {
+pub fn panel(ui: &mut Ui, st: &mut SfxPanelState, gizmo: &mut SfxGizmoState, target: &SfxTargetInfo<'_>) -> SfxPanelOutput {
     let mut out = SfxPanelOutput::default();
     st.ensure_fonts();
     st.sync_from_host(target);
     let t = Tokens::get(ui.ctx());
     let before = st.draft.clone();
 
-    draw_header_banner(ui, t, target);
-    draw_text_section(ui, st, t);
-    crate::widgets::hairline(ui);
-    draw_warp_section(ui, st, gizmo, t);
-    crate::widgets::hairline(ui);
-    draw_fill_section(ui, st, t);
-    crate::widgets::hairline(ui);
-    draw_styles_section(ui, st, t);
-    crate::widgets::hairline(ui);
-    draw_distress_section(ui, st, t);
-    crate::widgets::hairline(ui);
-    draw_presets_section(ui, st, target, &mut out);
-    crate::widgets::hairline(ui);
-    draw_actions_section(ui, st, target, &mut out);
+    draw_header_and_tabs(ui, st, t, target);
+    ui.add_space(4.0);
+
+    egui::ScrollArea::vertical().id_salt("sfx-dock-scroll").auto_shrink([false, true]).show(ui, |ui| {
+        ui.spacing_mut().item_spacing.y = 6.0;
+        match st.active_tab {
+            DockTab::Sfx => draw_sfx_tab(ui, st, gizmo, t, target, &mut out),
+            DockTab::Character => draw_character_tab(ui, st, t),
+            DockTab::Color => draw_color_tab(ui, st, t),
+        }
+        crate::widgets::hairline(ui);
+        draw_actions_section(ui, st, target, &mut out);
+    });
 
     if st.draft != before
         && let (Some(doc_id), Some(layer_id)) = (target.doc_id, target.layer_id)
@@ -160,240 +381,730 @@ pub fn panel(ui: &mut egui::Ui, st: &mut SfxPanelState, gizmo: &mut SfxGizmoStat
     out
 }
 
-fn draw_header_banner(ui: &mut egui::Ui, t: Tokens, target: &SfxTargetInfo<'_>) {
+fn draw_header_and_tabs(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens, target: &SfxTargetInfo<'_>) {
     ui.horizontal(|ui| {
         ui.strong("SFX Lettering");
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let status = if let Some(id) = target.layer_id.filter(|_| target.data.is_some()) { format!("Live #{}", id.0) } else { "Draft (New)".to_owned() };
-            ui.label(egui::RichText::new(status).color(t.text_dim).size(11.0));
-        });
-    });
-}
-
-fn draw_text_section(ui: &mut egui::Ui, st: &mut SfxPanelState, t: Tokens) {
-    ui.label(egui::RichText::new("Text & Typography").strong().size(12.0));
-    ui.add(egui::TextEdit::multiline(&mut st.draft.text).desired_rows(2).desired_width(f32::INFINITY));
-
-    egui::Grid::new("sfx-type-grid").num_columns(2).spacing(egui::vec2(8.0, 4.0)).show(ui, |ui| {
-        dim_label(ui, t, "Font:");
-        ui.horizontal(|ui| {
-            let selected = st.draft.font_family.clone();
-            craft_ui::ComboBox::from_id_salt("sfx-font-family").width(152.0).selected_text(selected).show_ui(ui, |ui| {
-                ui.add(egui::TextEdit::singleline(&mut st.font_query).hint_text("Filter fonts...").desired_width(148.0));
-                let q = st.font_query.trim().to_ascii_lowercase();
-                let list = st.cached_fonts.as_deref().unwrap_or(&[]);
-                egui::ScrollArea::vertical().max_height(210.0).show(ui, |ui| {
-                    let mut shown = 0usize;
-                    for fam in list {
-                        if !q.is_empty() && !fam.to_ascii_lowercase().contains(&q) {
-                            continue;
-                        }
-                        if ui.selectable_label(st.draft.font_family == *fam, fam).clicked() {
-                            st.draft.font_family = fam.clone();
-                        }
-                        shown += 1;
-                        if shown >= 200 {
-                            break;
-                        }
-                    }
-                });
-            });
-            if ui.button("Reload").on_hover_text("Refresh system fonts cache").clicked() {
-                st.cached_fonts = None;
-                st.ensure_fonts();
-            }
-        });
-        ui.end_row();
-
-        dim_label(ui, t, "Weight:");
-        ui.horizontal(|ui| {
-            let mut w = st.draft.weight;
-            let weights = [(400u16, "Regular"), (700u16, "Bold"), (800u16, "Heavy"), (900u16, "Black")];
-            if crate::widgets::dropdown_literal(ui, "sfx-font-weight", &mut w, &weights, 92.0) {
-                st.draft.weight = w;
-            }
-            ui.checkbox(&mut st.draft.italic, "Italic");
-        });
-        ui.end_row();
-
-        dim_label(ui, t, "Size:");
-        ui.horizontal(|ui| {
-            crate::widgets::value_field(ui, &mut st.draft.size_pt, 6.0..=500.0, "pt", 68.0);
-            ui.checkbox(&mut st.draft.vertical, "Vertical");
-        });
-        ui.end_row();
-
-        dim_label(ui, t, "Track / Lead:");
-        ui.horizontal(|ui| {
-            crate::widgets::value_field(ui, &mut st.draft.tracking, -200.0..=500.0, "", 62.0);
-            crate::widgets::value_field(ui, &mut st.draft.leading_scale, 0.4..=3.0, "x", 62.0);
-        });
-        ui.end_row();
-    });
-}
-
-fn draw_warp_section(ui: &mut egui::Ui, st: &mut SfxPanelState, gizmo: &mut SfxGizmoState, t: Tokens) {
-    ui.label(egui::RichText::new("Non-Destructive Warp").strong().size(12.0));
-    ui.horizontal_wrapped(|ui| {
-        for (mode, label) in [
-            (SfxWarpMode::FreeTransform, "Transform / Skew"),
-            (SfxWarpMode::PerGlyph, "Per-Glyph"),
-            (SfxWarpMode::MeshLattice, "Mesh Grid"),
-            (SfxWarpMode::LiquifyField, "Liquify"),
-        ] {
-            ui.selectable_value(&mut st.draft.warp_mode, mode, label);
-        }
-    });
-
-    match st.draft.warp_mode {
-        SfxWarpMode::FreeTransform => {
-            egui::Grid::new("sfx-ft-grid").num_columns(2).spacing(egui::vec2(8.0, 4.0)).show(ui, |ui| {
-                let mut sx = st.draft.free_transform.scale_x as f32;
-                let mut sy = st.draft.free_transform.scale_y as f32;
-                let mut rot = st.draft.free_transform.rotation_deg as f32;
-                let mut skx = st.draft.free_transform.skew_x_deg as f32;
-                let mut sky = st.draft.free_transform.skew_y_deg as f32;
-                let mut px = st.draft.free_transform.perspective_x as f32;
-                let mut py = st.draft.free_transform.perspective_y as f32;
-
-                dim_label(ui, t, "Scale X / Y:");
-                ui.horizontal(|ui| {
-                    if crate::widgets::value_field(ui, &mut sx, 0.1..=12.0, "x", 64.0).changed() {
-                        st.draft.free_transform.scale_x = f64::from(sx);
-                    }
-                    if crate::widgets::value_field(ui, &mut sy, 0.1..=12.0, "x", 64.0).changed() {
-                        st.draft.free_transform.scale_y = f64::from(sy);
-                    }
-                });
-                ui.end_row();
-
-                dim_label(ui, t, "Rotate / Skew X:");
-                ui.horizontal(|ui| {
-                    if crate::widgets::value_field(ui, &mut rot, -360.0..=360.0, "°", 64.0).changed() {
-                        st.draft.free_transform.rotation_deg = f64::from(rot);
-                    }
-                    if crate::widgets::value_field(ui, &mut skx, -75.0..=75.0, "°", 64.0).changed() {
-                        st.draft.free_transform.skew_x_deg = f64::from(skx);
-                    }
-                });
-                ui.end_row();
-
-                dim_label(ui, t, "Skew Y / Persp:");
-                ui.horizontal(|ui| {
-                    if crate::widgets::value_field(ui, &mut sky, -75.0..=75.0, "°", 54.0).changed() {
-                        st.draft.free_transform.skew_y_deg = f64::from(sky);
-                    }
-                    if crate::widgets::value_field(ui, &mut px, -0.75..=0.75, "", 46.0).changed() {
-                        st.draft.free_transform.perspective_x = f64::from(px);
-                    }
-                    if crate::widgets::value_field(ui, &mut py, -0.75..=0.75, "", 46.0).changed() {
-                        st.draft.free_transform.perspective_y = f64::from(py);
-                    }
-                });
-                ui.end_row();
-            });
-            if ui.button("Reset Transform").clicked() {
-                st.draft.free_transform = SfxFreeTransform::default();
-            }
-        }
-        SfxWarpMode::PerGlyph => {
-            if let Some(g_idx) = gizmo.selected_glyph {
-                ui.horizontal(|ui| {
-                    ui.label(format!("Glyph #{g_idx}"));
-                    if ui.button("Reset Glyph").clicked() {
-                        st.draft.per_glyph.retain(|g| g.glyph_index != g_idx);
-                    }
-                });
-                let entry_idx = st.draft.per_glyph.iter().position(|g| g.glyph_index == g_idx);
-                let mut cur = entry_idx.map_or(SfxGlyphTransform { glyph_index: g_idx, ..SfxGlyphTransform::default() }, |i| st.draft.per_glyph[i]);
-                let mut edited = false;
-                ui.horizontal(|ui| {
-                    let (mut dx, mut dy) = (cur.dx as f32, cur.dy as f32);
-                    if crate::widgets::value_field(ui, &mut dx, -2000.0..=2000.0, "px", 60.0).changed() {
-                        cur.dx = f64::from(dx);
-                        edited = true;
-                    }
-                    if crate::widgets::value_field(ui, &mut dy, -2000.0..=2000.0, "px", 60.0).changed() {
-                        cur.dy = f64::from(dy);
-                        edited = true;
-                    }
-                    let mut rot = cur.rotation_deg as f32;
-                    if crate::widgets::value_field(ui, &mut rot, -360.0..=360.0, "°", 56.0).changed() {
-                        cur.rotation_deg = f64::from(rot);
-                        edited = true;
-                    }
-                });
-                if edited {
-                    if let Some(i) = entry_idx {
-                        st.draft.per_glyph[i] = cur;
-                    } else {
-                        st.draft.per_glyph.push(cur);
-                    }
-                }
+            let status = if let Some(id) = target.layer_id.filter(|_| target.data.is_some()) {
+                format!("Live #{}", id.0)
             } else {
-                ui.label(egui::RichText::new("Click a glyph on canvas to move/rotate/scale.").color(t.text_dim).size(11.0));
-            }
-            if !st.draft.per_glyph.is_empty() && ui.button("Reset All Glyphs").clicked() {
-                st.draft.per_glyph.clear();
-            }
+                "Draft (New)".to_owned()
+            };
+            ui.label(RichText::new(status).color(TEXT_SKY).monospace().size(10.5));
+        });
+    });
+
+    // Quick text + Halo/Line strip (mirrors mockup top seam bar)
+    ui.add(egui::TextEdit::singleline(&mut st.draft.text).hint_text("SFX текст (напр. БА-БАХ!)...").desired_width(f32::INFINITY));
+    ui.horizontal(|ui| {
+        dim_label(ui, t, "Ореол:");
+        color_swatch_compact(ui, &mut st.draft.line_effect.halo_color);
+        crate::widgets::value_field(ui, &mut st.draft.line_effect.halo_width_px, 0.0..=64.0, "px", 46.0);
+        ui.add_space(4.0);
+        dim_label(ui, t, "Лайн:");
+        color_swatch_compact(ui, &mut st.draft.line_effect.line_color);
+        crate::widgets::value_field(ui, &mut st.draft.line_effect.line_width_px, 0.0..=64.0, "px", 46.0);
+    });
+
+    ui.add_space(2.0);
+    ui.columns(3, |cols| {
+        if seg_button(&mut cols[0], st.active_tab == DockTab::Sfx, ACCENT_SKY, "SFX ●", t).clicked() {
+            st.active_tab = DockTab::Sfx;
         }
-        SfxWarpMode::MeshLattice => {
-            ui.horizontal(|ui| {
-                let mut cols = st.draft.mesh.cols as f32;
-                let mut rows = st.draft.mesh.rows as f32;
-                dim_label(ui, t, "Grid:");
-                if crate::widgets::value_field(ui, &mut cols, 2.0..=8.0, "c", 48.0).changed() {
-                    st.draft.mesh.cols = cols.round().clamp(2.0, 8.0) as u8;
-                    reset_mesh(&mut st.draft);
-                    gizmo.selected_nodes.clear();
-                }
-                if crate::widgets::value_field(ui, &mut rows, 2.0..=8.0, "r", 48.0).changed() {
-                    st.draft.mesh.rows = rows.round().clamp(2.0, 8.0) as u8;
-                    reset_mesh(&mut st.draft);
-                    gizmo.selected_nodes.clear();
+        if seg_button(&mut cols[1], st.active_tab == DockTab::Character, ACCENT_SKY, "Character", t).clicked() {
+            st.active_tab = DockTab::Character;
+        }
+        if seg_button(&mut cols[2], st.active_tab == DockTab::Color, ACCENT_SKY, "Color", t).clicked() {
+            st.active_tab = DockTab::Color;
+        }
+    });
+}
+
+fn draw_sfx_tab(ui: &mut Ui, st: &mut SfxPanelState, gizmo: &mut SfxGizmoState, t: Tokens, target: &SfxTargetInfo<'_>, out: &mut SfxPanelOutput) {
+    draw_presets_card(ui, st, t, target, out);
+    draw_gizmo_card(ui, st, gizmo, t);
+    draw_line_effect_card(ui, st, t);
+    draw_fill_card(ui, st, t);
+    draw_vector_shadow_card(ui, st, t);
+    draw_advanced_fx_collapsible(ui, st, t);
+}
+
+fn draw_presets_card(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens, target: &SfxTargetInfo<'_>, out: &mut SfxPanelOutput) {
+    section_card(ui, t, |ui| {
+        section_header(ui, t, "БЫСТРЫЕ СТИЛИ (1-КЛИК)", "Manga B/W", t.text_faint);
+        ui.add_space(3.0);
+
+        for pair in target.presets.chunks(2) {
+            ui.columns(2, |cols| {
+                for (i, preset) in pair.iter().enumerate() {
+                    let title_col = preset_title_color(preset, t);
+                    let sub = if preset.description.is_empty() { "JSON Preset" } else { preset.description.as_str() };
+                    let card_resp = egui::Frame::group(cols[i].style())
+                        .fill(t.field)
+                        .stroke(Stroke::new(1.0, t.card_border))
+                        .corner_radius(t.radius_sm)
+                        .inner_margin(egui::Margin::symmetric(6, 4))
+                        .show(&mut cols[i], |ui| {
+                            ui.set_width(ui.available_width().max(1.0));
+                            ui.label(RichText::new(&preset.name).strong().size(10.5).color(title_col));
+                            ui.label(RichText::new(sub).size(9.5).color(t.text_dim));
+                        })
+                        .response
+                        .interact(egui::Sense::click());
+                    if card_resp.hovered() {
+                        cols[i].ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
+                    if card_resp.clicked() {
+                        if let Some(id) = target.layer_id.filter(|_| target.data.is_some()) {
+                            out.commands.push(OutCommand::new("sfx.presets.apply", json!({ "layer": id.0, "name": preset.name })));
+                        } else {
+                            st.draft.apply_preset(preset);
+                        }
+                    }
                 }
             });
-            ui.horizontal(|ui| {
-                ui.selectable_value(&mut st.draft.mesh.interpolation, SfxMeshInterpolation::Bilinear, "Bilinear");
-                ui.selectable_value(&mut st.draft.mesh.interpolation, SfxMeshInterpolation::Bicubic, "Bicubic");
-                ui.checkbox(&mut st.draft.mesh.link_h, "Link H");
-                ui.checkbox(&mut st.draft.mesh.link_v, "Link V");
+            ui.add_space(2.0);
+        }
+
+        egui::CollapsingHeader::new(RichText::new("Сохранить / удалить пресет").size(10.0).color(t.text_dim))
+            .id_salt("sfx-preset-manage")
+            .default_open(false)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.add(egui::TextEdit::singleline(&mut st.preset_name).hint_text("Имя пресета...").desired_width(116.0));
+                    let name = st.preset_name.trim().to_owned();
+                    if ui.add_enabled(!name.is_empty(), egui::Button::new("Save")).clicked() {
+                        let mut preset = st.draft.to_preset(&name);
+                        preset.validate();
+                        out.commands.push(OutCommand::new("sfx.presets.save", json!({ "preset": preset })));
+                    }
+                    if ui.add_enabled(!name.is_empty() && target.presets.iter().any(|p| p.name == name), egui::Button::new("Del")).clicked() {
+                        out.commands.push(OutCommand::new("sfx.presets.delete", json!({ "name": name })));
+                    }
+                });
             });
-            ui.horizontal(|ui| {
+    });
+}
+
+fn draw_gizmo_card(ui: &mut Ui, st: &mut SfxPanelState, gizmo: &mut SfxGizmoState, t: Tokens) {
+    section_card(ui, t, |ui| {
+        section_header(ui, t, "GIZMO НА ХОЛСТЕ", "Неаффинный FT", TEXT_SKY);
+        ui.add_space(3.0);
+
+        ui.columns(2, |cols| {
+            if seg_button(&mut cols[0], st.draft.warp_mode == SfxWarpMode::FreeTransform, ACCENT_SKY, "FT 4-Corner + Дуга", t).clicked() {
+                st.draft.warp_mode = SfxWarpMode::FreeTransform;
+            }
+            if seg_button(&mut cols[1], st.draft.warp_mode == SfxWarpMode::PerGlyph, ACCENT_SKY, "По точкам (Alt)", t).clicked() {
+                st.draft.warp_mode = SfxWarpMode::PerGlyph;
+            }
+        });
+        ui.add_space(2.0);
+        ui.columns(2, |cols| {
+            if seg_button(&mut cols[0], st.draft.warp_mode == SfxWarpMode::MeshLattice, ACCENT_SKY, "Mesh Grid", t).clicked() {
+                st.draft.warp_mode = SfxWarpMode::MeshLattice;
+            }
+            if seg_button(&mut cols[1], st.draft.warp_mode == SfxWarpMode::LiquifyField, ACCENT_SKY, "Liquify", t).clicked() {
+                st.draft.warp_mode = SfxWarpMode::LiquifyField;
+            }
+        });
+
+        ui.add_space(4.0);
+        match st.draft.warp_mode {
+            SfxWarpMode::FreeTransform => {
+                ui.horizontal(|ui| {
+                    dim_label(ui, t, "Перспектива рамки:");
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button("Сбросить FT").clicked() {
+                            st.draft.free_transform = SfxFreeTransform::default();
+                        }
+                        if ui.small_button("Сбросить 4 угла").clicked() {
+                            st.draft.free_transform.reset_corners();
+                        }
+                    });
+                });
+                crate::widgets::hairline(ui);
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut st.draft.spline.show_arc, "Видимая дуга");
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(RichText::new(format!("{} тчк", st.draft.spline.points.len())).monospace().size(10.0).color(TEXT_CYAN));
+                    });
+                });
+                ui.columns(2, |cols| {
+                    if cols[0]
+                        .add(
+                            egui::Button::new(RichText::new("+ Точка на дуге").size(10.5).color(TEXT_CYAN))
+                                .min_size(vec2(cols[0].available_width(), 22.0)),
+                        )
+                        .clicked()
+                    {
+                        add_spline_point(&mut st.draft);
+                    }
+                    if cols[1]
+                        .add(egui::Button::new(RichText::new("Выпрямить дугу").size(10.5)).min_size(vec2(cols[1].available_width(), 22.0)))
+                        .clicked()
+                    {
+                        st.draft.spline.straighten();
+                    }
+                });
+            }
+            SfxWarpMode::PerGlyph => {
+                let mut gtool = SfxGlyphTool::get(ui.ctx());
+                ui.columns(3, |cols| {
+                    if seg_button(&mut cols[0], gtool == SfxGlyphTool::Move, ACCENT_AMBER, "Move", t).clicked() {
+                        gtool = SfxGlyphTool::Move;
+                    }
+                    if seg_button(&mut cols[1], gtool == SfxGlyphTool::Skew, ACCENT_AMBER, "Skew", t).clicked() {
+                        gtool = SfxGlyphTool::Skew;
+                    }
+                    if seg_button(&mut cols[2], gtool == SfxGlyphTool::FreeTransform, ACCENT_AMBER, "FT (4-Crn)", t).clicked() {
+                        gtool = SfxGlyphTool::FreeTransform;
+                    }
+                });
+                SfxGlyphTool::set(ui.ctx(), gtool);
+
+                if let Some(g_idx) = gizmo.selected_glyph {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(format!("Буква #{}", g_idx + 1)).strong().size(10.5).color(TEXT_AMBER));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.small_button("Сбросить").clicked() {
+                                st.draft.per_glyph.retain(|g| g.glyph_index != g_idx);
+                            }
+                        });
+                    });
+                    let entry_idx = st.draft.per_glyph.iter().position(|g| g.glyph_index == g_idx);
+                    let mut cur = entry_idx.map_or(SfxGlyphTransform { glyph_index: g_idx, ..SfxGlyphTransform::default() }, |i| st.draft.per_glyph[i]);
+                    let mut edited = false;
+                    ui.horizontal(|ui| {
+                        let (mut dx, mut dy, mut rot) = (cur.dx as f32, cur.dy as f32, cur.rotation_deg as f32);
+                        if crate::widgets::value_field(ui, &mut dx, -2000.0..=2000.0, "x", 56.0).changed() {
+                            cur.dx = f64::from(dx);
+                            edited = true;
+                        }
+                        if crate::widgets::value_field(ui, &mut dy, -2000.0..=2000.0, "y", 56.0).changed() {
+                            cur.dy = f64::from(dy);
+                            edited = true;
+                        }
+                        if crate::widgets::value_field(ui, &mut rot, -360.0..=360.0, "°", 56.0).changed() {
+                            cur.rotation_deg = f64::from(rot);
+                            edited = true;
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        let (mut skx, mut sky) = (cur.skew_x_deg as f32, cur.skew_y_deg as f32);
+                        dim_label(ui, t, "Skew:");
+                        if crate::widgets::value_field(ui, &mut skx, -60.0..=60.0, "°", 56.0).changed() {
+                            cur.skew_x_deg = f64::from(skx);
+                            edited = true;
+                        }
+                        if crate::widgets::value_field(ui, &mut sky, -60.0..=60.0, "°", 56.0).changed() {
+                            cur.skew_y_deg = f64::from(sky);
+                            edited = true;
+                        }
+                    });
+                    if edited {
+                        if let Some(i) = entry_idx {
+                            st.draft.per_glyph[i] = cur;
+                        } else {
+                            st.draft.per_glyph.push(cur);
+                        }
+                    }
+                } else {
+                    ui.label(RichText::new("Кликните по букве на холсте (Move / Skew / FT + вращение).").color(t.text_dim).size(10.5));
+                }
+                if !st.draft.per_glyph.is_empty() && ui.button("Сбросить все буквы").clicked() {
+                    st.draft.per_glyph.clear();
+                }
+            }
+            SfxWarpMode::MeshLattice => {
+                ui.horizontal(|ui| {
+                    let mut cols = f32::from(st.draft.mesh.cols);
+                    let mut rows = f32::from(st.draft.mesh.rows);
+                    dim_label(ui, t, "Grid:");
+                    if crate::widgets::value_field(ui, &mut cols, 2.0..=8.0, "c", 48.0).changed() {
+                        st.draft.mesh.cols = cols.round().clamp(2.0, 8.0) as u8;
+                        reset_mesh(&mut st.draft);
+                        gizmo.selected_nodes.clear();
+                    }
+                    if crate::widgets::value_field(ui, &mut rows, 2.0..=8.0, "r", 48.0).changed() {
+                        st.draft.mesh.rows = rows.round().clamp(2.0, 8.0) as u8;
+                        reset_mesh(&mut st.draft);
+                        gizmo.selected_nodes.clear();
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut st.draft.mesh.interpolation, SfxMeshInterpolation::Bilinear, "Bilinear");
+                    ui.selectable_value(&mut st.draft.mesh.interpolation, SfxMeshInterpolation::Bicubic, "Bicubic");
+                    ui.checkbox(&mut st.draft.mesh.link_h, "Link H");
+                    ui.checkbox(&mut st.draft.mesh.link_v, "Link V");
+                });
                 if ui.button("Reset Mesh").clicked() {
                     reset_mesh(&mut st.draft);
                     gizmo.selected_nodes.clear();
                 }
-                ui.label(egui::RichText::new("Drag empty area to box-select nodes.").color(t.text_dim).size(10.5));
-            });
+            }
+            SfxWarpMode::LiquifyField => {
+                ui.horizontal(|ui| {
+                    let mut r = gizmo.liquify_radius_px as f32;
+                    let mut strg = gizmo.liquify_strength as f32;
+                    dim_label(ui, t, "Radius:");
+                    if crate::widgets::value_field(ui, &mut r, 4.0..=500.0, "px", 58.0).changed() {
+                        gizmo.liquify_radius_px = f64::from(r);
+                    }
+                    dim_label(ui, t, "Power:");
+                    if crate::widgets::value_field(ui, &mut strg, 0.05..=2.0, "", 52.0).changed() {
+                        gizmo.liquify_strength = f64::from(strg);
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label(format!("Strokes: {}", st.draft.liquify_strokes.len()));
+                    if !st.draft.liquify_strokes.is_empty() && ui.small_button("Undo").clicked() {
+                        st.draft.liquify_strokes.pop();
+                    }
+                    if !st.draft.liquify_strokes.is_empty() && ui.small_button("Clear").clicked() {
+                        st.draft.liquify_strokes.clear();
+                    }
+                });
+            }
         }
-        SfxWarpMode::LiquifyField => {
-            ui.horizontal(|ui| {
-                let mut r = gizmo.liquify_radius_px as f32;
-                let mut strg = gizmo.liquify_strength as f32;
-                dim_label(ui, t, "Radius:");
-                if crate::widgets::value_field(ui, &mut r, 4.0..=500.0, "px", 60.0).changed() {
-                    gizmo.liquify_radius_px = f64::from(r);
-                }
-                dim_label(ui, t, "Power:");
-                if crate::widgets::value_field(ui, &mut strg, 0.05..=2.0, "", 54.0).changed() {
-                    gizmo.liquify_strength = f64::from(strg);
-                }
-            });
-            ui.horizontal(|ui| {
-                ui.label(format!("Strokes: {}", st.draft.liquify_strokes.len()));
-                if !st.draft.liquify_strokes.is_empty() && ui.button("Undo Stroke").clicked() {
-                    st.draft.liquify_strokes.pop();
-                }
-                if !st.draft.liquify_strokes.is_empty() && ui.button("Clear Liquify").clicked() {
-                    st.draft.liquify_strokes.clear();
-                }
-            });
-        }
-    }
+    });
 }
 
-fn draw_fill_source_editor(ui: &mut egui::Ui, id_salt: &str, fill: &mut SfxFillSource, t: Tokens) {
+fn draw_line_effect_card(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens) {
+    section_card(ui, t, |ui| {
+        let badge = line_style_badge(&st.draft);
+        section_header(ui, t, "ЛАЙН / ОБВОДКА", badge, TEXT_AMBER);
+        ui.add_space(3.0);
+
+        let cur = st.draft.line_effect.style;
+        ui.columns(3, |cols| {
+            if seg_button(&mut cols[0], cur == SfxLineStyle::Clean, ACCENT_SKY, "Clean", t).clicked() {
+                st.draft.line_effect.style = SfxLineStyle::Clean;
+            }
+            if seg_button(&mut cols[1], cur == SfxLineStyle::OneBit, ACCENT_SKY, "1-Bit", t).clicked() {
+                st.draft.line_effect.style = SfxLineStyle::OneBit;
+            }
+            if seg_button(&mut cols[2], cur == SfxLineStyle::Spikes, ACCENT_SKY, "Шипы", t).clicked() {
+                st.draft.line_effect.style = SfxLineStyle::Spikes;
+            }
+        });
+        ui.add_space(2.0);
+        ui.columns(3, |cols| {
+            if seg_button(&mut cols[0], cur == SfxLineStyle::GPenNib, ACCENT_SKY, "✒ G-Pen", t).clicked() {
+                st.draft.line_effect.style = SfxLineStyle::GPenNib;
+            }
+            if seg_button(&mut cols[1], cur == SfxLineStyle::BrushStroke, ACCENT_SKY, "🖌 Кисть", t).clicked() {
+                st.draft.line_effect.style = SfxLineStyle::BrushStroke;
+            }
+            if seg_button(&mut cols[2], cur == SfxLineStyle::Shtack, ACCENT_SKY, "⚡ Shtack", t).clicked() {
+                st.draft.line_effect.style = SfxLineStyle::Shtack;
+            }
+        });
+
+        ui.add_space(4.0);
+        let le = &mut st.draft.line_effect;
+        match le.style {
+            SfxLineStyle::Clean => {}
+            SfxLineStyle::OneBit => {
+                slider_row_f32(ui, t, "Рубленый край:", &mut le.one_bit_intensity, 0.0..=100.0, "%");
+            }
+            SfxLineStyle::Spikes => {
+                row_with_reroll(ui, 22.0, &mut le.spike_seed, "Новый Seed шипов", |ui| {
+                    ui.columns(3, |cols| {
+                        if seg_button(&mut cols[0], le.spike_shape == SfxSpikeShape::Triangle, ACCENT_SKY, "Треуг", t).clicked() {
+                            le.spike_shape = SfxSpikeShape::Triangle;
+                        }
+                        if seg_button(&mut cols[1], le.spike_shape == SfxSpikeShape::Square, ACCENT_SKY, "Квадр", t).clicked() {
+                            le.spike_shape = SfxSpikeShape::Square;
+                        }
+                        if seg_button(&mut cols[2], le.spike_shape == SfxSpikeShape::Circle, ACCENT_SKY, "Круги", t).clicked() {
+                            le.spike_shape = SfxSpikeShape::Circle;
+                        }
+                    });
+                });
+                slider_row_f32(ui, t, "Длина шипов:", &mut le.spike_length_px, 2.0..=28.0, "px");
+                slider_row_f32(ui, t, "Размер шипов:", &mut le.spike_size_px, 2.0..=20.0, "px");
+                slider_row_u16(ui, t, "Кол-во шипов:", &mut le.spike_count, 2..=40, "");
+                slider_row_f32(ui, t, "Рандом (Гаусс):", &mut le.spike_random_pct, 0.0..=100.0, "%");
+            }
+            SfxLineStyle::GPenNib => {
+                row_with_reroll(ui, 22.0, &mut le.gpen_seed, "Новый Seed перекрестий G-Pen", |ui| {
+                    slider_row_f32(ui, t, "Контраст нажима:", &mut le.gpen_contrast_pct, 0.0..=100.0, "%");
+                });
+                slider_row_f32(ui, t, "Угол пера:", &mut le.gpen_angle_deg, -90.0..=90.0, "°");
+                slider_row_f32(ui, t, "Прогиб граней:", &mut le.gpen_pinch_pct, 0.0..=100.0, "%");
+                crate::widgets::hairline(ui);
+                slider_row_f32(ui, t, "Длина перекрестий:", &mut le.gpen_overshoot_px, 0.0..=14.0, "px");
+                slider_row_f32(ui, t, "Кол-во перекрестий:", &mut le.gpen_overshoot_count_pct, 0.0..=100.0, "%");
+                slider_row_f32(ui, t, "Рандом перекрестий:", &mut le.gpen_overshoot_random_pct, 0.0..=100.0, "%");
+            }
+            SfxLineStyle::BrushStroke => {
+                row_with_reroll(ui, 22.0, &mut le.ink_brush_seed, "Новый Seed тушевой кисти", |ui| {
+                    slider_row_f32(ui, t, "Рваность края:", &mut le.ink_brush_roughness_pct, 0.0..=100.0, "%");
+                });
+                slider_row_f32(ui, t, "Прорывы туши:", &mut le.ink_brush_dropout_pct, 0.0..=100.0, "%");
+                slider_row_f32(ui, t, "Вар. нажима:", &mut le.ink_brush_pressure_pct, 0.0..=100.0, "%");
+                crate::widgets::hairline(ui);
+                slider_row_f32(ui, t, "Длина перекрестий:", &mut le.ink_brush_overshoot_px, 0.0..=14.0, "px");
+                slider_row_f32(ui, t, "Кол-во перекрестий:", &mut le.ink_brush_overshoot_count_pct, 0.0..=100.0, "%");
+                slider_row_f32(ui, t, "Рандом перекрестий:", &mut le.ink_brush_overshoot_random_pct, 0.0..=100.0, "%");
+            }
+            SfxLineStyle::Shtack => {
+                row_with_reroll(ui, 22.0, &mut le.shtack_seed, "Новый Seed игл SHTACK", |ui| {
+                    ui.columns(2, |cols| {
+                        if seg_button(&mut cols[0], le.shtack_variant == SfxShtackVariant::Caps, ACCENT_SKY, "1: Торцы (Caps)", t).clicked() {
+                            le.shtack_variant = SfxShtackVariant::Caps;
+                        }
+                        if seg_button(&mut cols[1], le.shtack_variant == SfxShtackVariant::Ribbon, ACCENT_SKY, "2: Лента (Ribbon)", t).clicked() {
+                            le.shtack_variant = SfxShtackVariant::Ribbon;
+                        }
+                    });
+                });
+                slider_row_u8(ui, t, "Игл на торце:", &mut le.shtack_bristles, 2..=6, "");
+                slider_row_f32(ui, t, "Расщепление:", &mut le.shtack_split_pct, 0.0..=100.0, "%");
+                slider_row_f32(ui, t, "Вылет штрихов:", &mut le.shtack_overshoot_px, 0.0..=34.0, "px");
+                if le.shtack_variant == SfxShtackVariant::Ribbon {
+                    slider_row_f32(ui, t, "Толщина ленты:", &mut le.shtack_thickness_px, 6.0..=24.0, "px");
+                }
+                slider_row_f32(ui, t, "Прожилки внутри:", &mut le.shtack_dryness_pct, 0.0..=100.0, "%");
+            }
+        }
+    });
+}
+
+fn draw_fill_card(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens) {
+    section_card(ui, t, |ui| {
+        let badge = fill_style_badge(&st.draft);
+        section_header(ui, t, "ЗАЛИВКА (FILL)", badge, TEXT_SKY);
+        ui.add_space(3.0);
+
+        let is_dry = st.draft.dry_brush.enabled;
+        let is_tone = !is_dry && matches!(st.draft.fill, SfxFillSource::Screentone { .. });
+        let is_solid = !is_dry && !is_tone;
+
+        ui.columns(3, |cols| {
+            if seg_button(&mut cols[0], is_solid, ACCENT_SKY, "Solid", t).clicked() {
+                let c = face_color_copy(&st.draft.fill);
+                st.draft.dry_brush.enabled = false;
+                if !matches!(st.draft.fill, SfxFillSource::Solid { .. } | SfxFillSource::Gradient { .. }) {
+                    st.draft.fill = SfxFillSource::Solid { color: c };
+                }
+            }
+            if seg_button(&mut cols[1], is_dry, ACCENT_SKY, "Dry Brush", t).clicked() {
+                let c = face_color_copy(&st.draft.fill);
+                st.draft.dry_brush.enabled = true;
+                if matches!(st.draft.fill, SfxFillSource::Screentone { .. }) {
+                    st.draft.fill = SfxFillSource::Solid { color: c };
+                }
+            }
+            if seg_button(&mut cols[2], is_tone, ACCENT_SKY, "Screentone", t).clicked() {
+                st.draft.dry_brush.enabled = false;
+                if !matches!(st.draft.fill, SfxFillSource::Screentone { .. }) {
+                    st.draft.fill = SfxFillSource::Screentone {
+                        spec: ScreentoneSpec {
+                            pattern_type: PatternType::Dots,
+                            dot_size: 3.0,
+                            spacing_x: 5.0,
+                            spacing_y: 5.0,
+                            density: 0.65,
+                            angle: 45.0,
+                            ..Default::default()
+                        },
+                        opacity: 1.0,
+                    };
+                }
+            }
+        });
+
+        ui.add_space(4.0);
+        if st.draft.dry_brush.enabled {
+            let db = &mut st.draft.dry_brush;
+            row_with_reroll(ui, 48.0, &mut db.seed, "Новый Seed щетины", |ui| {
+                ui.columns(2, |cols| {
+                    if seg_button(&mut cols[0], db.engine == SfxDryBrushEngine::SdfPhysics, ACCENT_SKY, "А: Физика SDF", t).clicked() {
+                        db.engine = SfxDryBrushEngine::SdfPhysics;
+                    }
+                    if seg_button(&mut cols[1], db.engine == SfxDryBrushEngine::SdfSeg, ACCENT_SKY, "Б1: Штрихи (Seg)", t).clicked() {
+                        db.engine = SfxDryBrushEngine::SdfSeg;
+                    }
+                });
+                ui.add_space(2.0);
+                ui.columns(2, |cols| {
+                    if seg_button(&mut cols[0], db.engine == SfxDryBrushEngine::SdfEtf, ACCENT_SKY, "Б2: Диффузия ETF", t).clicked() {
+                        db.engine = SfxDryBrushEngine::SdfEtf;
+                    }
+                    if seg_button(&mut cols[1], db.engine == SfxDryBrushEngine::Vector, ACCENT_SKY, "Вектор", t).clicked() {
+                        db.engine = SfxDryBrushEngine::Vector;
+                    }
+                });
+            });
+
+            slider_row_f32(ui, t, "Сухость (Порог):", &mut db.dryness_pct, 10.0..=85.0, "%");
+
+            match db.engine {
+                SfxDryBrushEngine::SdfPhysics | SfxDryBrushEngine::SdfSeg | SfxDryBrushEngine::SdfEtf => {
+                    slider_row_f32(ui, t, "Плотность щетины:", &mut db.freq_pct, 10.0..=100.0, "%");
+                    if db.engine == SfxDryBrushEngine::SdfEtf {
+                        slider_row_f32(ui, t, "Длина LIC:", &mut db.lic_length_px, 6.0..=26.0, "px");
+                    }
+                    slider_row_f32(ui, t, "Изгиб (Warp):", &mut db.warp_pct, 0.0..=100.0, "%");
+                    slider_row_f32(ui, t, "Зерно бумаги:", &mut db.paper_grain_pct, 0.0..=100.0, "%");
+                    slider_row_f32(ui, t, "Износ краёв SDF:", &mut db.edge_wear_pct, 0.0..=100.0, "%");
+                }
+                SfxDryBrushEngine::Vector => {
+                    slider_row_u16(ui, t, "Щетинок:", &mut db.vec_bristle_count, 4..=40, "");
+                    slider_row_f32(ui, t, "Рандом щетины:", &mut db.vec_bristle_random_pct, 0.0..=100.0, "%");
+                    slider_row_f32(ui, t, "Наклон друг к другу:", &mut db.vec_mutual_tilt_deg, -10.0..=10.0, "°");
+                    slider_row_f32(ui, t, "Рандом наклона:", &mut db.vec_tilt_random_deg, 0.0..=10.0, "°");
+                    slider_row_f32(ui, t, "Гаусс. точки:", &mut db.vec_gauss_dots_pct, 0.0..=100.0, "%");
+                }
+            }
+
+            crate::widgets::hairline(ui);
+            if matches!(db.engine, SfxDryBrushEngine::SdfPhysics | SfxDryBrushEngine::Vector) {
+                slider_row_f32(ui, t, "Угол мазка:", &mut db.angle_deg, -90.0..=90.0, "°");
+            } else {
+                let tag = if db.engine == SfxDryBrushEngine::SdfEtf { "Harmonic ETF" } else { "Segment Axis" };
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Угол: авто по штрихам буквы").size(10.0).color(TEXT_CYAN));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(RichText::new(tag).monospace().size(9.5).color(TEXT_CYAN));
+                    });
+                });
+            }
+        } else if let SfxFillSource::Screentone { spec, opacity } = &mut st.draft.fill {
+            let mut spacing = spec.spacing_x;
+            if slider_row_f32(ui, t, "Шаг точек:", &mut spacing, 3.0..=24.0, "px") {
+                spec.spacing_x = spacing;
+                spec.spacing_y = spacing;
+            }
+            egui::CollapsingHeader::new(RichText::new("Параметры скринтона").size(10.0).color(t.text_dim))
+                .id_salt("sfx-tone-details")
+                .default_open(false)
+                .show(ui, |ui| {
+                    draw_screentone_grid(ui, "sfx-base-tone", spec, opacity, t);
+                });
+        } else if let Some(col) = face_color_mut(&mut st.draft.fill) {
+            color_swatch(ui, "Цвет заливки:", col);
+        }
+    });
+}
+
+fn draw_vector_shadow_card(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens) {
+    section_card(ui, t, |ui| {
+        let sh = &mut st.draft.vector_shadow;
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut sh.enabled, RichText::new("☀ Направление тени / 3D").strong().size(10.5).color(TEXT_AMBER));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let readout = format!("{:.0}° • {:.0}px", sh.angle_deg, sh.distance_px);
+                ui.label(RichText::new(readout).monospace().size(10.0).color(t.text_dim));
+            });
+        });
+        slider_row_f32(ui, t, "3D Extrude:", &mut sh.extrude_depth_px, 0.0..=32.0, "px");
+        if sh.enabled {
+            slider_row_f32(ui, t, "Угол тени:", &mut sh.angle_deg, -180.0..=180.0, "°");
+            slider_row_f32(ui, t, "Дистанция тени:", &mut sh.distance_px, 0.0..=96.0, "px");
+            color_swatch(ui, "Цвет тени:", &mut sh.color);
+        }
+    });
+}
+
+fn draw_advanced_fx_collapsible(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens) {
+    egui::CollapsingHeader::new(RichText::new("Доп. FX: Invert / Distress / Стек слоёв").size(10.5).color(t.text_dim))
+        .id_salt("sfx-adv-fx")
+        .default_open(false)
+        .show(ui, |ui| {
+            let has_inv = st.draft.has_negative_invert();
+            if ui.selectable_label(has_inv, "Negative / Invert (BlendMode::Difference)").clicked() {
+                if has_inv {
+                    st.draft.styles.retain(|p| !matches!(p, SfxStylePass::NegativeInvert { .. }));
+                } else {
+                    st.draft.styles.push(SfxStylePass::NegativeInvert { enabled: true });
+                }
+            }
+            crate::widgets::hairline(ui);
+            draw_distress_section(ui, st, t);
+            crate::widgets::hairline(ui);
+            draw_styles_stack(ui, st, t);
+        });
+}
+
+fn draw_character_tab(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens) {
+    section_card(ui, t, |ui| {
+        section_header(ui, t, "НАТИВНАЯ ПАНЕЛЬ CHARACTER", "Shaping Seam", TEXT_SKY);
+        ui.add_space(3.0);
+
+        egui::Grid::new("sfx-type-grid").num_columns(2).spacing(vec2(8.0, 4.0)).show(ui, |ui| {
+            dim_label(ui, t, "Шрифт:");
+            ui.horizontal(|ui| {
+                let selected = st.draft.font_family.clone();
+                craft_ui::ComboBox::from_id_salt("sfx-font-family").width(146.0).selected_text(selected).show_ui(ui, |ui| {
+                    ui.add(egui::TextEdit::singleline(&mut st.font_query).hint_text("Поиск шрифта...").desired_width(142.0));
+                    let q = st.font_query.trim().to_ascii_lowercase();
+                    let list = st.cached_fonts.as_deref().unwrap_or(&[]);
+                    egui::ScrollArea::vertical().max_height(210.0).show(ui, |ui| {
+                        let mut shown = 0usize;
+                        for fam in list {
+                            if !q.is_empty() && !fam.to_ascii_lowercase().contains(&q) {
+                                continue;
+                            }
+                            if ui.selectable_label(st.draft.font_family == *fam, fam).clicked() {
+                                st.draft.font_family = fam.clone();
+                            }
+                            shown += 1;
+                            if shown >= 200 {
+                                break;
+                            }
+                        }
+                    });
+                });
+                if ui.small_button("↻").on_hover_text("Обновить список системных шрифтов").clicked() {
+                    st.cached_fonts = None;
+                    st.ensure_fonts();
+                }
+            });
+            ui.end_row();
+
+            dim_label(ui, t, "Насыщенность:");
+            ui.horizontal(|ui| {
+                let mut w = st.draft.weight;
+                let weights = [(400u16, "Regular"), (700u16, "Bold"), (800u16, "Heavy"), (900u16, "Black")];
+                if crate::widgets::dropdown_literal(ui, "sfx-font-weight", &mut w, &weights, 88.0) {
+                    st.draft.weight = w;
+                }
+                ui.checkbox(&mut st.draft.italic, "Italic");
+            });
+            ui.end_row();
+
+            dim_label(ui, t, "Ориентация:");
+            ui.checkbox(&mut st.draft.vertical, "Вертикальный (Vertical)");
+            ui.end_row();
+        });
+
+        ui.add_space(4.0);
+        slider_row_f32(ui, t, "Кегль:", &mut st.draft.size_pt, 12.0..=260.0, "pt");
+        slider_row_f32(ui, t, "Трекинг:", &mut st.draft.tracking, -40.0..=120.0, "px");
+        ui.horizontal(|ui| {
+            dim_label(ui, t, "Интерлиньяж:");
+            crate::widgets::value_field(ui, &mut st.draft.leading_scale, 0.4..=3.0, "x", 64.0);
+        });
+    });
+
+    section_card(ui, t, |ui| {
+        section_header(ui, t, "ТОЧНАЯ ТРАНСФОРМАЦИЯ (FT)", "Degrees / Scale", t.text_dim);
+        ui.add_space(3.0);
+        let ft = &mut st.draft.free_transform;
+        egui::Grid::new("sfx-ft-grid").num_columns(2).spacing(vec2(8.0, 4.0)).show(ui, |ui| {
+            let (mut sx, mut sy) = (ft.scale_x as f32, ft.scale_y as f32);
+            dim_label(ui, t, "Scale X / Y:");
+            ui.horizontal(|ui| {
+                if crate::widgets::value_field(ui, &mut sx, 0.1..=12.0, "x", 62.0).changed() {
+                    ft.scale_x = f64::from(sx);
+                }
+                if crate::widgets::value_field(ui, &mut sy, 0.1..=12.0, "x", 62.0).changed() {
+                    ft.scale_y = f64::from(sy);
+                }
+            });
+            ui.end_row();
+
+            let (mut rot, mut skx) = (ft.rotation_deg as f32, ft.skew_x_deg as f32);
+            dim_label(ui, t, "Rotate / SkewX:");
+            ui.horizontal(|ui| {
+                if crate::widgets::value_field(ui, &mut rot, -360.0..=360.0, "°", 62.0).changed() {
+                    ft.rotation_deg = f64::from(rot);
+                }
+                if crate::widgets::value_field(ui, &mut skx, -75.0..=75.0, "°", 62.0).changed() {
+                    ft.skew_x_deg = f64::from(skx);
+                }
+            });
+            ui.end_row();
+
+            let (mut sky, mut px, mut py) = (ft.skew_y_deg as f32, ft.perspective_x as f32, ft.perspective_y as f32);
+            dim_label(ui, t, "SkewY / Persp:");
+            ui.horizontal(|ui| {
+                if crate::widgets::value_field(ui, &mut sky, -75.0..=75.0, "°", 48.0).changed() {
+                    ft.skew_y_deg = f64::from(sky);
+                }
+                if crate::widgets::value_field(ui, &mut px, -0.75..=0.75, "", 44.0).changed() {
+                    ft.perspective_x = f64::from(px);
+                }
+                if crate::widgets::value_field(ui, &mut py, -0.75..=0.75, "", 44.0).changed() {
+                    ft.perspective_y = f64::from(py);
+                }
+            });
+            ui.end_row();
+        });
+    });
+}
+
+fn draw_color_tab(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens) {
+    section_card(ui, t, |ui| {
+        section_header(ui, t, "ЦВЕТА И ТОЛЩИНЫ СЛОЁВ", "2-Pass Halo + Ink", TEXT_SKY);
+        ui.add_space(4.0);
+
+        draw_fill_source_editor(ui, "sfx-color-tab-fill", &mut st.draft.fill, t);
+        crate::widgets::hairline(ui);
+        color_swatch(ui, "Цвет ореола (Pass 1):", &mut st.draft.line_effect.halo_color);
+        slider_row_f32(ui, t, "Толщина ореола:", &mut st.draft.line_effect.halo_width_px, 0.0..=36.0, "px");
+        crate::widgets::hairline(ui);
+        color_swatch(ui, "Цвет лайна (Pass 2):", &mut st.draft.line_effect.line_color);
+        slider_row_f32(ui, t, "Толщина лайна:", &mut st.draft.line_effect.line_width_px, 0.0..=24.0, "px");
+        crate::widgets::hairline(ui);
+        color_swatch(ui, "Цвет тени / 3D:", &mut st.draft.vector_shadow.color);
+    });
+
+    egui::CollapsingHeader::new(RichText::new("</> Показать JSON-шов (SfxData)").monospace().size(10.0).color(TEXT_EMERALD))
+        .id_salt("sfx-json-seam")
+        .default_open(false)
+        .show(ui, |ui| {
+            let preview = serde_json::to_string_pretty(&st.draft).unwrap_or_default();
+            egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
+                ui.add(egui::Label::new(RichText::new(preview).monospace().size(9.5).color(TEXT_EMERALD)).wrap());
+            });
+        });
+}
+
+fn draw_screentone_grid(ui: &mut Ui, id_salt: &str, spec: &mut ScreentoneSpec, opacity: &mut f32, t: Tokens) {
+    egui::Grid::new(format!("{id_salt}-tone")).num_columns(2).spacing(vec2(6.0, 3.0)).show(ui, |ui| {
+        dim_label(ui, t, "Pattern:");
+        let mut cur = enum_id(&spec.pattern_type);
+        let opts: Vec<(String, &str)> = SCREENTONE_PATTERNS.iter().map(|s| ((*s).to_owned(), *s)).collect();
+        if crate::widgets::dropdown_literal(ui, &format!("{id_salt}-pat"), &mut cur, &opts, 108.0)
+            && let Some(p) = enum_from_id::<PatternType>(&cur)
+        {
+            spec.pattern_type = p;
+        }
+        ui.end_row();
+
+        dim_label(ui, t, "Shape:");
+        let mut cur_s = enum_id(&spec.dot_shape);
+        let opts_s: Vec<(String, &str)> = SCREENTONE_SHAPES.iter().map(|s| ((*s).to_owned(), *s)).collect();
+        if crate::widgets::dropdown_literal(ui, &format!("{id_salt}-shp"), &mut cur_s, &opts_s, 108.0)
+            && let Some(d) = enum_from_id::<DotShape>(&cur_s)
+        {
+            spec.dot_shape = d;
+        }
+        ui.end_row();
+
+        dim_label(ui, t, "Dot / Step:");
+        ui.horizontal(|ui| {
+            crate::widgets::value_field(ui, &mut spec.dot_size, 0.5..=256.0, "px", 54.0);
+            if crate::widgets::value_field(ui, &mut spec.spacing_x, 2.0..=512.0, "px", 54.0).changed() {
+                spec.spacing_y = spec.spacing_x;
+            }
+        });
+        ui.end_row();
+
+        dim_label(ui, t, "Angle / Op:");
+        ui.horizontal(|ui| {
+            crate::widgets::value_field(ui, &mut spec.angle, -180.0..=180.0, "°", 54.0);
+            crate::widgets::value_field(ui, opacity, 0.0..=1.0, "", 54.0);
+        });
+        ui.end_row();
+    });
+}
+
+fn draw_fill_source_editor(ui: &mut Ui, id_salt: &str, fill: &mut SfxFillSource, t: Tokens) {
     let kind_idx = match fill {
         SfxFillSource::Solid { .. } => 0u8,
         SfxFillSource::Gradient { .. } => 1u8,
@@ -415,60 +1126,19 @@ fn draw_fill_source_editor(ui: &mut egui::Ui, id_salt: &str, fill: &mut SfxFillS
 
     match fill {
         SfxFillSource::Solid { color } => {
-            color_swatch(ui, "Color:", color);
+            color_swatch(ui, "Цвет заливки:", color);
         }
         SfxFillSource::Gradient { start, end, angle_deg } => {
             ui.horizontal(|ui| {
                 color_swatch(ui, "A:", start);
                 color_swatch(ui, "B:", end);
-                crate::widgets::value_field(ui, angle_deg, 0.0..=360.0, "°", 56.0);
+                crate::widgets::value_field(ui, angle_deg, 0.0..=360.0, "°", 54.0);
             });
         }
         SfxFillSource::Screentone { spec, opacity } => {
-            egui::Grid::new(format!("{id_salt}-tone")).num_columns(2).spacing(egui::vec2(6.0, 3.0)).show(ui, |ui| {
-                dim_label(ui, t, "Pattern:");
-                let mut cur = enum_id(&spec.pattern_type);
-                let opts: Vec<(String, &str)> = SCREENTONE_PATTERNS.iter().map(|s| ((*s).to_owned(), *s)).collect();
-                if crate::widgets::dropdown_literal(ui, &format!("{id_salt}-pat"), &mut cur, &opts, 108.0)
-                    && let Some(p) = enum_from_id::<PatternType>(&cur)
-                {
-                    spec.pattern_type = p;
-                }
-                ui.end_row();
-
-                dim_label(ui, t, "Shape:");
-                let mut cur_s = enum_id(&spec.dot_shape);
-                let opts_s: Vec<(String, &str)> = SCREENTONE_SHAPES.iter().map(|s| ((*s).to_owned(), *s)).collect();
-                if crate::widgets::dropdown_literal(ui, &format!("{id_salt}-shp"), &mut cur_s, &opts_s, 108.0)
-                    && let Some(d) = enum_from_id::<DotShape>(&cur_s)
-                {
-                    spec.dot_shape = d;
-                }
-                ui.end_row();
-
-                dim_label(ui, t, "Dot / Step:");
-                ui.horizontal(|ui| {
-                    crate::widgets::value_field(ui, &mut spec.dot_size, 0.5..=256.0, "px", 56.0);
-                    if crate::widgets::value_field(ui, &mut spec.spacing_x, 2.0..=512.0, "px", 56.0).changed() {
-                        spec.spacing_y = spec.spacing_x;
-                    }
-                });
-                ui.end_row();
-
-                dim_label(ui, t, "Angle / Op:");
-                ui.horizontal(|ui| {
-                    crate::widgets::value_field(ui, &mut spec.angle, -180.0..=180.0, "°", 56.0);
-                    crate::widgets::value_field(ui, opacity, 0.0..=1.0, "", 56.0);
-                });
-                ui.end_row();
-            });
+            draw_screentone_grid(ui, id_salt, spec, opacity, t);
         }
     }
-}
-
-fn draw_fill_section(ui: &mut egui::Ui, st: &mut SfxPanelState, t: Tokens) {
-    ui.label(egui::RichText::new("Face Fill").strong().size(12.0));
-    draw_fill_source_editor(ui, "sfx-base-fill", &mut st.draft.fill, t);
 }
 
 fn pass_title(pass: &SfxStylePass) -> &'static str {
@@ -481,10 +1151,9 @@ fn pass_title(pass: &SfxStylePass) -> &'static str {
     }
 }
 
-fn draw_styles_section(ui: &mut egui::Ui, st: &mut SfxPanelState, t: Tokens) {
-    ui.label(egui::RichText::new("Borders, 3D & FX Stack").strong().size(12.0));
+fn draw_styles_stack(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens) {
     ui.horizontal_wrapped(|ui| {
-        if ui.button("+ Stroke").clicked() {
+        if ui.small_button("+ Stroke").clicked() {
             st.draft.styles.push(SfxStylePass::Stroke {
                 enabled: true,
                 width_px: 4.0,
@@ -493,7 +1162,7 @@ fn draw_styles_section(ui: &mut egui::Ui, st: &mut SfxPanelState, t: Tokens) {
                 fill: SfxFillSource::Solid { color: Color::WHITE },
             });
         }
-        if ui.button("+ 3D").clicked() {
+        if ui.small_button("+ 3D").clicked() {
             st.draft.styles.push(SfxStylePass::Extrude3D {
                 enabled: true,
                 dx_px: 8.0,
@@ -502,19 +1171,18 @@ fn draw_styles_section(ui: &mut egui::Ui, st: &mut SfxPanelState, t: Tokens) {
                 fill: SfxFillSource::Solid { color: Color::BLACK },
             });
         }
-        if ui.button("+ Shadow").clicked() {
-            st.draft.styles.push(SfxStylePass::Shadow { enabled: true, dx_px: 6.0, dy_px: 6.0, blur_px: 3.0, color: Color::BLACK, opacity: 0.7 });
+        if ui.small_button("+ Shadow").clicked() {
+            st.draft.styles.push(SfxStylePass::Shadow {
+                enabled: true,
+                dx_px: 6.0,
+                dy_px: 6.0,
+                blur_px: 3.0,
+                color: Color::BLACK,
+                opacity: 0.7,
+            });
         }
-        if ui.button("+ Glow").clicked() {
+        if ui.small_button("+ Glow").clicked() {
             st.draft.styles.push(SfxStylePass::InnerGlow { enabled: true, width_px: 3.0, color: Color::WHITE, opacity: 0.85 });
-        }
-        let has_inv = st.draft.has_negative_invert();
-        if ui.selectable_label(has_inv, "Invert (Diff)").clicked() {
-            if has_inv {
-                st.draft.styles.retain(|p| !matches!(p, SfxStylePass::NegativeInvert { .. }));
-            } else {
-                st.draft.styles.push(SfxStylePass::NegativeInvert { enabled: true });
-            }
         }
     });
 
@@ -536,13 +1204,13 @@ fn draw_styles_section(ui: &mut egui::Ui, st: &mut SfxPanelState, t: Tokens) {
                 }
                 ui.strong(pass_title(pass));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("x").on_hover_text("Remove style pass").clicked() {
+                    if ui.small_button("x").clicked() {
                         delete_idx = Some(idx);
                     }
-                    if idx + 1 < total && ui.button("v").clicked() {
+                    if idx + 1 < total && ui.small_button("v").clicked() {
                         swap_op = Some((idx, idx + 1));
                     }
-                    if idx > 0 && ui.button("^").clicked() {
+                    if idx > 0 && ui.small_button("^").clicked() {
                         swap_op = Some((idx - 1, idx));
                     }
                 });
@@ -552,22 +1220,21 @@ fn draw_styles_section(ui: &mut egui::Ui, st: &mut SfxPanelState, t: Tokens) {
                 SfxStylePass::Stroke { width_px, join, miter_limit, fill, .. } => {
                     ui.horizontal(|ui| {
                         dim_label(ui, t, "Width:");
-                        crate::widgets::value_field(ui, width_px, 0.0..=128.0, "px", 54.0);
+                        crate::widgets::value_field(ui, width_px, 0.0..=128.0, "px", 50.0);
                         let joins = [(SfxLineJoin::Round, "Round"), (SfxLineJoin::Miter, "Miter"), (SfxLineJoin::Bevel, "Bevel")];
-                        crate::widgets::dropdown_literal(ui, &format!("sfx-join-{idx}"), join, &joins, 72.0);
+                        crate::widgets::dropdown_literal(ui, &format!("sfx-join-{idx}"), join, &joins, 68.0);
                         if *join == SfxLineJoin::Miter {
-                            crate::widgets::value_field(ui, miter_limit, 1.0..=24.0, "m", 44.0);
+                            crate::widgets::value_field(ui, miter_limit, 1.0..=24.0, "m", 42.0);
                         }
                     });
                     draw_fill_source_editor(ui, &format!("sfx-stroke-fill-{idx}"), fill, t);
                 }
                 SfxStylePass::Extrude3D { dx_px, dy_px, steps, fill, .. } => {
                     ui.horizontal(|ui| {
-                        dim_label(ui, t, "Offset:");
-                        crate::widgets::value_field(ui, dx_px, -256.0..=256.0, "x", 50.0);
-                        crate::widgets::value_field(ui, dy_px, -256.0..=256.0, "y", 50.0);
-                        let mut st_f = *steps as f32;
-                        if crate::widgets::value_field(ui, &mut st_f, 1.0..=64.0, "s", 46.0).changed() {
+                        crate::widgets::value_field(ui, dx_px, -256.0..=256.0, "x", 48.0);
+                        crate::widgets::value_field(ui, dy_px, -256.0..=256.0, "y", 48.0);
+                        let mut st_f = f32::from(*steps);
+                        if crate::widgets::value_field(ui, &mut st_f, 1.0..=64.0, "s", 44.0).changed() {
                             *steps = st_f.round().clamp(1.0, 64.0) as u16;
                         }
                     });
@@ -575,22 +1242,22 @@ fn draw_styles_section(ui: &mut egui::Ui, st: &mut SfxPanelState, t: Tokens) {
                 }
                 SfxStylePass::Shadow { dx_px, dy_px, blur_px, color, opacity, .. } => {
                     ui.horizontal(|ui| {
-                        crate::widgets::value_field(ui, dx_px, -256.0..=256.0, "x", 48.0);
-                        crate::widgets::value_field(ui, dy_px, -256.0..=256.0, "y", 48.0);
-                        crate::widgets::value_field(ui, blur_px, 0.0..=64.0, "b", 48.0);
-                        crate::widgets::value_field(ui, opacity, 0.0..=1.0, "a", 44.0);
+                        crate::widgets::value_field(ui, dx_px, -256.0..=256.0, "x", 46.0);
+                        crate::widgets::value_field(ui, dy_px, -256.0..=256.0, "y", 46.0);
+                        crate::widgets::value_field(ui, blur_px, 0.0..=64.0, "b", 46.0);
+                        crate::widgets::value_field(ui, opacity, 0.0..=1.0, "a", 42.0);
                     });
-                    color_swatch(ui, "Shadow Color:", color);
+                    color_swatch(ui, "Shadow:", color);
                 }
                 SfxStylePass::InnerGlow { width_px, color, opacity, .. } => {
                     ui.horizontal(|ui| {
-                        crate::widgets::value_field(ui, width_px, 0.0..=64.0, "px", 52.0);
-                        crate::widgets::value_field(ui, opacity, 0.0..=1.0, "a", 52.0);
+                        crate::widgets::value_field(ui, width_px, 0.0..=64.0, "px", 50.0);
+                        crate::widgets::value_field(ui, opacity, 0.0..=1.0, "a", 50.0);
                         color_swatch(ui, "Glow:", color);
                     });
                 }
                 SfxStylePass::NegativeInvert { .. } => {
-                    ui.label(egui::RichText::new("Composites glyph silhouette via Difference blend group.").color(t.text_dim).size(11.0));
+                    ui.label(RichText::new("Composites glyph silhouette via Difference blend group.").color(t.text_dim).size(10.5));
                 }
             }
         });
@@ -604,73 +1271,46 @@ fn draw_styles_section(ui: &mut egui::Ui, st: &mut SfxPanelState, t: Tokens) {
     }
 }
 
-fn draw_distress_section(ui: &mut egui::Ui, st: &mut SfxPanelState, t: Tokens) {
+fn draw_distress_section(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens) {
     ui.horizontal(|ui| {
-        ui.checkbox(&mut st.draft.distress.enabled, egui::RichText::new("Deterministic Distress").strong().size(12.0));
-        if ui.button("Reset").clicked() {
+        ui.checkbox(&mut st.draft.distress.enabled, RichText::new("Deterministic Distress").strong().size(11.0));
+        if ui.small_button("Reset").clicked() {
             st.draft.distress = SfxDistress::default();
         }
     });
     if !st.draft.distress.enabled {
         return;
     }
-    egui::Grid::new("sfx-distress-grid").num_columns(2).spacing(egui::vec2(8.0, 4.0)).show(ui, |ui| {
+    egui::Grid::new("sfx-distress-grid").num_columns(2).spacing(vec2(8.0, 4.0)).show(ui, |ui| {
         dim_label(ui, t, "Seed:");
         ui.horizontal(|ui| {
-            if ui.button("-").clicked() {
+            if ui.small_button("-").clicked() {
                 st.draft.distress.seed = st.draft.distress.seed.saturating_sub(1);
             }
             let mut s = st.draft.distress.seed as f32;
-            if crate::widgets::value_field(ui, &mut s, 0.0..=99_999.0, "", 68.0).changed() {
+            if crate::widgets::value_field(ui, &mut s, 0.0..=99_999.0, "", 62.0).changed() {
                 st.draft.distress.seed = s.round().max(0.0) as u32;
             }
-            if ui.button("+").clicked() {
+            if ui.small_button("+").clicked() {
                 st.draft.distress.seed = st.draft.distress.seed.saturating_add(1);
             }
         });
         ui.end_row();
 
         dim_label(ui, t, "Roughness:");
-        crate::widgets::value_field(ui, &mut st.draft.distress.roughness, 0.0..=16.0, "px", 68.0);
+        crate::widgets::value_field(ui, &mut st.draft.distress.roughness, 0.0..=16.0, "px", 62.0);
         ui.end_row();
 
         dim_label(ui, t, "Grain / Chip:");
         ui.horizontal(|ui| {
-            crate::widgets::value_field(ui, &mut st.draft.distress.grain, 0.0..=1.0, "", 62.0);
-            crate::widgets::value_field(ui, &mut st.draft.distress.edge_chip, 0.0..=1.0, "", 62.0);
+            crate::widgets::value_field(ui, &mut st.draft.distress.grain, 0.0..=1.0, "", 58.0);
+            crate::widgets::value_field(ui, &mut st.draft.distress.edge_chip, 0.0..=1.0, "", 58.0);
         });
         ui.end_row();
     });
 }
 
-fn draw_presets_section(ui: &mut egui::Ui, st: &mut SfxPanelState, target: &SfxTargetInfo<'_>, out: &mut SfxPanelOutput) {
-    ui.label(egui::RichText::new("JSON Presets").strong().size(12.0));
-    ui.horizontal_wrapped(|ui| {
-        for preset in target.presets {
-            if ui.button(&preset.name).clicked() {
-                if let Some(id) = target.layer_id.filter(|_| target.data.is_some()) {
-                    out.commands.push(OutCommand::new("sfx.presets.apply", json!({ "layer": id.0, "name": preset.name })));
-                } else {
-                    st.draft.apply_preset(preset);
-                }
-            }
-        }
-    });
-    ui.horizontal(|ui| {
-        ui.add(egui::TextEdit::singleline(&mut st.preset_name).hint_text("Preset name...").desired_width(120.0));
-        let name = st.preset_name.trim().to_owned();
-        if ui.add_enabled(!name.is_empty(), egui::Button::new("Save Preset")).clicked() {
-            let mut preset = st.draft.to_preset(&name);
-            preset.validate();
-            out.commands.push(OutCommand::new("sfx.presets.save", json!({ "preset": preset })));
-        }
-        if ui.add_enabled(!name.is_empty() && target.presets.iter().any(|p| p.name == name), egui::Button::new("Delete")).clicked() {
-            out.commands.push(OutCommand::new("sfx.presets.delete", json!({ "name": name })));
-        }
-    });
-}
-
-fn draw_actions_section(ui: &mut egui::Ui, st: &mut SfxPanelState, target: &SfxTargetInfo<'_>, out: &mut SfxPanelOutput) {
+fn draw_actions_section(ui: &mut Ui, st: &mut SfxPanelState, target: &SfxTargetInfo<'_>, out: &mut SfxPanelOutput) {
     let has_doc = target.doc_id.is_some();
     let has_sfx = target.layer_id.is_some() && target.data.is_some();
     ui.horizontal_wrapped(|ui| {
@@ -687,7 +1327,10 @@ fn draw_actions_section(ui: &mut egui::Ui, st: &mut SfxPanelState, target: &SfxT
         {
             out.commands.push(OutCommand::new("sfx.convertFromText", json!({ "layer": id.0 })));
         }
-        if ui.add_enabled(has_sfx, egui::Button::new("Bake to Raster")).on_hover_text("Freeze the SFX layer into standard pixels").clicked()
+        if ui
+            .add_enabled(has_sfx, egui::Button::new("Bake to Raster"))
+            .on_hover_text("Freeze the SFX layer into standard pixels")
+            .clicked()
             && let Some(id) = target.layer_id
         {
             out.commands.push(OutCommand::new("sfx.bakeToRaster", json!({ "layer": id.0 })));
@@ -732,5 +1375,36 @@ mod tests {
         let t1 = SfxTargetInfo { doc_id: Some(BridgeDocId(1)), layer_id: Some(LayerId(2)), data: Some(d1), active_is_text: false, presets: &presets };
         st.sync_from_host(&t1);
         assert_eq!(st.draft.text, "CRACK");
+    }
+
+    #[test]
+    fn panel_renders_all_tabs_line_styles_and_dry_brush_engines() {
+        let mut st = SfxPanelState::default();
+        let mut gizmo = SfxGizmoState::default();
+        let presets = vec![SfxPreset::default()];
+        let ctx = egui::Context::default();
+        let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(320.0, 900.0))), ..Default::default() };
+
+        for tab in [DockTab::Sfx, DockTab::Character, DockTab::Color] {
+            st.active_tab = tab;
+            for style in [
+                SfxLineStyle::Clean,
+                SfxLineStyle::OneBit,
+                SfxLineStyle::Spikes,
+                SfxLineStyle::GPenNib,
+                SfxLineStyle::BrushStroke,
+                SfxLineStyle::Shtack,
+            ] {
+                let mut data = SfxData::default();
+                data.line_effect.style = style;
+                data.dry_brush.enabled = true;
+                data.dry_brush.engine = SfxDryBrushEngine::Vector;
+                let target = SfxTargetInfo { doc_id: Some(BridgeDocId(1)), layer_id: Some(LayerId(3)), data: Some(data), active_is_text: false, presets: &presets };
+                let mut out = ctx.run_ui(input.clone(), |ui| {
+                    let _ = egui::CentralPanel::default().show(ui, |ui| panel(ui, &mut st, &mut gizmo, &target));
+                });
+                out.textures_delta.clear();
+            }
+        }
     }
 }

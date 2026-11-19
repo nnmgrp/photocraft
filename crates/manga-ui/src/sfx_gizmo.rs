@@ -1,26 +1,40 @@
-//! 2D interactive canvas gizmo for `SfxData` (Transform/Skew/Perspective, Per-Glyph, Mesh Lattice + Marquee, Liquify Brush).
+//! 2D interactive canvas gizmo for `SfxData`:
+//! - Non-affine `FT 4-Corner` (with frozen inverse homography during drag + `Shift` trapezoid)
+//! - `Catmull-Rom` arc spline (drag points, click arc to add point, `Alt+click` point to delete)
+//! - Vector `☀ Shadow` direction/distance ray handle
+//! - `PerGlyph` 3-tool suite (`Move`, `Skew`, `FT 4-Corner`) with persistent rotation stem
+//! - `MeshLattice` + marquee box select & `LiquifyField` brush
 //!
 //! All document mutations are emitted as `OutCommand` (`"sfx.update"` with `"coalesce"`) so dragging
 //! collapses into a single history step and `Escape` restores the pre-drag snapshot cleanly.
 
+use std::sync::atomic::{AtomicU8, Ordering};
+
 use egui::{Color32, CursorIcon, Pos2, Rect, Stroke, pos2, vec2};
-use photocraft_doc::sfx::{MAX_SFX_LIQUIFY_STROKES, SfxData, SfxFreeTransform, SfxGlyphTransform, SfxLiquifyBrush, SfxMeshLattice, SfxWarpMode};
+use photocraft_doc::sfx::{
+    MAX_SFX_LIQUIFY_STROKES, MAX_SFX_SPLINE_POINTS, SfxData, SfxFreeTransform, SfxGlyphTransform, SfxLiquifyBrush, SfxMeshLattice, SfxWarpMode,
+};
 use photocraft_doc::{Document, LayerId};
 use photocraft_manga_core::sfx_geom::{
-    PreparedSfx, apply_free_transform_point, build_sfx_geometry, eval_mesh_uv, invert_free_transform_point, mesh_node_doc_pos, move_mesh_node_linked,
-    transform_point_full,
+    PreparedSfx, apply_free_transform_point, apply_homography, build_sfx_geometry, eval_mesh_uv, free_transform_homography,
+    invert_free_transform_point, mesh_node_doc_pos, move_mesh_node_linked, sample_catmull_rom, spline_control_doc_pos,
 };
 use photocraft_text::TextEngine;
 use serde_json::json;
 
-use crate::BridgeDocId;
-use crate::OutCommand;
+use crate::sfx_panel::SfxGlyphTool;
 use crate::theme::Tokens;
 use crate::view::{CanvasToolEvent, CanvasViewXform};
+use crate::{BridgeDocId, OutCommand};
 
 const HANDLE_HIT_PX: f32 = 10.0;
+const ARC_HIT_PX: f32 = 9.0;
 const ROTATE_STEM_PX: f32 = 24.0;
 const MIN_LIQUIFY_STEP_PX: f64 = 12.0;
+
+const COLOR_CYAN: Color32 = Color32::from_rgb(34, 211, 238);
+const COLOR_AMBER: Color32 = Color32::from_rgb(245, 158, 11);
+const COLOR_SUN: Color32 = Color32::from_rgb(251, 191, 36);
 
 /// View context passed by `ui-egui` into [`SfxGizmoState`] per frame or pointer event.
 pub struct SfxView<'a> {
@@ -49,13 +63,10 @@ struct CachedSfxGeom {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FreeHandle {
-    TopLeft,
+    Corner(usize),
     Top,
-    TopRight,
     Right,
-    BottomRight,
     Bottom,
-    BottomLeft,
     Left,
     Rotate,
     Body,
@@ -66,12 +77,17 @@ enum GlyphHandle {
     Body(usize),
     Rotate(usize),
     Scale(usize),
+    SkewX(usize),
+    SkewY(usize),
+    Corner(usize, usize),
 }
 
 #[derive(Clone, Debug)]
 enum DragMode {
     Free(FreeHandle),
-    Glyph(GlyphHandle),
+    SplinePoint { index: usize },
+    VectorShadow,
+    Glyph { handle: GlyphHandle, arc_angle_rad: f64, rest_center: [f64; 2] },
     MeshNode { row: usize, col: usize, multi: bool },
     MeshMarquee { start_doc: [f64; 2], cur_doc: [f64; 2], additive: bool },
     Liquify { stroke_start_idx: usize, last_stamp_doc: [f64; 2] },
@@ -86,7 +102,25 @@ struct ActiveDrag {
     initial_sfx: SfxData,
     reported_sfx: SfxData,
     rest_box: [f64; 4],
+    /// Frozen inverse homography captured on pointer-down (prevents projective drift/NaN during drag).
+    init_inv_h: [f64; 9],
     mode: DragMode,
+}
+
+fn glyph_tool_to_u8(tool: SfxGlyphTool) -> u8 {
+    match tool {
+        SfxGlyphTool::Move => 0,
+        SfxGlyphTool::Skew => 1,
+        SfxGlyphTool::FreeTransform => 2,
+    }
+}
+
+fn glyph_tool_from_u8(v: u8) -> SfxGlyphTool {
+    match v {
+        1 => SfxGlyphTool::Skew,
+        2 => SfxGlyphTool::FreeTransform,
+        _ => SfxGlyphTool::Move,
+    }
 }
 
 /// Persistent gizmo state owned inside [`crate::MangaUiState`].
@@ -99,6 +133,7 @@ pub struct SfxGizmoState {
     drag: Option<ActiveDrag>,
     cached: std::sync::Mutex<Option<CachedSfxGeom>>,
     bound_target: Option<(BridgeDocId, LayerId)>,
+    glyph_tool_code: AtomicU8,
 }
 
 impl Default for SfxGizmoState {
@@ -112,6 +147,7 @@ impl Default for SfxGizmoState {
             drag: None,
             cached: std::sync::Mutex::new(None),
             bound_target: None,
+            glyph_tool_code: AtomicU8::new(0),
         }
     }
 }
@@ -119,6 +155,14 @@ impl Default for SfxGizmoState {
 impl SfxGizmoState {
     pub fn has_active_drag(&self) -> bool {
         self.drag.is_some()
+    }
+
+    pub fn current_glyph_tool(&self) -> SfxGlyphTool {
+        glyph_tool_from_u8(self.glyph_tool_code.load(Ordering::Relaxed))
+    }
+
+    pub fn set_glyph_tool(&self, tool: SfxGlyphTool) {
+        self.glyph_tool_code.store(glyph_tool_to_u8(tool), Ordering::Relaxed);
     }
 
     /// Computes or returns the cached `PreparedSfx` geometry using `engine`.
@@ -187,13 +231,13 @@ fn rest_box_points(rb: [f64; 4]) -> [([f64; 2], FreeHandle); 8] {
     let cx = (rb[0] + rb[2]) * 0.5;
     let cy = (rb[1] + rb[3]) * 0.5;
     [
-        ([rb[0], rb[1]], FreeHandle::TopLeft),
+        ([rb[0], rb[1]], FreeHandle::Corner(0)),
         ([cx, rb[1]], FreeHandle::Top),
-        ([rb[2], rb[1]], FreeHandle::TopRight),
+        ([rb[2], rb[1]], FreeHandle::Corner(1)),
         ([rb[2], cy], FreeHandle::Right),
-        ([rb[2], rb[3]], FreeHandle::BottomRight),
+        ([rb[2], rb[3]], FreeHandle::Corner(2)),
         ([cx, rb[3]], FreeHandle::Bottom),
-        ([rb[0], rb[3]], FreeHandle::BottomLeft),
+        ([rb[0], rb[3]], FreeHandle::Corner(3)),
         ([rb[0], cy], FreeHandle::Left),
     ]
 }
@@ -214,11 +258,103 @@ fn rotate_stem_doc(ft: &SfxFreeTransform, rb: [f64; 4], xf: &CanvasViewXform) ->
     xf.to_doc(stem_scr)
 }
 
+fn shadow_center_and_knob_doc(data: &SfxData, rb: [f64; 4]) -> ([f64; 2], [f64; 2]) {
+    let center = apply_free_transform_point(&data.free_transform, rb, [(rb[0] + rb[2]) * 0.5, (rb[1] + rb[3]) * 0.5]);
+    let rad = f64::from(data.vector_shadow.angle_deg).to_radians();
+    let vis_dist = f64::from(data.vector_shadow.distance_px).max(26.0);
+    let knob = [center[0] + rad.cos() * vis_dist, center[1] + rad.sin() * vis_dist];
+    (center, knob)
+}
+
+fn hit_shadow_knob(data: &SfxData, rb: [f64; 4], xf: &CanvasViewXform, at_doc: [f64; 2]) -> bool {
+    if !data.vector_shadow.enabled {
+        return false;
+    }
+    let (_, knob) = shadow_center_and_knob_doc(data, rb);
+    let p_scr = xf.to_screen(at_doc[0] as f32, at_doc[1] as f32);
+    let k_scr = xf.to_screen(knob[0] as f32, knob[1] as f32);
+    k_scr.distance(p_scr) <= HANDLE_HIT_PX + 2.0
+}
+
+fn hit_spline_point(data: &SfxData, rb: [f64; 4], xf: &CanvasViewXform, at_doc: [f64; 2]) -> Option<usize> {
+    if !data.spline.show_arc || data.spline.points.is_empty() {
+        return None;
+    }
+    let p_scr = xf.to_screen(at_doc[0] as f32, at_doc[1] as f32);
+    let mut best: Option<(f32, usize)> = None;
+    for (i, &lp) in data.spline.points.iter().enumerate() {
+        let dp = spline_control_doc_pos(data, rb, lp);
+        let d = xf.to_screen(dp[0] as f32, dp[1] as f32).distance(p_scr);
+        if d <= HANDLE_HIT_PX + 1.0 && best.is_none_or(|(bd, _)| d < bd) {
+            best = Some((d, i));
+        }
+    }
+    best.map(|(_, i)| i)
+}
+
+fn dist_pt_to_seg_scr(p: Pos2, a: Pos2, b: Pos2) -> f32 {
+    let ab = b - a;
+    let l2 = ab.length_sq();
+    if l2 < 1e-6 {
+        return p.distance(a);
+    }
+    let t = ((p - a).dot(ab) / l2).clamp(0.0, 1.0);
+    p.distance(a + ab * t)
+}
+
+/// Returns the spline segment index (`0..points.len()-1`) if the cursor clicks near the Catmull-Rom curve.
+fn hit_spline_curve(data: &SfxData, rb: [f64; 4], xf: &CanvasViewXform, at_doc: [f64; 2]) -> Option<usize> {
+    if !data.spline.show_arc || data.spline.points.len() < 2 || data.spline.points.len() >= MAX_SFX_SPLINE_POINTS {
+        return None;
+    }
+    let p_scr = xf.to_screen(at_doc[0] as f32, at_doc[1] as f32);
+    let segs = data.spline.points.len() - 1;
+    let steps = (segs * 12).clamp(16, 128);
+    let mut best: Option<(f32, usize)> = None;
+    let mut prev_scr = {
+        let s0 = sample_catmull_rom(&data.spline.points, 0.0);
+        let d0 = spline_control_doc_pos(data, rb, [s0.lx, s0.ly]);
+        xf.to_screen(d0[0] as f32, d0[1] as f32)
+    };
+    for st in 1..=steps {
+        let t = st as f64 / steps as f64;
+        let sp = sample_catmull_rom(&data.spline.points, t);
+        let dp = spline_control_doc_pos(data, rb, [sp.lx, sp.ly]);
+        let cur_scr = xf.to_screen(dp[0] as f32, dp[1] as f32);
+        let d = dist_pt_to_seg_scr(p_scr, prev_scr, cur_scr);
+        if d <= ARC_HIT_PX && best.is_none_or(|(bd, _)| d < bd) {
+            let t_mid = (st as f64 - 0.5) / steps as f64;
+            let seg_idx = ((t_mid * segs as f64).floor() as usize).min(segs - 1);
+            best = Some((d, seg_idx));
+        }
+        prev_scr = cur_scr;
+    }
+    best.map(|(_, seg)| seg)
+}
+
 fn point_in_rect(r: [f64; 4], p: [f64; 2]) -> bool {
     p[0] >= r[0] && p[0] <= r[2] && p[1] >= r[1] && p[1] <= r[3]
 }
 
-fn hit_free_transform(data: &SfxData, rb: [f64; 4], xf: &CanvasViewXform, at_doc: [f64; 2]) -> Option<FreeHandle> {
+fn point_in_quad(quad: [[f64; 2]; 4], p: [f64; 2]) -> bool {
+    let mut inside = false;
+    let mut j = 3usize;
+    for i in 0..4 {
+        let xi = quad[i][0];
+        let yi = quad[i][1];
+        let xj = quad[j][0];
+        let yj = quad[j][1];
+        let denom = yj - yi;
+        let intersect = ((yi > p[1]) != (yj > p[1])) && denom.abs() > 1e-9 && (p[0] < (xj - xi) * (p[1] - yi) / denom + xi);
+        if intersect {
+            inside = !inside;
+        }
+        j = i;
+    }
+    inside
+}
+
+fn hit_free_transform(data: &SfxData, rb: [f64; 4], world_corners: [[f64; 2]; 4], xf: &CanvasViewXform, at_doc: [f64; 2]) -> Option<FreeHandle> {
     let p_scr = xf.to_screen(at_doc[0] as f32, at_doc[1] as f32);
     let stem_doc = rotate_stem_doc(&data.free_transform, rb, xf);
     let stem_scr = xf.to_screen(stem_doc[0] as f32, stem_doc[1] as f32);
@@ -232,8 +368,8 @@ fn hit_free_transform(data: &SfxData, rb: [f64; 4], xf: &CanvasViewXform, at_doc
             return Some(kind);
         }
     }
-    if let Some(rest_pt) = invert_free_transform_point(&data.free_transform, rb, at_doc)
-        && point_in_rect(rb, rest_pt)
+    if point_in_quad(world_corners, at_doc)
+        || invert_free_transform_point(&data.free_transform, rb, at_doc).is_some_and(|rest_pt| point_in_rect(rb, rest_pt))
     {
         return Some(FreeHandle::Body);
     }
@@ -258,30 +394,83 @@ fn hit_mesh_node(data: &SfxData, rb: [f64; 4], xf: &CanvasViewXform, at_doc: [f6
     best.map(|(_, r, c)| (r, c))
 }
 
-fn glyph_handles_screen(wb: [f64; 4], xf: &CanvasViewXform) -> (Pos2, Pos2) {
-    let top_mid = xf.to_screen(((wb[0] + wb[2]) * 0.5) as f32, wb[1] as f32);
-    let rot_pos = top_mid - vec2(0.0, ROTATE_STEM_PX * 0.8);
-    let br_pos = xf.to_screen(wb[2] as f32, wb[3] as f32);
-    (rot_pos, br_pos)
+struct GlyphScreenGizmo {
+    corners: [Pos2; 4],
+    top_mid: Pos2,
+    rot_pos: Pos2,
+    skew_x_pos: Pos2,
+    skew_y_pos: Pos2,
+    scale_pos: Pos2,
 }
 
-fn hit_glyph(geom: &PreparedSfx, selected: Option<usize>, xf: &CanvasViewXform, at_doc: [f64; 2]) -> Option<GlyphHandle> {
+fn glyph_screen_gizmo(quad_doc: [[f64; 2]; 4], xf: &CanvasViewXform) -> GlyphScreenGizmo {
+    let corners = [
+        xf.to_screen(quad_doc[0][0] as f32, quad_doc[0][1] as f32),
+        xf.to_screen(quad_doc[1][0] as f32, quad_doc[1][1] as f32),
+        xf.to_screen(quad_doc[2][0] as f32, quad_doc[2][1] as f32),
+        xf.to_screen(quad_doc[3][0] as f32, quad_doc[3][1] as f32),
+    ];
+    let top_mid = pos2((corners[0].x + corners[1].x) * 0.5, (corners[0].y + corners[1].y) * 0.5);
+    let right_mid = pos2((corners[1].x + corners[2].x) * 0.5, (corners[1].y + corners[2].y) * 0.5);
+    let center = pos2(
+        (corners[0].x + corners[1].x + corners[2].x + corners[3].x) * 0.25,
+        (corners[0].y + corners[1].y + corners[2].y + corners[3].y) * 0.25,
+    );
+    let mut up_dir = top_mid - center;
+    let up_len = up_dir.length();
+    if up_len > 1e-3 {
+        up_dir /= up_len;
+    } else {
+        up_dir = vec2(0.0, -1.0);
+    }
+    let rot_pos = top_mid + up_dir * (ROTATE_STEM_PX * 0.85);
+    GlyphScreenGizmo {
+        corners,
+        top_mid,
+        rot_pos,
+        skew_x_pos: top_mid,
+        skew_y_pos: right_mid,
+        scale_pos: corners[2],
+    }
+}
+
+fn hit_glyph(geom: &PreparedSfx, selected: Option<usize>, tool: SfxGlyphTool, xf: &CanvasViewXform, at_doc: [f64; 2]) -> Option<GlyphHandle> {
     let p_scr = xf.to_screen(at_doc[0] as f32, at_doc[1] as f32);
     if let Some(idx) = selected
         && let Some(g) = geom.glyphs.iter().find(|g| g.glyph_index == idx)
     {
-        let (rot_scr, scale_scr) = glyph_handles_screen(g.warped_bounds, xf);
-        if rot_scr.distance(p_scr) <= HANDLE_HIT_PX {
+        let gs = glyph_screen_gizmo(g.quad_doc, xf);
+        // Rotate handle is always available across Move, Skew, and FT (4-Crn).
+        if gs.rot_pos.distance(p_scr) <= HANDLE_HIT_PX {
             return Some(GlyphHandle::Rotate(idx));
         }
-        if scale_scr.distance(p_scr) <= HANDLE_HIT_PX {
-            return Some(GlyphHandle::Scale(idx));
+        match tool {
+            SfxGlyphTool::FreeTransform => {
+                for (ci, &cp) in gs.corners.iter().enumerate() {
+                    if cp.distance(p_scr) <= HANDLE_HIT_PX {
+                        return Some(GlyphHandle::Corner(idx, ci));
+                    }
+                }
+            }
+            SfxGlyphTool::Skew => {
+                if gs.skew_x_pos.distance(p_scr) <= HANDLE_HIT_PX {
+                    return Some(GlyphHandle::SkewX(idx));
+                }
+                if gs.skew_y_pos.distance(p_scr) <= HANDLE_HIT_PX {
+                    return Some(GlyphHandle::SkewY(idx));
+                }
+            }
+            SfxGlyphTool::Move => {
+                if gs.scale_pos.distance(p_scr) <= HANDLE_HIT_PX {
+                    return Some(GlyphHandle::Scale(idx));
+                }
+            }
         }
     }
     for g in geom.glyphs.iter().rev() {
         let pad_doc = 4.0 / f64::from(xf.zoom.max(0.05));
         let expanded = [g.warped_bounds[0] - pad_doc, g.warped_bounds[1] - pad_doc, g.warped_bounds[2] + pad_doc, g.warped_bounds[3] + pad_doc];
-        if point_in_rect(expanded, at_doc) {
+        if point_in_quad(g.quad_doc, at_doc) || point_in_rect(expanded, at_doc) {
             return Some(GlyphHandle::Body(g.glyph_index));
         }
     }
@@ -292,17 +481,17 @@ fn to_pre_ft(ft: &SfxFreeTransform, rb: [f64; 4], p: [f64; 2]) -> [f64; 2] {
     invert_free_transform_point(ft, rb, p).unwrap_or(p)
 }
 
-fn free_corner_delta_signs(kind: FreeHandle) -> (f64, f64) {
+fn edge_delta_signs(kind: FreeHandle) -> (f64, f64) {
     match kind {
-        FreeHandle::TopLeft => (-1.0, -1.0),
         FreeHandle::Top => (0.0, -1.0),
-        FreeHandle::TopRight => (1.0, -1.0),
         FreeHandle::Right => (1.0, 0.0),
-        FreeHandle::BottomRight => (1.0, 1.0),
         FreeHandle::Bottom => (0.0, 1.0),
-        FreeHandle::BottomLeft => (-1.0, 1.0),
         FreeHandle::Left => (-1.0, 0.0),
-        FreeHandle::Rotate | FreeHandle::Body => (0.0, 0.0),
+        FreeHandle::Corner(0) => (-1.0, -1.0),
+        FreeHandle::Corner(1) => (1.0, -1.0),
+        FreeHandle::Corner(2) => (1.0, 1.0),
+        FreeHandle::Corner(3) => (-1.0, 1.0),
+        FreeHandle::Corner(_) | FreeHandle::Rotate | FreeHandle::Body => (0.0, 0.0),
     }
 }
 
@@ -335,8 +524,29 @@ fn apply_free_drag(drag: &ActiveDrag, at_doc: [f64; 2], mods: egui::Modifiers, n
             }
             next.free_transform.rotation_deg = deg;
         }
-        edge_or_corner => {
-            // Undo only the rotation into local frame so edge/corner directions feel natural.
+        FreeHandle::Corner(c_idx) if c_idx < 4 && !mods.ctrl => {
+            // Non-affine 4-Corner FT drag using frozen pre-corner inverse (zero feedback drift / NaN).
+            let ft_no_corners = SfxFreeTransform { corners: [[0.0; 2]; 4], ..drag.initial_sfx.free_transform };
+            let p0 = invert_free_transform_point(&ft_no_corners, rb, drag.start_doc).unwrap_or(drag.start_doc);
+            let p1 = invert_free_transform_point(&ft_no_corners, rb, at_doc).unwrap_or(at_doc);
+            let dp = [p1[0] - p0[0], p1[1] - p0[1]];
+            let base = drag.initial_sfx.free_transform.corners;
+            next.free_transform.corners = base;
+            next.free_transform.corners[c_idx][0] = base[c_idx][0] + dp[0];
+            next.free_transform.corners[c_idx][1] = base[c_idx][1] + dp[1];
+            if mods.shift {
+                // Symmetric trapezoid perspective on paired top/bottom corner.
+                let pair = match c_idx {
+                    0 => 1,
+                    1 => 0,
+                    2 => 3,
+                    _ => 2,
+                };
+                next.free_transform.corners[pair][0] = base[pair][0] - dp[0];
+                next.free_transform.corners[pair][1] = base[pair][1] + dp[1];
+            }
+        }
+        edge_or_ctrl_corner => {
             let (s, c) = (-drag.initial_sfx.free_transform.rotation_deg).to_radians().sin_cos();
             let rot = |p: [f64; 2]| -> [f64; 2] {
                 let rx = p[0] - center[0];
@@ -346,11 +556,11 @@ fn apply_free_drag(drag: &ActiveDrag, at_doc: [f64; 2], mods: egui::Modifiers, n
             let p0 = rot(drag.start_doc);
             let p1 = rot(at_doc);
             let d = [p1[0] - p0[0], p1[1] - p0[1]];
-            let (sx_sign, sy_sign) = free_corner_delta_signs(edge_or_corner);
+            let (sx_sign, sy_sign) = edge_delta_signs(edge_or_ctrl_corner);
             let ft0 = drag.initial_sfx.free_transform;
 
             if mods.ctrl {
-                match edge_or_corner {
+                match edge_or_ctrl_corner {
                     FreeHandle::Top => {
                         let skew_delta = (d[0] / (h * 0.5)).atan().to_degrees();
                         next.free_transform.skew_x_deg = (ft0.skew_x_deg - skew_delta).clamp(-75.0, 75.0);
@@ -367,7 +577,7 @@ fn apply_free_drag(drag: &ActiveDrag, at_doc: [f64; 2], mods: egui::Modifiers, n
                         let skew_delta = (d[1] / (w * 0.5)).atan().to_degrees();
                         next.free_transform.skew_y_deg = (ft0.skew_y_deg + skew_delta).clamp(-75.0, 75.0);
                     }
-                    FreeHandle::TopLeft | FreeHandle::TopRight | FreeHandle::BottomRight | FreeHandle::BottomLeft => {
+                    FreeHandle::Corner(_) => {
                         next.free_transform.perspective_x = (ft0.perspective_x - sx_sign * d[0] / (w * 0.5)).clamp(-0.75, 0.75);
                         next.free_transform.perspective_y = (ft0.perspective_y - sy_sign * d[1] / (h * 0.5)).clamp(-0.75, 0.75);
                     }
@@ -397,6 +607,37 @@ fn apply_free_drag(drag: &ActiveDrag, at_doc: [f64; 2], mods: egui::Modifiers, n
     next.validate();
 }
 
+fn apply_spline_drag(drag: &ActiveDrag, at_doc: [f64; 2], next: &mut SfxData) {
+    let DragMode::SplinePoint { index } = drag.mode else { return };
+    let cx = (drag.rest_box[0] + drag.rest_box[2]) * 0.5;
+    let cy = (drag.rest_box[1] + drag.rest_box[3]) * 0.5;
+    // Frozen inverse homography ensures arc points never explode to NaN under strong 4-Corner FT.
+    let local = apply_homography(&drag.init_inv_h, at_doc);
+    if let Some(pt) = next.spline.points.get_mut(index) {
+        pt[0] = local[0] - cx;
+        pt[1] = local[1] - cy;
+    }
+    next.validate();
+}
+
+fn apply_shadow_drag(drag: &ActiveDrag, at_doc: [f64; 2], mods: egui::Modifiers, next: &mut SfxData) {
+    let center = apply_free_transform_point(&drag.initial_sfx.free_transform, drag.rest_box, [
+        (drag.rest_box[0] + drag.rest_box[2]) * 0.5,
+        (drag.rest_box[1] + drag.rest_box[3]) * 0.5,
+    ]);
+    let dx = at_doc[0] - center[0];
+    let dy = at_doc[1] - center[1];
+    let mut deg = dy.atan2(dx).to_degrees();
+    if mods.shift {
+        deg = (deg / 15.0).round() * 15.0;
+    }
+    let dist = dx.hypot(dy).clamp(0.0, 256.0);
+    next.vector_shadow.enabled = true;
+    next.vector_shadow.angle_deg = deg as f32;
+    next.vector_shadow.distance_px = dist as f32;
+    next.validate();
+}
+
 fn find_or_insert_glyph_mut(data: &mut SfxData, glyph_index: usize) -> &mut SfxGlyphTransform {
     if let Some(pos) = data.per_glyph.iter().position(|g| g.glyph_index == glyph_index) {
         return &mut data.per_glyph[pos];
@@ -407,20 +648,23 @@ fn find_or_insert_glyph_mut(data: &mut SfxData, glyph_index: usize) -> &mut SfxG
 }
 
 fn apply_glyph_drag(drag: &ActiveDrag, at_doc: [f64; 2], mods: egui::Modifiers, next: &mut SfxData) {
-    let DragMode::Glyph(gh) = drag.mode else { return };
-    let ft = &drag.initial_sfx.free_transform;
-    let p0 = to_pre_ft(ft, drag.rest_box, drag.start_doc);
-    let p1 = to_pre_ft(ft, drag.rest_box, at_doc);
+    let DragMode::Glyph { handle, arc_angle_rad, rest_center } = drag.mode else { return };
+    // Frozen inverse homography maps document pointer back to pre-FT layout space without drift.
+    let p0 = apply_homography(&drag.init_inv_h, drag.start_doc);
+    let p1 = apply_homography(&drag.init_inv_h, at_doc);
 
-    match gh {
+    let base_for = |idx: usize| -> SfxGlyphTransform {
+        drag.initial_sfx
+            .per_glyph
+            .iter()
+            .find(|g| g.glyph_index == idx)
+            .copied()
+            .unwrap_or(SfxGlyphTransform { glyph_index: idx, ..SfxGlyphTransform::default() })
+    };
+
+    match handle {
         GlyphHandle::Body(idx) => {
-            let base = drag
-                .initial_sfx
-                .per_glyph
-                .iter()
-                .find(|g| g.glyph_index == idx)
-                .copied()
-                .unwrap_or(SfxGlyphTransform { glyph_index: idx, ..SfxGlyphTransform::default() });
+            let base = base_for(idx);
             let mut dx = p1[0] - p0[0];
             let mut dy = p1[1] - p0[1];
             if mods.shift {
@@ -435,14 +679,8 @@ fn apply_glyph_drag(drag: &ActiveDrag, at_doc: [f64; 2], mods: egui::Modifiers, 
             entry.dy = base.dy + dy;
         }
         GlyphHandle::Rotate(idx) => {
-            let base = drag
-                .initial_sfx
-                .per_glyph
-                .iter()
-                .find(|g| g.glyph_index == idx)
-                .copied()
-                .unwrap_or(SfxGlyphTransform { glyph_index: idx, ..SfxGlyphTransform::default() });
-            let c = [(drag.rest_box[0] + drag.rest_box[2]) * 0.5, (drag.rest_box[1] + drag.rest_box[3]) * 0.5];
+            let base = base_for(idx);
+            let c = [rest_center[0] + base.dx, rest_center[1] + base.dy];
             let a0 = (p0[1] - c[1]).atan2(p0[0] - c[0]);
             let a1 = (p1[1] - c[1]).atan2(p1[0] - c[0]);
             let mut deg = base.rotation_deg + (a1 - a0).to_degrees();
@@ -452,13 +690,7 @@ fn apply_glyph_drag(drag: &ActiveDrag, at_doc: [f64; 2], mods: egui::Modifiers, 
             find_or_insert_glyph_mut(next, idx).rotation_deg = deg;
         }
         GlyphHandle::Scale(idx) => {
-            let base = drag
-                .initial_sfx
-                .per_glyph
-                .iter()
-                .find(|g| g.glyph_index == idx)
-                .copied()
-                .unwrap_or(SfxGlyphTransform { glyph_index: idx, ..SfxGlyphTransform::default() });
+            let base = base_for(idx);
             let dy = p1[1] - p0[1];
             let dx = p1[0] - p0[0];
             let factor = (1.0 + (dx + dy) / 64.0).clamp(0.2, 6.0);
@@ -466,6 +698,30 @@ fn apply_glyph_drag(drag: &ActiveDrag, at_doc: [f64; 2], mods: egui::Modifiers, 
             entry.scale_x = (base.scale_x * factor).clamp(0.1, 8.0);
             entry.scale_y = if mods.shift { entry.scale_x } else { (base.scale_y * (1.0 + dy / 64.0)).clamp(0.1, 8.0) };
         }
+        GlyphHandle::SkewX(idx) => {
+            let base = base_for(idx);
+            let dx = p1[0] - p0[0];
+            find_or_insert_glyph_mut(next, idx).skew_x_deg = (base.skew_x_deg + dx * 0.45).clamp(-60.0, 60.0);
+        }
+        GlyphHandle::SkewY(idx) => {
+            let base = base_for(idx);
+            let dy = p1[1] - p0[1];
+            find_or_insert_glyph_mut(next, idx).skew_y_deg = (base.skew_y_deg + dy * 0.45).clamp(-60.0, 60.0);
+        }
+        GlyphHandle::Corner(idx, c_idx) if c_idx < 4 => {
+            let base = base_for(idx);
+            let dlx = p1[0] - p0[0];
+            let dly = p1[1] - p0[1];
+            let total_angle = arc_angle_rad + base.rotation_deg.to_radians();
+            let (s, c) = (-total_angle).sin_cos();
+            let lx = (dlx * c - dly * s) / base.scale_x.abs().max(0.1);
+            let ly = (dlx * s + dly * c) / base.scale_y.abs().max(0.1);
+            let entry = find_or_insert_glyph_mut(next, idx);
+            entry.corners = base.corners;
+            entry.corners[c_idx][0] = base.corners[c_idx][0] + lx;
+            entry.corners[c_idx][1] = base.corners[c_idx][1] + ly;
+        }
+        GlyphHandle::Corner(_, _) => {}
     }
     next.validate();
 }
@@ -518,7 +774,6 @@ fn apply_liquify_drag(drag: &mut ActiveDrag, at_doc: [f64; 2], radius_px: f64, s
     } else if next.liquify_strokes.len() < MAX_SFX_LIQUIFY_STROKES {
         next.liquify_strokes.push(brush);
     }
-    // Advance stamp along long brush sweeps so continuous painting deforms along the full path.
     if dist >= (radius_px * 0.45).max(MIN_LIQUIFY_STEP_PX) && next.liquify_strokes.len() < MAX_SFX_LIQUIFY_STROKES {
         *last_stamp_doc = at_doc;
         drag.mode = DragMode::Liquify { stroke_start_idx: next.liquify_strokes.len(), last_stamp_doc: at_doc };
@@ -573,7 +828,7 @@ pub fn pointer(gizmo: &mut SfxGizmoState, view: &SfxView<'_>, ev: CanvasToolEven
     match ev {
         CanvasToolEvent::Down { x, y, .. } => {
             let Some((layer_id, sfx_ref)) = active_sfx_target(view) else { return out };
-            let sfx = sfx_ref.clone();
+            let mut sfx = sfx_ref.clone();
             let doc_id = view.doc_id.unwrap_or(BridgeDocId(0));
             let dpi = doc_dpi(view);
             let geom = gizmo.ensure_geom(&sfx, dpi);
@@ -582,23 +837,99 @@ pub fn pointer(gizmo: &mut SfxGizmoState, view: &SfxView<'_>, ev: CanvasToolEven
             }
             let rb = geom.rest_box;
             let xf = &view.view_xform;
+            let (_, init_inv_h) = free_transform_homography(&sfx.free_transform, rb);
             let coalesce = format!("sfx-gizmo:{}:{}:{:?}", doc_id.0, layer_id.0, sfx.warp_mode);
+
+            // 1. Vector `☀ Shadow` knob has top hit priority in FreeTransform / PerGlyph.
+            if matches!(sfx.warp_mode, SfxWarpMode::FreeTransform | SfxWarpMode::PerGlyph) && hit_shadow_knob(&sfx, rb, xf, [x, y]) {
+                gizmo.drag = Some(ActiveDrag {
+                    doc_id,
+                    layer_id,
+                    coalesce: format!("sfx-shadow:{}:{}", doc_id.0, layer_id.0),
+                    start_doc: [x, y],
+                    reported_sfx: sfx.clone(),
+                    initial_sfx: sfx,
+                    rest_box: rb,
+                    init_inv_h,
+                    mode: DragMode::VectorShadow,
+                });
+                out.handled = true;
+                return out;
+            }
 
             let mode = match sfx.warp_mode {
                 SfxWarpMode::FreeTransform => {
-                    let Some(h) = hit_free_transform(&sfx, rb, xf, [x, y]) else { return out };
-                    DragMode::Free(h)
+                    if let Some(sp_idx) = hit_spline_point(&sfx, rb, xf, [x, y]) {
+                        if mods.alt && sfx.spline.points.len() > 2 {
+                            sfx.spline.points.remove(sp_idx);
+                            sfx.validate();
+                            out.commands.push(OutCommand::new(
+                                "sfx.update",
+                                json!({ "layer": layer_id.0, "sfx": sfx, "coalesce": coalesce }),
+                            ));
+                            out.updated_sfx = Some(sfx);
+                            out.handled = true;
+                            return out;
+                        }
+                        DragMode::SplinePoint { index: sp_idx }
+                    } else if let Some(h) = hit_free_transform(&sfx, rb, geom.world_corners, xf, [x, y]) {
+                        // Allow clicking directly on the Catmull-Rom curve to insert a point when not on a frame handle.
+                        if h == FreeHandle::Body
+                            && let Some(seg_idx) = hit_spline_curve(&sfx, rb, xf, [x, y])
+                        {
+                            let cx = (rb[0] + rb[2]) * 0.5;
+                            let cy = (rb[1] + rb[3]) * 0.5;
+                            let local = apply_homography(&init_inv_h, [x, y]);
+                            let insert_at = seg_idx + 1;
+                            sfx.spline.points.insert(insert_at, [local[0] - cx, local[1] - cy]);
+                            sfx.validate();
+                            out.commands.push(OutCommand::new(
+                                "sfx.update",
+                                json!({ "layer": layer_id.0, "sfx": sfx, "coalesce": coalesce }),
+                            ));
+                            out.updated_sfx = Some(sfx.clone());
+                            DragMode::SplinePoint { index: insert_at }
+                        } else {
+                            DragMode::Free(h)
+                        }
+                    } else if let Some(seg_idx) = hit_spline_curve(&sfx, rb, xf, [x, y]) {
+                        let cx = (rb[0] + rb[2]) * 0.5;
+                        let cy = (rb[1] + rb[3]) * 0.5;
+                        let local = apply_homography(&init_inv_h, [x, y]);
+                        let insert_at = seg_idx + 1;
+                        sfx.spline.points.insert(insert_at, [local[0] - cx, local[1] - cy]);
+                        sfx.validate();
+                        out.commands.push(OutCommand::new(
+                            "sfx.update",
+                            json!({ "layer": layer_id.0, "sfx": sfx, "coalesce": coalesce }),
+                        ));
+                        out.updated_sfx = Some(sfx.clone());
+                        DragMode::SplinePoint { index: insert_at }
+                    } else {
+                        return out;
+                    }
                 }
                 SfxWarpMode::PerGlyph => {
-                    let Some(gh) = hit_glyph(&geom, gizmo.selected_glyph, xf, [x, y]) else {
+                    let tool = gizmo.current_glyph_tool();
+                    let Some(gh) = hit_glyph(&geom, gizmo.selected_glyph, tool, xf, [x, y]) else {
                         gizmo.selected_glyph = None;
                         return out;
                     };
                     let g_idx = match gh {
-                        GlyphHandle::Body(i) | GlyphHandle::Rotate(i) | GlyphHandle::Scale(i) => i,
+                        GlyphHandle::Body(i)
+                        | GlyphHandle::Rotate(i)
+                        | GlyphHandle::Scale(i)
+                        | GlyphHandle::SkewX(i)
+                        | GlyphHandle::SkewY(i)
+                        | GlyphHandle::Corner(i, _) => i,
                     };
                     gizmo.selected_glyph = Some(g_idx);
-                    DragMode::Glyph(gh)
+                    let (arc_angle_rad, rest_center) = geom
+                        .glyphs
+                        .iter()
+                        .find(|g| g.glyph_index == g_idx)
+                        .map_or((0.0, [(rb[0] + rb[2]) * 0.5, (rb[1] + rb[3]) * 0.5]), |g| (g.arc_angle_rad, g.rest_center));
+                    DragMode::Glyph { handle: gh, arc_angle_rad, rest_center }
                 }
                 SfxWarpMode::MeshLattice => {
                     if let Some((row, col)) = hit_mesh_node(&sfx, rb, xf, [x, y]) {
@@ -633,7 +964,17 @@ pub fn pointer(gizmo: &mut SfxGizmoState, view: &SfxView<'_>, ev: CanvasToolEven
                 }
             };
 
-            gizmo.drag = Some(ActiveDrag { doc_id, layer_id, coalesce, start_doc: [x, y], reported_sfx: sfx.clone(), initial_sfx: sfx, rest_box: rb, mode });
+            gizmo.drag = Some(ActiveDrag {
+                doc_id,
+                layer_id,
+                coalesce,
+                start_doc: [x, y],
+                reported_sfx: sfx.clone(),
+                initial_sfx: sfx,
+                rest_box: rb,
+                init_inv_h,
+                mode,
+            });
             out.handled = true;
             out
         }
@@ -650,7 +991,15 @@ pub fn pointer(gizmo: &mut SfxGizmoState, view: &SfxView<'_>, ev: CanvasToolEven
                     next = drag.initial_sfx.clone();
                     apply_free_drag(&drag, [x, y], mods, &mut next);
                 }
-                DragMode::Glyph(_) => {
+                DragMode::SplinePoint { .. } => {
+                    next = drag.initial_sfx.clone();
+                    apply_spline_drag(&drag, [x, y], &mut next);
+                }
+                DragMode::VectorShadow => {
+                    next = drag.initial_sfx.clone();
+                    apply_shadow_drag(&drag, [x, y], mods, &mut next);
+                }
+                DragMode::Glyph { .. } => {
                     next = drag.initial_sfx.clone();
                     apply_glyph_drag(&drag, [x, y], mods, &mut next);
                 }
@@ -690,7 +1039,17 @@ pub fn pointer(gizmo: &mut SfxGizmoState, view: &SfxView<'_>, ev: CanvasToolEven
                     apply_free_drag(&drag, [x, y], mods, &mut next);
                     push_update(&mut drag, next, &mut out);
                 }
-                DragMode::Glyph(_) => {
+                DragMode::SplinePoint { .. } => {
+                    next = drag.initial_sfx.clone();
+                    apply_spline_drag(&drag, [x, y], &mut next);
+                    push_update(&mut drag, next, &mut out);
+                }
+                DragMode::VectorShadow => {
+                    next = drag.initial_sfx.clone();
+                    apply_shadow_drag(&drag, [x, y], mods, &mut next);
+                    push_update(&mut drag, next, &mut out);
+                }
+                DragMode::Glyph { .. } => {
                     next = drag.initial_sfx.clone();
                     apply_glyph_drag(&drag, [x, y], mods, &mut next);
                     push_update(&mut drag, next, &mut out);
@@ -733,7 +1092,7 @@ pub fn cancel_drag(gizmo: &mut SfxGizmoState, view: &SfxView<'_>) -> SfxGizmoOut
     out
 }
 
-/// Returns hover cursor feedback over SFX handles or brush circle.
+/// Returns hover cursor feedback over SFX handles, arc points, shadow knob, or brush circle.
 pub fn hover_cursor(gizmo: &SfxGizmoState, view: &SfxView<'_>, cursor_scr: Pos2) -> Option<CursorIcon> {
     if !is_active_on_canvas(gizmo, view) {
         return None;
@@ -741,9 +1100,10 @@ pub fn hover_cursor(gizmo: &SfxGizmoState, view: &SfxView<'_>, cursor_scr: Pos2)
     let at_doc = view.view_xform.to_doc(cursor_scr);
     if let Some(drag) = &gizmo.drag {
         return Some(match drag.mode {
-            DragMode::Free(FreeHandle::Body) => CursorIcon::Grabbing,
-            DragMode::Free(FreeHandle::Rotate) => CursorIcon::Alias,
-            DragMode::Free(_) | DragMode::Glyph(_) | DragMode::MeshNode { .. } => CursorIcon::Grabbing,
+            DragMode::Free(FreeHandle::Rotate) | DragMode::Glyph { handle: GlyphHandle::Rotate(_), .. } => CursorIcon::Alias,
+            DragMode::Free(_) | DragMode::Glyph { .. } | DragMode::MeshNode { .. } | DragMode::SplinePoint { .. } | DragMode::VectorShadow => {
+                CursorIcon::Grabbing
+            }
             DragMode::MeshMarquee { .. } | DragMode::Liquify { .. } => CursorIcon::Crosshair,
         });
     }
@@ -753,19 +1113,40 @@ pub fn hover_cursor(gizmo: &SfxGizmoState, view: &SfxView<'_>, cursor_scr: Pos2)
     let geom = gizmo.ensure_geom(&sfx, dpi);
     let rb = geom.rest_box;
     let xf = &view.view_xform;
+
+    if matches!(sfx.warp_mode, SfxWarpMode::FreeTransform | SfxWarpMode::PerGlyph) && hit_shadow_knob(&sfx, rb, xf, at_doc) {
+        return Some(CursorIcon::Grab);
+    }
+
     match sfx.warp_mode {
-        SfxWarpMode::FreeTransform => match hit_free_transform(&sfx, rb, xf, at_doc)? {
-            FreeHandle::Body => Some(CursorIcon::Move),
-            FreeHandle::Rotate => Some(CursorIcon::Alias),
-            FreeHandle::Top | FreeHandle::Bottom => Some(CursorIcon::ResizeVertical),
-            FreeHandle::Left | FreeHandle::Right => Some(CursorIcon::ResizeHorizontal),
-            FreeHandle::TopLeft | FreeHandle::BottomRight => Some(CursorIcon::ResizeNwSe),
-            FreeHandle::TopRight | FreeHandle::BottomLeft => Some(CursorIcon::ResizeNeSw),
-        },
-        SfxWarpMode::PerGlyph => match hit_glyph(&geom, gizmo.selected_glyph, xf, at_doc)? {
+        SfxWarpMode::FreeTransform => {
+            if hit_spline_point(&sfx, rb, xf, at_doc).is_some() {
+                return Some(CursorIcon::Grab);
+            }
+            if let Some(h) = hit_free_transform(&sfx, rb, geom.world_corners, xf, at_doc) {
+                if h == FreeHandle::Body && hit_spline_curve(&sfx, rb, xf, at_doc).is_some() {
+                    return Some(CursorIcon::Crosshair);
+                }
+                return Some(match h {
+                    FreeHandle::Body => CursorIcon::Move,
+                    FreeHandle::Rotate => CursorIcon::Alias,
+                    FreeHandle::Top | FreeHandle::Bottom => CursorIcon::ResizeVertical,
+                    FreeHandle::Left | FreeHandle::Right => CursorIcon::ResizeHorizontal,
+                    FreeHandle::Corner(0) | FreeHandle::Corner(2) => CursorIcon::ResizeNwSe,
+                    FreeHandle::Corner(_) => CursorIcon::ResizeNeSw,
+                });
+            }
+            if hit_spline_curve(&sfx, rb, xf, at_doc).is_some() {
+                return Some(CursorIcon::Crosshair);
+            }
+            None
+        }
+        SfxWarpMode::PerGlyph => match hit_glyph(&geom, gizmo.selected_glyph, gizmo.current_glyph_tool(), xf, at_doc)? {
             GlyphHandle::Body(_) => Some(CursorIcon::Move),
             GlyphHandle::Rotate(_) => Some(CursorIcon::Alias),
-            GlyphHandle::Scale(_) => Some(CursorIcon::ResizeNwSe),
+            GlyphHandle::Scale(_) | GlyphHandle::Corner(_, _) => Some(CursorIcon::ResizeNwSe),
+            GlyphHandle::SkewX(_) => Some(CursorIcon::ResizeHorizontal),
+            GlyphHandle::SkewY(_) => Some(CursorIcon::ResizeVertical),
         },
         SfxWarpMode::MeshLattice => {
             if hit_mesh_node(&sfx, rb, xf, at_doc).is_some() {
@@ -776,13 +1157,7 @@ pub fn hover_cursor(gizmo: &SfxGizmoState, view: &SfxView<'_>, cursor_scr: Pos2)
                 None
             }
         }
-        SfxWarpMode::LiquifyField => {
-            if view.tool_is_sfx {
-                Some(CursorIcon::Crosshair)
-            } else {
-                None
-            }
-        }
+        SfxWarpMode::LiquifyField => view.tool_is_sfx.then_some(CursorIcon::Crosshair),
     }
 }
 
@@ -791,6 +1166,9 @@ pub fn draw(painter: &egui::Painter, gizmo: &SfxGizmoState, view: &SfxView<'_>) 
     if !is_active_on_canvas(gizmo, view) {
         return;
     }
+    // Sync active Per-Glyph sub-tool from panel's egui context temp storage.
+    gizmo.set_glyph_tool(SfxGlyphTool::get(painter.ctx()));
+
     let Some((_, sfx_ref)) = active_sfx_target(view) else { return };
     let sfx = sfx_ref.clone();
     let dpi = doc_dpi(view);
@@ -808,14 +1186,12 @@ pub fn draw(painter: &egui::Painter, gizmo: &SfxGizmoState, view: &SfxView<'_>) 
 
     match sfx.warp_mode {
         SfxWarpMode::FreeTransform => {
-            let corners = [[rb[0], rb[1]], [rb[2], rb[1]], [rb[2], rb[3]], [rb[0], rb[3]]];
-            let scr: Vec<Pos2> = corners
-                .iter()
-                .map(|&p| {
-                    let wp = apply_free_transform_point(&sfx.free_transform, rb, p);
-                    xf.to_screen(wp[0] as f32, wp[1] as f32)
-                })
-                .collect();
+            let scr: [Pos2; 4] = [
+                xf.to_screen(geom.world_corners[0][0] as f32, geom.world_corners[0][1] as f32),
+                xf.to_screen(geom.world_corners[1][0] as f32, geom.world_corners[1][1] as f32),
+                xf.to_screen(geom.world_corners[2][0] as f32, geom.world_corners[2][1] as f32),
+                xf.to_screen(geom.world_corners[3][0] as f32, geom.world_corners[3][1] as f32),
+            ];
             for i in 0..4 {
                 painter.line_segment([scr[i], scr[(i + 1) % 4]], line_stroke);
             }
@@ -824,36 +1200,66 @@ pub fn draw(painter: &egui::Painter, gizmo: &SfxGizmoState, view: &SfxView<'_>) 
             let stem_doc = rotate_stem_doc(&sfx.free_transform, rb, xf);
             let stem_scr = xf.to_screen(stem_doc[0] as f32, stem_doc[1] as f32);
             painter.line_segment([top_mid_scr, stem_scr], line_stroke);
-            painter.circle_filled(stem_scr, 4.5, fill_handle);
-            painter.circle_stroke(stem_scr, 4.5, line_stroke);
+            painter.circle_filled(stem_scr, 4.8, fill_handle);
+            painter.circle_stroke(stem_scr, 4.8, line_stroke);
 
-            for (pt, _) in rest_box_points(rb) {
+            for (pt, kind) in rest_box_points(rb) {
                 let wp = apply_free_transform_point(&sfx.free_transform, rb, pt);
                 let sp = xf.to_screen(wp[0] as f32, wp[1] as f32);
-                let r = Rect::from_center_size(sp, vec2(7.0, 7.0));
-                painter.rect_filled(r, 1.0, fill_handle);
-                painter.rect_stroke(r, 1.0, line_stroke, egui::StrokeKind::Outside);
+                let is_corner = matches!(kind, FreeHandle::Corner(_));
+                let sz = if is_corner { 8.0 } else { 6.0 };
+                let r = Rect::from_center_size(sp, vec2(sz, sz));
+                painter.rect_filled(r, 1.5, fill_handle);
+                painter.rect_stroke(r, 1.5, line_stroke, egui::StrokeKind::Outside);
+            }
+
+            if sfx.spline.show_arc && !sfx.spline.points.is_empty() {
+                draw_spline_arc(painter, &sfx, rb, xf);
+            }
+            if sfx.vector_shadow.enabled {
+                draw_vector_shadow_ray(painter, &sfx, rb, xf);
             }
         }
         SfxWarpMode::PerGlyph => {
+            let tool = gizmo.current_glyph_tool();
             for g in &geom.glyphs {
                 let is_sel = gizmo.selected_glyph == Some(g.glyph_index);
-                let r = Rect::from_two_pos(
-                    xf.to_screen(g.warped_bounds[0] as f32, g.warped_bounds[1] as f32),
-                    xf.to_screen(g.warped_bounds[2] as f32, g.warped_bounds[3] as f32),
-                );
-                let st = if is_sel { Stroke::new(1.8, accent) } else { Stroke::new(1.0, accent.gamma_multiply(0.55)) };
-                painter.rect_stroke(r, 0.0, st, egui::StrokeKind::Outside);
-                if is_sel {
-                    let (rot_scr, scale_scr) = glyph_handles_screen(g.warped_bounds, xf);
-                    let top_mid = pos2(r.center().x, r.top());
-                    painter.line_segment([top_mid, rot_scr], st);
-                    painter.circle_filled(rot_scr, 4.0, fill_handle);
-                    painter.circle_stroke(rot_scr, 4.0, st);
-                    let sr = Rect::from_center_size(scale_scr, vec2(7.0, 7.0));
-                    painter.rect_filled(sr, 1.0, fill_handle);
-                    painter.rect_stroke(sr, 1.0, st, egui::StrokeKind::Outside);
+                let gs = glyph_screen_gizmo(g.quad_doc, xf);
+                let col = if is_sel { COLOR_AMBER } else { COLOR_AMBER.gamma_multiply(0.45) };
+                let st = Stroke::new(if is_sel { 1.8 } else { 1.0 }, col);
+                for i in 0..4 {
+                    painter.line_segment([gs.corners[i], gs.corners[(i + 1) % 4]], st);
                 }
+                if is_sel {
+                    // Always draw rotation stem handle across Move / Skew / FT (4-Crn).
+                    painter.line_segment([gs.top_mid, gs.rot_pos], st);
+                    painter.circle_filled(gs.rot_pos, 4.5, fill_handle);
+                    painter.circle_stroke(gs.rot_pos, 4.5, st);
+
+                    match tool {
+                        SfxGlyphTool::FreeTransform => {
+                            for &cp in &gs.corners {
+                                let cr = Rect::from_center_size(cp, vec2(7.5, 7.5));
+                                painter.rect_filled(cr, 1.0, COLOR_AMBER);
+                                painter.rect_stroke(cr, 1.0, Stroke::new(1.2, Color32::WHITE), egui::StrokeKind::Outside);
+                            }
+                        }
+                        SfxGlyphTool::Skew => {
+                            for &dp in &[gs.skew_x_pos, gs.skew_y_pos] {
+                                let pts = vec![dp + vec2(0.0, -5.5), dp + vec2(5.5, 0.0), dp + vec2(0.0, 5.5), dp + vec2(-5.5, 0.0)];
+                                painter.add(egui::Shape::convex_polygon(pts, COLOR_AMBER, Stroke::new(1.2, Color32::WHITE)));
+                            }
+                        }
+                        SfxGlyphTool::Move => {
+                            let sr = Rect::from_center_size(gs.scale_pos, vec2(7.0, 7.0));
+                            painter.rect_filled(sr, 1.0, fill_handle);
+                            painter.rect_stroke(sr, 1.0, st, egui::StrokeKind::Outside);
+                        }
+                    }
+                }
+            }
+            if sfx.vector_shadow.enabled {
+                draw_vector_shadow_ray(painter, &sfx, rb, xf);
             }
         }
         SfxWarpMode::MeshLattice => {
@@ -865,14 +1271,12 @@ pub fn draw(painter: &egui::Painter, gizmo: &SfxGizmoState, view: &SfxView<'_>) 
             }
         }
         SfxWarpMode::LiquifyField => {
-            let corners = [[rb[0], rb[1]], [rb[2], rb[1]], [rb[2], rb[3]], [rb[0], rb[3]]];
-            let scr: Vec<Pos2> = corners
-                .iter()
-                .map(|&p| {
-                    let wp = apply_free_transform_point(&sfx.free_transform, rb, p);
-                    xf.to_screen(wp[0] as f32, wp[1] as f32)
-                })
-                .collect();
+            let scr: [Pos2; 4] = [
+                xf.to_screen(geom.world_corners[0][0] as f32, geom.world_corners[0][1] as f32),
+                xf.to_screen(geom.world_corners[1][0] as f32, geom.world_corners[1][1] as f32),
+                xf.to_screen(geom.world_corners[2][0] as f32, geom.world_corners[2][1] as f32),
+                xf.to_screen(geom.world_corners[3][0] as f32, geom.world_corners[3][1] as f32),
+            ];
             let dim = Stroke::new(1.0, accent.gamma_multiply(0.5));
             for i in 0..4 {
                 painter.line_segment([scr[i], scr[(i + 1) % 4]], dim);
@@ -887,6 +1291,37 @@ pub fn draw(painter: &egui::Painter, gizmo: &SfxGizmoState, view: &SfxView<'_>) 
     }
 }
 
+fn draw_spline_arc(painter: &egui::Painter, data: &SfxData, rb: [f64; 4], xf: &CanvasViewXform) {
+    let n = data.spline.points.len();
+    if n >= 2 {
+        let steps = ((n - 1) * 14).clamp(20, 140);
+        let mut pts = Vec::with_capacity(steps + 1);
+        for s in 0..=steps {
+            let t = s as f64 / steps as f64;
+            let sp = sample_catmull_rom(&data.spline.points, t);
+            let dp = spline_control_doc_pos(data, rb, [sp.lx, sp.ly]);
+            pts.push(xf.to_screen(dp[0] as f32, dp[1] as f32));
+        }
+        painter.add(egui::Shape::line(pts, Stroke::new(1.6, COLOR_CYAN.gamma_multiply(0.85))));
+    }
+    for &lp in &data.spline.points {
+        let dp = spline_control_doc_pos(data, rb, lp);
+        let sp = xf.to_screen(dp[0] as f32, dp[1] as f32);
+        painter.circle_filled(sp, 4.8, COLOR_CYAN);
+        painter.circle_stroke(sp, 4.8, Stroke::new(1.4, Color32::from_rgb(12, 74, 110)));
+    }
+}
+
+fn draw_vector_shadow_ray(painter: &egui::Painter, data: &SfxData, rb: [f64; 4], xf: &CanvasViewXform) {
+    let (center, knob) = shadow_center_and_knob_doc(data, rb);
+    let c_scr = xf.to_screen(center[0] as f32, center[1] as f32);
+    let k_scr = xf.to_screen(knob[0] as f32, knob[1] as f32);
+    painter.line_segment([c_scr, k_scr], Stroke::new(1.6, COLOR_SUN));
+    painter.circle_filled(c_scr, 3.0, COLOR_SUN);
+    painter.circle_filled(k_scr, 6.0, COLOR_SUN);
+    painter.circle_stroke(k_scr, 6.0, Stroke::new(1.4, Color32::from_rgb(120, 53, 15)));
+}
+
 fn draw_mesh_lattice(painter: &egui::Painter, data: &SfxData, rb: [f64; 4], xf: &CanvasViewXform, selected: &[(usize, usize)], accent: Color32) {
     let rows = usize::from(data.mesh.rows.max(2));
     let cols = usize::from(data.mesh.cols.max(2));
@@ -896,12 +1331,9 @@ fn draw_mesh_lattice(painter: &egui::Painter, data: &SfxData, rb: [f64; 4], xf: 
     let segs = 8usize;
 
     let sample_uv = |u: f64, v: f64| -> Pos2 {
-        let mut m = data.clone();
-        m.liquify_strokes.clear();
         let uv = eval_mesh_uv(&data.mesh, u, v);
         let p = [rb[0] + uv[0] * w, rb[1] + uv[1] * h];
         let wp = apply_free_transform_point(&data.free_transform, rb, p);
-        let _ = transform_point_full(&m, rb, p);
         xf.to_screen(wp[0] as f32, wp[1] as f32)
     };
 
@@ -1024,6 +1456,60 @@ mod tests {
     }
 
     #[test]
+    fn free_transform_4_corner_drag_and_shift_trapezoid() {
+        let sfx = SfxData { origin: [100.0, 100.0], ..SfxData::default() };
+        let (doc, id) = sfx_doc(sfx.clone());
+        let mut gizmo = SfxGizmoState::default();
+        let geom = gizmo.ensure_geom(&sfx, 72.0).clone();
+        let tl = geom.world_corners[0];
+        let view = view_for(&doc, id);
+
+        assert!(pointer(&mut gizmo, &view, CanvasToolEvent::Down { x: tl[0], y: tl[1], pressure: 1.0 }, Modifiers::NONE).handled);
+        let moved = pointer(&mut gizmo, &view, CanvasToolEvent::Move { x: tl[0] + 18.0, y: tl[1] - 12.0, pressure: 1.0 }, Modifiers::SHIFT);
+        let u = moved.updated_sfx.expect("4-corner shift trapezoid update");
+        assert!((u.free_transform.corners[0][0] - 18.0).abs() < 1e-6);
+        assert!((u.free_transform.corners[0][1] + 12.0).abs() < 1e-6);
+        // Paired TR corner must mirror X delta symmetrically under Shift.
+        assert!((u.free_transform.corners[1][0] + 18.0).abs() < 1e-6);
+        assert!((u.free_transform.corners[1][1] + 12.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn spline_control_point_drag_updates_arc_cleanly() {
+        let mut sfx = SfxData { origin: [100.0, 100.0], ..SfxData::default() };
+        sfx.spline.points = vec![[-100.0, 0.0], [0.0, -20.0], [100.0, 0.0]];
+        let (doc, id) = sfx_doc(sfx.clone());
+        let mut gizmo = SfxGizmoState::default();
+        let geom = gizmo.ensure_geom(&sfx, 72.0).clone();
+        let mid_doc = spline_control_doc_pos(&sfx, geom.rest_box, sfx.spline.points[1]);
+        let view = view_for(&doc, id);
+
+        assert!(pointer(&mut gizmo, &view, CanvasToolEvent::Down { x: mid_doc[0], y: mid_doc[1], pressure: 1.0 }, Modifiers::NONE).handled);
+        let moved = pointer(&mut gizmo, &view, CanvasToolEvent::Move { x: mid_doc[0], y: mid_doc[1] - 15.0, pressure: 1.0 }, Modifiers::NONE);
+        let u = moved.updated_sfx.expect("spline drag update");
+        assert!((u.spline.points[1][1] + 35.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn vector_shadow_handle_drag_updates_angle_and_distance() {
+        let mut sfx = SfxData { origin: [100.0, 100.0], ..SfxData::default() };
+        sfx.vector_shadow.enabled = true;
+        sfx.vector_shadow.angle_deg = 0.0;
+        sfx.vector_shadow.distance_px = 30.0;
+        let (doc, id) = sfx_doc(sfx.clone());
+        let mut gizmo = SfxGizmoState::default();
+        let geom = gizmo.ensure_geom(&sfx, 72.0).clone();
+        let (center, knob) = shadow_center_and_knob_doc(&sfx, geom.rest_box);
+        let view = view_for(&doc, id);
+
+        assert!(pointer(&mut gizmo, &view, CanvasToolEvent::Down { x: knob[0], y: knob[1], pressure: 1.0 }, Modifiers::NONE).handled);
+        let moved = pointer(&mut gizmo, &view, CanvasToolEvent::Move { x: center[0], y: center[1] + 40.0, pressure: 1.0 }, Modifiers::NONE);
+        let u = moved.updated_sfx.expect("shadow drag update");
+        assert!((u.vector_shadow.angle_deg - 90.0).abs() < 1e-3);
+        assert!((u.vector_shadow.distance_px - 40.0).abs() < 1e-3);
+    }
+
+    #[test]
     fn mesh_marquee_box_selects_and_moves_multiple_nodes() {
         let sfx = SfxData { origin: [100.0, 100.0], warp_mode: SfxWarpMode::MeshLattice, ..SfxData::default() };
         let (doc, id) = sfx_doc(sfx.clone());
@@ -1032,7 +1518,6 @@ mod tests {
         let view = view_for(&doc, id);
 
         let rb = geom.rest_box;
-        // Pick an empty start point above-left of node (0, 0) beyond hit radius, drag over row 0 cols 0..=1.
         let p_n00 = mesh_node_doc_pos(&sfx, rb, 0, 0).unwrap();
         let p_n01 = mesh_node_doc_pos(&sfx, rb, 0, 1).unwrap();
         let start = [p_n00[0] - 25.0, p_n00[1] - 25.0];
@@ -1043,7 +1528,6 @@ mod tests {
         assert!(pointer(&mut gizmo, &view, CanvasToolEvent::Up { x: end[0], y: end[1] }, Modifiers::NONE).handled);
         assert_eq!(gizmo.selected_nodes, vec![(0, 0), (0, 1)]);
 
-        // Now drag node (0, 0): both selected nodes must displace equally.
         assert!(pointer(&mut gizmo, &view, CanvasToolEvent::Down { x: p_n00[0], y: p_n00[1], pressure: 1.0 }, Modifiers::NONE).handled);
         let moved = pointer(&mut gizmo, &view, CanvasToolEvent::Move { x: p_n00[0], y: p_n00[1] - 20.0, pressure: 1.0 }, Modifiers::NONE);
         let u = moved.updated_sfx.unwrap();
@@ -1068,6 +1552,26 @@ mod tests {
         assert_eq!(u.per_glyph.len(), 1);
         assert!((u.per_glyph[0].dx - 12.0).abs() < 1e-6);
         assert!((u.per_glyph[0].dy - 6.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn per_glyph_ft_corner_drag_updates_glyph_corners() {
+        let sfx = SfxData { text: "AB".to_owned(), origin: [100.0, 100.0], warp_mode: SfxWarpMode::PerGlyph, ..SfxData::default() };
+        let (doc, id) = sfx_doc(sfx.clone());
+        let mut gizmo = SfxGizmoState::default();
+        gizmo.set_glyph_tool(SfxGlyphTool::FreeTransform);
+        let geom = gizmo.ensure_geom(&sfx, 72.0).clone();
+        let g0 = &geom.glyphs[0];
+        gizmo.selected_glyph = Some(g0.glyph_index);
+        let tl = g0.quad_doc[0];
+        let view = view_for(&doc, id);
+
+        assert!(pointer(&mut gizmo, &view, CanvasToolEvent::Down { x: tl[0], y: tl[1], pressure: 1.0 }, Modifiers::NONE).handled);
+        let moved = pointer(&mut gizmo, &view, CanvasToolEvent::Move { x: tl[0] - 8.0, y: tl[1] - 5.0, pressure: 1.0 }, Modifiers::NONE);
+        let u = moved.updated_sfx.expect("glyph 4-corner update");
+        assert_eq!(u.per_glyph.len(), 1);
+        assert!((u.per_glyph[0].corners[0][0] + 8.0).abs() < 1e-5);
+        assert!((u.per_glyph[0].corners[0][1] + 5.0).abs() < 1e-5);
     }
 
     #[test]

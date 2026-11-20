@@ -2184,7 +2184,7 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
         Tool::RotateView => crate::rotate_view::cursor(response.dragged()),
         Tool::Zoom => crate::tool_cursor::zoom(ui.ctx(), zoom_out(alt)),
         Tool::Type | Tool::VerticalType if type_path.is_some() => match type_path {
-            Some(crate::type_tool::PathClick::Area { .. }) => crate::tool_cursor::area_type(painter, p),
+            Some(crate::type_tool::PathClick::Area { .. }) | Some(crate::type_tool::PathClick::Balloon { .. }) => crate::tool_cursor::area_type(painter, p),
             _ => crate::tool_cursor::path_type(painter, p),
         },
         Tool::Type | Tool::VerticalType | Tool::HorizontalTypeMask | Tool::VerticalTypeMask => egui::CursorIcon::Text,

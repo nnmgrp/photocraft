@@ -7,7 +7,8 @@
 
 use std::collections::HashSet;
 
-use photocraft_doc::vector::{BalloonVoice, LiveBalloon, LiveBalloonBody, LiveBalloonGroup, LiveBalloonTail, TailPreset, TextDirection};
+use photocraft_doc::vector::balloon_ranges as ranges;
+use photocraft_doc::vector::{BalloonTextFitMode, BalloonVoice, Knot, LiveBalloon, LiveBalloonBody, LiveBalloonGroup, LiveBalloonTail, TailPreset, TextDirection};
 use photocraft_doc::{Color, Document, Fill, Layer, LayerContent, LayerId, LiveShape, ShapeLayer, ShapeStroke, TextLayer};
 use photocraft_geom::Point;
 use photocraft_vector as vector;
@@ -259,26 +260,36 @@ fn validate_balloon(b: &LiveBalloon) -> std::result::Result<(), String> {
         return Err("ukiyo_contrast must be between 0.0 and 1.0".into());
     }
     if !b.haze_spread.is_finite()
-        || !(0.0..=100.0).contains(&b.haze_spread)
+        || !ranges::HAZE_SPREAD.contains(&b.haze_spread)
         || !b.stipple_density.is_finite()
-        || !(0.0..=100.0).contains(&b.stipple_density)
-        || !(24..=600).contains(&b.stipple_count)
+        || !ranges::STIPPLE_DENSITY.contains(&b.stipple_density)
+        || !ranges::STIPPLE_COUNT.contains(&b.stipple_count)
         || !b.stipple_randomness.is_finite()
-        || !(0.0..=100.0).contains(&b.stipple_randomness)
+        || !ranges::STIPPLE_RANDOMNESS.contains(&b.stipple_randomness)
         || !b.grain_size.is_finite()
-        || !(5.0..=100.0).contains(&b.grain_size)
+        || !ranges::GRAIN_SIZE.contains(&b.grain_size)
         || !b.edge_roughness.is_finite()
-        || !(0.0..=100.0).contains(&b.edge_roughness)
+        || !ranges::EDGE_ROUGHNESS.contains(&b.edge_roughness)
     {
         return Err("stipple_dots line style parameters are out of range".into());
     }
-    if !(0..=128).contains(&b.sparkle_count)
+    if !ranges::SPARKLE_COUNT.contains(&b.sparkle_count)
         || !b.sparkle_size.is_finite()
-        || !(0.2..=4.0).contains(&b.sparkle_size)
+        || !ranges::SPARKLE_SIZE.contains(&b.sparkle_size)
+        || !b.sparkle_size_jitter.is_finite()
+        || !ranges::SPARKLE_SIZE_JITTER.contains(&b.sparkle_size_jitter)
         || !b.sparkle_randomness.is_finite()
-        || !(0.0..=100.0).contains(&b.sparkle_randomness)
+        || !ranges::SPARKLE_RANDOMNESS.contains(&b.sparkle_randomness)
     {
         return Err("sparkle_glitter line style parameters are out of range".into());
+    }
+    if !ranges::BOKEH_COUNT.contains(&b.bokeh_count)
+        || !b.bokeh_size.is_finite()
+        || !ranges::BOKEH_SIZE.contains(&b.bokeh_size)
+        || !b.bokeh_size_randomness.is_finite()
+        || !ranges::BOKEH_SIZE_RANDOMNESS.contains(&b.bokeh_size_randomness)
+    {
+        return Err("sparkle_glitter bokeh parameters are out of range".into());
     }
     if b.tails.len() > 64 {
         return Err("a balloon may have at most 64 tails".into());
@@ -299,6 +310,9 @@ fn validate_balloon(b: &LiveBalloon) -> std::result::Result<(), String> {
         if !t.bubble_radius.is_finite() || !(0.1..=1.0e4).contains(&t.bubble_radius) {
             return Err("a tail's bubble radius must be between 0.1 and 10000 px".into());
         }
+    }
+    if !b.text_inset_px.is_finite() || !ranges::TEXT_INSET_PX.contains(&b.text_inset_px) {
+        return Err("the contour text inset must be between 0 and 48 px".into());
     }
     for v in &b.vertex_overrides {
         if !v.offset.iter().all(|x| x.is_finite() && x.abs() <= 1.0e7) {
@@ -373,7 +387,10 @@ fn text_box_dims(tl: &TextLayer) -> (f32, f32) {
     }
 }
 
-fn sync_linked_text_box(doc: &mut Document, b: &LiveBalloon) {
+/// Refits the linked text layer of `b` in the same document step. `Safe` and `Outer` use a box;
+/// `Contour` rewrites the text shape to an `Area` following the tail-free body path, mapped into
+/// text space so it lands at the balloon's document position.
+pub(crate) fn sync_linked_text_box(doc: &mut Document, b: &LiveBalloon) {
     if !b.auto_follow_text {
         return;
     }
@@ -384,17 +401,39 @@ fn sync_linked_text_box(doc: &mut Document, b: &LiveBalloon) {
     if locks.all || locks.pixels {
         return;
     }
-    let r = b.safe_text_rect();
-    if !r.iter().all(|v| v.is_finite()) {
-        return;
-    }
-    let rect = [r[0], r[1], r[2].max(8.0), r[3].max(8.0)];
     let dpi = doc.resolution_dpi.max(1.0);
     let fmt = doc.pixel_format();
     if let Some(layer) = doc.layer_mut(tid)
         && let LayerContent::Text(ref mut tl) = layer.content
     {
-        apply_box(tl, rect);
+        match b.text_fit_mode {
+            BalloonTextFitMode::Safe | BalloonTextFitMode::Outer => {
+                let r = if b.text_fit_mode == BalloonTextFitMode::Safe { b.safe_text_rect() } else { b.outer_text_rect() };
+                if !r.iter().all(|v| v.is_finite()) {
+                    return;
+                }
+                apply_box(tl, [r[0], r[1], r[2].max(8.0), r[3].max(8.0)]);
+            }
+            BalloonTextFitMode::Contour => {
+                let path = b.text_area_path();
+                let knots = path.subpaths.iter().fold(0usize, |n, s| n.saturating_add(s.knots.len()));
+                if path.subpaths.is_empty() || knots > photocraft_text::area::MAX_AREA_KNOTS {
+                    return;
+                }
+                let Some(inv) = tl.transform.inverse() else {
+                    return;
+                };
+                let map = |q: Point| inv.apply(q);
+                let mut mapped = path;
+                for k in mapped.subpaths.iter_mut().flat_map(|s| s.knots.iter_mut()) {
+                    *k = Knot { anchor: map(k.anchor), in_ctrl: map(k.in_ctrl), out_ctrl: map(k.out_ctrl), smooth: k.smooth };
+                }
+                let vertical = tl.orientation == photocraft_doc::text::Orientation::Vertical;
+                if photocraft_text::area::AreaShape::new(&mapped, vertical).is_some() {
+                    tl.shape = photocraft_doc::text::TextShape::Area { path: mapped };
+                }
+            }
+        }
         refresh_at(dpi, fmt, tl);
     }
 }
@@ -468,7 +507,7 @@ fn reflow_story_pair(doc: &mut Document, ta_id: LayerId, tb_id: LayerId) {
     }
 }
 
-fn sync_balloon_group_linked_texts(doc: &mut Document, items: &[LiveBalloon], size_changed: bool) {
+pub(crate) fn sync_balloon_group_linked_texts(doc: &mut Document, items: &[LiveBalloon], size_changed: bool) {
     for b in items {
         sync_linked_text_box(doc, b);
     }
@@ -512,9 +551,18 @@ fn balloon_update(s: &mut Session, p: &Value) -> Result<Value> {
                         let new_r = updated.safe_text_rect();
                         let pos_changed = old_r.iter().zip(new_r.iter()).any(|(a, b)| (a - b).abs() > 0.05);
                         let dim_changed = (old_r[2] - new_r[2]).abs() > 0.5 || (old_r[3] - new_r[3]).abs() > 0.5;
-                        let follow_toggled = !slot.auto_follow_text && updated.auto_follow_text;
+                        // A fit-mode/inset change restructures Box <-> Area even when the rect
+                        // is unchanged; dragging a bulge changes safe/outer rects through the
+                        // overrides; linking a chamber refits its own box without reflowing a
+                        // freshly split Stories pair across chambers.
+                        let shape_or_fit_changed = slot.text_fit_mode != updated.text_fit_mode
+                            || (slot.text_inset_px - updated.text_inset_px).abs() > 1e-6
+                            || slot.body != updated.body
+                            || slot.vertex_overrides != updated.vertex_overrides;
+                        let link_changed = slot.linked_text_layer != updated.linked_text_layer;
+                        let follow_enabled = !slot.auto_follow_text && updated.auto_follow_text;
                         *slot = updated;
-                        (pos_changed || follow_toggled, dim_changed || follow_toggled)
+                        (pos_changed || shape_or_fit_changed || follow_enabled || link_changed, dim_changed || shape_or_fit_changed || follow_enabled)
                     }
                     None => {
                         group.items.push(updated);

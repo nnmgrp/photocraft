@@ -16,6 +16,7 @@
 //! dragged to a custom offset, fade via an opacity slider, and choose the generative AI backend.
 
 use egui::{Color32, CornerRadius, DragValue, Frame, Id, Margin, Order, Pos2, Rect, RichText, Sense, Stroke, Ui, pos2, vec2};
+use photocraft_doc::vector::BalloonTextFitMode;
 use photocraft_doc::{Document, LayerContent, LayerId};
 use photocraft_geom::Rect as DocRect;
 use serde::{Deserialize, Serialize};
@@ -97,6 +98,9 @@ pub struct CapsuleView<'a> {
     pub tool_name: &'static str,
     pub is_desktop: bool,
     pub screentone_target: Option<ScreentoneTargetInfo>,
+    /// `(balloon layer, chamber id, current mode)` when a balloon is active or the active text
+    /// layer is linked to one. Shows the compact `Safe | Outer | Contour` strip.
+    pub balloon_fit_mode: Option<(LayerId, u32, BalloonTextFitMode)>,
 }
 
 /// Actions the host should perform after [`show`] returns.
@@ -107,6 +111,8 @@ pub struct CapsuleOutput {
     pub open_screentone_panel: bool,
     pub detach_screentone_gizmo: bool,
     pub notice: Option<String>,
+    /// The user picked a new text fit mode for this balloon chamber.
+    pub set_balloon_fit_mode: Option<(LayerId, u32, BalloonTextFitMode)>,
 }
 
 /// Host-provided drawing hooks the capsule cannot implement without L6 dependencies.
@@ -123,6 +129,7 @@ enum CapsuleMode {
     Selection,
     Type,
     Screentone,
+    Balloon,
 }
 
 /// Resolves the active workflow, with screentone taking precedence over the other contexts.
@@ -136,7 +143,26 @@ fn capsule_mode(view: &CapsuleView<'_>) -> CapsuleMode {
     if view.tool_name == "type" || is_text_layer {
         return CapsuleMode::Type;
     }
+    let is_balloon = layer.is_some_and(|l| matches!(&l.content, LayerContent::Shape(sh) if matches!(sh.live, Some(photocraft_doc::LiveShape::BalloonGroup { .. }))));
+    if is_balloon || view.balloon_fit_mode.is_some() {
+        return CapsuleMode::Balloon;
+    }
     if view.has_selection { CapsuleMode::Selection } else { CapsuleMode::Idle }
+}
+
+/// Compact `Safe | Outer | Contour` strip, shown for a balloon layer and for a linked text layer.
+fn draw_balloon_fit(ui: &mut Ui, view: &CapsuleView<'_>, out: &mut CapsuleOutput) {
+    let Some((layer_id, balloon_id, current)) = view.balloon_fit_mode else { return };
+    ui.label(RichText::new(tl!("Text fit:")).small());
+    for (mode, label) in [
+        (BalloonTextFitMode::Safe, tl!("Safe")),
+        (BalloonTextFitMode::Outer, tl!("Outer")),
+        (BalloonTextFitMode::Contour, tl!("Contour")),
+    ] {
+        if ui.selectable_label(mode == current, label).on_hover_text(tl!("Refit the linked lettering now")).clicked() && mode != current {
+            out.set_balloon_fit_mode = Some((layer_id, balloon_id, mode));
+        }
+    }
 }
 
 /// Selection bounds in document space, when a non-empty selection exists.
@@ -382,7 +408,14 @@ fn draw_context(
 ) {
     match mode {
         CapsuleMode::Screentone => draw_screentone(ui, screentone, view, out),
-        CapsuleMode::Type => callbacks.draw_type_controls(ui),
+        CapsuleMode::Type => {
+            callbacks.draw_type_controls(ui);
+            if view.balloon_fit_mode.is_some() {
+                ui.separator();
+                draw_balloon_fit(ui, view, out);
+            }
+        }
+        CapsuleMode::Balloon => draw_balloon_fit(ui, view, out),
         CapsuleMode::Selection => draw_selection(ui, state, out),
         CapsuleMode::Idle => draw_idle(ui, out),
     }
@@ -425,7 +458,7 @@ mod tests {
     use egui::{Context, Rect, Response, Ui, pos2, vec2};
     use photocraft_doc::LayerId;
 
-    use super::{AiBackendChoice, CanvasCapsuleState, CapsuleCallbacks, CapsuleOutput, CapsuleView, PANEL, show};
+    use super::{AiBackendChoice, CapsuleMode, CanvasCapsuleState, CapsuleCallbacks, CapsuleOutput, CapsuleView, PANEL, capsule_mode, show};
     use crate::BridgeDocId;
     use crate::comic_screentone_panel::{ScreentoneTargetInfo, ScreentoneUi};
     use crate::view::CanvasViewXform;
@@ -465,6 +498,7 @@ mod tests {
             tool_name: tool,
             is_desktop: true,
             screentone_target: target,
+            balloon_fit_mode: None,
         }
     }
 
@@ -490,6 +524,19 @@ mod tests {
         assert_eq!(AiBackendChoice::DirectMl.label(), "DirectML (Local ONNX)");
         assert_eq!(AiBackendChoice::SdCppRemote.label(), "SD.CPP / Tunnel (Remote)");
         assert_eq!(AiBackendChoice::LazySdUi.label(), "LazySD-UI (Local)");
+    }
+
+    #[test]
+    fn a_balloon_context_shows_the_fit_strip() {
+        let mut view = sample_view(false, "move", None);
+        assert_eq!(capsule_mode(&view), CapsuleMode::Idle);
+        view.balloon_fit_mode = Some((LayerId(1), 3, photocraft_doc::vector::BalloonTextFitMode::Contour));
+        assert_eq!(capsule_mode(&view), CapsuleMode::Balloon);
+        // The strip is also present in the type context, next to the inline type controls.
+        view.tool_name = "type";
+        assert_eq!(capsule_mode(&view), CapsuleMode::Type);
+        let out = CapsuleOutput::default();
+        assert!(out.set_balloon_fit_mode.is_none());
     }
 
     #[test]

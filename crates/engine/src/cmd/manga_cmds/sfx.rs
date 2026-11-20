@@ -78,8 +78,8 @@ impl SfxPresetLibrary {
         let ink = ink_color();
         vec![
             SfxPreset {
-                name: "⚡ SHTACK (Торцы)".to_owned(),
-                description: "Вариант 1: Caps + иглы".to_owned(),
+                name: "⚡ SHTACK (SAI Pen)".to_owned(),
+                description: "Режим 1: перо SAI — длинные иглы и чистые заострения".to_owned(),
                 font_family: "Impact".to_owned(),
                 weight: 800,
                 size_pt: 64.0,
@@ -91,8 +91,8 @@ impl SfxPresetLibrary {
                     halo_color: Color::WHITE,
                     line_width_px: 0.0,
                     line_color: ink,
-                    shtack_variant: SfxShtackVariant::Caps,
-                    shtack_bristles: 3,
+                    shtack_variant: SfxShtackVariant::SaiPenSketch,
+                    shtack_bristles: 5,
                     shtack_split_pct: 78.0,
                     shtack_overshoot_px: 20.0,
                     shtack_dryness_pct: 26.0,
@@ -103,8 +103,8 @@ impl SfxPresetLibrary {
                 ..SfxPreset::default()
             },
             SfxPreset {
-                name: "⚡ SHTACK (Лента)".to_owned(),
-                description: "Вариант 2: Скелет-лента".to_owned(),
+                name: "⚡ SHTACK (Dry Pencil)".to_owned(),
+                description: "Режим 2: сухой карандаш — короткие иглы и зерно бумаги".to_owned(),
                 font_family: "Impact".to_owned(),
                 weight: 800,
                 size_pt: 64.0,
@@ -116,8 +116,8 @@ impl SfxPresetLibrary {
                     halo_color: Color::WHITE,
                     line_width_px: 0.0,
                     line_color: ink,
-                    shtack_variant: SfxShtackVariant::Ribbon,
-                    shtack_bristles: 3,
+                    shtack_variant: SfxShtackVariant::DryPencil,
+                    shtack_bristles: 5,
                     shtack_split_pct: 72.0,
                     shtack_overshoot_px: 16.0,
                     shtack_thickness_px: 13.0,

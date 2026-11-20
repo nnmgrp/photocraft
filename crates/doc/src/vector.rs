@@ -504,6 +504,29 @@ pub enum BalloonTextAlign {
     Justify,
 }
 
+/// How lettering is fitted into a vector balloon.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BalloonTextFitMode {
+    /// Fit inside the safe inner rectangle (the old balloon behaviour; default for old files).
+    #[default]
+    Safe,
+    /// Fit inside the tight body bounds, excluding the tail.
+    Outer,
+    /// Wrap the text along the balloon's pure body contour, inset by [`LiveBalloon::text_inset_px`].
+    Contour,
+}
+
+impl BalloonTextFitMode {
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::Safe => "safe",
+            Self::Outer => "outer",
+            Self::Contour => "contour",
+        }
+    }
+}
+
 /// Optional underlay figure rendered behind the balloon body.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -650,6 +673,76 @@ impl BokehShape {
             "ring" => Some(Self::Ring),
             _ => None,
         }
+    }
+}
+
+/// Shared numeric ranges for the manga balloon particle controls.
+///
+/// Kept next to [`LiveBalloon`] so the vector generators, the engine command validation and the
+/// manga UI sliders/clamps all agree on one set of limits. The UI slider bounds are the source of
+/// truth: a value the slider cannot produce must also be rejected by `validate_balloon`.
+pub mod balloon_ranges {
+    use std::ops::RangeInclusive;
+
+    // The MIN/MAX pairs below are the single source of truth: the ranges and every clamp use them.
+    pub const HAZE_SPREAD_MIN: f64 = 0.0;
+    pub const HAZE_SPREAD_MAX: f64 = 100.0;
+    pub const STIPPLE_DENSITY_MIN: f64 = 0.0;
+    pub const STIPPLE_DENSITY_MAX: f64 = 100.0;
+    pub const STIPPLE_COUNT_MIN: u32 = 24;
+    pub const STIPPLE_COUNT_MAX: u32 = 2000;
+    pub const STIPPLE_RANDOMNESS_MIN: f64 = 0.0;
+    pub const STIPPLE_RANDOMNESS_MAX: f64 = 100.0;
+    pub const GRAIN_SIZE_MIN: f64 = 5.0;
+    pub const GRAIN_SIZE_MAX: f64 = 100.0;
+    pub const EDGE_ROUGHNESS_MIN: f64 = 0.0;
+    pub const EDGE_ROUGHNESS_MAX: f64 = 100.0;
+
+    pub const SPARKLE_COUNT_MIN: u32 = 0;
+    pub const SPARKLE_COUNT_MAX: u32 = 400;
+    pub const SPARKLE_SIZE_MIN: f64 = 0.2;
+    pub const SPARKLE_SIZE_MAX: f64 = 2.5;
+    pub const SPARKLE_SIZE_JITTER_MIN: f64 = 0.0;
+    pub const SPARKLE_SIZE_JITTER_MAX: f64 = 100.0;
+    pub const SPARKLE_RANDOMNESS_MIN: f64 = 0.0;
+    pub const SPARKLE_RANDOMNESS_MAX: f64 = 100.0;
+
+    pub const BOKEH_COUNT_MIN: u32 = 0;
+    pub const BOKEH_COUNT_MAX: u32 = 400;
+    pub const BOKEH_SIZE_MIN: f64 = 2.0;
+    pub const BOKEH_SIZE_MAX: f64 = 36.0;
+    pub const BOKEH_SIZE_RANDOMNESS_MIN: f64 = 0.0;
+    pub const BOKEH_SIZE_RANDOMNESS_MAX: f64 = 100.0;
+    /// Inner padding of `Contour` mode lettering, in document px (slider range).
+    pub const TEXT_INSET_PX_MIN: f64 = 0.0;
+    pub const TEXT_INSET_PX_MAX: f64 = 48.0;
+
+    pub const HAZE_SPREAD: RangeInclusive<f64> = HAZE_SPREAD_MIN..=HAZE_SPREAD_MAX;
+    pub const STIPPLE_DENSITY: RangeInclusive<f64> = STIPPLE_DENSITY_MIN..=STIPPLE_DENSITY_MAX;
+    pub const STIPPLE_COUNT: RangeInclusive<u32> = STIPPLE_COUNT_MIN..=STIPPLE_COUNT_MAX;
+    pub const STIPPLE_RANDOMNESS: RangeInclusive<f64> = STIPPLE_RANDOMNESS_MIN..=STIPPLE_RANDOMNESS_MAX;
+    pub const GRAIN_SIZE: RangeInclusive<f64> = GRAIN_SIZE_MIN..=GRAIN_SIZE_MAX;
+    pub const EDGE_ROUGHNESS: RangeInclusive<f64> = EDGE_ROUGHNESS_MIN..=EDGE_ROUGHNESS_MAX;
+
+    pub const SPARKLE_COUNT: RangeInclusive<u32> = SPARKLE_COUNT_MIN..=SPARKLE_COUNT_MAX;
+    pub const SPARKLE_SIZE: RangeInclusive<f64> = SPARKLE_SIZE_MIN..=SPARKLE_SIZE_MAX;
+    pub const SPARKLE_SIZE_JITTER: RangeInclusive<f64> = SPARKLE_SIZE_JITTER_MIN..=SPARKLE_SIZE_JITTER_MAX;
+    pub const SPARKLE_RANDOMNESS: RangeInclusive<f64> = SPARKLE_RANDOMNESS_MIN..=SPARKLE_RANDOMNESS_MAX;
+
+    pub const BOKEH_COUNT: RangeInclusive<u32> = BOKEH_COUNT_MIN..=BOKEH_COUNT_MAX;
+    pub const BOKEH_SIZE: RangeInclusive<f64> = BOKEH_SIZE_MIN..=BOKEH_SIZE_MAX;
+    pub const BOKEH_SIZE_RANDOMNESS: RangeInclusive<f64> = BOKEH_SIZE_RANDOMNESS_MIN..=BOKEH_SIZE_RANDOMNESS_MAX;
+    pub const TEXT_INSET_PX: RangeInclusive<f64> = TEXT_INSET_PX_MIN..=TEXT_INSET_PX_MAX;
+
+    /// Clamp `value` into one of the ranges above. Ranges are not `Copy`, so this avoids repeating
+    /// `start()`/`end()` at every call site while keeping the bounds in a single place.
+    pub fn clamp_u32(value: u32, range: &RangeInclusive<u32>) -> u32 {
+        value.clamp(*range.start(), *range.end())
+    }
+
+    /// Floating-point counterpart of [`clamp_u32`].
+    pub fn clamp_f64(value: f64, range: &RangeInclusive<f64>) -> f64 {
+        value.clamp(*range.start(), *range.end())
     }
 }
 
@@ -925,6 +1018,12 @@ pub struct LiveBalloon {
     /// Text alignment inside the safe rect (`Center`, `Left`, `Justify`).
     #[serde(default)]
     pub text_align: BalloonTextAlign,
+    /// Which balloon geometry a linked text layer is fitted to (`Safe`, `Outer`, `Contour`).
+    #[serde(default)]
+    pub text_fit_mode: BalloonTextFitMode,
+    /// Inner padding of `Contour` mode lettering, in document px (`0..=48`, default `6`).
+    #[serde(default = "default_text_inset_px")]
+    pub text_inset_px: f64,
     /// Whether handwritten manga lettering style is enabled.
     #[serde(default)]
     pub handwritten_font: bool,
@@ -955,6 +1054,10 @@ fn default_one() -> u32 {
 
 fn default_one_f64() -> f64 {
     1.0
+}
+
+fn default_text_inset_px() -> f64 {
+    6.0
 }
 
 fn default_chamfer() -> f64 {
@@ -1114,6 +1217,8 @@ impl Default for LiveBalloon {
             voice_intensity: 0.5,
             text_direction: TextDirection::Horizontal,
             text_align: BalloonTextAlign::Center,
+            text_fit_mode: BalloonTextFitMode::Safe,
+            text_inset_px: 6.0,
             handwritten_font: false,
             underlay: None,
             custom_svg_contour: None,
@@ -1330,6 +1435,8 @@ mod tests {
         assert!(balloon.auto_merge_overlapping);
         assert!(balloon.linked_text_layer.is_none());
         assert!(balloon.auto_follow_text);
+        assert_eq!(balloon.text_fit_mode, BalloonTextFitMode::Safe);
+        assert_eq!(balloon.text_inset_px, 6.0);
 
         let linked = LiveBalloon { linked_text_layer: Some(crate::LayerId(42)), auto_follow_text: false, ..LiveBalloon::default() };
         let raw = serde_json::to_string(&linked).unwrap();
@@ -1348,6 +1455,19 @@ mod tests {
         assert_eq!(balloon.bokeh_size, 10.0);
         assert_eq!(balloon.bokeh_size_randomness, 65.0);
         assert_eq!(balloon.bokeh_shape, BokehShape::Circle);
+    }
+
+    #[test]
+    fn text_fit_mode_ids_and_serde_round_trip() {
+        for mode in [BalloonTextFitMode::Safe, BalloonTextFitMode::Outer, BalloonTextFitMode::Contour] {
+            let b = LiveBalloon { text_fit_mode: mode, text_inset_px: 12.5, ..LiveBalloon::default() };
+            let j = serde_json::to_string(&b).unwrap();
+            assert!(j.contains("\"textFitMode\""), "{j}");
+            assert_eq!(serde_json::from_str::<LiveBalloon>(&j).unwrap(), b);
+            assert_eq!(mode.id(), match mode { BalloonTextFitMode::Safe => "safe", BalloonTextFitMode::Outer => "outer", BalloonTextFitMode::Contour => "contour" });
+        }
+        assert_eq!(serde_json::from_str::<BalloonTextFitMode>("\"contour\"").unwrap(), BalloonTextFitMode::Contour);
+        assert_eq!(balloon_ranges::TEXT_INSET_PX, 0.0..=48.0);
     }
 
     #[test]

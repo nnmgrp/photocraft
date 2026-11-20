@@ -334,7 +334,7 @@ impl Layouter {
             let ps = paras[run_index_at(&para_starts, prange.start)].style.clone();
             self.layout_paragraph(fonts, &mut out, &mut flow, &mut line_spans, Para::new(&env, fonts, pi, prange, ps));
         }
-        apply_vertical_align(paras.first().map_or(VerticalAlign::Top, |p| p.style.vertical_align), box_rect.3, is_box, vertical, &mut out, &line_spans);
+        apply_vertical_align(paras.first().map_or(VerticalAlign::Top, |p| p.style.vertical_align), box_rect.3, is_box, vertical, &mut out, &line_spans, env.area.as_ref());
         out.styles = styles;
         out
     }
@@ -379,7 +379,13 @@ impl Layouter {
     }
 }
 
-/// Shifts placed horizontal lines vertically inside a paragraph box to satisfy [`VerticalAlign`].
+/// Shifts placed horizontal lines vertically to satisfy [`VerticalAlign`].
+///
+/// Paragraph boxes use the box height directly. Area type uses the path's vertical extent: the
+/// lines are already broken to fit the contour, so a shift is only applied when every shifted
+/// line still lies inside a span of the shape across its whole ascent-to-descent band. Narrow
+/// shapes (an ellipse's top and bottom) therefore keep their original placement instead of
+/// letting text poke outside the contour.
 fn apply_vertical_align(
     vertical_align: VerticalAlign,
     box_height: f32,
@@ -387,56 +393,152 @@ fn apply_vertical_align(
     vertical: bool,
     out: &mut TextLayout,
     line_spans: &[(Range<usize>, Range<usize>)],
+    area: Option<&crate::area::AreaShape>,
 ) {
-    if !is_box || vertical || out.lines.is_empty() {
+    if vertical || out.lines.is_empty() {
         return;
     }
     let top_y = out.lines.first().map(|l| l.baseline - l.ascent).unwrap_or(0.0);
     let bottom_y = out.lines.last().map(|l| l.baseline + l.descent).unwrap_or(0.0);
     let text_height = (bottom_y - top_y).max(0.0);
+    if is_box {
+        match vertical_align {
+            VerticalAlign::Top => {}
+            VerticalAlign::Center | VerticalAlign::Bottom => {
+                let y_offset = match vertical_align {
+                    VerticalAlign::Center => ((box_height - text_height) * 0.5).max(0.0),
+                    _ => (box_height - text_height).max(0.0),
+                };
+                if y_offset > 0.0 {
+                    shift_all(out, y_offset);
+                }
+            }
+            VerticalAlign::Justify => {
+                let n = out.lines.len();
+                let slack = (box_height - text_height).max(0.0);
+                if n > 1 && slack > 0.0 {
+                    let step = slack / (n - 1) as f32;
+                    shift_by_spans(out, line_spans, |li| step * li as f32);
+                }
+            }
+        }
+        return;
+    }
+    let Some(area) = area else { return };
+    if matches!(vertical_align, VerticalAlign::Top) {
+        return;
+    }
+    let (ay0, ay1) = (area.bounds[1], area.bounds[3]);
     match vertical_align {
-        VerticalAlign::Top => {}
         VerticalAlign::Center | VerticalAlign::Bottom => {
-            let y_offset = match vertical_align {
-                VerticalAlign::Center => ((box_height - text_height) * 0.5).max(0.0),
-                _ => (box_height - text_height).max(0.0),
+            // Center the text block in the shape; Bottom puts its last descent on the lower
+            // edge. Both are clamped so an overfull block is never pulled upwards.
+            let wanted = match vertical_align {
+                VerticalAlign::Center => ((ay1 - ay0 - text_height) * 0.5 - (top_y - ay0)).max(0.0),
+                _ => (ay1 - bottom_y).max(0.0),
             };
-            if y_offset > 0.0 {
-                for line in &mut out.lines {
-                    line.baseline += y_offset;
-                }
-                for g in &mut out.glyphs {
-                    g.y += y_offset;
-                }
-                for d in &mut out.decorations {
-                    d.y0 += y_offset;
-                    d.y1 += y_offset;
-                }
+            let offset = largest_area_shift(area, out, wanted);
+            if offset > 0.0 {
+                shift_all(out, offset);
             }
         }
         VerticalAlign::Justify => {
             let n = out.lines.len();
-            let slack = (box_height - text_height).max(0.0);
+            let slack = (ay1 - ay0 - text_height).max(0.0);
             if n > 1 && slack > 0.0 {
                 let step = slack / (n - 1) as f32;
-                for (li, (line, (g_span, d_span))) in out.lines.iter_mut().zip(line_spans.iter().cloned()).enumerate() {
-                    let y_offset = step * li as f32;
-                    line.baseline += y_offset;
-                    if let Some(glyphs) = out.glyphs.get_mut(g_span) {
-                        for g in glyphs {
-                            g.y += y_offset;
-                        }
-                    }
-                    if let Some(decorations) = out.decorations.get_mut(d_span) {
-                        for d in decorations {
-                            d.y0 += y_offset;
-                            d.y1 += y_offset;
-                        }
-                    }
+                // Find the largest fraction of the wanted spread that keeps every line inside
+                // the contour, so no line is pushed into a narrow part of the shape.
+                let fits = |scale: f32| {
+                    out.lines.iter().enumerate().all(|(li, l)| area_line_inside(area, l, step * li as f32 * scale))
+                };
+                let scale = binary_search_fraction(fits);
+                if scale > 0.0 {
+                    shift_by_spans(out, line_spans, |li| step * li as f32 * scale);
                 }
             }
         }
+        VerticalAlign::Top => {}
     }
+}
+
+/// Shift every line, glyph and decoration by the same amount (the uniform box/area path).
+fn shift_all(out: &mut TextLayout, y_offset: f32) {
+    for line in &mut out.lines {
+        line.baseline += y_offset;
+    }
+    for g in &mut out.glyphs {
+        g.y += y_offset;
+    }
+    for d in &mut out.decorations {
+        d.y0 += y_offset;
+        d.y1 += y_offset;
+    }
+}
+
+/// Shift each line and only its own glyphs/decorations (the progressive Justify path).
+fn shift_by_spans(out: &mut TextLayout, line_spans: &[(Range<usize>, Range<usize>)], offset: impl Fn(usize) -> f32) {
+    for (li, (line, (g_span, d_span))) in out.lines.iter_mut().zip(line_spans.iter().cloned()).enumerate() {
+        let y_offset = offset(li);
+        line.baseline += y_offset;
+        if let Some(glyphs) = out.glyphs.get_mut(g_span) {
+            for g in glyphs {
+                g.y += y_offset;
+            }
+        }
+        if let Some(decorations) = out.decorations.get_mut(d_span) {
+            for d in decorations {
+                d.y0 += y_offset;
+                d.y1 += y_offset;
+            }
+        }
+    }
+}
+
+/// A line fits after a uniform shift when its whole band has a span wide enough to hold it. The
+/// 0.5 px tolerance is the same one the area layout tests use for a placed line.
+fn area_line_inside(area: &crate::area::AreaShape, line: &LineInfo, y_offset: f32) -> bool {
+    let spans = area.spans(line.baseline + y_offset - line.ascent, line.baseline + y_offset + line.descent, 0.0);
+    spans.iter().any(|&(s0, s1)| line.x0 >= s0 - 0.5 && line.x1 <= s1 + 0.5)
+}
+
+/// Largest uniform shift in `0..=wanted` that keeps all lines inside an area shape. If the full
+/// shift fits, use it; otherwise bisect for the largest valid one.
+fn largest_area_shift(area: &crate::area::AreaShape, out: &TextLayout, wanted: f32) -> f32 {
+    if wanted <= 0.0 {
+        return 0.0;
+    }
+    let fits = |off: f32| out.lines.iter().all(|l| area_line_inside(area, l, off));
+    if fits(wanted) {
+        return wanted;
+    }
+    let (mut lo, mut hi) = (0.0f32, wanted);
+    for _ in 0..20 {
+        let mid = (lo + hi) * 0.5;
+        if fits(mid) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+/// Largest fraction in `0..=1` for which the progressive offsets keep all lines inside.
+fn binary_search_fraction(fits: impl Fn(f32) -> bool) -> f32 {
+    if fits(1.0) {
+        return 1.0;
+    }
+    let (mut lo, mut hi) = (0.0f32, 1.0f32);
+    for _ in 0..20 {
+        let mid = (lo + hi) * 0.5;
+        if fits(mid) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
 }
 
 /// What a layout run shares between its paragraphs.

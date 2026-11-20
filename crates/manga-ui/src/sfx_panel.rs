@@ -306,8 +306,8 @@ fn line_style_badge(draft: &SfxData) -> &'static str {
         SfxLineStyle::GPenNib => "G-Pen",
         SfxLineStyle::BrushStroke => "Кисть-штрих",
         SfxLineStyle::Shtack => match draft.line_effect.shtack_variant {
-            SfxShtackVariant::Caps => "SHTACK (Торцы)",
-            SfxShtackVariant::Ribbon => "SHTACK (Лента)",
+            SfxShtackVariant::SaiPenSketch => "SHTACK (SAI Pen)",
+            SfxShtackVariant::DryPencil => "SHTACK (Dry Pencil)",
         },
     }
 }
@@ -758,23 +758,21 @@ fn draw_line_effect_card(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens) {
                 slider_row_f32(ui, t, "Рандом перекрестий:", &mut le.ink_brush_overshoot_random_pct, 0.0..=100.0, "%");
             }
             SfxLineStyle::Shtack => {
-                row_with_reroll(ui, 22.0, &mut le.shtack_seed, "Новый Seed игл SHTACK", |ui| {
+                row_with_reroll(ui, 22.0, &mut le.shtack_seed, "Новый Seed штрихов SHTACK", |ui| {
                     ui.columns(2, |cols| {
-                        if seg_button(&mut cols[0], le.shtack_variant == SfxShtackVariant::Caps, ACCENT_SKY, "1: Торцы (Caps)", t).clicked() {
-                            le.shtack_variant = SfxShtackVariant::Caps;
+                        if seg_button(&mut cols[0], le.shtack_variant == SfxShtackVariant::SaiPenSketch, ACCENT_SKY, "1: SAI Pen Sketch", t).clicked() {
+                            le.shtack_variant = SfxShtackVariant::SaiPenSketch;
                         }
-                        if seg_button(&mut cols[1], le.shtack_variant == SfxShtackVariant::Ribbon, ACCENT_SKY, "2: Лента (Ribbon)", t).clicked() {
-                            le.shtack_variant = SfxShtackVariant::Ribbon;
+                        if seg_button(&mut cols[1], le.shtack_variant == SfxShtackVariant::DryPencil, ACCENT_SKY, "2: Dry Pencil Shtack", t).clicked() {
+                            le.shtack_variant = SfxShtackVariant::DryPencil;
                         }
                     });
                 });
-                slider_row_u8(ui, t, "Игл на торце:", &mut le.shtack_bristles, 2..=6, "");
-                slider_row_f32(ui, t, "Расщепление:", &mut le.shtack_split_pct, 0.0..=100.0, "%");
-                slider_row_f32(ui, t, "Вылет штрихов:", &mut le.shtack_overshoot_px, 0.0..=34.0 * scale, "px");
-                if le.shtack_variant == SfxShtackVariant::Ribbon {
-                    slider_row_f32(ui, t, "Толщина ленты:", &mut le.shtack_thickness_px, 6.0..=24.0 * scale, "px");
-                }
-                slider_row_f32(ui, t, "Прожилки внутри:", &mut le.shtack_dryness_pct, 0.0..=100.0, "%");
+                slider_row_u8(ui, t, "Проходов пера:", &mut le.shtack_bristles, 3..=6, "");
+                slider_row_f32(ui, t, "Разброс штрихов:", &mut le.shtack_split_pct, 0.0..=100.0, "%");
+                slider_row_f32(ui, t, "Вылет игл:", &mut le.shtack_overshoot_px, 0.0..=34.0 * scale, "px");
+                slider_row_f32(ui, t, "Толщина штриха:", &mut le.shtack_thickness_px, 6.0..=24.0 * scale, "px");
+                slider_row_f32(ui, t, "Сухость / Зерно:", &mut le.shtack_dryness_pct, 0.0..=100.0, "%");
             }
         }
     });

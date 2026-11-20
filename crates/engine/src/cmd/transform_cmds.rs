@@ -677,6 +677,7 @@ pub(crate) fn transform_by_map(doc: &mut Document, id: LayerId, h: &Homography, 
     if let Some(l) = doc.layer_mut(id) {
         refresh_text(&snapshot, l);
     }
+    follow_balloon_texts(doc, std::slice::from_ref(&id));
     crate::smart_cmds::restore_unrendered(doc, taken, |c| warp_surface(c, c.content_bounds(), h, interp))?;
     Ok(())
 }
@@ -691,6 +692,40 @@ pub(crate) fn refresh_text(doc: &Document, l: &mut Layer) {
         }
         LayerContent::Group(g) => g.children.iter_mut().for_each(|c| refresh_text(doc, c)),
         _ => {}
+    }
+}
+
+/// Refit lettering linked to balloons transformed in this step. A text layer that was itself
+/// transformed (the user selected it together with the balloon) is excluded: its box has already
+/// been scaled by this very transform and must not be overwritten with a second, stale geometry.
+fn follow_balloon_texts(doc: &mut Document, ids: &[LayerId]) {
+    fn collect(layer: &Layer, ids: &[LayerId], out: &mut Vec<photocraft_doc::vector::LiveBalloon>) {
+        match &layer.content {
+            LayerContent::Shape(sh)
+                if let Some(photocraft_doc::LiveShape::BalloonGroup { group }) = &sh.live =>
+            {
+                for b in &group.items {
+                    if b.auto_follow_text && b.linked_text_layer.is_some_and(|tid| !ids.contains(&tid)) {
+                        out.push(b.clone());
+                    }
+                }
+            }
+            LayerContent::Group(g) => {
+                for c in &g.children {
+                    collect(c, ids, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut items = Vec::new();
+    for &id in ids {
+        if let Some(layer) = doc.layer(id) {
+            collect(layer, ids, &mut items);
+        }
+    }
+    if !items.is_empty() {
+        crate::manga_cmds::balloon::sync_balloon_group_linked_texts(doc, &items, false);
     }
 }
 
@@ -1049,6 +1084,8 @@ fn transform_doc(
                 refresh_text(&snapshot, l);
             }
         }
+        // Balloon lettering that did not transform with its chamber refits to the new geometry.
+        follow_balloon_texts(doc, ids);
         crate::smart_cmds::restore_unrendered(doc, taken, |c| warp_surface(c, c.content_bounds(), h, interp))?;
         // The selection outline moves with the pixels.
         if let Some(sel) = &doc.selection {

@@ -18,6 +18,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::f64::consts::TAU;
 
+use photocraft_doc::vector::balloon_ranges as ranges;
 use photocraft_doc::vector::{
     BalloonLineStyle, BalloonUnderlay, BalloonVoice, BokehShape, LiveBalloon, LiveBalloonBody, LiveBalloonGroup, LiveBalloonTail, TailPreset, UniflashMode,
 };
@@ -1067,6 +1068,17 @@ fn van_der_corput_2(mut n: u32) -> f64 {
 pub trait LiveBalloonGeom {
     /// The inner area a text is laid out in: `[x, y, w, h]` in document px.
     fn safe_text_rect(&self) -> [f64; 4];
+    /// Tight bounds `[x, y, w, h]` of the balloon's pure body (tails excluded), including
+    /// `vertex_overrides`. With no overrides this is exactly [`LiveBalloonBody::rect`].
+    fn deformed_body_bounds(&self) -> [f64; 4];
+    /// The tail-free body bounds a linked text layer is fitted to in `Outer` mode.
+    fn outer_text_rect(&self) -> [f64; 4];
+    /// The closed, tail-free body contour used as an `Area` text shape in `Contour` mode, inset
+    /// inward by the balloon's `text_inset_px`.
+    fn text_area_path(&self) -> Path;
+    /// Whether a point falls inside the balloon's logical body, rather than its rendered ink
+    /// paths. A Uniflash's path is only its needle fan, so its white interior needs a body test.
+    fn contains_body_point(&self, pt: [f64; 2]) -> bool;
     /// The perimeter parameter `t` in `[0.0, 1.0)` of the body point nearest to `pt`.
     fn closest_perimeter_t(&self, pt: [f64; 2]) -> f64;
     /// The point of the body's outline at `t` and the outward normal there.
@@ -1354,9 +1366,6 @@ fn build_superellipse_path(cx: f64, cy: f64, rx: f64, ry: f64, squircle: f64) ->
 /// gizmo handles, so a handle always moves the knot it is drawn on.
 pub const OVAL_BULGES: u32 = 8;
 
-/// How many of a Uniflash body's needles get a drag handle (the rest follow the shape sliders).
-pub const UNIFLASH_HANDLES: u32 = 14;
-
 /// Maximum number of individual stipple dot handles exposed on canvas for `BalloonLineStyle::StippleDots`.
 pub const MAX_EDITABLE_STIPPLE_DOTS: u32 = 96;
 
@@ -1386,6 +1395,30 @@ fn oval_bulge_points(cx: f64, cy: f64, rx: f64, ry: f64, squircle: f64) -> Vec<P
         // (NE, SE, SW, NW), clockwise from the top: eight evenly spread handles, one per bulge.
         out.push(p0);
         out.push(cubic_at(p0, c1, c2, p3, 0.5));
+    }
+    out
+}
+
+/// The smooth angular offset of the oval body's bulges at polar angle `theta`.
+///
+/// The [`OVAL_BULGES`] manual offsets are keyed by index, with bulge `i` sitting at
+/// `-PI/2 + i * TAU / 8` (the same stations [`oval_bulge_points`] samples). A periodic
+/// Catmull-Rom interpolation of those offsets gives a kink-free offset field all the way around
+/// the contour. Uniflash drives both its needle ends and its solid collar through this one helper,
+/// so a single deformed silhouette is shared by every mode and is independent of the needle count.
+fn oval_bulge_offset(balloon: &LiveBalloon, theta: f64) -> [f64; 2] {
+    let step = TAU / OVAL_BULGES as f64;
+    let u = (theta + std::f64::consts::FRAC_PI_2) / step;
+    let base = u.floor();
+    let t = u - base;
+    let i = base as i64;
+    let at = |k: i64| -> [f64; 2] { balloon.get_vertex_offset(k.rem_euclid(OVAL_BULGES as i64) as u32) };
+    let (p0, p1, p2, p3) = (at(i - 1), at(i), at(i + 1), at(i + 2));
+
+    let mut out = [0.0, 0.0];
+    for axis in 0..2 {
+        let (a, b, c, d) = (p0[axis], p1[axis], p2[axis], p3[axis]);
+        out[axis] = 0.5 * ((2.0 * b) + (-a + c) * t + (2.0 * a - 5.0 * b + 4.0 * c - d) * t * t + (-a + 3.0 * b - 3.0 * c + d) * t * t * t);
     }
     out
 }
@@ -1671,15 +1704,12 @@ fn uniflash_needles(balloon: &LiveBalloon) -> Option<Vec<UniflashNeedle>> {
             }
         };
 
-        let user_off = balloon.get_vertex_offset(i);
-        let (outer, inner) = match mode {
-            UniflashMode::InwardNeedles => {
-                (Point::new(cx + rx * r_out * cos, cy + ry * r_out * sin), Point::new(cx + rx * r_in * cos + user_off[0], cy + ry * r_in * sin + user_off[1]))
-            }
-            UniflashMode::SolidRingSpikes => {
-                (Point::new(cx + rx * r_out * cos + user_off[0], cy + ry * r_out * sin + user_off[1]), Point::new(cx + rx * r_in * cos, cy + ry * r_in * sin))
-            }
-        };
+        // One smooth oval bulge offset bends the whole needle (both ends, both modes). It is
+        // keyed by the 8 bulge angles, not the needle index, so a spike never jumps when the
+        // needle count changes, and the shared helper keeps the solid collar aligned.
+        let bulge = oval_bulge_offset(balloon, theta);
+        let outer = Point::new(cx + rx * r_out * cos + bulge[0], cy + ry * r_out * sin + bulge[1]);
+        let inner = Point::new(cx + rx * r_in * cos + bulge[0], cy + ry * r_in * sin + bulge[1]);
 
         out.push(UniflashNeedle { outer, inner, half_outer, half_mid, half_inner, perp: [-sin, cos] });
     }
@@ -1706,11 +1736,13 @@ fn build_uniflash_paths(balloon: &LiveBalloon) -> Option<Path> {
         let mut ring_pts = Vec::with_capacity(segs * 2);
         for k in 0..segs {
             let a = TAU * (k as f64) / (segs as f64);
-            ring_pts.push((cx + rx * r_collar * a.cos(), cy + ry * r_collar * a.sin()));
+            let off = oval_bulge_offset(balloon, a);
+            ring_pts.push((cx + rx * r_collar * a.cos() + off[0], cy + ry * r_collar * a.sin() + off[1]));
         }
         for k in (0..segs).rev() {
             let a = TAU * (k as f64) / (segs as f64);
-            ring_pts.push((cx + rx * r_inner * a.cos(), cy + ry * r_inner * a.sin()));
+            let off = oval_bulge_offset(balloon, a);
+            ring_pts.push((cx + rx * r_inner * a.cos() + off[0], cy + ry * r_inner * a.sin() + off[1]));
         }
         subpaths.push(Subpath::polygon(&ring_pts));
     }
@@ -3035,12 +3067,12 @@ fn compute_stipple_dots_on_table(balloon: &LiveBalloon, table: &ContourArcTable)
     let ry = (r[3] * 0.5).abs().max(8.0);
     let min_r = rx.min(ry);
 
-    let density = balloon.stipple_density.clamp(0.0, 100.0) / 100.0;
-    let base_count = balloon.stipple_count.clamp(24, 2000) as f64;
-    let randomness = balloon.stipple_randomness.clamp(0.0, 100.0) / 100.0;
-    let spread = balloon.haze_spread.clamp(0.0, 100.0) / 100.0;
-    let grain = balloon.grain_size.clamp(5.0, 100.0) / 100.0;
-    let roughness = balloon.edge_roughness.clamp(0.0, 100.0) / 100.0;
+    let density = ranges::clamp_f64(balloon.stipple_density, &ranges::STIPPLE_DENSITY) / 100.0;
+    let base_count = ranges::clamp_u32(balloon.stipple_count, &ranges::STIPPLE_COUNT) as f64;
+    let randomness = ranges::clamp_f64(balloon.stipple_randomness, &ranges::STIPPLE_RANDOMNESS) / 100.0;
+    let spread = ranges::clamp_f64(balloon.haze_spread, &ranges::HAZE_SPREAD) / 100.0;
+    let grain = ranges::clamp_f64(balloon.grain_size, &ranges::GRAIN_SIZE) / 100.0;
+    let roughness = ranges::clamp_f64(balloon.edge_roughness, &ranges::EDGE_ROUGHNESS) / 100.0;
     let seed = balloon.noise_seed() ^ 0xA533_C0DE;
     // Only 1, 2 or 4 symmetric spawn sectors are meaningful; anything else degrades to 4.
     let spawns = match balloon.particle_spawns {
@@ -3049,7 +3081,7 @@ fn compute_stipple_dots_on_table(balloon: &LiveBalloon, table: &ContourArcTable)
         _ => 4,
     };
 
-    let count = ((base_count * (0.20 + 0.80 * density)).round() as u32).clamp(24, 2000);
+    let count = ranges::clamp_u32((base_count * (0.20 + 0.80 * density)).round() as u32, &ranges::STIPPLE_COUNT);
     let band_px = (min_r * (0.04 + spread * 0.34)).max(3.0);
     let base_dot_r = (1.1 + grain * 4.6).clamp(0.9, 7.5);
 
@@ -3105,9 +3137,9 @@ pub fn compute_uniflash_stipple_dots(balloon: &LiveBalloon) -> Vec<(u32, [f64; 2
     if needles.is_empty() {
         return Vec::new();
     }
-    let count = balloon.stipple_count.clamp(24, 2000);
-    let max_lat = (balloon.haze_spread.clamp(0.0, 100.0) / 100.0 * 12.0).clamp(1.2, 14.0);
-    let grain = balloon.grain_size.clamp(5.0, 100.0) / 100.0;
+    let count = ranges::clamp_u32(balloon.stipple_count, &ranges::STIPPLE_COUNT);
+    let max_lat = (ranges::clamp_f64(balloon.haze_spread, &ranges::HAZE_SPREAD) / 100.0 * 12.0).clamp(1.2, 14.0);
+    let grain = ranges::clamp_f64(balloon.grain_size, &ranges::GRAIN_SIZE) / 100.0;
     let seed = balloon.noise_seed() ^ 0x5EED_0123;
     let spawns = match balloon.particle_spawns {
         1 => 1,
@@ -3195,10 +3227,10 @@ fn compute_sparkle_particles(balloon: &LiveBalloon, table: &ContourArcTable) -> 
     };
 
     // ---- 4-point shoujo stars ----------------------------------------------------------------
-    let count = balloon.sparkle_count.clamp(0, 400);
-    let size_scale = balloon.sparkle_size.clamp(0.2, 2.5);
-    let randomness = balloon.sparkle_randomness.clamp(0.0, 100.0) / 100.0;
-    let size_jitter = balloon.sparkle_size_jitter.clamp(0.0, 100.0) / 100.0;
+    let count = ranges::clamp_u32(balloon.sparkle_count, &ranges::SPARKLE_COUNT);
+    let size_scale = ranges::clamp_f64(balloon.sparkle_size, &ranges::SPARKLE_SIZE);
+    let randomness = ranges::clamp_f64(balloon.sparkle_randomness, &ranges::SPARKLE_RANDOMNESS) / 100.0;
+    let size_jitter = ranges::clamp_f64(balloon.sparkle_size_jitter, &ranges::SPARKLE_SIZE_JITTER) / 100.0;
     let seed = balloon.noise_seed() ^ 0x7F4A_7C15;
     let mut stars = Vec::with_capacity(count as usize);
 
@@ -3231,10 +3263,10 @@ fn compute_sparkle_particles(balloon: &LiveBalloon, table: &ContourArcTable) -> 
     }
 
     // ---- Bokeh particles --------------------------------------------------------------------
-    let bokeh_count = balloon.bokeh_count.clamp(0, 400);
-    let bokeh_size = balloon.bokeh_size.clamp(2.0, 36.0);
-    let bokeh_rand = balloon.bokeh_size_randomness.clamp(0.0, 100.0) / 100.0;
-    let spread = balloon.haze_spread.clamp(0.0, 100.0) / 100.0;
+    let bokeh_count = ranges::clamp_u32(balloon.bokeh_count, &ranges::BOKEH_COUNT);
+    let bokeh_size = ranges::clamp_f64(balloon.bokeh_size, &ranges::BOKEH_SIZE);
+    let bokeh_rand = ranges::clamp_f64(balloon.bokeh_size_randomness, &ranges::BOKEH_SIZE_RANDOMNESS) / 100.0;
+    let spread = ranges::clamp_f64(balloon.haze_spread, &ranges::HAZE_SPREAD) / 100.0;
     let bseed = balloon.noise_seed() ^ 0x2424_B0FE;
     let mut bokeh = Vec::with_capacity(bokeh_count as usize);
 
@@ -3381,7 +3413,10 @@ pub fn build_underlay_path(balloon: &LiveBalloon) -> Option<Path> {
 
 impl LiveBalloonGeom for LiveBalloon {
     fn safe_text_rect(&self) -> [f64; 4] {
-        let r = self.body.rect();
+        // Dragging a blue bulge handle changes the body's bounds, and the lettering follows.
+        // With no overrides `deformed_body_bounds()` is exactly `body.rect()`, so old documents
+        // keep their previous safe rect byte for byte.
+        let r = self.deformed_body_bounds();
         let cx = r[0] + r[2] * 0.5;
         let cy = r[1] + r[3] * 0.5;
         let rx = (r[2] * 0.5).abs();
@@ -3423,6 +3458,187 @@ impl LiveBalloonGeom for LiveBalloon {
         };
 
         [cx - in_rx, cy - in_ry, in_rx * 2.0, in_ry * 2.0]
+    }
+
+    fn deformed_body_bounds(&self) -> [f64; 4] {
+        let base = self.body.rect();
+        // Undeformed balloons keep their exact rect: this is the compatibility path used by the
+        // existing safe-rect tests and by every document saved before manual vertex editing.
+        if self.vertex_overrides.is_empty() || !base.iter().all(|v| v.is_finite()) {
+            return base;
+        }
+        let x0 = base[0].min(base[0] + base[2]);
+        let y0 = base[1].min(base[1] + base[3]);
+        let mut b = [x0, y0, (base[0] + base[2]).max(x0), (base[1] + base[3]).max(y0)];
+        let mut include = |p: P| {
+            if !p.0.is_finite() || !p.1.is_finite() {
+                return;
+            }
+            b[0] = b[0].min(p.0);
+            b[1] = b[1].min(p.1);
+            b[2] = b[2].max(p.0);
+            b[3] = b[3].max(p.1);
+        };
+        match &self.body {
+            LiveBalloonBody::Ellipse { rect, squircle } => {
+                let cx = rect[0] + rect[2] * 0.5;
+                let cy = rect[1] + rect[3] * 0.5;
+                let rx = (rect[2] * 0.5).abs();
+                let ry = (rect[3] * 0.5).abs();
+                for (i, p) in oval_bulge_points(cx, cy, rx, ry, *squircle).into_iter().enumerate() {
+                    let off = self.get_vertex_offset(i as u32);
+                    include((p.0 + off[0], p.1 + off[1]));
+                }
+            }
+            LiveBalloonBody::Uniflash { rect, .. } => {
+                // A Uniflash's silhouette is the shared deformed oval, not its needle fan.
+                let cx = rect[0] + rect[2] * 0.5;
+                let cy = rect[1] + rect[3] * 0.5;
+                let rx = (rect[2] * 0.5).abs();
+                let ry = (rect[3] * 0.5).abs();
+                for k in 0..64u32 {
+                    let theta = -std::f64::consts::FRAC_PI_2 + TAU * f64::from(k) / 64.0;
+                    let off = oval_bulge_offset(self, theta);
+                    include((cx + rx * theta.cos() + off[0], cy + ry * theta.sin() + off[1]));
+                }
+            }
+            // Every other body's contour builder already folds its vertex overrides in.
+            _ => {
+                let path = body_outline_with_noise(self);
+                if let Some((x0, y0, x1, y1)) = path.control_bounds() {
+                    include((x0, y0));
+                    include((x1, y1));
+                }
+            }
+        }
+        [b[0], b[1], b[2] - b[0], b[3] - b[1]]
+    }
+
+    fn outer_text_rect(&self) -> [f64; 4] {
+        let r = self.body.rect();
+        if !r.iter().all(|v| v.is_finite()) {
+            return [0.0; 4];
+        }
+        let cx = r[0] + r[2] * 0.5;
+        let cy = r[1] + r[3] * 0.5;
+        let rx = (r[2] * 0.5).abs();
+        let ry = (r[3] * 0.5).abs();
+        if let LiveBalloonBody::Uniflash { inner_ratio, .. } = &self.body {
+            // Fit inside the needles' inner ring, deformed by the same smooth oval bulge so a
+            // dragged handle moves the text with it.
+            let ratio = inner_ratio.clamp(0.30, 0.90);
+            let mut b = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+            for k in 0..64u32 {
+                let theta = -std::f64::consts::FRAC_PI_2 + TAU * f64::from(k) / 64.0;
+                let off = oval_bulge_offset(self, theta);
+                let p = (cx + rx * ratio * theta.cos() + off[0], cy + ry * ratio * theta.sin() + off[1]);
+                if p.0.is_finite() && p.1.is_finite() {
+                    b[0] = b[0].min(p.0);
+                    b[1] = b[1].min(p.1);
+                    b[2] = b[2].max(p.0);
+                    b[3] = b[3].max(p.1);
+                }
+            }
+            if b[0].is_finite() && b[2] >= b[0] {
+                return [b[0], b[1], b[2] - b[0], b[3] - b[1]];
+            }
+        }
+        self.deformed_body_bounds()
+    }
+
+    fn text_area_path(&self) -> Path {
+        let inset = self.text_inset_px.clamp(ranges::TEXT_INSET_PX_MIN, ranges::TEXT_INSET_PX_MAX).max(0.0);
+        let bounds = self.deformed_body_bounds();
+        let cx = bounds[0] + bounds[2] * 0.5;
+        let cy = bounds[1] + bounds[3] * 0.5;
+        let rx = (bounds[2] * 0.5).abs().max(4.0);
+        let ry = (bounds[3] * 0.5).abs().max(4.0);
+        // Scale inward toward the centroid, never inverting or shrinking any axis below 8 px.
+        let sx = ((rx - inset).max(4.0)) / rx;
+        let sy = ((ry - inset).max(4.0)) / ry;
+        let scale = |p: Point| Point::new(cx + (p.x - cx) * sx, cy + (p.y - cy) * sy);
+
+        let source = match &self.body {
+            LiveBalloonBody::Uniflash { inner_ratio, .. } => {
+                // Smooth closed inner ring (not the needle fan), following inner_ratio and the
+                // same bulge field the needles use.
+                let ratio = inner_ratio.clamp(0.30, 0.90);
+                const SEGS: u32 = 48;
+                let mut pts: Vec<P> = Vec::with_capacity(SEGS as usize);
+                for k in 0..SEGS {
+                    let theta = TAU * f64::from(k) / f64::from(SEGS);
+                    let off = oval_bulge_offset(self, theta);
+                    pts.push((cx + rx * ratio * theta.cos() + off[0], cy + ry * ratio * theta.sin() + off[1]));
+                }
+                Path::new(vec![Subpath::polygon(&pts)])
+            }
+            // The body helper ignores tails entirely and keeps every vertex override.
+            _ => body_outline_with_noise(self),
+        };
+
+        // Pick the largest closed contour (the body itself for DoubleOutline and friends), then
+        // inset its anchors and handles together so its curves keep their shape.
+        let mut best: Option<Subpath> = None;
+        let mut best_area = f64::NEG_INFINITY;
+        for sub in &source.subpaths {
+            if !sub.closed || sub.knots.len() < 3 {
+                continue;
+            }
+            let knots: Vec<Knot> = sub
+                .knots
+                .iter()
+                .map(|k| Knot {
+                    anchor: scale(k.anchor),
+                    in_ctrl: scale(k.in_ctrl),
+                    out_ctrl: scale(k.out_ctrl),
+                    smooth: k.smooth,
+                })
+                .collect();
+            let area = Path::new(vec![Subpath { knots: knots.clone(), closed: true, op: PathOp::Combine }])
+                .control_bounds()
+                .map_or(f64::NEG_INFINITY, |(x0, y0, x1, y1)| (x1 - x0) * (y1 - y0));
+            if area > best_area {
+                best_area = area;
+                best = Some(Subpath { knots, closed: true, op: PathOp::Combine });
+            }
+        }
+        if let Some(sub) = best {
+            return Path::new(vec![sub]);
+        }
+        // A degenerate body still yields a small, finite closed contour instead of no area.
+        let s = 8.0_f64.min(rx).min(ry).max(4.0);
+        Path::new(vec![Subpath::polygon(&[(cx - s, cy - s), (cx + s, cy - s), (cx + s, cy + s), (cx - s, cy + s)])])
+    }
+
+    fn contains_body_point(&self, pt: [f64; 2]) -> bool {
+        let r = self.body.rect();
+        let cx = r[0] + r[2] * 0.5;
+        let cy = r[1] + r[3] * 0.5;
+        let rx = (r[2] * 0.5).abs().max(1.0);
+        let ry = (r[3] * 0.5).abs().max(1.0);
+        let dx = pt[0] - cx;
+        let dy = pt[1] - cy;
+        if !dx.is_finite() || !dy.is_finite() {
+            return false;
+        }
+        let inside_ellipse = |rx: f64, ry: f64| (dx * dx) / (rx * rx) + (dy * dy) / (ry * ry) <= 1.0;
+        match &self.body {
+            LiveBalloonBody::Rect { .. } | LiveBalloonBody::ChamferRect { .. } => dx.abs() <= rx && dy.abs() <= ry,
+            // Undo the shared smooth oval bulge at this angle before testing the base ellipse.
+            LiveBalloonBody::Ellipse { .. } | LiveBalloonBody::DoubleOutline { .. } | LiveBalloonBody::Uniflash { .. } => {
+                let theta = (dy / ry).atan2(dx / rx);
+                let off = oval_bulge_offset(self, theta);
+                let ox = dx - off[0];
+                let oy = dy - off[1];
+                inside_ellipse(rx, ry) || (ox * ox) / (rx * rx) + (oy * oy) / (ry * ry) <= 1.0
+            }
+            LiveBalloonBody::Cloud { amplitude, cusp_bite, .. } => {
+                let f = (1.0 - amplitude.clamp(0.0, 1.0) * 0.45 - cusp_bite.clamp(0.0, 0.5) * 0.25).clamp(0.4, 0.9);
+                inside_ellipse(rx * f, ry * f)
+            }
+            LiveBalloonBody::Spiky { concavity, .. } => inside_ellipse(rx * (1.0 - concavity.clamp(0.0, 1.0) * 0.28).clamp(0.55, 1.0), ry * (1.0 - concavity.clamp(0.0, 1.0) * 0.28).clamp(0.55, 1.0)),
+            LiveBalloonBody::Burst { depth, .. } => inside_ellipse(rx * (1.0 - depth.clamp(0.0, 0.6) * 0.85).clamp(0.32, 1.0), ry * (1.0 - depth.clamp(0.0, 0.6) * 0.85).clamp(0.32, 1.0)),
+        }
     }
 
     fn closest_perimeter_t(&self, pt: [f64; 2]) -> f64 {
@@ -3616,38 +3832,14 @@ impl LiveBalloonGeom for LiveBalloon {
                     out.push((i as u32, [p.0 + off[0], p.1 + off[1]]));
                 }
             }
-            LiveBalloonBody::Uniflash { mode, needles, inner_ratio, bundle_group, length_jitter, angle_jitter, seed, .. } => {
-                let n = (*needles).clamp(24, 450);
-                let shown = n.min(UNIFLASH_HANDLES);
-                let stride = n as f64 / shown as f64;
-                let step = std::f64::consts::TAU / (n as f64);
-                for slot in 0..shown {
-                    let i = ((slot as f64) * stride).round() as u32;
-                    let rand_a = hash_f64(*seed, i * 3) - 0.5;
-                    let rand_in = hash_f64(*seed, i * 3 + 1);
-                    let rand_out = hash_f64(*seed, i * 3 + 2);
-                    let bundle_phase = ((i as f64) * 0.35 * std::f64::consts::TAU).sin();
-                    let bundle_shift = bundle_phase * step * 0.35 * bundle_group.clamp(0.0, 1.0);
-                    let theta = (i as f64) * step + bundle_shift + rand_a * step * angle_jitter.clamp(0.0, 1.0);
-                    let off = self.get_vertex_offset(i);
-                    let handle_r = match mode {
-                        UniflashMode::InwardNeedles => {
-                            let harmonic_in = if i.is_multiple_of(2) { 1.0 } else { 0.85 };
-                            inner_ratio * (1.0 - 0.32 * length_jitter * rand_in * harmonic_in)
-                        }
-                        UniflashMode::SolidRingSpikes => {
-                            let r_in = inner_ratio.clamp(0.25, 0.90);
-                            let ring_outer = (r_in + 0.08).min(0.84);
-                            let max_spike = (1.12 - ring_outer).max(0.16);
-                            let harmonic = match i % 4 {
-                                0 => 1.0,
-                                2 => 0.72,
-                                _ => 0.46,
-                            };
-                            ring_outer + max_spike * (1.0 - length_jitter * 0.65 * rand_out) * harmonic
-                        }
-                    };
-                    out.push((i, [cx + rx * handle_r * theta.cos() + off[0], cy + ry * handle_r * theta.sin() + off[1]]));
+            LiveBalloonBody::Uniflash { .. } => {
+                // A Uniflash is deformed by the same eight smooth oval bulges as an Ellipse. The
+                // needles (and the solid collar) sample the shared `oval_bulge_offset` field, so a
+                // handle always sits on the contour it bends and its index no longer depends on
+                // how many needles are drawn.
+                for (i, p) in oval_bulge_points(cx, cy, rx, ry, 0.0).into_iter().enumerate() {
+                    let off = self.get_vertex_offset(i as u32);
+                    out.push((i as u32, [p.0 + off[0], p.1 + off[1]]));
                 }
             }
             _ => {}
@@ -5835,6 +6027,222 @@ mod tests {
                 .fold(f64::MAX, f64::min);
             assert!(nearest <= 16.0, "a dot drifted {nearest} px from every needle: {p:?}");
         }
+    }
+
+    fn uniflash_body(needles: u32, mode: UniflashMode) -> LiveBalloonBody {
+        LiveBalloonBody::Uniflash {
+            rect: [100.0, 100.0, 300.0, 300.0],
+            mode,
+            needles,
+            inner_ratio: 0.62,
+            bundle_group: 0.0,
+            length_jitter: 0.0,
+            angle_jitter: 0.0,
+            needle_width: 4.0,
+            outer_sharpness: 1.0,
+            inner_sharpness: 1.0,
+            seed: 7,
+        }
+    }
+
+    /// A Uniflash exposes the very same eight smooth oval bulge handles as an Ellipse, and its
+    /// logical body includes the white center (the rendered path is only the needle fan).
+    #[test]
+    fn uniflash_exposes_eight_oval_bulge_handles_and_clickable_center() {
+        use photocraft_doc::vector::VertexOverride;
+
+        let plain = LiveBalloon { id: 1, body: uniflash_body(40, UniflashMode::InwardNeedles), ..LiveBalloon::default() };
+        let bulged = LiveBalloon { vertex_overrides: vec![VertexOverride { index: 1, offset: [14.0, 9.0] }], ..plain.clone() };
+        let handles = bulged.vertex_handle_positions();
+        assert_eq!(handles.len(), OVAL_BULGES as usize);
+        assert_eq!(handles.iter().map(|(i, _)| *i).collect::<Vec<_>>(), (0..OVAL_BULGES).collect::<Vec<_>>());
+
+        let expected = oval_bulge_points(250.0, 250.0, 150.0, 150.0, 0.0);
+        for (i, ((_, pos), p)) in handles.iter().zip(&expected).enumerate() {
+            let off = bulged.get_vertex_offset(i as u32);
+            assert!((pos[0] - (p.0 + off[0])).abs() < 1e-6 && (pos[1] - (p.1 + off[1])).abs() < 1e-6, "handle {i}");
+        }
+
+        // Changing the needle count cannot change the handle set.
+        let many = LiveBalloon { body: uniflash_body(420, UniflashMode::InwardNeedles), ..bulged.clone() };
+        assert_eq!(many.vertex_handle_positions(), handles);
+
+        assert!(bulged.contains_body_point([250.0, 250.0]), "the white center of a UniFlash is a hit");
+        assert!(bulged.contains_body_point([300.0, 250.0]), "the inner ring is a hit");
+        assert!(!bulged.contains_body_point([450.0, 250.0]), "outside the oval is not a hit");
+    }
+
+    /// One bulge offset bends BOTH ends of every needle in both modes, and the solid collar in
+    /// `SolidRingSpikes` uses that exact same offset, so ink and spikes never separate.
+    #[test]
+    fn uniflash_bulge_deforms_inner_outer_and_collar_together() {
+        use photocraft_doc::vector::VertexOverride;
+
+        let off = [0.0, -40.0];
+        for mode in [UniflashMode::InwardNeedles, UniflashMode::SolidRingSpikes] {
+            let plain = LiveBalloon { id: 1, body: uniflash_body(40, mode), ..LiveBalloon::default() };
+            let bulged = LiveBalloon { vertex_overrides: vec![VertexOverride { index: 0, offset: off }], ..plain.clone() };
+
+            let base = uniflash_needles(&plain).unwrap();
+            let bent = uniflash_needles(&bulged).unwrap();
+            let top = base.iter().enumerate().min_by(|(_, a), (_, b)| a.outer.y.total_cmp(&b.outer.y)).map(|(i, _)| i).unwrap();
+            assert!((bent[top].outer.y - (base[top].outer.y + off[1])).abs() < 1e-6, "{mode:?}: spike tip moved");
+            assert!((bent[top].inner.y - (base[top].inner.y + off[1])).abs() < 1e-6, "{mode:?}: inner needle end moved");
+
+            if mode == UniflashMode::SolidRingSpikes {
+                let path_plain = build_uniflash_paths(&plain).unwrap();
+                let path_bent = build_uniflash_paths(&bulged).unwrap();
+                let (ring_plain, ring_bent) = (&path_plain.subpaths[0].knots, &path_bent.subpaths[0].knots);
+                assert_eq!(ring_plain.len(), ring_bent.len());
+                let top_ring = ring_plain.iter().enumerate().min_by(|(_, a), (_, b)| a.anchor.y.total_cmp(&b.anchor.y)).map(|(i, _)| i).unwrap();
+                assert!((ring_bent[top_ring].anchor.y - (ring_plain[top_ring].anchor.y + off[1])).abs() < 1e-6, "collar follows the bulge");
+            }
+        }
+    }
+
+    /// The deformed silhouette is keyed by the eight bulge indices, so rebuilding with 420 needles
+    /// instead of 40 leaves the handles and the solid collar untouched.
+    #[test]
+    fn uniflash_silhouette_is_stable_when_needle_count_changes() {
+        use photocraft_doc::vector::VertexOverride;
+
+        let overrides = vec![
+            VertexOverride { index: 0, offset: [0.0, -40.0] },
+            VertexOverride { index: 3, offset: [22.0, 0.0] },
+        ];
+        for mode in [UniflashMode::InwardNeedles, UniflashMode::SolidRingSpikes] {
+            let few = LiveBalloon { id: 1, body: uniflash_body(40, mode), vertex_overrides: overrides.clone(), ..LiveBalloon::default() };
+            let many = LiveBalloon { body: uniflash_body(420, mode), ..few.clone() };
+            assert_eq!(many.vertex_handle_positions(), few.vertex_handle_positions(), "{mode:?}: handles jumped");
+            let path_few = build_uniflash_paths(&few).unwrap();
+            let path_many = build_uniflash_paths(&many).unwrap();
+            assert_eq!(path_many.subpaths[0].knots, path_few.subpaths[0].knots, "{mode:?}: collar jumped");
+        }
+    }
+
+    /// The shared angular offset is exact at the bulge stations and kink-free between them.
+    #[test]
+    fn oval_bulge_offset_is_knot_exact_and_smooth() {
+        use photocraft_doc::vector::VertexOverride;
+
+        let b = LiveBalloon {
+            id: 1,
+            body: LiveBalloonBody::Ellipse { rect: [0.0, 0.0, 200.0, 200.0], squircle: 0.0 },
+            vertex_overrides: vec![VertexOverride { index: 0, offset: [0.0, -50.0] }, VertexOverride { index: 2, offset: [30.0, 0.0] }],
+            ..LiveBalloon::default()
+        };
+        for i in 0..OVAL_BULGES {
+            let theta = -std::f64::consts::FRAC_PI_2 + (i as f64) * TAU / OVAL_BULGES as f64;
+            let off = oval_bulge_offset(&b, theta);
+            let expected = b.get_vertex_offset(i);
+            assert!((off[0] - expected[0]).abs() < 1e-9 && (off[1] - expected[1]).abs() < 1e-9, "knot {i}");
+        }
+        let mut prev = oval_bulge_offset(&b, -std::f64::consts::PI);
+        for k in 1..1440 {
+            let theta = -std::f64::consts::PI + (k as f64) * TAU / 1440.0;
+            let cur = oval_bulge_offset(&b, theta);
+            assert!(((cur[0] - prev[0]).powi(2) + (cur[1] - prev[1]).powi(2)).sqrt() < 1.0, "kink near {theta}");
+            prev = cur;
+        }
+    }
+
+    #[test]
+    fn vertex_overrides_shift_safe_and_outer_text_rects() {
+        use photocraft_doc::vector::VertexOverride;
+
+        let plain = LiveBalloon {
+            id: 1,
+            body: LiveBalloonBody::Ellipse { rect: [100.0, 100.0, 200.0, 160.0], squircle: 0.25 },
+            ..LiveBalloon::default()
+        };
+        // Undeformed bodies must be byte-for-byte compatible with the old safe rect.
+        assert_eq!(plain.deformed_body_bounds(), plain.body.rect());
+        assert_eq!(plain.outer_text_rect(), plain.body.rect());
+        let safe = plain.safe_text_rect();
+
+        let dragged = LiveBalloon {
+            vertex_overrides: vec![VertexOverride { index: 0, offset: [0.0, -24.0] }, VertexOverride { index: 2, offset: [36.0, 0.0] }],
+            ..plain.clone()
+        };
+        assert!(dragged.deformed_body_bounds()[1] < plain.body.rect()[1], "top bulge extends the body");
+        assert!(dragged.deformed_body_bounds()[2] > plain.body.rect()[2] + 36.0 - 1.0, "right bulge extends the body");
+        let moved = dragged.safe_text_rect();
+        assert!(moved[1] < safe[1] - 4.0, "safe rect follows a dragged bulge: {safe:?} -> {moved:?}");
+        assert!(moved[2] > safe[2] + 4.0, "safe rect widens with a dragged bulge");
+        assert_eq!(dragged.outer_text_rect(), dragged.deformed_body_bounds());
+
+        // Outer mode of a Uniflash is its deformed inner ring, not the needle fan.
+        let u = LiveBalloon { id: 1, body: uniflash_body(80, UniflashMode::InwardNeedles), ..LiveBalloon::default() };
+        let outer = u.outer_text_rect();
+        assert!(outer[2] < u.body.rect()[2] * 0.8, "outer rect sits inside the needles: {outer:?}");
+        let bent = LiveBalloon { vertex_overrides: vec![VertexOverride { index: 0, offset: [0.0, -40.0] }], ..u.clone() };
+        assert!(bent.outer_text_rect()[1] < outer[1] - 10.0, "outer rect follows the bulge");
+    }
+
+    #[test]
+    fn text_area_path_omits_tails_and_respects_inset() {
+        for body in [
+            LiveBalloonBody::Ellipse { rect: [100.0, 100.0, 200.0, 160.0], squircle: 0.25 },
+            LiveBalloonBody::Spiky {
+                rect: [100.0, 100.0, 200.0, 160.0],
+                spikes: 12,
+                length: 0.3,
+                sub_harmonic: 0.4,
+                concavity: 0.6,
+                jitter: 0.2,
+                smooth: false,
+                seed: 9,
+            },
+        ] {
+            let plain = LiveBalloon { id: 1, body: body.clone(), text_inset_px: 0.0, ..LiveBalloon::default() };
+            let padded = LiveBalloon { text_inset_px: 12.0, ..plain.clone() };
+            let tailed = LiveBalloon { tails: vec![plain.tails.first().cloned().unwrap_or_else(|| LiveBalloonTail {
+                id: 1,
+                preset: TailPreset::Wedge,
+                perimeter_t: 0.58,
+                mouth_width: 28.0,
+                tip: [200.0, 400.0],
+                bend: 0.0,
+                bubbles: 3,
+                bubble_radius: 10.0,
+            })], ..padded.clone() };
+
+            // A tail never enters the lettering contour.
+            assert_eq!(padded.text_area_path(), tailed.text_area_path(), "{body:?}");
+            let path = padded.text_area_path();
+            assert_eq!(path.subpaths.len(), 1, "{body:?}");
+            assert!(path.subpaths[0].closed, "{body:?}");
+            let raw = plain.text_area_path().control_bounds().unwrap();
+            let inset = path.control_bounds().unwrap();
+            assert!(inset.2 - inset.0 <= raw.2 - raw.0 - 18.0, "inset shrinks the contour: {raw:?} -> {inset:?}");
+            assert!(inset.3 - inset.1 <= raw.3 - raw.1 - 18.0, "inset shrinks the contour vertically");
+            assert!(inset.2 - inset.0 >= 8.0 && inset.3 - inset.1 >= 8.0, "contour never collapses");
+            // Insulating against absurd input: the inset is clamped to the documented range.
+            let huge = LiveBalloon { text_inset_px: 1.0e9, ..plain.clone() };
+            let hb = huge.text_area_path().control_bounds().unwrap();
+            assert!(hb.2 - hb.0 >= 8.0 && (hb.2 - hb.0).is_finite());
+        }
+    }
+
+    #[test]
+    fn uniflash_text_area_path_is_the_deformed_inner_ring() {
+        use photocraft_doc::vector::VertexOverride;
+
+        let plain = LiveBalloon { id: 1, body: uniflash_body(80, UniflashMode::InwardNeedles), text_inset_px: 0.0, ..LiveBalloon::default() };
+        let path = plain.text_area_path();
+        assert_eq!(path.subpaths.len(), 1);
+        assert!(path.subpaths[0].closed);
+        let b = path.control_bounds().unwrap();
+        let radius = 0.62 * 150.0;
+        assert!((b.2 - b.0 - 2.0 * radius).abs() < 2.0, "inner ring matches inner_ratio: {b:?}");
+        assert!((b.3 - b.1 - 2.0 * radius).abs() < 2.0, "inner ring matches inner_ratio: {b:?}");
+
+        let bent = LiveBalloon { vertex_overrides: vec![VertexOverride { index: 0, offset: [0.0, -40.0] }], ..plain.clone() };
+        let bb = bent.text_area_path().control_bounds().unwrap();
+        assert!(bb.1 < b.1 - 20.0, "the inner contour follows the bulge: {b:?} -> {bb:?}");
+        let padded = LiveBalloon { text_inset_px: 10.0, ..plain.clone() };
+        let pb = padded.text_area_path().control_bounds().unwrap();
+        assert!(pb.2 - pb.0 <= b.2 - b.0 - 10.0, "inset applies to Uniflash too");
     }
 
     fn stipple_balloon(count: u32) -> LiveBalloon {

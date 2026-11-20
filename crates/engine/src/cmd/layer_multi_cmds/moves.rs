@@ -1,6 +1,7 @@
 use super::selection::{reselect, same_named_targets, selected, top_level};
 use super::structure::{check_group_depth, relink_copies};
 use super::{Document, EngineError, Layer, LayerContent, LayerId, Result, Session, Value, bad, int_i32, json};
+use photocraft_doc::LiveShape;
 
 /// A Layers-panel drag of the selected layer records its drop target by name (and which of
 /// several same-named layers it is), as [`recorded_selection`] does: the id means nothing in the
@@ -116,6 +117,26 @@ pub fn moves_mask_alone(l: &Layer) -> bool {
     l.mask.as_ref().is_some_and(|m| !m.linked)
 }
 
+/// Refit lettering linked to a moved balloon in the same move step. A linked text layer that is
+/// itself among `ids` is left alone: the user moved both layers together, so the text already
+/// travelled with the balloon and must not be repositioned a second time.
+pub(crate) fn follow_balloon_texts(doc: &mut Document, ids: &[LayerId]) {
+    let mut items = Vec::new();
+    for &id in ids {
+        let Some(layer) = doc.layer(id) else { continue };
+        let LayerContent::Shape(sh) = &layer.content else { continue };
+        let Some(LiveShape::BalloonGroup { group }) = &sh.live else { continue };
+        for b in &group.items {
+            if b.auto_follow_text && b.linked_text_layer.is_some_and(|tid| !ids.contains(&tid)) {
+                items.push(b.clone());
+            }
+        }
+    }
+    if !items.is_empty() {
+        crate::manga_cmds::balloon::sync_balloon_group_linked_texts(doc, &items, false);
+    }
+}
+
 /// `layer.translate`: the explicit layer, or every selected layer, plus their linked layers.
 /// With `"target":"mask"` a layer whose mask is unlinked moves that mask alone.
 pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
@@ -174,6 +195,8 @@ pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
         }
         let moves: Vec<_> = ids.iter().map(|&id| (id, dx, dy)).collect();
         move_layers_wrapped(doc, &before, &moves, tile)?;
+        // Balloon lettering follows its chamber in this same Move step.
+        follow_balloon_texts(doc, &ids);
         // In the same step, so Undo takes the move and the change of board back together.
         let nested = if nest { auto_nest(doc, &ids) } else { Vec::new() };
         for id in alone {

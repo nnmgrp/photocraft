@@ -134,8 +134,9 @@ fn default_60() -> f32 {
     60.0
 }
 
-fn default_3_u8() -> u8 {
-    3
+/// Default number of independent sketch passes for the Shtack brush.
+fn default_5_u8() -> u8 {
+    5
 }
 
 fn default_20() -> f32 {
@@ -255,15 +256,23 @@ pub enum SfxSpikeShape {
     Circle,
 }
 
-/// Two rendering variants of the [`SfxLineStyle::Shtack`] brush.
+/// Two hand-drawn submodes of the [`SfxLineStyle::Shtack`] brush.
+///
+/// Both submodes share the same multi-pass tapered-stroke geometry engine: merged
+/// skeleton strokes, tangents overshooting at both ends, and several independent
+/// organic passes per stroke. They differ only in finish.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SfxShtackVariant {
-    /// Variant 1: monolithic font silhouette + razor bristle caps & white split wedges.
+    /// Mode 1: sharp PaintTool SAI pen ink — long razor needles and crisp tapered passes.
+    /// Legacy documents used the name `caps`, which is kept as a serde alias.
     #[default]
-    Caps,
-    /// Variant 2: EDT + Zhang-Suen skeleton + RDP/PCA ribbon with split ends.
-    Ribbon,
+    #[serde(alias = "caps")]
+    SaiPenSketch,
+    /// Mode 2: dry pencil — stubby needles, micro-jitter and paper-grain density breakup.
+    /// Legacy documents used the name `ribbon`, which is kept as a serde alias.
+    #[serde(alias = "ribbon")]
+    DryPencil,
 }
 
 /// 4 Rust-ready Dry Brush fill engines from the SFX mockup.
@@ -344,9 +353,10 @@ pub struct SfxLineEffect {
     #[serde(default = "default_seed_one")]
     pub ink_brush_seed: u32,
 
-    // --- SHTACK (⚡ SHTACK Caps / Ribbon) ---
+    // --- SHTACK (⚡ SAI Pen Sketch / Dry Pencil) ---
     pub shtack_variant: SfxShtackVariant,
-    #[serde(default = "default_3_u8")]
+    /// Number of independent variable-width tapered sketch passes per stroke (3..=6).
+    #[serde(default = "default_5_u8")]
     pub shtack_bristles: u8,
     #[serde(default = "default_78")]
     pub shtack_split_pct: f32,
@@ -389,8 +399,8 @@ impl Default for SfxLineEffect {
             ink_brush_overshoot_count_pct: 85.0,
             ink_brush_overshoot_random_pct: 45.0,
             ink_brush_seed: 1,
-            shtack_variant: SfxShtackVariant::Caps,
-            shtack_bristles: 3,
+            shtack_variant: SfxShtackVariant::SaiPenSketch,
+            shtack_bristles: 5,
             shtack_split_pct: 78.0,
             shtack_overshoot_px: 20.0,
             shtack_thickness_px: 14.0,
@@ -428,7 +438,7 @@ impl SfxLineEffect {
         self.ink_brush_overshoot_count_pct = finite_f32(self.ink_brush_overshoot_count_pct, 85.0).clamp(0.0, 100.0);
         self.ink_brush_overshoot_random_pct = finite_f32(self.ink_brush_overshoot_random_pct, 45.0).clamp(0.0, 100.0);
 
-        self.shtack_bristles = self.shtack_bristles.clamp(2, 6);
+        self.shtack_bristles = self.shtack_bristles.clamp(3, 6);
         self.shtack_split_pct = finite_f32(self.shtack_split_pct, 78.0).clamp(0.0, 100.0);
         self.shtack_overshoot_px = finite_f32(self.shtack_overshoot_px, 20.0).clamp(0.0, MAX_SFX_EFFECT_PX);
         self.shtack_thickness_px = finite_f32(self.shtack_thickness_px, 14.0).clamp(6.0, MAX_SFX_EFFECT_PX);
@@ -1362,7 +1372,7 @@ mod tests {
         data.free_transform.corners = [[12.0, -8.0], [f64::NAN, 4.0], [0.0, 10.0], [-5.0, 0.0]];
         data.spline.points = vec![[-175.0, 22.0], [0.0, -28.0], [175.0, 16.0]];
         data.line_effect.style = SfxLineStyle::Shtack;
-        data.line_effect.shtack_variant = SfxShtackVariant::Ribbon;
+        data.line_effect.shtack_variant = SfxShtackVariant::DryPencil;
         data.line_effect.shtack_bristles = 99;
         data.line_effect.gpen_overshoot_px = 999.0;
         data.dry_brush.enabled = true;
@@ -1390,5 +1400,29 @@ mod tests {
         assert_eq!(legacy.text, "BOOM");
         assert_eq!(legacy.line_effect.style, SfxLineStyle::Clean);
         assert!(!legacy.dry_brush.enabled);
+    }
+
+    #[test]
+    fn shtack_variant_legacy_serde_aliases_deserialize() {
+        let caps: SfxLineEffect =
+            serde_json::from_str(r#"{"style":"shtack","shtackVariant":"caps"}"#).unwrap();
+        assert_eq!(caps.shtack_variant, SfxShtackVariant::SaiPenSketch);
+        let ribbon: SfxLineEffect =
+            serde_json::from_str(r#"{"style":"shtack","shtackVariant":"ribbon"}"#).unwrap();
+        assert_eq!(ribbon.shtack_variant, SfxShtackVariant::DryPencil);
+
+        // New names round-trip cleanly.
+        for v in [SfxShtackVariant::SaiPenSketch, SfxShtackVariant::DryPencil] {
+            let json = serde_json::to_string(&v).unwrap();
+            let back: SfxShtackVariant = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, v);
+        }
+
+        // A full legacy document JSON with `shtackVariant: "ribbon"` still loads.
+        let legacy: SfxData = serde_json::from_str(
+            r#"{"text":"BAM!","lineEffect":{"style":"shtack","shtackVariant":"ribbon"}}"#,
+        )
+        .unwrap();
+        assert_eq!(legacy.line_effect.shtack_variant, SfxShtackVariant::DryPencil);
     }
 }

@@ -275,7 +275,9 @@ pub fn transform_shape(sh: &mut ShapeLayer, a: &Affine) {
                             t.mouth_width *= m0.min(m3);
                         }
                         for v in &mut b.vertex_overrides {
-                            v.offset = pt(v.offset);
+                            // A vertex override is a *delta*, not a point: adding the affine
+                            // translation to it moved every handle twice on a Move-tool drag.
+                            v.offset = [v.offset[0] * m0 + v.offset[1] * m2, v.offset[0] * m1 + v.offset[1] * m3];
                         }
                         b.stroke_width *= m0.min(m3);
                     }

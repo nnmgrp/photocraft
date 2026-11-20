@@ -11,9 +11,10 @@
 //! Protected against collapse: minimum body bounds are enforced everywhere a rect is built.
 
 use egui::{Color32, RichText, Ui, vec2};
+use photocraft_doc::vector::balloon_ranges as ranges;
 use photocraft_doc::vector::{
-    BalloonLineStyle, BalloonTextAlign, BalloonUnderlay, BalloonVoice, BokehShape, LiveBalloon, LiveBalloonBody, LiveBalloonTail, TailPreset, TextDirection,
-    UniflashMode,
+    BalloonLineStyle, BalloonTextAlign, BalloonTextFitMode, BalloonUnderlay, BalloonVoice, BokehShape, LiveBalloon, LiveBalloonBody, LiveBalloonTail, TailPreset,
+    TextDirection, UniflashMode,
 };
 use photocraft_manga_core::balloon_fit;
 use photocraft_vector::balloon::LiveBalloonGeom;
@@ -252,10 +253,26 @@ pub struct BalloonPanelUi {
     /// Automatically keep linked TypeR text layer boxes / Stories synced when the balloon resizes.
     #[serde(default = "default_true")]
     pub auto_follow_text: bool,
+    /// Which balloon geometry the linked lettering is fitted to.
+    #[serde(default)]
+    pub text_fit_mode: BalloonTextFitMode,
+    /// Inner padding of `Contour` mode lettering, in px.
+    #[serde(default = "default_text_inset_px")]
+    pub text_inset_px: f64,
+    /// Shrink text inserted by a Type-tool click so it fits the balloon's safe text rectangle.
+    #[serde(default = "default_true")]
+    pub auto_fit_on_insert: bool,
+    /// Recolour linked text black or white to stay legible when the balloon fill is dark or light.
+    #[serde(default = "default_true")]
+    pub auto_contrast: bool,
 }
 
 fn default_particle_spawns() -> u8 {
     4
+}
+
+fn default_text_inset_px() -> f64 {
+    6.0
 }
 
 impl Default for BalloonPanelUi {
@@ -349,6 +366,10 @@ impl Default for BalloonPanelUi {
             stroke_color: [0.0, 0.0, 0.0, 1.0],
             fill_color: [1.0, 1.0, 1.0, 1.0],
             auto_follow_text: true,
+            text_fit_mode: BalloonTextFitMode::Safe,
+            text_inset_px: 6.0,
+            auto_fit_on_insert: true,
+            auto_contrast: true,
         }
     }
 }
@@ -404,6 +425,9 @@ pub struct BalloonPanelOutput {
     pub fit_text_dirty: bool,
     /// Safe rectangle of an already grown balloon, for the text command emitted by the Fit button.
     pub fit_text_safe_rect: Option<[f64; 4]>,
+    /// The "Auto-fit text" button was pressed: fit the active balloon's linked text layer into
+    /// its safe text rectangle (handled by the host seam).
+    pub auto_fit_linked_text: bool,
 }
 
 pub fn handles(id: &str) -> bool {
@@ -625,25 +649,25 @@ pub fn hydrate_geometry_from_balloon(state: &mut BalloonPanelUi, balloon: &LiveB
     state.pencil_roughness = balloon.pencil_roughness.clamp(0.0, 1.0);
     state.pixel_size_px = balloon.pixel_size_px.clamp(1.0, 32.0);
     state.ukiyo_contrast = balloon.ukiyo_contrast.clamp(0.0, 1.0);
-    state.haze_spread = balloon.haze_spread.clamp(0.0, 100.0);
-    state.stipple_density = balloon.stipple_density.clamp(0.0, 100.0);
-    state.stipple_count = balloon.stipple_count.clamp(24, 2000);
-    state.stipple_randomness = balloon.stipple_randomness.clamp(0.0, 100.0);
-    state.grain_size = balloon.grain_size.clamp(5.0, 100.0);
-    state.edge_roughness = balloon.edge_roughness.clamp(0.0, 100.0);
+    state.haze_spread = balloon.haze_spread.clamp(ranges::HAZE_SPREAD_MIN, ranges::HAZE_SPREAD_MAX);
+    state.stipple_density = balloon.stipple_density.clamp(ranges::STIPPLE_DENSITY_MIN, ranges::STIPPLE_DENSITY_MAX);
+    state.stipple_count = balloon.stipple_count.clamp(ranges::STIPPLE_COUNT_MIN, ranges::STIPPLE_COUNT_MAX);
+    state.stipple_randomness = balloon.stipple_randomness.clamp(ranges::STIPPLE_RANDOMNESS_MIN, ranges::STIPPLE_RANDOMNESS_MAX);
+    state.grain_size = balloon.grain_size.clamp(ranges::GRAIN_SIZE_MIN, ranges::GRAIN_SIZE_MAX);
+    state.edge_roughness = balloon.edge_roughness.clamp(ranges::EDGE_ROUGHNESS_MIN, ranges::EDGE_ROUGHNESS_MAX);
     state.stipple_fill_interior = balloon.stipple_fill_interior;
-    state.sparkle_count = balloon.sparkle_count.clamp(0, 400);
-    state.sparkle_size = balloon.sparkle_size.clamp(0.2, 2.5);
-    state.sparkle_size_jitter = balloon.sparkle_size_jitter.clamp(0.0, 100.0);
-    state.sparkle_randomness = balloon.sparkle_randomness.clamp(0.0, 100.0);
+    state.sparkle_count = balloon.sparkle_count.clamp(ranges::SPARKLE_COUNT_MIN, ranges::SPARKLE_COUNT_MAX);
+    state.sparkle_size = balloon.sparkle_size.clamp(ranges::SPARKLE_SIZE_MIN, ranges::SPARKLE_SIZE_MAX);
+    state.sparkle_size_jitter = balloon.sparkle_size_jitter.clamp(ranges::SPARKLE_SIZE_JITTER_MIN, ranges::SPARKLE_SIZE_JITTER_MAX);
+    state.sparkle_randomness = balloon.sparkle_randomness.clamp(ranges::SPARKLE_RANDOMNESS_MIN, ranges::SPARKLE_RANDOMNESS_MAX);
     state.particle_spawns = match balloon.particle_spawns {
         1 => 1,
         2 => 2,
         _ => 4,
     };
-    state.bokeh_count = balloon.bokeh_count.clamp(0, 400);
-    state.bokeh_size = balloon.bokeh_size.clamp(2.0, 36.0);
-    state.bokeh_size_randomness = balloon.bokeh_size_randomness.clamp(0.0, 100.0);
+    state.bokeh_count = balloon.bokeh_count.clamp(ranges::BOKEH_COUNT_MIN, ranges::BOKEH_COUNT_MAX);
+    state.bokeh_size = balloon.bokeh_size.clamp(ranges::BOKEH_SIZE_MIN, ranges::BOKEH_SIZE_MAX);
+    state.bokeh_size_randomness = balloon.bokeh_size_randomness.clamp(ranges::BOKEH_SIZE_RANDOMNESS_MIN, ranges::BOKEH_SIZE_RANDOMNESS_MAX);
     state.bokeh_shape = balloon.bokeh_shape;
     state.brush_preset_id = balloon.brush_preset_id.clone();
     if let Some(t) = balloon.tails.first() {
@@ -665,6 +689,8 @@ pub fn hydrate_geometry_from_balloon(state: &mut BalloonPanelUi, balloon: &LiveB
     state.text_align = balloon.text_align;
     state.handwritten_font = balloon.handwritten_font;
     state.auto_follow_text = balloon.auto_follow_text;
+    state.text_fit_mode = balloon.text_fit_mode;
+    state.text_inset_px = balloon.text_inset_px.clamp(ranges::TEXT_INSET_PX_MIN, ranges::TEXT_INSET_PX_MAX);
     if let Some(u) = &balloon.underlay {
         state.underlay_enabled = u.enabled;
         state.underlay_offset_x = u.offset[0];
@@ -808,25 +834,25 @@ fn apply_geometry_to_balloon(state: &BalloonPanelUi, balloon: &mut LiveBalloon, 
     balloon.pencil_roughness = state.pencil_roughness.clamp(0.0, 1.0);
     balloon.pixel_size_px = state.pixel_size_px.clamp(1.0, 32.0);
     balloon.ukiyo_contrast = state.ukiyo_contrast.clamp(0.0, 1.0);
-    balloon.haze_spread = state.haze_spread.clamp(0.0, 100.0);
-    balloon.stipple_density = state.stipple_density.clamp(0.0, 100.0);
-    balloon.stipple_count = state.stipple_count.clamp(24, 2000);
-    balloon.stipple_randomness = state.stipple_randomness.clamp(0.0, 100.0);
-    balloon.grain_size = state.grain_size.clamp(5.0, 100.0);
-    balloon.edge_roughness = state.edge_roughness.clamp(0.0, 100.0);
+    balloon.haze_spread = state.haze_spread.clamp(ranges::HAZE_SPREAD_MIN, ranges::HAZE_SPREAD_MAX);
+    balloon.stipple_density = state.stipple_density.clamp(ranges::STIPPLE_DENSITY_MIN, ranges::STIPPLE_DENSITY_MAX);
+    balloon.stipple_count = state.stipple_count.clamp(ranges::STIPPLE_COUNT_MIN, ranges::STIPPLE_COUNT_MAX);
+    balloon.stipple_randomness = state.stipple_randomness.clamp(ranges::STIPPLE_RANDOMNESS_MIN, ranges::STIPPLE_RANDOMNESS_MAX);
+    balloon.grain_size = state.grain_size.clamp(ranges::GRAIN_SIZE_MIN, ranges::GRAIN_SIZE_MAX);
+    balloon.edge_roughness = state.edge_roughness.clamp(ranges::EDGE_ROUGHNESS_MIN, ranges::EDGE_ROUGHNESS_MAX);
     balloon.stipple_fill_interior = state.stipple_fill_interior;
-    balloon.sparkle_count = state.sparkle_count.clamp(0, 400);
-    balloon.sparkle_size = state.sparkle_size.clamp(0.2, 2.5);
-    balloon.sparkle_size_jitter = state.sparkle_size_jitter.clamp(0.0, 100.0);
-    balloon.sparkle_randomness = state.sparkle_randomness.clamp(0.0, 100.0);
+    balloon.sparkle_count = state.sparkle_count.clamp(ranges::SPARKLE_COUNT_MIN, ranges::SPARKLE_COUNT_MAX);
+    balloon.sparkle_size = state.sparkle_size.clamp(ranges::SPARKLE_SIZE_MIN, ranges::SPARKLE_SIZE_MAX);
+    balloon.sparkle_size_jitter = state.sparkle_size_jitter.clamp(ranges::SPARKLE_SIZE_JITTER_MIN, ranges::SPARKLE_SIZE_JITTER_MAX);
+    balloon.sparkle_randomness = state.sparkle_randomness.clamp(ranges::SPARKLE_RANDOMNESS_MIN, ranges::SPARKLE_RANDOMNESS_MAX);
     balloon.particle_spawns = match state.particle_spawns {
         1 => 1,
         2 => 2,
         _ => 4,
     };
-    balloon.bokeh_count = state.bokeh_count.clamp(0, 400);
-    balloon.bokeh_size = state.bokeh_size.clamp(2.0, 36.0);
-    balloon.bokeh_size_randomness = state.bokeh_size_randomness.clamp(0.0, 100.0);
+    balloon.bokeh_count = state.bokeh_count.clamp(ranges::BOKEH_COUNT_MIN, ranges::BOKEH_COUNT_MAX);
+    balloon.bokeh_size = state.bokeh_size.clamp(ranges::BOKEH_SIZE_MIN, ranges::BOKEH_SIZE_MAX);
+    balloon.bokeh_size_randomness = state.bokeh_size_randomness.clamp(ranges::BOKEH_SIZE_RANDOMNESS_MIN, ranges::BOKEH_SIZE_RANDOMNESS_MAX);
     balloon.bokeh_shape = state.bokeh_shape;
     balloon.brush_preset_id = state.brush_preset_id.clone();
     balloon.stroke_width = state.stroke_width;
@@ -839,6 +865,8 @@ fn apply_geometry_to_balloon(state: &BalloonPanelUi, balloon: &mut LiveBalloon, 
     balloon.text_align = state.text_align;
     balloon.handwritten_font = state.handwritten_font;
     balloon.auto_follow_text = state.auto_follow_text;
+    balloon.text_fit_mode = state.text_fit_mode;
+    balloon.text_inset_px = state.text_inset_px.clamp(ranges::TEXT_INSET_PX_MIN, ranges::TEXT_INSET_PX_MAX);
     balloon.underlay = if state.underlay_enabled {
         Some(BalloonUnderlay {
             enabled: true,
@@ -1022,26 +1050,26 @@ pub fn create_live_balloon_in_rect_commands(
         pencil_roughness: st.pencil_roughness.clamp(0.0, 1.0),
         pixel_size_px: st.pixel_size_px.clamp(1.0, 32.0),
         ukiyo_contrast: st.ukiyo_contrast.clamp(0.0, 1.0),
-        haze_spread: st.haze_spread.clamp(0.0, 100.0),
-        stipple_density: st.stipple_density.clamp(0.0, 100.0),
-        stipple_count: st.stipple_count.clamp(24, 2000),
-        stipple_randomness: st.stipple_randomness.clamp(0.0, 100.0),
-        grain_size: st.grain_size.clamp(5.0, 100.0),
-        edge_roughness: st.edge_roughness.clamp(0.0, 100.0),
+        haze_spread: st.haze_spread.clamp(ranges::HAZE_SPREAD_MIN, ranges::HAZE_SPREAD_MAX),
+        stipple_density: st.stipple_density.clamp(ranges::STIPPLE_DENSITY_MIN, ranges::STIPPLE_DENSITY_MAX),
+        stipple_count: st.stipple_count.clamp(ranges::STIPPLE_COUNT_MIN, ranges::STIPPLE_COUNT_MAX),
+        stipple_randomness: st.stipple_randomness.clamp(ranges::STIPPLE_RANDOMNESS_MIN, ranges::STIPPLE_RANDOMNESS_MAX),
+        grain_size: st.grain_size.clamp(ranges::GRAIN_SIZE_MIN, ranges::GRAIN_SIZE_MAX),
+        edge_roughness: st.edge_roughness.clamp(ranges::EDGE_ROUGHNESS_MIN, ranges::EDGE_ROUGHNESS_MAX),
         stipple_fill_interior: st.stipple_fill_interior,
         stipple_overrides: Vec::new(),
-        sparkle_count: st.sparkle_count.clamp(0, 400),
-        sparkle_size: st.sparkle_size.clamp(0.2, 2.5),
-        sparkle_size_jitter: st.sparkle_size_jitter.clamp(0.0, 100.0),
-        sparkle_randomness: st.sparkle_randomness.clamp(0.0, 100.0),
+        sparkle_count: st.sparkle_count.clamp(ranges::SPARKLE_COUNT_MIN, ranges::SPARKLE_COUNT_MAX),
+        sparkle_size: st.sparkle_size.clamp(ranges::SPARKLE_SIZE_MIN, ranges::SPARKLE_SIZE_MAX),
+        sparkle_size_jitter: st.sparkle_size_jitter.clamp(ranges::SPARKLE_SIZE_JITTER_MIN, ranges::SPARKLE_SIZE_JITTER_MAX),
+        sparkle_randomness: st.sparkle_randomness.clamp(ranges::SPARKLE_RANDOMNESS_MIN, ranges::SPARKLE_RANDOMNESS_MAX),
         particle_spawns: match st.particle_spawns {
             1 => 1,
             2 => 2,
             _ => 4,
         },
-        bokeh_count: st.bokeh_count.clamp(0, 400),
-        bokeh_size: st.bokeh_size.clamp(2.0, 36.0),
-        bokeh_size_randomness: st.bokeh_size_randomness.clamp(0.0, 100.0),
+        bokeh_count: st.bokeh_count.clamp(ranges::BOKEH_COUNT_MIN, ranges::BOKEH_COUNT_MAX),
+        bokeh_size: st.bokeh_size.clamp(ranges::BOKEH_SIZE_MIN, ranges::BOKEH_SIZE_MAX),
+        bokeh_size_randomness: st.bokeh_size_randomness.clamp(ranges::BOKEH_SIZE_RANDOMNESS_MIN, ranges::BOKEH_SIZE_RANDOMNESS_MAX),
         bokeh_shape: st.bokeh_shape,
         tails,
         next_tail_id: 2,
@@ -1061,6 +1089,8 @@ pub fn create_live_balloon_in_rect_commands(
         auto_merge_overlapping: true,
         linked_text_layer: None,
         auto_follow_text: st.auto_follow_text,
+        text_fit_mode: st.text_fit_mode,
+        text_inset_px: st.text_inset_px.clamp(ranges::TEXT_INSET_PX_MIN, ranges::TEXT_INSET_PX_MAX),
     };
 
     // Uniflash + Solid draws the needles themselves in the fill colour; stylized line styles
@@ -1157,26 +1187,26 @@ fn draw_dual_chambers_row(ui: &mut Ui, state: &BalloonPanelUi, host: &BalloonHos
                     pencil_roughness: state.pencil_roughness.clamp(0.0, 1.0),
                     pixel_size_px: state.pixel_size_px.clamp(1.0, 32.0),
                     ukiyo_contrast: state.ukiyo_contrast.clamp(0.0, 1.0),
-                    haze_spread: state.haze_spread.clamp(0.0, 100.0),
-                    stipple_density: state.stipple_density.clamp(0.0, 100.0),
-                    stipple_count: state.stipple_count.clamp(24, 2000),
-                    stipple_randomness: state.stipple_randomness.clamp(0.0, 100.0),
-                    grain_size: state.grain_size.clamp(5.0, 100.0),
-                    edge_roughness: state.edge_roughness.clamp(0.0, 100.0),
+                    haze_spread: state.haze_spread.clamp(ranges::HAZE_SPREAD_MIN, ranges::HAZE_SPREAD_MAX),
+                    stipple_density: state.stipple_density.clamp(ranges::STIPPLE_DENSITY_MIN, ranges::STIPPLE_DENSITY_MAX),
+                    stipple_count: state.stipple_count.clamp(ranges::STIPPLE_COUNT_MIN, ranges::STIPPLE_COUNT_MAX),
+                    stipple_randomness: state.stipple_randomness.clamp(ranges::STIPPLE_RANDOMNESS_MIN, ranges::STIPPLE_RANDOMNESS_MAX),
+                    grain_size: state.grain_size.clamp(ranges::GRAIN_SIZE_MIN, ranges::GRAIN_SIZE_MAX),
+                    edge_roughness: state.edge_roughness.clamp(ranges::EDGE_ROUGHNESS_MIN, ranges::EDGE_ROUGHNESS_MAX),
                     stipple_fill_interior: state.stipple_fill_interior,
                     stipple_overrides: Vec::new(),
-                    sparkle_count: state.sparkle_count.clamp(0, 400),
-                    sparkle_size: state.sparkle_size.clamp(0.2, 2.5),
-                    sparkle_size_jitter: state.sparkle_size_jitter.clamp(0.0, 100.0),
-                    sparkle_randomness: state.sparkle_randomness.clamp(0.0, 100.0),
+                    sparkle_count: state.sparkle_count.clamp(ranges::SPARKLE_COUNT_MIN, ranges::SPARKLE_COUNT_MAX),
+                    sparkle_size: state.sparkle_size.clamp(ranges::SPARKLE_SIZE_MIN, ranges::SPARKLE_SIZE_MAX),
+                    sparkle_size_jitter: state.sparkle_size_jitter.clamp(ranges::SPARKLE_SIZE_JITTER_MIN, ranges::SPARKLE_SIZE_JITTER_MAX),
+                    sparkle_randomness: state.sparkle_randomness.clamp(ranges::SPARKLE_RANDOMNESS_MIN, ranges::SPARKLE_RANDOMNESS_MAX),
                     particle_spawns: match state.particle_spawns {
                         1 => 1,
                         2 => 2,
                         _ => 4,
                     },
-                    bokeh_count: state.bokeh_count.clamp(0, 400),
-                    bokeh_size: state.bokeh_size.clamp(2.0, 36.0),
-                    bokeh_size_randomness: state.bokeh_size_randomness.clamp(0.0, 100.0),
+                    bokeh_count: state.bokeh_count.clamp(ranges::BOKEH_COUNT_MIN, ranges::BOKEH_COUNT_MAX),
+                    bokeh_size: state.bokeh_size.clamp(ranges::BOKEH_SIZE_MIN, ranges::BOKEH_SIZE_MAX),
+                    bokeh_size_randomness: state.bokeh_size_randomness.clamp(ranges::BOKEH_SIZE_RANDOMNESS_MIN, ranges::BOKEH_SIZE_RANDOMNESS_MAX),
                     bokeh_shape: state.bokeh_shape,
                     tails: Vec::new(),
                     next_tail_id: 2,
@@ -1196,6 +1226,8 @@ fn draw_dual_chambers_row(ui: &mut Ui, state: &BalloonPanelUi, host: &BalloonHos
                     auto_merge_overlapping: true,
                     linked_text_layer: None,
                     auto_follow_text: state.auto_follow_text,
+                    text_fit_mode: state.text_fit_mode,
+                    text_inset_px: state.text_inset_px.clamp(ranges::TEXT_INSET_PX_MIN, ranges::TEXT_INSET_PX_MAX),
                 };
                 output.commands.push(OutCommand::new("shape.balloon.add", json!({ "layer": target.layer_id, "balloon": next_b })));
             }
@@ -1428,23 +1460,23 @@ fn draw_line_style_params(ui: &mut Ui, state: &mut BalloonPanelUi) {
         }
         BalloonLineStyle::StippleDots => {
             draw_spawn_origins_row(ui, state);
-            adaptive_slider(ui, tl!("Dot count:"), &mut state.stipple_count, 24..=2000, "", false);
-            adaptive_slider(ui, tl!("Density:"), &mut state.stipple_density, 0.0..=100.0, "", false);
-            adaptive_slider(ui, tl!("Dot randomness:"), &mut state.stipple_randomness, 0.0..=100.0, "%", false);
-            adaptive_slider(ui, tl!("Haze spread:"), &mut state.haze_spread, 0.0..=100.0, "", false);
-            adaptive_slider(ui, tl!("Grain size:"), &mut state.grain_size, 5.0..=100.0, "", false);
-            adaptive_slider(ui, tl!("Edge roughness:"), &mut state.edge_roughness, 0.0..=100.0, "", false);
+            adaptive_slider(ui, tl!("Dot count:"), &mut state.stipple_count, ranges::STIPPLE_COUNT, "", false);
+            adaptive_slider(ui, tl!("Density:"), &mut state.stipple_density, ranges::STIPPLE_DENSITY, "", false);
+            adaptive_slider(ui, tl!("Dot randomness:"), &mut state.stipple_randomness, ranges::STIPPLE_RANDOMNESS, "%", false);
+            adaptive_slider(ui, tl!("Haze spread:"), &mut state.haze_spread, ranges::HAZE_SPREAD, "", false);
+            adaptive_slider(ui, tl!("Grain size:"), &mut state.grain_size, ranges::GRAIN_SIZE, "", false);
+            adaptive_slider(ui, tl!("Edge roughness:"), &mut state.edge_roughness, ranges::EDGE_ROUGHNESS, "", false);
             ui.checkbox(&mut state.stipple_fill_interior, tl!("Fill interior (Gloom mode)"));
         }
         BalloonLineStyle::SparkleGlitter => {
             draw_spawn_origins_row(ui, state);
-            adaptive_slider(ui, tl!("Sparkle count:"), &mut state.sparkle_count, 0..=400, "", false);
-            adaptive_slider(ui, tl!("Sparkle size:"), &mut state.sparkle_size, 0.2..=2.5, "×", false);
-            adaptive_slider(ui, tl!("Size randomness:"), &mut state.sparkle_size_jitter, 0.0..=100.0, "%", false);
-            adaptive_slider(ui, tl!("Sparkle randomness:"), &mut state.sparkle_randomness, 0.0..=100.0, "%", false);
-            adaptive_slider(ui, tl!("Bokeh count:"), &mut state.bokeh_count, 0..=400, "", false);
-            adaptive_slider(ui, tl!("Bokeh size:"), &mut state.bokeh_size, 2.0..=36.0, " px", false);
-            adaptive_slider(ui, tl!("Bokeh size rand:"), &mut state.bokeh_size_randomness, 0.0..=100.0, "%", false);
+            adaptive_slider(ui, tl!("Sparkle count:"), &mut state.sparkle_count, ranges::SPARKLE_COUNT, "", false);
+            adaptive_slider(ui, tl!("Sparkle size:"), &mut state.sparkle_size, ranges::SPARKLE_SIZE, "×", false);
+            adaptive_slider(ui, tl!("Size randomness:"), &mut state.sparkle_size_jitter, ranges::SPARKLE_SIZE_JITTER, "%", false);
+            adaptive_slider(ui, tl!("Sparkle randomness:"), &mut state.sparkle_randomness, ranges::SPARKLE_RANDOMNESS, "%", false);
+            adaptive_slider(ui, tl!("Bokeh count:"), &mut state.bokeh_count, ranges::BOKEH_COUNT, "", false);
+            adaptive_slider(ui, tl!("Bokeh size:"), &mut state.bokeh_size, ranges::BOKEH_SIZE, " px", false);
+            adaptive_slider(ui, tl!("Bokeh size rand:"), &mut state.bokeh_size_randomness, ranges::BOKEH_SIZE_RANDOMNESS, "%", false);
             ui.horizontal_wrapped(|ui| {
                 ui.label(tl!("Bokeh shape:"));
                 for (shape, label) in [(BokehShape::Circle, tl!("Circle")), (BokehShape::Hexagon, tl!("Hexagon")), (BokehShape::Ring, tl!("Ring"))] {
@@ -1689,9 +1721,31 @@ fn draw_typer_section(ui: &mut Ui, state: &mut BalloonPanelUi, host: &BalloonHos
     if ui.button(tl!("🔤 Open / Send to TypeR")).clicked() {
         output.open_typer_panel = true;
     }
+    let linked_layer = active_balloon_target(host).and_then(|target| target.balloon.linked_text_layer);
+    ui.add_enabled_ui(linked_layer.is_some(), |ui| {
+        if ui.button(tl!("Auto-fit text")).clicked() {
+            output.auto_fit_linked_text = true;
+        }
+    });
+    ui.horizontal_wrapped(|ui| {
+        ui.label(tl!("Text fit:"));
+        for (mode, label) in [
+            (BalloonTextFitMode::Safe, tl!("Safe")),
+            (BalloonTextFitMode::Outer, tl!("Outer")),
+            (BalloonTextFitMode::Contour, tl!("Contour")),
+        ] {
+            if ui.selectable_label(state.text_fit_mode == mode, label).on_hover_text(tl!("Refit the linked text layer now")).clicked() {
+                state.text_fit_mode = mode;
+            }
+        }
+    });
+    if state.text_fit_mode == BalloonTextFitMode::Contour {
+        adaptive_slider(ui, tl!("Inset:"), &mut state.text_inset_px, 0.0..=32.0, " px", false);
+    }
     ui.checkbox(&mut state.auto_follow_text, tl!("Auto-follow balloon box"));
-    let linked_text = active_balloon_target(host).and_then(|target| {
-        let tid = target.balloon.linked_text_layer?;
+    ui.checkbox(&mut state.auto_fit_on_insert, tl!("Auto-fit text on insert"));
+    ui.checkbox(&mut state.auto_contrast, tl!("Auto black/white text contrast"));
+    let linked_text = linked_layer.and_then(|tid| {
         let layer = host.doc.and_then(|doc| doc.layer(tid))?;
         let story = matches!(&layer.content, photocraft_doc::LayerContent::Text(txt) if txt.story_threaded || txt.next_story_layer.is_some());
         Some(if story { format!("{} (Stories)", layer.name) } else { layer.name.clone() })
@@ -1763,12 +1817,12 @@ pub fn panel(ui: &mut Ui, state: &mut BalloonPanelUi, host: &BalloonHostContext<
 
 #[cfg(test)]
 mod tests {
-    use photocraft_doc::vector::{BalloonLineStyle, LiveBalloon, UniflashMode};
+    use photocraft_doc::vector::{BalloonLineStyle, BalloonTextFitMode, LiveBalloon, UniflashMode};
     use photocraft_vector::balloon::LiveBalloonGroupGeom;
 
     use super::{
-        BALLOON_COLOR_TAB, BalloonBodyKindChoice, BalloonFillMode, BalloonPanelOutput, BalloonPanelUi, MIN_BALLOON_SIZE, PANEL, body_from_state,
-        create_live_balloon_in_rect_commands, handles, hydrate_geometry_from_balloon, set_gizmo_mode,
+        BALLOON_COLOR_TAB, BalloonBodyKindChoice, BalloonFillMode, BalloonPanelOutput, BalloonPanelUi, MIN_BALLOON_SIZE, PANEL, apply_geometry_to_balloon,
+        body_from_state, create_live_balloon_in_rect_commands, handles, hydrate_geometry_from_balloon, set_gizmo_mode,
     };
 
     #[test]
@@ -1779,6 +1833,22 @@ mod tests {
         assert_eq!(BALLOON_COLOR_TAB, 5);
         let min_sz = MIN_BALLOON_SIZE;
         assert!(min_sz >= 24.0);
+    }
+
+    #[test]
+    fn text_fit_mode_and_inset_survive_panel_hydration_and_application() {
+        let source = LiveBalloon { text_fit_mode: BalloonTextFitMode::Contour, text_inset_px: 15.0, ..LiveBalloon::default() };
+        let mut state = BalloonPanelUi::default();
+        hydrate_geometry_from_balloon(&mut state, &source);
+        assert_eq!(state.text_fit_mode, BalloonTextFitMode::Contour);
+        assert_eq!(state.text_inset_px, 15.0);
+
+        state.text_fit_mode = BalloonTextFitMode::Outer;
+        state.text_inset_px = 1000.0;
+        let mut applied = source.clone();
+        apply_geometry_to_balloon(&state, &mut applied, 1.0);
+        assert_eq!(applied.text_fit_mode, BalloonTextFitMode::Outer);
+        assert_eq!(applied.text_inset_px, 48.0, "inset is clamped to the shared range");
     }
 
     #[test]

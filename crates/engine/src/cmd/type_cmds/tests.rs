@@ -609,6 +609,21 @@ fn set_style_paragraph_and_box() {
 }
 
 #[test]
+fn set_style_orientation_and_vertical_align_change_the_whole_layer() {
+    let mut s = session();
+    let id = s.execute("type.create", json!({"text": "垂直", "size": 12, "box": [10, 10, 80, 60]})).unwrap()["layer"].as_u64().unwrap();
+    let info = s.execute("type.setStyle", json!({"layer": id, "orientation": "vertical", "verticalAlign": "center"})).unwrap();
+    assert_eq!(info["orientation"], "Vertical");
+    assert_eq!(info["verticalAlign"], "Center");
+    let t = text_layer(&s, id);
+    assert_eq!(t.orientation, Orientation::Vertical);
+    assert_eq!(t.paragraphs[0].style.vertical_align, VerticalAlign::Center);
+
+    s.execute("type.setStyle", json!({"layer": id, "orientation": "horizontal"})).unwrap();
+    assert_eq!(text_layer(&s, id).orientation, Orientation::Horizontal);
+}
+
+#[test]
 fn rasterize_and_fonts() {
     let mut s = session();
     let id = s.execute("type.create", json!({"x": 5, "y": 30, "text": "Raster"})).unwrap()["layer"].as_u64().unwrap();

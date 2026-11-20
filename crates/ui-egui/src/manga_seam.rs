@@ -41,7 +41,7 @@ mod native {
 
     use photocraft_color::PixelFormat;
     use photocraft_doc::sfx::{reset_sfx_warps_for_new_layer, scale_new_sfx_for_document};
-    use photocraft_doc::vector::{BalloonLineStyle, LiveBalloon, LiveBalloonBody, LiveBalloonGroup};
+    use photocraft_doc::vector::{BalloonLineStyle, BalloonTextFitMode, LiveBalloon, LiveBalloonBody, LiveBalloonGroup};
     use photocraft_doc::{DocId, Document, Fill, Layer, LayerContent, LayerId, LiveShape, ShapeLayer};
     use photocraft_engine::DocState;
     use photocraft_engine::cmd::manga_cmds::typesetter_adapter;
@@ -409,10 +409,19 @@ mod native {
             app.manga.ui.balloon_gizmo.show_vertex_handles = app.manga.ui.balloon_ui.show_vertex_handles;
         }
         let out = comic_balloon_panel::panel(ui, &mut app.manga.ui.balloon_ui, &host);
+        // A fill edit is the only panel edit that changes lettering contrast. Detect it before
+        // the commands are consumed so recolouring runs exactly once, on this frame only.
+        let fill_changed = out.commands.iter().any(|c| c.id == "shape.edit" && c.params.get("fill").is_some());
         if let Some(bid) = out.select_balloon_id {
             app.manga.ui.balloon_gizmo.active_balloon_id = Some(bid);
         }
         let last = dispatch_commands(app, out.commands);
+        if fill_changed && app.manga.ui.balloon_ui.auto_contrast && let Some(id) = active_layer {
+            recolor_linked_balloon_text(app, id);
+        }
+        if out.auto_fit_linked_text {
+            fit_active_balloon_linked_text(app);
+        }
         if let Some(bid) = last.as_ref().and_then(|v| v.get("balloonId").and_then(Value::as_u64)).and_then(|n| u32::try_from(n).ok()) {
             app.manga.ui.balloon_gizmo.active_balloon_id = Some(bid);
         }
@@ -428,6 +437,7 @@ mod native {
             app.manga.ui.balloon_gizmo.show_vertex_handles = show;
         }
         if out.open_typer_panel {
+            prepare_typer_for_active_balloon(app);
             let _ = app.run("window.panel.activate", json!({ "panel": "typesetter" }));
         }
         if out.open_linework_panel {
@@ -1552,6 +1562,7 @@ mod native {
             ),
             None => return,
         };
+        let balloon_fit_mode = active_balloon_fit_context(app);
         let view = CapsuleView {
             visible: true,
             view_xform: to_manga_xf(&xf),
@@ -1562,6 +1573,7 @@ mod native {
             tool_name: tool_capsule_name(app.active_tool()),
             is_desktop: true,
             screentone_target: active_tone,
+            balloon_fit_mode,
         };
         let mut capsule = std::mem::take(&mut app.manga.ui.canvas_capsule);
         let mut tone = app.manga.ui.screentone_ui.clone();
@@ -1575,6 +1587,9 @@ mod native {
             app.manga.ui.screentone_gizmo.detach();
         }
         dispatch_commands(app, out.commands);
+        if let Some((shape_id, balloon_id, mode)) = out.set_balloon_fit_mode {
+            apply_balloon_fit_mode(app, shape_id, balloon_id, mode);
+        }
         if out.action_remove_selection {
             #[cfg(not(target_arch = "wasm32"))]
             let _ = crate::retouch_ui::remove_selection(app);
@@ -1654,6 +1669,321 @@ mod native {
             }
         }
         None
+    }
+
+    /// A visible vector balloon hit by a document point, with everything a Type-tool click needs.
+    /// The hit tests the balloon *body* (including UniFlash's white centre), not its decorative
+    /// outer path with tail and spikes.
+    #[derive(Clone, Copy, Debug)]
+    pub(crate) struct BalloonHit {
+        pub layer_id: LayerId,
+        pub balloon_id: u32,
+        /// `[x, y, width, height]` of the balloon's safe text rectangle (kept for tests).
+        #[allow(dead_code)]
+        pub safe_rect: [f64; 4],
+        /// The chamber's chosen insertion mode; `Contour` falls back to `safe_rect` for the box
+        /// creation step and applies its area path immediately afterwards.
+        pub text_fit_mode: BalloonTextFitMode,
+        /// The rectangle a new type layer is created in: safe for `Safe`/`Contour`, tail-free
+        /// outer body bounds for `Outer`.
+        pub target_rect: [f64; 4],
+        pub is_dark: bool,
+        /// Kept on the hit result for callers that distinguish rectangular balloons (e.g. tests).
+        #[allow(dead_code)]
+        pub is_rect: bool,
+        /// The chamber's existing link, if any (used by callers/tests; a fresh click relinks).
+        #[allow(dead_code)]
+        pub linked_text_layer: Option<LayerId>,
+    }
+
+    /// Topmost visible balloon under `(x, y)`: prefer the active balloon layer, then walk visible
+    /// layers from top to bottom, and within a multi-chamber group test chambers from top down.
+    pub(crate) fn balloon_at_point(app: &PhotocraftApp, x: f64, y: f64) -> Option<BalloonHit> {
+        let st = app.session.active()?;
+        let mut candidates: Vec<&Layer> = st.doc.layers.iter().rev().filter(|l| l.visible).collect();
+        if let Some(active) = st.active_layer
+            && let Some(pos) = candidates.iter().position(|l| l.id == active)
+        {
+            let layer = candidates.remove(pos);
+            candidates.insert(0, layer);
+        }
+        for layer in candidates {
+            let LayerContent::Shape(sh) = &layer.content else { continue };
+            let Some(LiveShape::BalloonGroup { group }) = &sh.live else { continue };
+            for b in group.items.iter().rev() {
+                if b.contains_body_point([x, y]) {
+                    let safe_rect = b.safe_text_rect();
+                    let target_rect = match b.text_fit_mode {
+                        BalloonTextFitMode::Safe | BalloonTextFitMode::Contour => safe_rect,
+                        BalloonTextFitMode::Outer => b.outer_text_rect(),
+                    };
+                    return Some(BalloonHit {
+                        layer_id: layer.id,
+                        balloon_id: b.id,
+                        safe_rect,
+                        text_fit_mode: b.text_fit_mode,
+                        target_rect,
+                        is_dark: vector_balloon_is_dark(sh),
+                        is_rect: matches!(b.body, LiveBalloonBody::Rect { .. } | LiveBalloonBody::ChamferRect { .. }),
+                        linked_text_layer: b.linked_text_layer,
+                    });
+                }
+            }
+        }
+        None
+    }
+
+    /// The balloon whose fit mode the Canvas Capsule should display: the active balloon layer, or
+    /// the balloon linked to the active lettering layer.
+    fn active_balloon_fit_context(app: &PhotocraftApp) -> Option<(LayerId, u32, BalloonTextFitMode)> {
+        let st = app.session.active()?;
+        let active = st.active_layer?;
+        if let Some(layer) = st.doc.layer(active)
+            && let LayerContent::Shape(sh) = &layer.content
+            && let Some(LiveShape::BalloonGroup { group }) = &sh.live
+        {
+            let b = group
+                .items
+                .iter()
+                .find(|b| Some(b.id) == app.manga.ui.balloon_gizmo.active_balloon_id)
+                .or_else(|| group.items.first())?;
+            return Some((active, b.id, b.text_fit_mode));
+        }
+        st.doc.layers.iter().rev().filter(|l| l.visible).find_map(|layer| {
+            let LayerContent::Shape(sh) = &layer.content else { return None };
+            let Some(LiveShape::BalloonGroup { group }) = &sh.live else { return None };
+            let b = group.items.iter().find(|b| b.linked_text_layer == Some(active))?;
+            Some((layer.id, b.id, b.text_fit_mode))
+        })
+    }
+
+    /// Link one chamber of a vector balloon to a text layer (immediately, so the TypeR panel shows
+    /// it without waiting for the next TypeR insertion).
+    pub(crate) fn link_balloon_to_text_layer(app: &mut PhotocraftApp, shape_id: LayerId, balloon_id: u32, text_id: u64) {
+        link_chambers_to_text_layers(app, &[(shape_id, balloon_id, text_id)]);
+    }
+
+    /// Apply a Capsule Bar / panel fit-mode choice. The `shape.balloon.update` command rebuilds
+    /// the balloon and resynchronises its linked text in the same undo step (`Box` <-> `Area`).
+    fn apply_balloon_fit_mode(app: &mut PhotocraftApp, shape_id: LayerId, balloon_id: u32, mode: BalloonTextFitMode) {
+        let Some(st) = app.session.active() else { return };
+        let Some(layer) = st.doc.layer(shape_id) else { return };
+        let LayerContent::Shape(sh) = &layer.content else { return };
+        let Some(LiveShape::BalloonGroup { group }) = &sh.live else { return };
+        let Some(mut b) = group.items.iter().find(|it| it.id == balloon_id).cloned() else { return };
+        if b.text_fit_mode == mode {
+            return;
+        }
+        b.text_fit_mode = mode;
+        let _ = app.run("shape.balloon.update", json!({ "layer": shape_id.0, "balloon": b }));
+    }
+
+    /// A chamber's pure body contour in document space, for `type.fillPath` in `Contour` mode.
+    fn balloon_text_area_path(app: &PhotocraftApp, shape_id: LayerId, balloon_id: u32) -> Option<photocraft_doc::vector::Path> {
+        let st = app.session.active()?;
+        let layer = st.doc.layer(shape_id)?;
+        let LayerContent::Shape(sh) = &layer.content else { return None };
+        let Some(LiveShape::BalloonGroup { group }) = &sh.live else { return None };
+        group.items.iter().find(|it| it.id == balloon_id).map(|b| b.text_area_path())
+    }
+
+    /// Make an existing linked text layer wrap along the balloon's contour.
+    pub(crate) fn apply_balloon_contour_to_text(app: &mut PhotocraftApp, shape_id: LayerId, balloon_id: u32, text_id: u64) {
+        let Some(path) = balloon_text_area_path(app, shape_id, balloon_id) else { return };
+        if app.run("type.fillPath", json!({ "layer": text_id, "path": path })).is_ok() {
+            let _ = app.run("type.setStyle", json!({ "layer": text_id, "align": "center", "verticalAlign": "center" }));
+        }
+    }
+
+    fn color_is_near_white(color: [u8; 4]) -> bool {
+        (0.299 * f32::from(color[0]) + 0.587 * f32::from(color[1]) + 0.114 * f32::from(color[2])) >= 230.0
+    }
+
+    fn foreground_is_near_white(app: &PhotocraftApp) -> bool {
+        let fg = app.session.tools.foreground;
+        let rgb = [fg[0], fg[1], fg[2]].map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8);
+        color_is_near_white([rgb[0], rgb[1], rgb[2], 255])
+    }
+
+    /// Colour a freshly created balloon text layer black or white when auto contrast is on.
+    /// Returns the colour applied, if any, so callers can put it straight into `type.create`.
+    pub(crate) fn balloon_text_contrast_color(app: &PhotocraftApp, hit: BalloonHit) -> Option<&'static str> {
+        if !app.manga.ui.balloon_ui.auto_contrast {
+            return None;
+        }
+        if hit.is_dark {
+            Some("#ffffffff")
+        } else if foreground_is_near_white(app) {
+            Some("#000000ff")
+        } else {
+            None
+        }
+    }
+
+    /// Shrink a newly created box text layer until its laid-out lines fit the balloon's safe
+    /// rectangle. Bounded (at most ten steps, never below 1 pt) and a no-op for empty text.
+    pub(crate) fn auto_fit_text_layer_to_rect(app: &mut PhotocraftApp, text_id: u64, rect: [f64; 4]) {
+        let Some(st) = app.session.active() else { return };
+        let Some(layer) = st.doc.layer(LayerId(text_id)) else { return };
+        let LayerContent::Text(t) = &layer.content else { return };
+        if t.text.trim().is_empty() {
+            return;
+        }
+        let Some(mut size) = t.runs.first().map(|r| r.style.size_pt).filter(|s| s.is_finite() && *s > 0.0) else {
+            return;
+        };
+        let (max_w, max_h) = (rect[2].max(1.0) as f32, rect[3].max(1.0) as f32);
+        let dpi = st.doc.resolution_dpi.max(1.0);
+        let fits = |candidate: f32| {
+            let mut probe = t.clone();
+            for run in &mut probe.runs {
+                run.style.size_pt = candidate;
+            }
+            let layout = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner()).layout(&probe, dpi);
+            let top = layout.lines.iter().map(|l| l.baseline - l.ascent).fold(f32::INFINITY, f32::min);
+            let bottom = layout.lines.iter().map(|l| l.baseline + l.descent).fold(f32::NEG_INFINITY, f32::max);
+            let width = layout.lines.iter().map(|l| l.x1 - l.x0).fold(0.0f32, f32::max);
+            (bottom - top) <= max_h && width <= max_w
+        };
+        if fits(size) {
+            return;
+        }
+        for _ in 0..10 {
+            size = (size * 0.9).max(1.0);
+            if fits(size) || size <= 1.0 {
+                break;
+            }
+        }
+        let _ = app.run("type.setStyle", json!({ "layer": text_id, "size": size }));
+    }
+
+    /// Recolour the linked text of every chamber of a balloon layer after its fill changed. Only
+    /// called on a fill-change frame so undo history is not spammed every repaint.
+    fn recolor_linked_balloon_text(app: &mut PhotocraftApp, layer_id: LayerId) {
+        let Some(st) = app.session.active() else { return };
+        let Some(layer) = st.doc.layer(layer_id) else { return };
+        let LayerContent::Shape(sh) = &layer.content else { return };
+        let Some(LiveShape::BalloonGroup { group }) = &sh.live else { return };
+        let dark = vector_balloon_is_dark(sh);
+        let edits: Vec<(u64, &'static str)> = group
+            .items
+            .iter()
+            .filter_map(|b| {
+                let tid = b.linked_text_layer?;
+                let current_white = st.doc.layer(tid).and_then(|l| match &l.content {
+                    LayerContent::Text(t) => t.runs.first().map(|r| color_is_near_white(r.style.color.to_rgba8())),
+                    _ => None,
+                });
+                let color = if dark {
+                    "#ffffffff"
+                } else if current_white == Some(true) {
+                    "#000000ff"
+                } else {
+                    return None;
+                };
+                Some((tid.0, color))
+            })
+            .collect();
+        for (tid, color) in edits {
+            let _ = app.run("type.setStyle", json!({ "layer": tid, "color": color }));
+        }
+    }
+
+    /// Fit the linked text of the active balloon into its safe text rectangle (Auto-fit button).
+    fn fit_active_balloon_linked_text(app: &mut PhotocraftApp) {
+        let Some(st) = app.session.active() else { return };
+        let Some(layer_id) = st.active_layer else { return };
+        let Some(LayerContent::Shape(sh)) = st.doc.layer(layer_id).map(|l| &l.content) else { return };
+        let Some(LiveShape::BalloonGroup { group }) = &sh.live else { return };
+        let active_bid = app.manga.ui.balloon_gizmo.active_balloon_id;
+        let Some(b) = active_bid
+            .and_then(|id| group.items.iter().find(|it| it.id == id && it.linked_text_layer.is_some()))
+            .or_else(|| group.items.iter().find(|it| it.linked_text_layer.is_some()))
+        else {
+            return;
+        };
+        if let Some(tid) = b.linked_text_layer {
+            auto_fit_text_layer_to_rect(app, tid.0, b.safe_text_rect());
+        }
+    }
+
+    fn text_layer_center(layer: &Layer) -> Option<[f64; 2]> {
+        if let Some(bounds) = layer.surface().map(|s| s.content_bounds()).filter(|b| !b.is_empty()) {
+            return Some([f64::from(bounds.x0) + f64::from(bounds.width()) * 0.5, f64::from(bounds.y0) + f64::from(bounds.height()) * 0.5]);
+        }
+        let LayerContent::Text(t) = &layer.content else { return None };
+        let (ox, oy) = (t.transform.m[4], t.transform.m[5]);
+        match &t.shape {
+            photocraft_doc::text::TextShape::Box { x, y, width, height } => Some([ox + f64::from(*x) + f64::from(*width) * 0.5, oy + f64::from(*y) + f64::from(*height) * 0.5]),
+            _ => Some([ox, oy]),
+        }
+    }
+
+    fn preset_orientation_str(raw: &str) -> &'static str {
+        let trimmed = raw.trim();
+        if trimmed.eq_ignore_ascii_case("vertical") || trimmed.eq_ignore_ascii_case("vrtc") {
+            "vertical"
+        } else {
+            "horizontal"
+        }
+    }
+
+    /// "Open / Send to TypeR" on a selected balloon with no linked text: bind an existing text
+    /// layer already sitting inside the balloon, or point the TypeR insertion at the balloon's
+    /// centre so the next line is created there and linked by `handle_typesetter_action`.
+    fn prepare_typer_for_active_balloon(app: &mut PhotocraftApp) {
+        let Some(st) = app.session.active() else { return };
+        let Some(layer_id) = st.active_layer else { return };
+        let Some(LayerContent::Shape(sh)) = st.doc.layer(layer_id).map(|l| &l.content) else { return };
+        let Some(LiveShape::BalloonGroup { group }) = &sh.live else { return };
+        let active_bid = app.manga.ui.balloon_gizmo.active_balloon_id;
+        let Some(b) = active_bid.and_then(|id| group.items.iter().find(|it| it.id == id)).or_else(|| group.items.first()) else {
+            return;
+        };
+        if b.linked_text_layer.is_some() {
+            return;
+        }
+        let inside = st.doc.layers.iter().find(|l| {
+            if !l.visible || !matches!(l.content, LayerContent::Text(_)) {
+                return false;
+            }
+            text_layer_center(l).is_some_and(|c| b.contains_body_point(c))
+        });
+        if let Some(layer) = inside {
+            link_balloon_to_text_layer(app, layer_id, b.id, layer.id.0);
+        } else {
+            let r = b.body.rect();
+            app.hover_doc = Some([r[0] + r[2] * 0.5, r[1] + r[3] * 0.5]);
+        }
+    }
+
+    /// Is text layer `text_id` linked to a visible vector balloon, and is that balloon dark?
+    /// Used by TypeR's "Apply to layer" auto contrast.
+    fn linked_balloon_is_dark(app: &PhotocraftApp, text_id: LayerId) -> bool {
+        let Some(st) = app.session.active() else { return false };
+        st.doc.layers.iter().rev().filter(|l| l.visible).any(|layer| {
+            let LayerContent::Shape(sh) = &layer.content else { return false };
+            let Some(LiveShape::BalloonGroup { group }) = &sh.live else { return false };
+            group.items.iter().any(|b| b.linked_text_layer == Some(text_id)) && vector_balloon_is_dark(sh)
+        })
+    }
+
+    /// Is this text layer explicitly linked to any visible vector balloon?
+    fn text_is_balloon_linked(app: &PhotocraftApp, text_id: LayerId) -> bool {
+        let Some(st) = app.session.active() else { return false };
+        st.doc.layers.iter().rev().filter(|l| l.visible).any(|layer| {
+            let LayerContent::Shape(sh) = &layer.content else { return false };
+            let Some(LiveShape::BalloonGroup { group }) = &sh.live else { return false };
+            group.items.iter().any(|b| b.linked_text_layer == Some(text_id))
+        })
+    }
+
+    /// Is this text layer sitting inside a visible vector balloon (even if not explicitly linked)?
+    fn text_inside_balloon_dark(app: &PhotocraftApp, text_id: LayerId) -> bool {
+        let Some(st) = app.session.active() else { return false };
+        let Some(layer) = st.doc.layer(text_id) else { return false };
+        let Some([cx, cy]) = text_layer_center(layer) else { return false };
+        balloon_at_point(app, cx, cy).is_some_and(|h| h.is_dark)
     }
 
     #[derive(Clone, Copy)]
@@ -1960,10 +2290,14 @@ mod native {
     }
 
     fn apply_typesetter_text_shape(app: &mut PhotocraftApp, layer: u64, text: String) {
-        let (new_point, new_hash) = if let Some(st) = app.session.active()
+        let (new_point, new_hash, keep_frame) = if let Some(st) = app.session.active()
             && let Some(l) = st.doc.layer(LayerId(layer))
             && let LayerContent::Text(t) = &l.content
         {
+            // Box/area type (including every balloon-linked layer) keeps its frame: `type.edit`'s
+            // `point` parameter would collapse it into a point layer at the box's top-left.
+            let keep_frame = matches!(t.shape, photocraft_doc::text::TextShape::Box { .. } | photocraft_doc::text::TextShape::Area { .. })
+                || text_is_balloon_linked(app, LayerId(layer));
             let font_size = t.char_runs().first().map_or(24.0, |r| r.style.size_pt);
             let leading = t.char_runs().first().and_then(|r| r.style.leading_pt).unwrap_or(font_size * 1.2);
             let old_lines = t.text.lines().count().max(1) as f64;
@@ -1987,9 +2321,9 @@ mod native {
                 hash ^= u64::from(*byte);
                 hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
             }
-            (pt, Some(hash))
+            (if keep_frame { None } else { pt }, Some(hash), keep_frame)
         } else {
-            (None, None)
+            (None, None, false)
         };
         let mut edit_params = json!({ "layer": layer, "text": text });
         if let Some(pt) = new_point {
@@ -2000,7 +2334,12 @@ mod native {
             app.ui.status_error = true;
             return;
         }
-        let _ = app.run("type.setStyle", json!({ "layer": layer, "align": "center" }));
+        if keep_frame {
+            // Centring inside the preserved box/area, not just horizontally on a point layer.
+            let _ = app.run("type.setStyle", json!({ "layer": layer, "align": "center", "verticalAlign": "center" }));
+        } else {
+            let _ = app.run("type.setStyle", json!({ "layer": layer, "align": "center" }));
+        }
         if let Some(h) = new_hash {
             app.manga.typesetter_text_shape_source = Some(h);
         }
@@ -2125,9 +2464,25 @@ mod native {
             app.ui.status_error = true;
             return;
         };
-        let hex = format!("#{:02x}{:02x}{:02x}{:02x}", preset.text_color[0], preset.text_color[1], preset.text_color[2], preset.text_color[3]);
+        let mut hex = format!("#{:02x}{:02x}{:02x}{:02x}", preset.text_color[0], preset.text_color[1], preset.text_color[2], preset.text_color[3]);
+        let orientation = preset_orientation_str(&preset.orientation);
+        let (on_dark_balloon, linked, box_or_area) = app.session.active().map_or((false, false, false), |st| {
+            let shape = st.doc.layer(target_id).and_then(|l| match &l.content {
+                LayerContent::Text(t) => Some(t.shape.clone()),
+                _ => None,
+            });
+            let box_or_area = matches!(shape, Some(photocraft_doc::text::TextShape::Box { .. } | photocraft_doc::text::TextShape::Area { .. }));
+            (
+                linked_balloon_is_dark(app, target_id) || text_inside_balloon_dark(app, target_id),
+                text_is_balloon_linked(app, target_id),
+                box_or_area,
+            )
+        });
+        if app.manga.ui.balloon_ui.auto_contrast && on_dark_balloon && typesetter_text_is_dark(preset.text_color) {
+            hex = "#ffffffff".into();
+        }
         let leading = if preset.leading > 0.0 { json!(preset.leading) } else { json!("auto") };
-        let params = json!({
+        let mut params = json!({
             "layer": target_id.0,
             "font": preset.font_family,
             "postscriptName": preset.font_postscript,
@@ -2145,8 +2500,14 @@ mod native {
             "spaceAfter": preset.space_after,
             "hyphenate": preset.hyphenate,
             "hangingRoman": preset.hanging_punctuation,
-            "direction": preset.direction
+            "direction": preset.direction,
+            "orientation": orientation
         });
+        // Box and area type (including balloon-linked layers) should be centred vertically by
+        // "Apply to layer" instead of being left at the top of their frame.
+        if box_or_area || linked {
+            params["verticalAlign"] = json!("center");
+        }
         match app.run("type.setStyle", params) {
             Ok(_) => {
                 if preset.stroke_width > 0.0 {
@@ -2175,6 +2536,35 @@ mod native {
     }
 
     fn align_typesetter_layer(app: &mut PhotocraftApp) {
+        // A lettering layer paired with a balloon centres inside that chamber, not in the
+        // marquee selection or the whole canvas.
+        let linked = app.session.active().and_then(|st| {
+            let id = st.active_layer?;
+            st.doc.layers.iter().rev().filter(|l| l.visible).find_map(|layer| {
+                let LayerContent::Shape(sh) = &layer.content else { return None };
+                let Some(LiveShape::BalloonGroup { group }) = &sh.live else { return None };
+                let b = group.items.iter().find(|b| b.linked_text_layer == Some(id))?;
+                Some((layer.id, b.clone(), id.0))
+            })
+        });
+        if let Some((shape_id, b, text_id)) = linked {
+            let fitted = if b.text_fit_mode == BalloonTextFitMode::Contour {
+                apply_balloon_contour_to_text(app, shape_id, b.id, text_id);
+                true
+            } else {
+                let r = if b.text_fit_mode == BalloonTextFitMode::Outer { b.outer_text_rect() } else { b.safe_text_rect() };
+                app.run("type.edit", json!({ "layer": text_id, "box": r })).is_ok()
+            };
+            let style = app.run("type.setStyle", json!({ "layer": text_id, "align": "center", "verticalAlign": "center" }));
+            if fitted && style.is_ok() {
+                app.ui.status = crate::i18n::tr(crate::i18n::current(), "Layer centered in its balloon").into();
+                app.ui.status_error = false;
+            } else {
+                app.ui.status = crate::i18n::tr(crate::i18n::current(), "Align failed").into();
+                app.ui.status_error = true;
+            }
+            return;
+        }
         let h = app.run("layer.align.horizontalCenters", json!({}));
         let v = app.run("layer.align.verticalCenters", json!({}));
         match (h, v) {
@@ -2402,7 +2792,13 @@ mod native {
                 Some(b)
             });
             if let Some(b) = updated_balloon {
+                let contour = b.text_fit_mode == BalloonTextFitMode::Contour;
                 let _ = app.run("shape.balloon.update", json!({ "layer": blid.0, "balloon": b }));
+                if contour {
+                    // The engine already made it an Area, but reassert the inline path so a
+                    // freshly linked layer is centred inside the body immediately.
+                    apply_balloon_contour_to_text(app, blid, bid, tid);
+                }
             }
         }
     }
@@ -2489,7 +2885,9 @@ mod native {
         };
 
         let (resolved_family, style_name, faux_bold, faux_italic, weight) = resolve_preset_font(&action.preset);
-        let invert_for_dark_bubble = dark_bubble && typesetter_text_is_dark(action.preset.text_color);
+        // Lettering contrast is opt-out: an explicit dark fill only inverts TypeR's text when
+        // the Balloons panel's auto-contrast preference is on.
+        let invert_for_dark_bubble = app.manga.ui.balloon_ui.auto_contrast && dark_bubble && typesetter_text_is_dark(action.preset.text_color);
         let hex_color = if invert_for_dark_bubble {
             "#ffffffff".to_string()
         } else {
@@ -2536,6 +2934,7 @@ mod native {
             "spaceAfter": action.preset.space_after,
             "hyphenate": action.preset.hyphenate,
             "direction": action.preset.direction,
+            "orientation": preset_orientation_str(&action.preset.orientation),
         });
 
         if let Some((clean_layer_id, hex_fill)) = auto_clean_params {
@@ -2990,6 +3389,248 @@ mod native {
                 total += controls;
             }
             assert!(total > 0);
+        }
+
+        fn new_balloon_app() -> PhotocraftApp {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
+            app.run("file.new", json!({ "width": 800, "height": 600 })).unwrap();
+            app
+        }
+
+        fn ellipse_balloon(balloon_id: u32, rect: [f64; 4]) -> LiveBalloon {
+            LiveBalloon { id: balloon_id, body: LiveBalloonBody::Ellipse { rect, squircle: 0.25 }, ..LiveBalloon::default() }
+        }
+
+        fn newest_text_layer(app: &PhotocraftApp) -> (u64, photocraft_doc::TextLayer) {
+            let st = app.session.active().unwrap();
+            st.doc
+                .layers
+                .iter()
+                .rev()
+                .find_map(|l| match &l.content {
+                    LayerContent::Text(t) => Some((l.id.0, t.clone())),
+                    _ => None,
+                })
+                .unwrap()
+        }
+
+        fn balloon_link(app: &PhotocraftApp, layer_id: u64, balloon_id: u32) -> Option<LayerId> {
+            let st = app.session.active().unwrap();
+            let LayerContent::Shape(sh) = &st.doc.layer(LayerId(layer_id)).unwrap().content else { return None };
+            let Some(LiveShape::BalloonGroup { group }) = &sh.live else { return None };
+            group.items.iter().find(|b| b.id == balloon_id)?.linked_text_layer
+        }
+
+        /// A Type-tool click in UniFlash's white centre hits the balloon body (not its spikes),
+        /// creates a centred box on the safe rect, and links it immediately.
+        #[test]
+        fn type_click_in_uniflash_white_center_creates_centered_linked_box() {
+            let mut app = new_balloon_app();
+            let b = LiveBalloon {
+                id: 1,
+                body: LiveBalloonBody::Uniflash {
+                    rect: [200.0, 100.0, 240.0, 160.0],
+                    needles: 160,
+                    inner_ratio: 0.62,
+                    bundle_group: 0.4,
+                    length_jitter: 0.5,
+                    angle_jitter: 0.25,
+                    needle_width: 2.2,
+                    outer_sharpness: 1.0,
+                    inner_sharpness: 1.0,
+                    mode: Default::default(),
+                    seed: 7,
+                },
+                line_style: BalloonLineStyle::Solid,
+                ..LiveBalloon::default()
+            };
+            let created = app.run("shape.balloon.create", json!({ "balloon": b })).unwrap();
+            let shape_id = created["layer"].as_u64().unwrap();
+
+            let hit = balloon_at_point(&app, 320.0, 180.0).expect("the white centre must hit the balloon");
+            assert_eq!(hit.balloon_id, 1);
+            assert!(!hit.is_rect);
+            assert!(!hit.is_dark, "Uniflash + Solid has a white text centre");
+            let sr = hit.safe_rect;
+
+            crate::tools::type_tool::pointer_up(&mut app, [320.0, 180.0], [320.0, 180.0]);
+
+            let (text_id, t) = newest_text_layer(&app);
+            let (w, h) = match t.shape {
+                photocraft_doc::text::TextShape::Box { width, height, .. } => (width, height),
+                _ => panic!("a balloon click must create paragraph text, got {:?}", t.shape),
+            };
+            assert!((f64::from(w) - sr[2].max(1.0)).abs() < 1.0, "box width follows the safe rect: {w} vs {}", sr[2]);
+            assert!((f64::from(h) - sr[3].max(1.0)).abs() < 1.0, "box height follows the safe rect: {h} vs {}", sr[3]);
+            assert!((t.transform.m[4] - sr[0]).abs() < 1.0, "box origin x follows the safe rect");
+            assert!((t.transform.m[5] - sr[1]).abs() < 1.0, "box origin y follows the safe rect");
+            assert_eq!(t.paragraphs[0].style.align, photocraft_doc::text::TextAlign::Center);
+            assert_eq!(t.vertical_align(), photocraft_doc::text::VerticalAlign::Center);
+            assert_eq!(balloon_link(&app, shape_id, 1), Some(LayerId(text_id)), "TypeR link shows the text at once");
+        }
+
+        /// A dark balloon with auto contrast on gives new lettering white; an already linked
+        /// text layer is recoloured when the fill is toggled white, and back when it goes dark.
+        #[test]
+        fn dark_balloon_click_white_text_and_fill_toggle_recolor_linked_text() {
+            let mut app = new_balloon_app();
+            let created = app.run("shape.balloon.create", json!({ "balloon": ellipse_balloon(5, [100.0, 100.0, 200.0, 140.0]) })).unwrap();
+            let shape_id = created["layer"].as_u64().unwrap();
+            app.run("shape.edit", json!({ "layer": shape_id, "fill": "#000000" })).unwrap();
+            assert!(balloon_at_point(&app, 200.0, 170.0).unwrap().is_dark);
+            app.manga.ui.balloon_ui.auto_contrast = true;
+
+            crate::tools::type_tool::pointer_up(&mut app, [200.0, 170.0], [200.0, 170.0]);
+            let (text_id, t) = newest_text_layer(&app);
+            assert_eq!(t.runs[0].style.color.to_rgba8(), [255, 255, 255, 255], "dark fill inverts TypeR text to white");
+            assert_eq!(balloon_link(&app, shape_id, 5), Some(LayerId(text_id)));
+
+            // Fill toggled to white: the linked text must go black on the very next fill-change
+            // frame (the seam calls `recolor_linked_balloon_text` only on those frames).
+            app.run("shape.edit", json!({ "layer": shape_id, "fill": "#ffffff" })).unwrap();
+            recolor_linked_balloon_text(&mut app, LayerId(shape_id));
+            assert_eq!(newest_text_layer(&app).1.runs[0].style.color.to_rgba8(), [0, 0, 0, 255]);
+
+            app.run("shape.edit", json!({ "layer": shape_id, "fill": "#000000" })).unwrap();
+            recolor_linked_balloon_text(&mut app, LayerId(shape_id));
+            assert_eq!(newest_text_layer(&app).1.runs[0].style.color.to_rgba8(), [255, 255, 255, 255]);
+        }
+
+        /// "Apply to layer" in TypeR propagates vertical orientation and centred vertical align,
+        /// and inverts dark lettering on a dark linked balloon when auto contrast is on.
+        #[test]
+        fn typesetter_apply_style_propagates_orientation_vertical_align_and_contrast() {
+            let mut app = new_balloon_app();
+            let created = app.run("shape.balloon.create", json!({ "balloon": ellipse_balloon(9, [100.0, 100.0, 200.0, 140.0]) })).unwrap();
+            let shape_id = created["layer"].as_u64().unwrap();
+            app.run("shape.edit", json!({ "layer": shape_id, "fill": "#000000" })).unwrap();
+            app.run(
+                "type.create",
+                json!({ "text": "Hello", "font": "Inter", "size": 14.0, "box": [110.0, 110.0, 180.0, 120.0], "color": "#000000ff" }),
+            )
+            .unwrap();
+            let (text_id, _) = newest_text_layer(&app);
+            link_balloon_to_text_layer(&mut app, LayerId(shape_id), 9, text_id);
+            app.run("layer.select", json!({ "layer": text_id })).unwrap();
+
+            let preset = TextStylePreset {
+                font_family: "Inter".into(),
+                font_size: 14.0,
+                orientation: "vertical".into(),
+                text_color: [0, 0, 0, 255],
+                ..TextStylePreset::default()
+            };
+            apply_typesetter_style_to_active_layer(&mut app, &preset);
+
+            let (_, t) = newest_text_layer(&app);
+            assert_eq!(t.orientation, photocraft_doc::text::Orientation::Vertical);
+            assert_eq!(t.vertical_align(), photocraft_doc::text::VerticalAlign::Center);
+            assert_eq!(t.runs[0].style.color.to_rgba8(), [255, 255, 255, 255], "dark preset on a dark balloon becomes white");
+        }
+
+        /// TextShapeR applied to a balloon-linked Box or Area text layer updates only the text
+        /// string, keeping its Box/Area frame and centred vertical alignment intact.
+        #[test]
+        fn text_shape_r_preserves_balloon_box_and_area_frames() {
+            let mut app = new_balloon_app();
+            let created = app.run("shape.balloon.create", json!({ "balloon": ellipse_balloon(11, [120.0, 90.0, 220.0, 160.0]) })).unwrap();
+            let shape_id = created["layer"].as_u64().unwrap();
+            crate::tools::type_tool::pointer_up(&mut app, [230.0, 170.0], [230.0, 170.0]);
+            let (text_id, before_box) = newest_text_layer(&app);
+            assert!(matches!(before_box.shape, photocraft_doc::text::TextShape::Box { .. }));
+
+            apply_typesetter_text_shape(&mut app, text_id, "Lorem\nIpsum".into());
+            let (_, after_box) = newest_text_layer(&app);
+            assert_eq!(after_box.text, "Lorem\nIpsum");
+            assert_eq!(after_box.shape, before_box.shape, "TextShapeR must not turn a Box into Point");
+            assert!((after_box.transform.m[4] - before_box.transform.m[4]).abs() < 1e-3);
+            assert!((after_box.transform.m[5] - before_box.transform.m[5]).abs() < 1e-3);
+            assert_eq!(after_box.paragraphs[0].style.align, photocraft_doc::text::TextAlign::Center);
+            assert_eq!(after_box.vertical_align(), photocraft_doc::text::VerticalAlign::Center);
+
+            // Switch to Contour (Area) and verify TextShapeR keeps the Area contour too.
+            apply_balloon_fit_mode(&mut app, LayerId(shape_id), 11, BalloonTextFitMode::Contour);
+            let (_, before_area) = newest_text_layer(&app);
+            assert!(matches!(before_area.shape, photocraft_doc::text::TextShape::Area { .. }));
+
+            apply_typesetter_text_shape(&mut app, text_id, "One\nTwo\nThree".into());
+            let (_, after_area) = newest_text_layer(&app);
+            assert_eq!(after_area.text, "One\nTwo\nThree");
+            assert!(matches!(after_area.shape, photocraft_doc::text::TextShape::Area { .. }), "Area shape must survive TextShapeR");
+            assert_eq!(after_area.vertical_align(), photocraft_doc::text::VerticalAlign::Center);
+        }
+
+        /// Aligning a linked text layer in TypeR centres it inside its balloon chamber according
+        /// to the balloon's fit mode, not at the centre of the 800x600 canvas.
+        #[test]
+        fn align_typesetter_layer_centers_in_linked_balloon_not_canvas() {
+            let mut app = new_balloon_app();
+            let b = ellipse_balloon(12, [40.0, 40.0, 200.0, 140.0]);
+            let safe = b.safe_text_rect();
+            let created = app.run("shape.balloon.create", json!({ "balloon": b })).unwrap();
+            let shape_id = created["layer"].as_u64().unwrap();
+            crate::tools::type_tool::pointer_up(&mut app, [140.0, 110.0], [140.0, 110.0]);
+            let (text_id, _) = newest_text_layer(&app);
+            // Push the text box far away toward the canvas bottom-right.
+            app.run("type.edit", json!({ "layer": text_id, "box": [500.0, 400.0, 100.0, 60.0] })).unwrap();
+            app.run("layer.select", json!({ "layer": text_id })).unwrap();
+
+            align_typesetter_layer(&mut app);
+
+            let (_, t) = newest_text_layer(&app);
+            let (w, h) = match t.shape {
+                photocraft_doc::text::TextShape::Box { width, height, .. } => (f64::from(width), f64::from(height)),
+                _ => panic!("expected Box shape in Safe mode, got {:?}", t.shape),
+            };
+            assert!((t.transform.m[4] - safe[0]).abs() < 1.0, "aligned x matches balloon safe rect, not canvas centre");
+            assert!((t.transform.m[5] - safe[1]).abs() < 1.0, "aligned y matches balloon safe rect, not canvas centre");
+            assert!((w - safe[2]).abs() < 1.0 && (h - safe[3]).abs() < 1.0);
+            assert_eq!(t.paragraphs[0].style.align, photocraft_doc::text::TextAlign::Center);
+            assert_eq!(t.vertical_align(), photocraft_doc::text::VerticalAlign::Center);
+            assert_eq!(balloon_link(&app, shape_id, 12), Some(LayerId(text_id)));
+        }
+
+        /// Capsule Bar fit-mode switching exposes the balloon context on both the balloon layer
+        /// and its linked text layer, and immediately switches Safe -> Outer -> Contour -> Safe.
+        #[test]
+        fn capsule_bar_fit_mode_switch_refits_linked_text_between_safe_outer_and_contour() {
+            let mut app = new_balloon_app();
+            let b = ellipse_balloon(13, [100.0, 100.0, 220.0, 160.0]);
+            let created = app.run("shape.balloon.create", json!({ "balloon": b })).unwrap();
+            let shape_id = created["layer"].as_u64().unwrap();
+            crate::tools::type_tool::pointer_up(&mut app, [210.0, 180.0], [210.0, 180.0]);
+            let (text_id, safe_t) = newest_text_layer(&app);
+            let safe_w = match safe_t.shape {
+                photocraft_doc::text::TextShape::Box { width, .. } => width,
+                _ => panic!("expected Safe Box"),
+            };
+
+            // Context resolves when the linked text layer is active.
+            app.run("layer.select", json!({ "layer": text_id })).unwrap();
+            assert_eq!(active_balloon_fit_context(&app), Some((LayerId(shape_id), 13, BalloonTextFitMode::Safe)));
+
+            // Switch to Outer: same text layer, wider box covering the tail-free body bounds.
+            apply_balloon_fit_mode(&mut app, LayerId(shape_id), 13, BalloonTextFitMode::Outer);
+            assert_eq!(active_balloon_fit_context(&app), Some((LayerId(shape_id), 13, BalloonTextFitMode::Outer)));
+            let (id_after_outer, outer_t) = newest_text_layer(&app);
+            assert_eq!(id_after_outer, text_id, "switching mode must not recreate the text layer");
+            let outer_w = match outer_t.shape {
+                photocraft_doc::text::TextShape::Box { width, .. } => width,
+                _ => panic!("expected Outer Box"),
+            };
+            assert!(outer_w > safe_w + 10.0, "Outer box ({outer_w}) must be wider than Safe box ({safe_w})");
+
+            // Switch to Contour: same text layer, becomes TextShape::Area.
+            apply_balloon_fit_mode(&mut app, LayerId(shape_id), 13, BalloonTextFitMode::Contour);
+            let (id_after_contour, contour_t) = newest_text_layer(&app);
+            assert_eq!(id_after_contour, text_id);
+            assert!(matches!(contour_t.shape, photocraft_doc::text::TextShape::Area { .. }));
+
+            // Switch back to Safe: restores TextShape::Box on the same layer.
+            apply_balloon_fit_mode(&mut app, LayerId(shape_id), 13, BalloonTextFitMode::Safe);
+            let (id_after_safe, back_t) = newest_text_layer(&app);
+            assert_eq!(id_after_safe, text_id);
+            assert!(matches!(back_t.shape, photocraft_doc::text::TextShape::Box { .. }));
         }
     }
 }

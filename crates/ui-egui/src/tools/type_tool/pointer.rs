@@ -1,3 +1,5 @@
+use photocraft_doc::vector::BalloonTextFitMode;
+
 use super::defaults::default_style_params;
 use super::editing::{begin_edit, commit_with};
 use super::layout::{hit_layer, hit_offset, layout, to_text};
@@ -222,6 +224,8 @@ pub fn pointer_move(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifie
 pub(crate) enum PathClick {
     Area { shape: Option<u64> },
     OnPath { shape: Option<u64>, subpath: usize, start: f64 },
+    /// A vector balloon body: area type goes into its safe text rectangle, not its outer path.
+    Balloon { shape: u64, balloon_id: u32 },
 }
 
 /// Arc length (px) along `sub` from its first anchor to segment `seg` at curve parameter `t`.
@@ -248,6 +252,11 @@ fn arc_length_to(sub: &photocraft_doc::Subpath, seg: usize, t: f64) -> f64 {
 /// click into area type. None while View › Show › Target Path (or Extras) hides paths.
 pub(crate) fn path_target(app: &PhotocraftApp, x: f64, y: f64) -> Option<PathClick> {
     use photocraft_vector::edit::{Hit, hit};
+    // A vector balloon is a live text target regardless of the Work Path's visibility: its body
+    // (including UniFlash's white centre) is hit, not the decorative contour with tail/spikes.
+    if let Some(hit) = crate::manga_seam::balloon_at_point(app, x, y) {
+        return Some(PathClick::Balloon { shape: hit.layer_id.0, balloon_id: hit.balloon_id });
+    }
     if !app.ui.view.shows(app.ui.view.show.target_path) {
         return None;
     }
@@ -332,9 +341,11 @@ pub fn pointer_up(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
     let min = 4.0 / app.point_zoom().max(0.01) as f64;
     let o = app.ui.tool_options.clone();
     let mask = app.ui.tool.is_type_mask();
-    // A click (not a drag) with the Type tool on a path: area type inside a closed path, type
-    // on the path on its outline. The Type Mask tools ignore paths.
-    let target = if !mask && !makes_box(app, start, end) { path_target(app, start[0], start[1]) } else { None };
+    // A click (not a drag) with the Type tool on a balloon or a path: area type inside a balloon
+    // or closed path, type on the path on its outline. The Type Mask tools ignore these targets.
+    let click = !mask && !makes_box(app, start, end);
+    let balloon_hit = if click { crate::manga_seam::balloon_at_point(app, start[0], start[1]) } else { None };
+    let target = if click && balloon_hit.is_none() { path_target(app, start[0], start[1]) } else { None };
     // Preferences ▸ Type: "Fill new type layers with placeholder text" (on by default). The
     // Horizontal Type Mask gets the Type tool's placeholder, as Photoshop's does (#12072); the
     // vertical mask's placeholder is not measured yet, so it keeps starting empty.
@@ -349,6 +360,17 @@ pub fn pointer_up(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
         p["x"] = json!(start[0].round());
         p["y"] = json!(start[1].round());
     }
+    if let Some(hit) = balloon_hit {
+        // Create the type layer in the rectangle chosen by the balloon's fit mode (the body's
+        // safe inner rect for Safe/Contour, the tail-free body bounds for Outer).
+        let sr = hit.target_rect;
+        p["box"] = json!([sr[0].round(), sr[1].round(), sr[2].max(1.0).round(), sr[3].max(1.0).round()]);
+        p["align"] = json!("center");
+        p["verticalAlign"] = json!("center");
+        if let Some(color) = crate::manga_seam::balloon_text_contrast_color(app, hit) {
+            p["color"] = json!(color);
+        }
+    }
     let key = session_key(app);
     p["coalesce"] = json!(key);
     if let Ok(v) = app.run("type.create", p)
@@ -360,8 +382,18 @@ pub fn pointer_up(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
             Some(PathClick::OnPath { shape, subpath, start }) => {
                 app.run("type.attachToPath", json!({"layer": id, "shape": shape, "subpath": subpath, "start": start, "coalesce": key}))
             }
-            None => Ok(serde_json::Value::Null),
+            Some(PathClick::Balloon { .. }) | None => Ok(serde_json::Value::Null),
         };
+        if let Some(hit) = balloon_hit {
+            if app.manga.ui.balloon_ui.auto_fit_on_insert && !text.is_empty() {
+                crate::manga_seam::auto_fit_text_layer_to_rect(app, id, hit.target_rect);
+            }
+            // Link immediately so TypeR & Text link shows the layer without a later insertion.
+            crate::manga_seam::link_balloon_to_text_layer(app, hit.layer_id, hit.balloon_id, id);
+            if hit.text_fit_mode == BalloonTextFitMode::Contour {
+                crate::manga_seam::apply_balloon_contour_to_text(app, hit.layer_id, hit.balloon_id, id);
+            }
+        }
         if let Err(e) = follow_up {
             app.ui.status = e;
             app.ui.status_error = true;

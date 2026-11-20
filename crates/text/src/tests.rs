@@ -4055,3 +4055,27 @@ fn area_text_keeps_its_path_when_a_vertical_alignment_is_set() {
     assert_eq!(top.lines.len(), bottom.lines.len(), "the line breaker is unchanged");
     assert_lines_inside(&bottom, &path);
 }
+
+/// A rectangular area path centres its lines vertically: the baselines move down from the Top
+/// placement into the middle of the rect, and every line stays inside the contour.
+#[test]
+fn area_rect_vertical_align_center_centers_lines_inside_shape() {
+    let mut e = TextEngine::new();
+    let rect = area_poly(&[(0.0, 0.0), (300.0, 0.0), (300.0, 200.0), (0.0, 200.0)]);
+    let mut t = point(BUBBLE_TEXT, 16.0);
+    t.shape = TextShape::Area { path: rect.clone() };
+    let top = e.layout(&with_para(t.clone(), ParagraphStyle { vertical_align: VerticalAlign::Top, ..Default::default() }), 72.0);
+    let center = e.layout(&with_para(t, ParagraphStyle { vertical_align: VerticalAlign::Center, ..Default::default() }), 72.0);
+
+    assert!(!top.lines.is_empty() && !center.lines.is_empty());
+    assert_eq!(top.lines.len(), center.lines.len(), "line breaking is independent of alignment");
+    let first_top = top.lines[0].baseline;
+    let first_center = center.lines[0].baseline;
+    assert!(first_center > first_top + 1.0, "Center moves the block down: {first_top} → {first_center}");
+
+    // The block's vertical middle now sits at the rect's vertical middle (100).
+    let top_y = center.lines.first().map(|l| l.baseline - l.ascent).unwrap_or(0.0);
+    let bottom_y = center.lines.last().map(|l| l.baseline + l.descent).unwrap_or(0.0);
+    assert!(((top_y + bottom_y) * 0.5 - 100.0).abs() < 1.0, "block is centred: {top_y}..{bottom_y}");
+    assert_lines_inside(&center, &rect);
+}

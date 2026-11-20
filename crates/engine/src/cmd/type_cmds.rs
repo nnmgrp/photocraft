@@ -1197,7 +1197,7 @@ pub fn specs() -> Vec<CommandSpec> {
             menu: &[],
             shortcut: None,
             params: Box::leak(
-                format!(r##"{{"layer":id? or "layers":[id,…]? (default selected Type layers),"range":[startChar,endChar]? (single layer; default all),"metricsAsShown":bool=false (size/leading/leadingBy include each layer's transform scale), {CHAR_PARAMS}, relative steps from each character's own value: "leadingBy":pt (auto leading starts from its laid-out value; result 0.01..=5000),"baselineShiftBy":pt (result -5000..=5000),"trackingBy":1/1000 em (result -1000..=10000), paragraph keys: "align":"left|center|right|justify|justifyCenter|justifyRight|justifyAll","verticalAlign":"top|center|bottom|justify","firstLineIndent":pt,"startIndent":pt,"endIndent":pt,"spaceBefore":pt,"spaceAfter":pt,"autoLeading":%,"direction":"auto|ltr|rtl","hyphenate":bool,"hangingRoman":bool}}"##)
+                format!(r##"{{"layer":id? or "layers":[id,…]? (default selected Type layers),"range":[startChar,endChar]? (single layer; default all),"metricsAsShown":bool=false (size/leading/leadingBy include each layer's transform scale), {CHAR_PARAMS}, relative steps from each character's own value: "leadingBy":pt (auto leading starts from its laid-out value; result 0.01..=5000),"baselineShiftBy":pt (result -5000..=5000),"trackingBy":1/1000 em (result -1000..=10000), paragraph keys: "align":"left|center|right|justify|justifyCenter|justifyRight|justifyAll","verticalAlign":"top|center|bottom|justify","firstLineIndent":pt,"startIndent":pt,"endIndent":pt,"spaceBefore":pt,"spaceAfter":pt,"autoLeading":%,"direction":"auto|ltr|rtl","hyphenate":bool,"hangingRoman":bool,"orientation":"horizontal|vertical"}}"##)
                     .into_boxed_str(),
             ),
             enabled: has_doc,
@@ -1215,6 +1215,15 @@ pub fn specs() -> Vec<CommandSpec> {
                         });
                     }
                     step_char_metrics(t, a, b, &props);
+                    // The whole layer's writing direction, not a character or paragraph run.
+                    // TypeR presets set this so a vertical manga preset really creates and
+                    // re-styles vertical text layers.
+                    if let Some(v) = p.get("orientation").and_then(Value::as_str) {
+                        t.orientation = match v {
+                            "vertical" => Orientation::Vertical,
+                            _ => Orientation::Horizontal,
+                        };
+                    }
                     let mut pprobe = ParagraphStyle::default();
                     if apply_para_props(&mut pprobe, p) {
                         style_paragraphs(t, a, b, &|st| {

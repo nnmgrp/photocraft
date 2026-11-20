@@ -32,6 +32,20 @@ fn has_text(s: &Session) -> std::result::Result<(), String> {
 /// The path area type fills, in document space: the work path (default) or a shape layer's
 /// path (`"shape":id`). Every closed subpath counts, with its path operation.
 fn area_source(doc: &Document, p: &Value) -> Result<Path> {
+    // An inline document-space path (e.g. a balloon's pure body contour) lets the manga seam
+    // apply a `Contour` text fit without first writing a throwaway work path.
+    if let Some(raw) = p.get("path") {
+        let path: Path = serde_json::from_value(raw.clone())
+            .map_err(|e| bad(&format!("`path` is not a valid vector path: {e}")))?;
+        let knots = path.subpaths.iter().fold(0usize, |n, s| n.saturating_add(s.knots.len()));
+        if knots > MAX_AREA_KNOTS {
+            return Err(bad("the path has too many anchor points"));
+        }
+        if path.inverted {
+            return Err(bad("an inverted path has no inside to fill"));
+        }
+        return Ok(path);
+    }
     let path = match p.get("shape") {
         None | Some(Value::Null) => doc.work_path.as_ref().ok_or_else(|| bad("the document has no work path; draw a closed path or pass \"shape\":layerId"))?,
         Some(v) => {
@@ -84,7 +98,7 @@ pub fn specs() -> Vec<CommandSpec> {
         label: "Area Type",
         menu: &[],
         shortcut: None,
-        params: r##"{"layer":id? (default active Type layer),"shape":layerId? (a shape layer; default the work path)} → the text wraps inside the path's closed subpaths, holes included"##,
+        params: r##"{"layer":id? (default active Type layer),"shape":layerId? (a shape layer; default the work path),"path":Path? (inline document-space path, for a balloon's contour)} → the text wraps inside the path's closed subpaths, holes included"##,
         enabled: has_text,
         journal: true,
         run: fill_path,

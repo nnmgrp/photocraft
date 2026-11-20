@@ -514,3 +514,171 @@ fn convert_to_linework_preserves_black_paper_fill() {
     let fill = fill_rgba(backing.fill.as_ref().unwrap()).unwrap();
     assert!(fill[0] < 0.02 && fill[1] < 0.02 && fill[2] < 0.02 && fill[3] > 0.98, "black Paper fill stays black: {fill:?}");
 }
+
+// --- Auto-follow / text-fit-mode regression coverage -------------------------------------------
+
+fn text_layer(s: &Session, id: u64) -> photocraft_doc::TextLayer {
+    match &doc(s).layer(LayerId(id)).unwrap().content {
+        LayerContent::Text(t) => t.clone(),
+        other => panic!("not a text layer: {}", other.kind_name()),
+    }
+}
+
+fn box_origin(t: &photocraft_doc::TextLayer) -> [f64; 2] {
+    match t.shape {
+        photocraft_doc::text::TextShape::Box { .. } => [t.transform.m[4], t.transform.m[5]],
+        ref other => panic!("expected a box text shape, got {other:?}"),
+    }
+}
+
+fn box_size(t: &photocraft_doc::TextLayer) -> [f32; 2] {
+    match t.shape {
+        photocraft_doc::text::TextShape::Box { width, height, .. } => [width, height],
+        ref other => panic!("expected a box text shape, got {other:?}"),
+    }
+}
+
+fn linked_balloon(s: &mut Session, rect: [f64; 4], tid: u64) -> u64 {
+    let b = LiveBalloon { id: 1, body: LiveBalloonBody::Ellipse { rect, squircle: 0.0 }, tails: Vec::new(), ..LiveBalloon::default() };
+    let layer = s.execute("shape.balloon.create", json!({ "balloon": b })).unwrap()["layer"].as_u64().unwrap();
+    let mut b = balloon_group(s, layer).items[0].clone();
+    b.linked_text_layer = Some(LayerId(tid));
+    s.execute("shape.balloon.update", json!({ "layer": layer, "balloon": b })).unwrap();
+    layer
+}
+
+fn push_balloon(s: &mut Session, layer: u64, f: impl FnOnce(&mut LiveBalloon)) {
+    let mut b = balloon_group(s, layer).items[0].clone();
+    f(&mut b);
+    s.execute("shape.balloon.update", json!({ "layer": layer, "balloon": b })).unwrap();
+}
+
+#[test]
+fn switching_text_fit_mode_restructures_the_same_linked_text_layer() {
+    let mut s = session(800, 600);
+    let text = s.execute("type.create", json!({ "box": [120, 120, 200, 100], "text": "Hello", "size": 14 })).unwrap()["layer"]
+        .as_u64()
+        .unwrap();
+    let shape_id = linked_balloon(&mut s, [100.0, 100.0, 400.0, 240.0], text);
+    let text_count = doc(&s).layers.iter().filter(|l| matches!(l.content, LayerContent::Text(_))).count();
+
+    // Safe -> a box on the safe rect.
+    assert!(matches!(text_layer(&s, text).shape, photocraft_doc::text::TextShape::Box { .. }));
+    let safe_w = box_size(&text_layer(&s, text))[0];
+    let safe_origin = box_origin(&text_layer(&s, text));
+
+    // Outer -> the same layer, a wider box on the tail-free body bounds.
+    push_balloon(&mut s, shape_id, |b| b.text_fit_mode = BalloonTextFitMode::Outer);
+    assert!(matches!(text_layer(&s, text).shape, photocraft_doc::text::TextShape::Box { .. }), "Outer stays a box");
+    assert!(box_size(&text_layer(&s, text))[0] > safe_w, "Outer uses the full body width");
+
+    // Contour -> the same layer becomes area type, not a new layer.
+    push_balloon(&mut s, shape_id, |b| b.text_fit_mode = BalloonTextFitMode::Contour);
+    let area = text_layer(&s, text);
+    let photocraft_doc::text::TextShape::Area { path } = &area.shape else { panic!("Contour must be area type: {:?}", area.shape) };
+    assert_eq!(path.subpaths.len(), 1);
+    assert!(path.subpaths[0].closed);
+    let body = balloon_group(&s, shape_id).items[0].clone();
+    let doc_bounds = body.text_area_path().control_bounds().unwrap();
+    // Area knots are stored in text space; mapping them back must land on the balloon contour.
+    let first = path.subpaths[0].knots[0].anchor;
+    let doc_first = photocraft_geom::Point::new(first.x * area.transform.m[0] + area.transform.m[4], first.y * area.transform.m[3] + area.transform.m[5]);
+    assert!(doc_first.x >= doc_bounds.0 - 1.0 && doc_first.x <= doc_bounds.2 + 1.0, "area path lands at the balloon: {doc_first:?} vs {doc_bounds:?}");
+
+    // Contour -> Safe flattens back to a box on the original safe rect, same layer id throughout.
+    push_balloon(&mut s, shape_id, |b| b.text_fit_mode = BalloonTextFitMode::Safe);
+    assert!(matches!(text_layer(&s, text).shape, photocraft_doc::text::TextShape::Box { .. }));
+    assert_eq!(box_size(&text_layer(&s, text))[0], safe_w);
+    assert_eq!(box_origin(&text_layer(&s, text)), safe_origin);
+    assert_eq!(doc(&s).layers.iter().filter(|l| matches!(l.content, LayerContent::Text(_))).count(), text_count);
+    assert!(doc(&s).layer(LayerId(text)).is_some());
+}
+
+#[test]
+fn dragging_vertex_overrides_refits_linked_text_when_auto_follow_is_on() {
+    let mut s = session(800, 600);
+    let text = s.execute("type.create", json!({ "box": [120, 120, 200, 100], "text": "Hi", "size": 14 })).unwrap()["layer"]
+        .as_u64()
+        .unwrap();
+    let shape_id = linked_balloon(&mut s, [100.0, 100.0, 400.0, 240.0], text);
+    let before = box_origin(&text_layer(&s, text));
+
+    push_balloon(&mut s, shape_id, |b| {
+        b.vertex_overrides.push(photocraft_doc::vector::VertexOverride { index: 0, offset: [0.0, -40.0] });
+    });
+    let after = box_origin(&text_layer(&s, text));
+    assert!(after[1] < before[1] - 4.0, "a dragged bulge moves the linked text: {before:?} -> {after:?}");
+
+    // With auto-follow off, the same geometry change leaves the box alone.
+    push_balloon(&mut s, shape_id, |b| {
+        b.auto_follow_text = false;
+        b.vertex_overrides.clear();
+    });
+    let frozen = box_origin(&text_layer(&s, text));
+    push_balloon(&mut s, shape_id, |b| {
+        b.vertex_overrides.push(photocraft_doc::vector::VertexOverride { index: 2, offset: [60.0, 0.0] });
+    });
+    assert_eq!(box_origin(&text_layer(&s, text)), frozen);
+}
+
+#[test]
+fn move_and_transform_follow_the_balloon_without_double_moving_or_corrupting_overrides() {
+    let mut s = session(800, 600);
+    let text = s.execute("type.create", json!({ "box": [120, 120, 200, 100], "text": "Hi", "size": 14 })).unwrap()["layer"]
+        .as_u64()
+        .unwrap();
+    let shape_id = linked_balloon(&mut s, [100.0, 100.0, 400.0, 240.0], text);
+    let overrides = vec![photocraft_doc::vector::VertexOverride { index: 0, offset: [0.0, -20.0] }];
+    push_balloon(&mut s, shape_id, |b| b.vertex_overrides = overrides.clone());
+
+    // Move Tool: the lettering travels with its chamber and the override delta is untouched.
+    let before = box_origin(&text_layer(&s, text));
+    s.execute("layer.translate", json!({ "layer": shape_id, "dx": 50, "dy": 30 })).unwrap();
+    let moved = box_origin(&text_layer(&s, text));
+    assert!((moved[0] - before[0] - 50.0).abs() < 1e-6 && (moved[1] - before[1] - 30.0).abs() < 1e-6, "move follows: {before:?} -> {moved:?}");
+    assert_eq!(balloon_group(&s, shape_id).items[0].vertex_overrides, overrides, "offsets are deltas, not points");
+
+    // Free Transform: scaling the chamber scales the linked text box in the same step.
+    let size_before = box_size(&text_layer(&s, text));
+    s.execute("edit.transform", json!({ "layer": shape_id, "matrix": [2.0, 0.0, 0.0, 2.0, 0.0, 0.0] })).unwrap();
+    let scaled = text_layer(&s, text);
+    assert!((box_size(&scaled)[0] - size_before[0] * 2.0).abs() < 1.0, "text box scales with the balloon");
+    assert_eq!(balloon_group(&s, shape_id).items[0].vertex_overrides.len(), 1);
+
+    // Selecting both layers and translating must not refit the text. Nudge it off the safe rect
+    // first so a stray sync would snap it back and make the delta wrong.
+    s.execute("type.edit", json!({ "layer": text, "move": [13.0, 0.0] })).unwrap();
+    let from = box_origin(&text_layer(&s, text));
+    s.execute("layer.select", json!({ "layer": text, "mode": "add" })).unwrap();
+    s.execute("layer.translate", json!({ "dx": 10, "dy": 0 })).unwrap();
+    let final_origin = box_origin(&text_layer(&s, text));
+    assert!((final_origin[0] - from[0] - 10.0).abs() < 1e-6, "a jointly selected text layer moves once: {from:?} -> {final_origin:?}");
+}
+
+/// The shared limits must agree with the UI sliders: values the slider can produce pass
+/// validation, values just outside them are rejected (the old caps were 600/128 and bokeh was
+/// not validated at all).
+#[test]
+fn validate_balloon_uses_the_shared_particle_limits() {
+    let base = || LiveBalloon {
+        id: 1,
+        body: LiveBalloonBody::Ellipse { rect: [10.0, 10.0, 200.0, 140.0], squircle: 0.0 },
+        ..LiveBalloon::default()
+    };
+
+    for (count, ok) in [(610, true), (2000, true), (2001, false), (23, false)] {
+        let mut b = base();
+        b.stipple_count = count;
+        assert_eq!(validate_balloon(&b).is_ok(), ok, "stipple_count {count}");
+    }
+    for (count, ok) in [(400, true), (401, false)] {
+        let mut b = base();
+        b.sparkle_count = count;
+        assert_eq!(validate_balloon(&b).is_ok(), ok, "sparkle_count {count}");
+    }
+    for (count, ok) in [(400, true), (401, false)] {
+        let mut b = base();
+        b.bokeh_count = count;
+        assert_eq!(validate_balloon(&b).is_ok(), ok, "bokeh_count {count}");
+    }
+}

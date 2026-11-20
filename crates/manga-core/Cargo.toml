@@ -20,3 +20,5 @@ photocraft-vector = { workspace = true }
 photocraft-algo = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+log = { workspace = true }
+web-time = { workspace = true }

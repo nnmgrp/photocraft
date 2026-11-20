@@ -75,6 +75,10 @@ pub struct SfxPanelState {
     pub font_query: String,
     pub cached_fonts: Option<Vec<String>>,
     pub preset_name: String,
+    /// True while a slider/colour drag is in progress: the next committed (non-preview) render
+    /// is deferred until the pointer is released. Transient only — `SfxPanelState` has no serde
+    /// derives and is never persisted, so this field is intentionally not part of any saved state.
+    pub pending_full_render: bool,
     active_tab: DockTab,
 }
 
@@ -367,21 +371,40 @@ pub fn panel(ui: &mut Ui, st: &mut SfxPanelState, gizmo: &mut SfxGizmoState, tar
         draw_actions_section(ui, st, target, &mut out);
     });
 
-    if st.draft != before
-        && let (Some(doc_id), Some(layer_id)) = (target.doc_id, target.layer_id)
-        && target.data.is_some()
-    {
-        st.draft.validate();
-        let coalesce = format!("sfx-panel:{}:{}", doc_id.0, layer_id.0);
-        out.commands.push(OutCommand::new(
-            "sfx.update",
-            json!({
-                "layer": layer_id.0,
-                "sfx": st.draft,
-                "coalesce": coalesce,
-            }),
-        ));
-        st.synced_data = Some(st.draft.clone());
+    // Interactive drags render through the fast proxy preview; the final full-resolution render
+    // is committed as soon as the mouse button is released.
+    let pointer_down = ui.ctx().input(|i| i.pointer.primary_down());
+    let has_target = target.doc_id.is_some() && target.layer_id.is_some() && target.data.is_some();
+    if has_target && let (Some(doc_id), Some(layer_id)) = (target.doc_id, target.layer_id) {
+        if st.draft != before {
+            st.draft.validate();
+            let coalesce = format!("sfx-panel:{}:{}", doc_id.0, layer_id.0);
+            let preview = pointer_down;
+            st.pending_full_render = pointer_down;
+            out.commands.push(OutCommand::new(
+                "sfx.update",
+                json!({
+                    "layer": layer_id.0,
+                    "sfx": st.draft,
+                    "coalesce": coalesce,
+                    "preview": preview,
+                }),
+            ));
+            st.synced_data = Some(st.draft.clone());
+        } else if st.pending_full_render && !pointer_down {
+            // The user just released the mouse after dragging a slider / colour picker.
+            st.pending_full_render = false;
+            let coalesce = format!("sfx-panel:{}:{}", doc_id.0, layer_id.0);
+            out.commands.push(OutCommand::new(
+                "sfx.update",
+                json!({
+                    "layer": layer_id.0,
+                    "sfx": st.draft,
+                    "coalesce": coalesce,
+                    "preview": false,
+                }),
+            ));
+        }
     }
 
     out
@@ -770,9 +793,11 @@ fn draw_line_effect_card(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens) {
                 });
                 slider_row_u8(ui, t, "Проходов пера:", &mut le.shtack_bristles, 3..=6, "");
                 slider_row_f32(ui, t, "Разброс штрихов:", &mut le.shtack_split_pct, 0.0..=100.0, "%");
-                slider_row_f32(ui, t, "Вылет игл:", &mut le.shtack_overshoot_px, 0.0..=34.0 * scale, "px");
+                // Needle length is a percentage of the glyph height, not a document pixel length.
+                slider_row_f32(ui, t, "Вылет игл:", &mut le.shtack_overshoot_px, 0.0..=60.0, "%");
                 slider_row_f32(ui, t, "Толщина штриха:", &mut le.shtack_thickness_px, 6.0..=24.0 * scale, "px");
                 slider_row_f32(ui, t, "Сухость / Зерно:", &mut le.shtack_dryness_pct, 0.0..=100.0, "%");
+                ui.checkbox(&mut le.shtack_fill_interior, "Заливать внутри буквы (Fill)");
             }
         }
     });

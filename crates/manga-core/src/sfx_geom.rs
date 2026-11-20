@@ -121,8 +121,8 @@ pub fn solve_homography(src: [[f64; 2]; 4], dst: [[f64; 2]; 4]) -> [f64; 9] {
         if !pivot.is_finite() || pivot.abs() < 1e-10 {
             return IDENTITY_H;
         }
-        for c in col..=8 {
-            a[col][c] /= pivot;
+        for v in a[col].iter_mut().skip(col) {
+            *v /= pivot;
         }
         let pivot_row = a[col];
         for (r, row) in a.iter_mut().enumerate() {
@@ -771,7 +771,7 @@ pub fn build_sfx_geometry(data: &SfxData, engine: &mut TextEngine, dpi: f32) -> 
     let mut warped_box: Option<[f64; 4]> = None;
     let mut contour_counter = 0usize;
 
-    for ((g_idx, contours), g_rest_bounds) in raw_glyphs.into_iter().zip(glyph_rest_boxes.into_iter()) {
+    for ((g_idx, contours), g_rest_bounds) in raw_glyphs.into_iter().zip(glyph_rest_boxes) {
         let g_rest_center = [(g_rest_bounds[0] + g_rest_bounds[2]) * 0.5, (g_rest_bounds[1] + g_rest_bounds[3]) * 0.5];
         let per = data.per_glyph.iter().find(|pg| pg.glyph_index == g_idx).copied();
 

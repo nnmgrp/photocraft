@@ -910,7 +910,7 @@ fn select_nodes_in_marquee(data: &SfxData, rb: [f64; 4], a: [f64; 2], b: [f64; 2
     selected.sort_unstable();
 }
 
-fn push_update(drag: &mut ActiveDrag, next: SfxData, out: &mut SfxGizmoOutcome) {
+fn push_update(drag: &mut ActiveDrag, next: SfxData, out: &mut SfxGizmoOutcome, preview: bool) {
     if next != drag.reported_sfx {
         let mut s = next.clone();
         s.validate();
@@ -920,6 +920,7 @@ fn push_update(drag: &mut ActiveDrag, next: SfxData, out: &mut SfxGizmoOutcome) 
                 "layer": drag.layer_id.0,
                 "sfx": s,
                 "coalesce": drag.coalesce,
+                "preview": preview,
             }),
         ));
         drag.reported_sfx = next.clone();
@@ -974,7 +975,7 @@ pub fn pointer(gizmo: &mut SfxGizmoState, view: &SfxView<'_>, ev: CanvasToolEven
                             sfx.validate();
                             out.commands.push(OutCommand::new(
                                 "sfx.update",
-                                json!({ "layer": layer_id.0, "sfx": sfx, "coalesce": coalesce }),
+                                json!({ "layer": layer_id.0, "sfx": sfx, "coalesce": coalesce, "preview": true }),
                             ));
                             out.updated_sfx = Some(sfx);
                             out.handled = true;
@@ -994,7 +995,7 @@ pub fn pointer(gizmo: &mut SfxGizmoState, view: &SfxView<'_>, ev: CanvasToolEven
                             sfx.validate();
                             out.commands.push(OutCommand::new(
                                 "sfx.update",
-                                json!({ "layer": layer_id.0, "sfx": sfx, "coalesce": coalesce }),
+                                json!({ "layer": layer_id.0, "sfx": sfx, "coalesce": coalesce, "preview": true }),
                             ));
                             out.updated_sfx = Some(sfx.clone());
                             DragMode::SplinePoint { index: insert_at }
@@ -1010,7 +1011,7 @@ pub fn pointer(gizmo: &mut SfxGizmoState, view: &SfxView<'_>, ev: CanvasToolEven
                         sfx.validate();
                         out.commands.push(OutCommand::new(
                             "sfx.update",
-                            json!({ "layer": layer_id.0, "sfx": sfx, "coalesce": coalesce }),
+                            json!({ "layer": layer_id.0, "sfx": sfx, "coalesce": coalesce, "preview": true }),
                         ));
                         out.updated_sfx = Some(sfx.clone());
                         DragMode::SplinePoint { index: insert_at }
@@ -1126,7 +1127,7 @@ pub fn pointer(gizmo: &mut SfxGizmoState, view: &SfxView<'_>, ev: CanvasToolEven
                     apply_liquify_drag(&mut drag, [x, y], rad, strength, &mut next);
                 }
             }
-            push_update(&mut drag, next, &mut out);
+            push_update(&mut drag, next, &mut out, true);
             gizmo.drag = Some(drag);
             out.handled = true;
             out
@@ -1146,32 +1147,32 @@ pub fn pointer(gizmo: &mut SfxGizmoState, view: &SfxView<'_>, ev: CanvasToolEven
                 DragMode::Free(_) => {
                     next = drag.initial_sfx.clone();
                     apply_free_drag(&drag, [x, y], mods, &mut next);
-                    push_update(&mut drag, next, &mut out);
+                    push_update(&mut drag, next, &mut out, false);
                 }
                 DragMode::SplinePoint { .. } => {
                     next = drag.initial_sfx.clone();
                     apply_spline_drag(&drag, [x, y], &mut next);
-                    push_update(&mut drag, next, &mut out);
+                    push_update(&mut drag, next, &mut out, false);
                 }
                 DragMode::VectorShadow => {
                     next = drag.initial_sfx.clone();
                     apply_shadow_drag(&drag, [x, y], mods, &mut next);
-                    push_update(&mut drag, next, &mut out);
+                    push_update(&mut drag, next, &mut out, false);
                 }
                 DragMode::Glyph { .. } => {
                     next = drag.initial_sfx.clone();
                     apply_glyph_drag(&drag, [x, y], mods, &mut next);
-                    push_update(&mut drag, next, &mut out);
+                    push_update(&mut drag, next, &mut out, false);
                 }
                 DragMode::MeshNode { .. } => {
                     apply_mesh_drag(&drag, &gizmo.selected_nodes, [x, y], &mut next);
-                    push_update(&mut drag, next, &mut out);
+                    push_update(&mut drag, next, &mut out, false);
                 }
                 DragMode::Liquify { .. } => {
                     let rad = gizmo.liquify_radius_px;
                     let strength = gizmo.liquify_strength;
                     apply_liquify_drag(&mut drag, [x, y], rad, strength, &mut next);
-                    push_update(&mut drag, next, &mut out);
+                    push_update(&mut drag, next, &mut out, false);
                 }
             }
             out.handled = true;
@@ -1193,6 +1194,7 @@ pub fn cancel_drag(gizmo: &mut SfxGizmoState, view: &SfxView<'_>) -> SfxGizmoOut
                 "layer": drag.layer_id.0,
                 "sfx": restored,
                 "coalesce": drag.coalesce,
+                "preview": false,
             }),
         ));
         out.updated_sfx = Some(drag.initial_sfx);

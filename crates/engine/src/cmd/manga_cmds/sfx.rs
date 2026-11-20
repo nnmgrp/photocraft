@@ -13,7 +13,7 @@ use photocraft_doc::sfx::{
 };
 use photocraft_doc::text::Orientation;
 use photocraft_doc::{Group, Layer, LayerContent, LayerId, Rect};
-use photocraft_manga_core::sfx_render::{SfxRenderOutput, render_sfx};
+use photocraft_manga_core::sfx_render::{SfxRenderOutput, render_sfx_with_options};
 use serde_json::{Value, json};
 
 use crate::commands::{CommandSpec, bad, has_doc, layer_param};
@@ -399,8 +399,12 @@ fn auto_layer_name(data: &SfxData) -> String {
 }
 
 fn render_with_shared_text(data: &SfxData, format: PixelFormat, dpi: f32) -> SfxRenderOutput {
+    render_with_shared_text_preview(data, format, dpi, false)
+}
+
+fn render_with_shared_text_preview(data: &SfxData, format: PixelFormat, dpi: f32, preview: bool) -> SfxRenderOutput {
     let mut guard = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
-    render_sfx(data, &mut guard, format, dpi)
+    render_sfx_with_options(data, &mut guard, format, dpi, preview)
 }
 
 fn apply_render_to_layer(layer: &mut Layer, data: SfxData, rendered: SfxRenderOutput, fmt: PixelFormat) {
@@ -497,7 +501,10 @@ fn sfx_update(s: &mut Session, p: &Value) -> Result<Value> {
         }
         (st.doc.pixel_format(), st.doc.resolution_dpi)
     };
-    let rendered = render_with_shared_text(&data, fmt, dpi);
+    // Interactive slider / gizmo drags ask for a fast proxy preview; the final full-resolution
+    // render is emitted on pointer release with `preview: false`.
+    let preview = p.get("preview").and_then(Value::as_bool).unwrap_or(false);
+    let rendered = render_with_shared_text_preview(&data, fmt, dpi, preview);
     let bounds = rendered.bounds();
 
     s.edit("Update SFX", |doc, _| {
@@ -670,7 +677,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Update SFX Layer",
             menu: &[],
             shortcut: None,
-            params: r##"{"layer":id?,"sfx":SfxData,"coalesce":str?} -> {ok:true,layer,bounds}"##,
+            params: r##"{"layer":id?,"sfx":SfxData,"coalesce":str?,"preview":bool?} -> {ok:true,layer,bounds}"##,
             enabled: has_doc,
             run: sfx_update,
             journal: true,

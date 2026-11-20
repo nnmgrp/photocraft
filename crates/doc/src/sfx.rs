@@ -368,6 +368,11 @@ pub struct SfxLineEffect {
     pub shtack_dryness_pct: f32,
     #[serde(default = "default_seed_one")]
     pub shtack_seed: u32,
+    /// `false` (default) = hollow sketch contour: `ЗАЛИВКА (FILL)` colours the Shtack strokes
+    /// themselves and the letter interior stays transparent. `true` = fill the letter interior
+    /// with `ЗАЛИВКА (FILL)` and draw the Shtack strokes on top in `line_color`.
+    #[serde(default)]
+    pub shtack_fill_interior: bool,
 }
 
 impl Default for SfxLineEffect {
@@ -406,6 +411,7 @@ impl Default for SfxLineEffect {
             shtack_thickness_px: 14.0,
             shtack_dryness_pct: 26.0,
             shtack_seed: 1,
+            shtack_fill_interior: false,
         }
     }
 }
@@ -440,7 +446,8 @@ impl SfxLineEffect {
 
         self.shtack_bristles = self.shtack_bristles.clamp(3, 6);
         self.shtack_split_pct = finite_f32(self.shtack_split_pct, 78.0).clamp(0.0, 100.0);
-        self.shtack_overshoot_px = finite_f32(self.shtack_overshoot_px, 20.0).clamp(0.0, MAX_SFX_EFFECT_PX);
+        // Needle overshoot is now a PERCENT of the glyph height (0..=60%), not a pixel length.
+        self.shtack_overshoot_px = finite_f32(self.shtack_overshoot_px, 20.0).clamp(0.0, 60.0);
         self.shtack_thickness_px = finite_f32(self.shtack_thickness_px, 14.0).clamp(6.0, MAX_SFX_EFFECT_PX);
         self.shtack_dryness_pct = finite_f32(self.shtack_dryness_pct, 26.0).clamp(0.0, 100.0);
     }
@@ -1208,7 +1215,7 @@ pub fn scale_new_sfx_for_document(data: &mut SfxData, doc_width: u32, doc_height
     data.line_effect.spike_size_px = scaled(data.line_effect.spike_size_px).max(2.0);
     data.line_effect.gpen_overshoot_px = scaled(data.line_effect.gpen_overshoot_px);
     data.line_effect.ink_brush_overshoot_px = scaled(data.line_effect.ink_brush_overshoot_px);
-    data.line_effect.shtack_overshoot_px = scaled(data.line_effect.shtack_overshoot_px);
+    // `shtack_overshoot_px` is a percentage of glyph height, so it must NOT be scaled with the document.
     data.line_effect.shtack_thickness_px = scaled(data.line_effect.shtack_thickness_px).max(6.0);
     data.dry_brush.lic_length_px = scaled(data.dry_brush.lic_length_px).max(4.0);
     data.vector_shadow.distance_px = scaled(data.vector_shadow.distance_px);

@@ -4,12 +4,14 @@
 //! - 2-pass Halo-then-Ink compositing (plus Vector Shadow / 3D Extrude & legacy `SfxStylePass` stack)
 //! - 6 stylized Line/Outline engines (`Clean`, `OneBit`, curvature-clamped `Spikes`,
 //!   `GPenNib` & `BrushStroke` with `#` corner cross-overs, and `Shtack` in
-//!   `SaiPenSketch` / `DryPencil` modes via merged Zhang-Suen skeletons, tangent
-//!   overshoots and several independent tapered sketch passes per stroke)
+//!   `SaiPenSketch` / `DryPencil` modes built directly from the vector glyph contours
+//!   (no raster skeleton downsampling), with proportional needle overshoots, guaranteed
+//!   compact-contour preservation and several independent tapered sketch passes per stroke)
 //! - 4 Rust-ready Dry Brush engines (`SdfPhysics`, `SdfSeg`, `SdfEtf` + LIC, `Vector`)
 //! - Procedural screentone sheets (`photocraft-algo`) and `NegativeInvert` (`BlendMode::Difference`).
 
 use std::f64::consts::PI;
+use std::sync::Mutex;
 
 use photocraft_algo::comic_screentone::{ScreentoneMode, render_screentone_to_surface};
 use photocraft_color::PixelFormat;
@@ -22,6 +24,7 @@ use photocraft_geom::Rect;
 use photocraft_raster::{Surface, from_rgba_into};
 use photocraft_text::TextEngine;
 use photocraft_vector::{Polyline, Rasterizer, StrokeStyle, stroke_polygons};
+use web_time::Instant;
 
 use crate::sfx_geom::{PreparedSfx, build_sfx_geometry};
 
@@ -30,7 +33,11 @@ const MAX_RENDER_PIXELS: usize = 16 * 1024 * 1024;
 /// Hard safety ceiling for the *returned* document-space rect. The surface stays sparse: only
 /// proxy-derived ink rows are written, so a gigapixel layer does not allocate a gigapixel buffer.
 const MAX_FULL_RENDER_EXTENT: i32 = 65_536;
-const SKELETON_MAX_GRID_DIM: usize = 256;
+
+/// Fast interactive proxy ceiling used while a slider or gizmo handle is being dragged.
+/// The committed (mouse-release) render uses the full 4096 px / 16 MP ceilings instead.
+const PREVIEW_MAX_SIDE: i32 = 420;
+const PREVIEW_MAX_PIXELS: usize = 135_000;
 
 /// Output of rendering an [`SfxData`] stack into document-space surfaces.
 #[derive(Clone, Debug)]
@@ -402,7 +409,13 @@ fn compute_render_bounds(data: &SfxData, geom: &PreparedSfx) -> Rect {
         SfxLineStyle::BrushStroke => f64::from(le.ink_brush_overshoot_px) + f64::from(le.line_width_px) * 0.9 + 4.0,
         // Needle overshoots are randomized up to ~1.5x the slider value; keep long SAI
         // needles plus the round EDT halo fully inside the surface (never clipped).
-        SfxLineStyle::Shtack => f64::from(le.shtack_overshoot_px) * 1.6 + f64::from(le.shtack_thickness_px) + 6.0,
+        SfxLineStyle::Shtack => {
+            // Needles are a percentage of glyph height, so the pad must grow with the lettering.
+            let gh = (geom.warped_box[3] - geom.warped_box[1]).abs().max(24.0);
+            let ratio = f64::from(le.shtack_overshoot_px).clamp(0.0, 60.0) / 100.0;
+            let needle = gh * ratio * if le.shtack_variant == SfxShtackVariant::DryPencil { 0.48 } else { 1.0 };
+            needle * 1.6 + f64::from(le.shtack_thickness_px) * (gh / 160.0).clamp(0.65, 4.0) + 6.0
+        }
     };
 
     let mut min_dx: f64 = 0.0;
@@ -709,26 +722,26 @@ fn rgba_to_surface(rgba: &[[f32; 4]], rect: Rect, format: PixelFormat) -> Surfac
 
 /// Proxy dimensions for a full document-space target. `proxy_scale == 1.0` keeps the exact
 /// historical fast path; otherwise the target is bounded to `MAX_RENDER_EXTENT`² / `MAX_RENDER_PIXELS`.
-fn proxy_target(bounds: Rect) -> (usize, usize, f64) {
+fn proxy_target_with(bounds: Rect, max_side: i32, max_pixels: usize) -> (usize, usize, f64) {
     let tw = bounds.width() as usize;
     let th = bounds.height() as usize;
     let mut scale = 1.0_f64;
-    if tw > MAX_RENDER_EXTENT as usize {
-        scale = scale.min(MAX_RENDER_EXTENT as f64 / tw as f64);
+    if tw > max_side as usize {
+        scale = scale.min(max_side as f64 / tw as f64);
     }
-    if th > MAX_RENDER_EXTENT as usize {
-        scale = scale.min(MAX_RENDER_EXTENT as f64 / th as f64);
+    if th > max_side as usize {
+        scale = scale.min(max_side as f64 / th as f64);
     }
-    if tw.saturating_mul(th) > MAX_RENDER_PIXELS {
-        let area_scale = (MAX_RENDER_PIXELS as f64 / (tw.saturating_mul(th) as f64)).sqrt();
+    if tw.saturating_mul(th) > max_pixels {
+        let area_scale = (max_pixels as f64 / (tw.saturating_mul(th) as f64)).sqrt();
         scale = scale.min(area_scale);
     }
     if scale >= 1.0 {
         return (tw, th, 1.0);
     }
-    let mut pw = ((tw as f64 * scale).round() as usize).clamp(1, MAX_RENDER_EXTENT as usize);
-    let mut ph = ((th as f64 * scale).round() as usize).clamp(1, MAX_RENDER_EXTENT as usize);
-    while pw.saturating_mul(ph) > MAX_RENDER_PIXELS {
+    let mut pw = ((tw as f64 * scale).round() as usize).clamp(1, max_side as usize);
+    let mut ph = ((th as f64 * scale).round() as usize).clamp(1, max_side as usize);
+    while pw.saturating_mul(ph) > max_pixels {
         if pw >= ph && pw > 1 {
             pw -= 1;
         } else if ph > 1 {
@@ -738,6 +751,10 @@ fn proxy_target(bounds: Rect) -> (usize, usize, f64) {
         }
     }
     (pw, ph, scale)
+}
+
+fn proxy_target(bounds: Rect) -> (usize, usize, f64) {
+    proxy_target_with(bounds, MAX_RENDER_EXTENT, MAX_RENDER_PIXELS)
 }
 
 fn scale_box(box4: [f64; 4], origin: [f64; 2], scale: f64) -> [f64; 4] {
@@ -802,8 +819,10 @@ fn proxy_scaled_data(data: &SfxData, scale: f64) -> SfxData {
         le.spike_size_px = px(le.spike_size_px);
         le.gpen_overshoot_px = px(le.gpen_overshoot_px);
         le.ink_brush_overshoot_px = px(le.ink_brush_overshoot_px);
-        le.shtack_overshoot_px = px(le.shtack_overshoot_px);
-        le.shtack_thickness_px = px(le.shtack_thickness_px);
+        // `shtack_overshoot_px` is a percentage of glyph height: the proxy geometry already
+        // scales the height, so scaling the percentage here would shrink needles twice.
+        // `shtack_thickness_px` is likewise proportional to glyph height via `size_scale`.
+
     }
     out.dry_brush.lic_length_px = px(out.dry_brush.lic_length_px);
     out.vector_shadow.distance_px = px(out.vector_shadow.distance_px);
@@ -1203,70 +1222,16 @@ fn build_brush_stroke_polygons(geom: &PreparedSfx, le: &SfxLineEffect) -> Vec<Ve
 // 5. ⚡ SHTACK BRUSH — SHARED MULTI-PASS HAND-DRAWN SKETCH GEOMETRY
 // =============================================================================
 //
-// Both submodes share one geometry engine:
-//   * skeleton chains are MERGED across T-junctions when their tangents continue smoothly
-//     (so the stem of `B` is one stroke, not a pile of fragments), and split at sharp
-//     L-corners so intersecting strokes both pierce the corner;
-//   * every resulting stroke overshoots along its end tangent at BOTH ends;
-//   * 3..=6 independent tapered passes (2 dense core + expressive side whiskers) create
-//     natural sketch air gaps — no parallel rails and no fake white `cut_polys` wedges.
+// Both submodes share one geometry engine, working DIRECTLY on the exact vector glyph contours:
+//   * each closed contour is simplified only at micro-collinear vertices, then split into
+//     independent line/arc segments at sharp corners (>36° turns); smooth loops become two arcs;
+//   * compact contours (the dot/bar of `!`, `?`, `i`, accents) keep their solid core PLUS a few
+//     short sketch strokes, so grid downsampling can never make them vanish;
+//   * every segment overshoots along its end tangent at BOTH ends by a percentage of glyph height;
+//   * 3..=6 independent tapered passes (2 dense core + thinner, laterally separated whiskers)
+//     create natural hand-drawn air gaps — no fake white `cut_polys` wedges.
 // `SaiPenSketch` keeps long sharp needles; `DryPencil` shortens/roughens them and adds
 // deterministic paper-grain breakup in coverage space.
-
-/// A traced skeleton chain in grid space. `node_a`/`node_b` record a junction pixel at the
-/// corresponding end (free endpoints and sharp-corner splits use `None`).
-#[derive(Clone, Debug)]
-struct ShtackChain {
-    pts: Vec<(usize, usize)>,
-    node_a: Option<(usize, usize)>,
-    node_b: Option<(usize, usize)>,
-}
-
-/// Connected components (8-neighbourhood) of a binary grid, with per-pixel component ids
-/// and integer bounding boxes. Used to keep compact glyph parts (dots on `!`, `i`, `?`,
-/// hyphens) from being thinned away.
-fn grid_connected_components(mask: &[u8], w: usize, h: usize) -> (Vec<usize>, Vec<GridBox>) {
-    let mut ids = vec![usize::MAX; w * h];
-    let mut boxes: Vec<GridBox> = Vec::new();
-    let mut stack: Vec<(usize, usize)> = Vec::new();
-    for y in 0..h {
-        for x in 0..w {
-            let start = y * w + x;
-            if mask[start] == 0 || ids[start] != usize::MAX {
-                continue;
-            }
-            let id = boxes.len();
-            let mut box_ = (x, y, x, y);
-            ids[start] = id;
-            stack.push((x, y));
-            while let Some((cx, cy)) = stack.pop() {
-                box_.0 = box_.0.min(cx);
-                box_.1 = box_.1.min(cy);
-                box_.2 = box_.2.max(cx);
-                box_.3 = box_.3.max(cy);
-                for dy in -1_isize..=1 {
-                    for dx in -1_isize..=1 {
-                        if dx == 0 && dy == 0 {
-                            continue;
-                        }
-                        let nx = cx as isize + dx;
-                        let ny = cy as isize + dy;
-                        if nx < 0 || ny < 0 || nx as usize >= w || ny as usize >= h {
-                            continue;
-                        }
-                        let ni = ny as usize * w + nx as usize;
-                        if mask[ni] != 0 && ids[ni] == usize::MAX {
-                            ids[ni] = id;
-                            stack.push((nx as usize, ny as usize));
-                        }
-                    }
-                }
-            }
-            boxes.push(box_);
-        }
-    }
-    (ids, boxes)
-}
 
 /// Even arc-length resampling of a polyline; guards short/zero-length inputs.
 fn resample_polyline(pts: &[(f64, f64)], count: usize) -> Vec<(f64, f64)> {
@@ -1299,10 +1264,11 @@ fn resample_polyline(pts: &[(f64, f64)], count: usize) -> Vec<(f64, f64)> {
     out
 }
 
-/// Extends a stroke past both ends along its end tangents (razor needles). `factor` scales the
-/// overshoot per pass so side whiskers shoot different needle lengths than the core.
-fn extend_stroke_ends(pts: &mut Vec<(f64, f64)>, overshoot: f64, factor: f64, seed: u32) {
-    if pts.len() < 2 || overshoot <= 0.05 {
+/// Extends a stroke past both ends along its end tangents (razor needles). `max_needle` is the
+/// per-glyph proportional ceiling; each end gets `max_needle * (0.75 + 0.55 * r)` so a single
+/// stroke shoots needles of different lengths without ever leaving the render bounds.
+fn extend_stroke_ends(pts: &mut Vec<(f64, f64)>, max_needle: f64, seed: u32) {
+    if pts.len() < 2 || max_needle <= 0.05 {
         return;
     }
     let first = pts[0];
@@ -1315,8 +1281,8 @@ fn extend_stroke_ends(pts: &mut Vec<(f64, f64)>, overshoot: f64, factor: f64, se
     let l1 = d1.0.hypot(d1.1).max(1e-6);
     let r0 = f64::from(hash_u32(seed));
     let r1 = f64::from(hash_u32(seed.wrapping_add(0x51ED)));
-    let o0 = overshoot * factor * (0.72 + 0.66 * r0);
-    let o1 = overshoot * factor * (0.72 + 0.66 * r1);
+    let o0 = max_needle * (0.75 + 0.55 * r0);
+    let o1 = max_needle * (0.75 + 0.55 * r1);
     let head = (first.0 + d0.0 / l0 * o0, first.1 + d0.1 / l0 * o0);
     let tail = (last.0 + d1.0 / l1 * o1, last.1 + d1.1 / l1 * o1);
     if head.0.is_finite() && head.1.is_finite() && tail.0.is_finite() && tail.1.is_finite() {
@@ -1325,432 +1291,193 @@ fn extend_stroke_ends(pts: &mut Vec<(f64, f64)>, overshoot: f64, factor: f64, se
     }
 }
 
-/// Zhang-Suen morphological thinning on a binary mask (`0`/`1`), panic-free.
-fn zhang_suen_thin(mask: &mut [u8], w: usize, h: usize) {
-    if w < 3 || h < 3 {
-        return;
+/// Splits a simplified closed contour into independent open stroke segments. Sharp corners
+/// (incoming/outgoing edge turn > ~36°, i.e. `cos_turn < 0.809`) become split points so
+/// intersecting strokes both pierce the corner. Smooth closed loops with fewer than two corners
+/// (`O`, `0`, oval counters) are cut into two half-loop arcs (top->bottom and bottom->top) so
+/// the pen still produces natural entry/exit tapered overlaps.
+fn split_contour_at_corners(simp: &[(f64, f64)]) -> Vec<Vec<(f64, f64)>> {
+    const COS_CORNER: f64 = 0.809;
+    let n = simp.len();
+    if n < 3 {
+        return Vec::new();
     }
-    let mut to_clear = Vec::new();
-    for _iter in 0..64 {
-        let mut changed = false;
-        for step in 0..2 {
-            to_clear.clear();
-            for y in 1..(h - 1) {
-                for x in 1..(w - 1) {
-                    let idx = y * w + x;
-                    if mask[idx] == 0 {
-                        continue;
-                    }
-                    let p2 = mask[(y - 1) * w + x];
-                    let p3 = mask[(y - 1) * w + (x + 1)];
-                    let p4 = mask[y * w + (x + 1)];
-                    let p5 = mask[(y + 1) * w + (x + 1)];
-                    let p6 = mask[(y + 1) * w + x];
-                    let p7 = mask[(y + 1) * w + (x - 1)];
-                    let p8 = mask[y * w + (x - 1)];
-                    let p9 = mask[(y - 1) * w + (x - 1)];
-                    let b = p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9;
-                    if !(2..=6).contains(&b) {
-                        continue;
-                    }
-                    let a = u8::from(p2 == 0 && p3 == 1)
-                        + u8::from(p3 == 0 && p4 == 1)
-                        + u8::from(p4 == 0 && p5 == 1)
-                        + u8::from(p5 == 0 && p6 == 1)
-                        + u8::from(p6 == 0 && p7 == 1)
-                        + u8::from(p7 == 0 && p8 == 1)
-                        + u8::from(p8 == 0 && p9 == 1)
-                        + u8::from(p9 == 0 && p2 == 1);
-                    if a != 1 {
-                        continue;
-                    }
-                    let cond = if step == 0 {
-                        (p2 * p4 * p6 == 0) && (p4 * p6 * p8 == 0)
-                    } else {
-                        (p2 * p4 * p8 == 0) && (p2 * p6 * p8 == 0)
-                    };
-                    if cond {
-                        to_clear.push(idx);
-                    }
+    let mut corners: Vec<usize> = Vec::new();
+    for i in 0..n {
+        let prev = simp[(i + n - 1) % n];
+        let cur = simp[i];
+        let next = simp[(i + 1) % n];
+        let v1 = (cur.0 - prev.0, cur.1 - prev.1);
+        let v2 = (next.0 - cur.0, next.1 - cur.1);
+        let l1 = v1.0.hypot(v1.1);
+        let l2 = v2.0.hypot(v2.1);
+        if l1 > 1e-4 && l2 > 1e-4 {
+            let cos_turn = ((v1.0 * v2.0 + v1.1 * v2.1) / (l1 * l2)).clamp(-1.0, 1.0);
+            if cos_turn < COS_CORNER {
+                corners.push(i);
+            }
+        }
+    }
+    if corners.len() >= 2 {
+        let mut edges = Vec::with_capacity(corners.len());
+        for k in 0..corners.len() {
+            let (start, end) = (corners[k], corners[(k + 1) % corners.len()]);
+            let mut edge = Vec::new();
+            let mut idx = start;
+            for _ in 0..=n {
+                edge.push(simp[idx]);
+                if idx == end && edge.len() >= 2 {
+                    break;
                 }
+                idx = (idx + 1) % n;
             }
-            if !to_clear.is_empty() {
-                changed = true;
-                for &idx in &to_clear {
-                    mask[idx] = 0;
-                }
+            if edge.len() >= 2 {
+                edges.push(edge);
             }
         }
-        if !changed {
-            break;
+        if !edges.is_empty() {
+            return edges;
         }
     }
-}
-
-/// Simplifies a raw skeleton chain via RDP, snaps straight strokes via PCA (prevents letter bending),
-/// and applies 2-pass Chaikin smoothing to genuinely curved strokes.
-fn simplify_and_straighten_skeleton(raw: &[(f64, f64)]) -> Vec<(f64, f64)> {
-    if raw.len() <= 2 {
-        return raw.to_vec();
-    }
-    let simp = rdp_open(raw, 2.2);
-    if simp.len() <= 2 {
-        return simp;
-    }
-    // Check chord straightness: if max perpendicular deviation < 10% of chord length, snap straight via PCA!
-    let a = simp[0];
-    let b = simp[simp.len() - 1];
-    let chord = (b.0 - a.0).hypot(b.1 - a.1);
-    if chord > 4.0 {
-        let mut max_dev = 0.0_f64;
-        for &p in &simp[1..(simp.len() - 1)] {
-            max_dev = max_dev.max(dist_pt_to_seg(p, a, b));
+    // Smooth loop: split into two arcs between the vertical extremes.
+    let (mut i_top, mut i_bot) = (0usize, 0usize);
+    for (i, &p) in simp.iter().enumerate() {
+        if p.1 < simp[i_top].1 {
+            i_top = i;
         }
-        if max_dev / chord < 0.105 {
-            // PCA principal axis fit across raw points projected to endpoints.
-            let n = raw.len() as f64;
-            let mean_x = raw.iter().map(|p| p.0).sum::<f64>() / n;
-            let mean_y = raw.iter().map(|p| p.1).sum::<f64>() / n;
-            let (mut sxx, mut sxy, mut syy) = (0.0_f64, 0.0_f64, 0.0_f64);
-            for &(x, y) in raw {
-                let dx = x - mean_x;
-                let dy = y - mean_y;
-                sxx += dx * dx;
-                sxy += dx * dy;
-                syy += dy * dy;
-            }
-            let theta = 0.5 * (2.0 * sxy).atan2(sxx - syy);
-            let ux = theta.cos();
-            let uy = theta.sin();
-            let mut t_min = f64::INFINITY;
-            let mut t_max = f64::NEG_INFINITY;
-            for &(x, y) in raw {
-                let t = (x - mean_x) * ux + (y - mean_y) * uy;
-                t_min = t_min.min(t);
-                t_max = t_max.max(t);
-            }
-            return vec![(mean_x + ux * t_min, mean_y + uy * t_min), (mean_x + ux * t_max, mean_y + uy * t_max)];
+        if p.1 > simp[i_bot].1 {
+            i_bot = i;
         }
     }
-
-    // Genuinely curved stroke: 2-pass Chaikin corner cutting preserving exact endpoints.
-    let mut cur = simp;
-    for _ in 0..2 {
-        if cur.len() < 3 {
-            break;
-        }
-        let mut next = Vec::with_capacity(cur.len() * 2);
-        next.push(cur[0]);
-        for seg in cur.windows(2) {
-            let p = seg[0];
-            let q = seg[1];
-            next.push((p.0 * 0.75 + q.0 * 0.25, p.1 * 0.75 + q.1 * 0.25));
-            next.push((p.0 * 0.25 + q.0 * 0.75, p.1 * 0.25 + q.1 * 0.75));
-        }
-        if let Some(&last) = cur.last() {
-            next.push(last);
-        }
-        cur = next;
+    if i_top == i_bot {
+        i_bot = (i_top + n / 2) % n;
     }
-    cur
-}
-
-type GridBox = (usize, usize, usize, usize);
-type DocBox = (f64, f64, f64, f64);
-type ChainEnd = (usize, bool, (f64, f64));
-
-/// Downsamples ink coverage to a bounded grid and computes connected components before thinning.
-fn build_skeleton_grid(base_cov: &[f32], w: usize, h: usize) -> (Vec<u8>, usize, usize, f64, Vec<GridBox>, usize) {
-    let scale = ((w.max(h) as f64) / SKELETON_MAX_GRID_DIM as f64).max(1.0);
-    let gw = ((w as f64 / scale).round() as usize).clamp(4, SKELETON_MAX_GRID_DIM);
-    let gh = ((h as f64 / scale).round() as usize).clamp(4, SKELETON_MAX_GRID_DIM);
-    let mut mask = vec![0u8; gw * gh];
-    for gy in 0..gh {
-        let sy = ((gy as f64 + 0.5) * scale).floor().clamp(0.0, (h - 1) as f64) as usize;
-        for gx in 0..gw {
-            let sx = ((gx as f64 + 0.5) * scale).floor().clamp(0.0, (w - 1) as f64) as usize;
-            if base_cov[sy * w + sx] >= 0.45 {
-                mask[gy * gw + gx] = 1;
+    let walk = |from: usize, to: usize| -> Vec<(f64, f64)> {
+        let mut out = Vec::new();
+        let mut idx = from;
+        for _ in 0..=n {
+            out.push(simp[idx]);
+            if idx == to && out.len() >= 2 {
+                break;
             }
+            idx = (idx + 1) % n;
         }
-    }
-    // Compact element preservation starts BEFORE thinning: Zhang-Suen would otherwise reduce
-    // the dot of `!` / `i` to a 1-2 px speck that no chain criterion can keep.
-    let (_ids, comp_boxes) = grid_connected_components(&mask, gw, gh);
-    let max_span = comp_boxes.iter().map(|&(x0, y0, x1, y1)| (x1 - x0).max(y1 - y0)).max().unwrap_or(0);
-    zhang_suen_thin(&mut mask, gw, gh);
-    (mask, gw, gh, scale, comp_boxes, max_span)
-}
-
-#[inline]
-fn skeleton_neighbors(x: usize, y: usize, m: &[u8], gw: usize, gh: usize) -> Vec<(usize, usize)> {
-    let mut out = Vec::with_capacity(8);
-    for dy in -1_isize..=1 {
-        for dx in -1_isize..=1 {
-            if dx == 0 && dy == 0 {
-                continue;
-            }
-            let nx = x as isize + dx;
-            let ny = y as isize + dy;
-            if nx >= 0 && ny >= 0 && (nx as usize) < gw && (ny as usize) < gh && m[ny as usize * gw + nx as usize] != 0 {
-                out.push((nx as usize, ny as usize));
-            }
-        }
-    }
-    out
-}
-
-/// Traces raw skeleton chains from endpoints/junctions (pass 1) and closed loops (pass 2).
-fn trace_skeleton_chains(mask: &[u8], gw: usize, gh: usize) -> Vec<ShtackChain> {
-    let mut deg = vec![0u8; gw * gh];
-    for y in 0..gh {
-        for x in 0..gw {
-            if mask[y * gw + x] != 0 {
-                deg[y * gw + x] = skeleton_neighbors(x, y, mask, gw, gh).len() as u8;
-            }
-        }
-    }
-    let mut visited = vec![false; gw * gh];
-    let mut chains = Vec::new();
-    for pass in 0..2 {
-        for sy in 0..gh {
-            for sx in 0..gw {
-                let s_idx = sy * gw + sx;
-                if mask[s_idx] == 0 || visited[s_idx] {
-                    continue;
-                }
-                if pass == 0 && deg[s_idx] == 2 {
-                    continue;
-                }
-                let nbs = skeleton_neighbors(sx, sy, mask, gw, gh);
-                if nbs.is_empty() {
-                    visited[s_idx] = true;
-                    continue;
-                }
-                for &(nx, ny) in &nbs {
-                    let n_idx = ny * gw + nx;
-                    if visited[n_idx] && deg[n_idx] == 2 {
-                        continue;
-                    }
-                    let mut pts = vec![(sx, sy), (nx, ny)];
-                    visited[s_idx] = true;
-                    let mut cur = (nx, ny);
-                    let mut prev = (sx, sy);
-                    for _ in 0..512 {
-                        let c_idx = cur.1 * gw + cur.0;
-                        if deg[c_idx] != 2 && c_idx != s_idx {
-                            break;
-                        }
-                        visited[c_idx] = true;
-                        let cnbs = skeleton_neighbors(cur.0, cur.1, mask, gw, gh);
-                        let next_opt = cnbs.into_iter().find(|&p| p != prev && (!visited[p.1 * gw + p.0] || deg[p.1 * gw + p.0] >= 3));
-                        let Some(next) = next_opt else { break };
-                        pts.push(next);
-                        prev = cur;
-                        cur = next;
-                        if cur == (sx, sy) {
-                            break;
-                        }
-                    }
-                    if pts.len() < 2 {
-                        continue;
-                    }
-                    let node_a = if deg[s_idx] >= 3 { Some((sx, sy)) } else { None };
-                    let tail = pts[pts.len() - 1];
-                    let node_b = if deg[tail.1 * gw + tail.0] >= 3 { Some(tail) } else { None };
-                    chains.push(ShtackChain { pts, node_a, node_b });
-                }
-            }
-        }
-    }
-    chains
-}
-
-/// Merges chains meeting at a junction when their outgoing tangents continue smoothly
-/// (`dot < -0.65`). This rebuilds the full vertical stem of `B` / `M`, not fragments.
-fn merge_skeleton_chains(chains: &mut Vec<ShtackChain>) -> Vec<bool> {
-    let mut active = vec![true; chains.len()];
-    for _round in 0..8 {
-        let mut ends: Vec<((usize, usize), Vec<ChainEnd>)> = Vec::new();
-        for (i, ch) in chains.iter().enumerate() {
-            if !active[i] {
-                continue;
-            }
-            for (node, is_start) in [(ch.node_a, true), (ch.node_b, false)] {
-                let Some(node) = node else { continue };
-                let a = if is_start { ch.pts[0] } else { ch.pts[ch.pts.len() - 1] };
-                let b = if is_start { ch.pts[1] } else { ch.pts[ch.pts.len() - 2] };
-                let dx = a.0 as f64 - b.0 as f64;
-                let dy = a.1 as f64 - b.1 as f64;
-                let l = dx.hypot(dy).max(1e-6);
-                let dir = (dx / l, dy / l);
-                if let Some(entry) = ends.iter_mut().find(|(n, _)| *n == node) {
-                    entry.1.push((i, is_start, dir));
-                } else {
-                    ends.push((node, vec![(i, is_start, dir)]));
-                }
-            }
-        }
-        let mut merges: Vec<(usize, bool, usize, bool)> = Vec::new();
-        for (_, list) in &ends {
-            let mut used = vec![false; list.len()];
-            for a in 0..list.len() {
-                if used[a] {
-                    continue;
-                }
-                let mut best: Option<(usize, f64)> = None;
-                for b in (a + 1)..list.len() {
-                    if used[b] || list[a].0 == list[b].0 {
-                        continue;
-                    }
-                    let dot = list[a].2.0 * list[b].2.0 + list[a].2.1 * list[b].2.1;
-                    if dot < -0.65 && best.is_none_or(|(_, bd)| dot < bd) {
-                        best = Some((b, dot));
-                    }
-                }
-                if let Some((b, _)) = best {
-                    used[a] = true;
-                    used[b] = true;
-                    merges.push((list[a].0, list[a].1, list[b].0, list[b].1));
-                }
-            }
-        }
-        if merges.is_empty() {
-            break;
-        }
-        for (ia, sa, ib, sb) in merges {
-            let a = &chains[ia];
-            let b = &chains[ib];
-            let mut seq_a = a.pts.clone();
-            if sa {
-                seq_a.reverse();
-            }
-            let mut seq_b = b.pts.clone();
-            if !sb {
-                seq_b.reverse();
-            }
-            if !seq_b.is_empty() && seq_a.last() == seq_b.first() {
-                seq_b.remove(0);
-            }
-            let mut pts = seq_a;
-            pts.extend(seq_b);
-            let node_a = if sa { a.node_b } else { a.node_a };
-            let node_b = if sb { b.node_a } else { b.node_b };
-            chains.push(ShtackChain { pts, node_a, node_b });
-            active.push(true);
-            active[ia] = false;
-            active[ib] = false;
-        }
-    }
-    active
-}
-
-/// Splits sharp L-corners (turn > ~55°) so intersecting strokes both overshoot past the
-/// corner, then simplifies each piece into a clean document-space stroke.
-fn split_skeleton_chains(chains: &[ShtackChain], active: &[bool], bounds: Rect, scale: f64) -> Vec<Vec<(f64, f64)>> {
-    const COS_SHARP_CORNER: f64 = 0.5736;
-    let to_doc = |gx: usize, gy: usize| -> (f64, f64) {
-        (f64::from(bounds.x0) + (gx as f64 + 0.5) * scale, f64::from(bounds.y0) + (gy as f64 + 0.5) * scale)
+        out
     };
-    let mut strokes = Vec::new();
-    for (i, ch) in chains.iter().enumerate() {
-        if !active[i] || ch.pts.len() < 2 {
-            continue;
+    let mut arcs = Vec::with_capacity(2);
+    for (a, b) in [(i_top, i_bot), (i_bot, i_top)] {
+        let arc = walk(a, b);
+        if arc.len() >= 2 {
+            arcs.push(arc);
         }
-        let gp = &ch.pts;
-        let mut cuts = Vec::new();
-        for j in 1..(gp.len() - 1) {
-            let k = 4.min(j).min(gp.len() - 1 - j);
-            if k < 1 {
+    }
+    arcs
+}
+
+/// Principal-axis unit vector of a point set via PCA, used for compact dot sketch strokes.
+fn principal_axis(pts: &[(f64, f64)]) -> (f64, f64) {
+    let n = pts.len().max(1) as f64;
+    let mx = pts.iter().map(|p| p.0).sum::<f64>() / n;
+    let my = pts.iter().map(|p| p.1).sum::<f64>() / n;
+    let (mut sxx, mut sxy, mut syy) = (0.0_f64, 0.0_f64, 0.0_f64);
+    for &(x, y) in pts {
+        let dx = x - mx;
+        let dy = y - my;
+        sxx += dx * dx;
+        sxy += dx * dy;
+        syy += dy * dy;
+    }
+    let theta = 0.5 * (2.0 * sxy).atan2(sxx - syy);
+    (theta.cos(), theta.sin())
+}
+
+/// Builds the complete Shtack polygon set DIRECTLY from the exact vector glyph contours.
+/// Returns ready-to-rasterize polygons: solid cores for compact contours (dots / bars) plus
+/// every tapered sketch pass. No raster grid, no skeleton thinning, no lost punctuation.
+fn build_shtack_contour_polygons(geom: &PreparedSfx, le: &SfxLineEffect) -> Vec<Vec<(f64, f64)>> {
+    let mut polys: Vec<Vec<(f64, f64)>> = Vec::new();
+    for glyph in &geom.glyphs {
+        // Letter height in document pixels; every proportional decision uses it.
+        let gh = (glyph.warped_bounds[3] - glyph.warped_bounds[1]).abs().max(24.0);
+        let mut segments: Vec<Vec<(f64, f64)>> = Vec::new();
+        let mut compact_segments: Vec<Vec<(f64, f64)>> = Vec::new();
+        let mut solid_cores: Vec<Vec<(f64, f64)>> = Vec::new();
+
+        for pl in &glyph.polylines {
+            if pl.pts.len() < 3 {
                 continue;
             }
-            let d0 = (gp[j].0 as f64 - gp[j - k].0 as f64, gp[j].1 as f64 - gp[j - k].1 as f64);
-            let d1 = (gp[j + k].0 as f64 - gp[j].0 as f64, gp[j + k].1 as f64 - gp[j].1 as f64);
-            let l0 = d0.0.hypot(d0.1);
-            let l1 = d1.0.hypot(d1.1);
-            if l0 < 2.0 || l1 < 2.0 {
+            let (mut x0, mut y0) = (f64::INFINITY, f64::INFINITY);
+            let (mut x1, mut y1) = (f64::NEG_INFINITY, f64::NEG_INFINITY);
+            let mut perimeter = 0.0_f64;
+            for (i, &p) in pl.pts.iter().enumerate() {
+                x0 = x0.min(p.0);
+                y0 = y0.min(p.1);
+                x1 = x1.max(p.0);
+                y1 = y1.max(p.1);
+                let q = pl.pts[(i + 1) % pl.pts.len()];
+                perimeter += (q.0 - p.0).hypot(q.1 - p.1);
+            }
+            if !x0.is_finite() || !y0.is_finite() || !x1.is_finite() || !y1.is_finite() {
                 continue;
             }
-            if (d0.0 * d1.0 + d0.1 * d1.1) / (l0 * l1) < COS_SHARP_CORNER {
-                cuts.push(j);
+            let c_span = (x1 - x0).max(y1 - y0);
+
+            // Compact closed contour: the bar and dot of `!` are separate contours in this
+            // vector outline, so they can never be lost to raster-grid downsampling.
+            if c_span <= gh * 0.26 || perimeter < gh * 0.75 {
+                solid_cores.push(pl.pts.clone());
+                let (ux, uy) = principal_axis(&pl.pts);
+                let (cx, cy) = ((x0 + x1) * 0.5, (y0 + y1) * 0.5);
+                let len = c_span.max(2.0);
+                // 2-3 short tapered sketch strokes across the principal axis and diagonals.
+                compact_segments.push(vec![
+                    (cx - ux * len * 0.48, cy - uy * len * 0.48),
+                    (cx + ux * len * 0.48, cy + uy * len * 0.48),
+                ]);
+                let (dx, dy) = (ux * 0.62 - uy * 0.78, uy * 0.62 + ux * 0.78);
+                compact_segments.push(vec![
+                    (cx - dx * len * 0.36, cy - dy * len * 0.36),
+                    (cx + dx * len * 0.36, cy + dy * len * 0.36),
+                ]);
+                let (ex, ey) = (ux * 0.62 + uy * 0.78, uy * 0.62 - ux * 0.78);
+                compact_segments.push(vec![
+                    (cx - ex * len * 0.30, cy - ey * len * 0.30),
+                    (cx + ex * len * 0.30, cy + ey * len * 0.30),
+                ]);
+                continue;
             }
+
+            // Normal contour: lightly simplify micro-collinear vertices (curves stay smooth),
+            // then split at sharp corners into independent line / arc segments.
+            let simp = rdp_closed(&pl.pts, 0.75);
+            segments.extend(split_contour_at_corners(&simp));
         }
-        let mut ranges: Vec<(usize, usize)> = Vec::new();
-        let mut s = 0usize;
-        for &c in &cuts {
-            if c > s {
-                ranges.push((s, c));
-            }
-            s = c;
+
+        polys.extend(build_shtack_stroke_polygons(&segments, le, gh));
+        if !compact_segments.is_empty() {
+            let mut dot_le = *le;
+            dot_le.shtack_bristles = 3;
+            dot_le.shtack_thickness_px = (f64::from(le.shtack_thickness_px) * 0.6).max(4.0) as f32;
+            polys.extend(build_shtack_stroke_polygons(&compact_segments, &dot_le, gh));
         }
-        if s < gp.len() - 1 {
-            ranges.push((s, gp.len() - 1));
-        }
-        for (a, b) in ranges {
-            let raw: Vec<(f64, f64)> = (a..=b).map(|k| to_doc(gp[k].0, gp[k].1)).collect();
-            let cleaned = simplify_and_straighten_skeleton(&raw);
-            if cleaned.len() >= 2 {
-                strokes.push(cleaned);
-            }
-        }
+        polys.extend(solid_cores);
     }
-    strokes
+    polys
 }
 
-/// Compact components (dots, punctuation, hyphens) or components with no skeleton chain are
-/// preserved as stylized multi-pass ink dots; strokes fully covered by them are not drawn twice.
-fn compact_component_boxes(comp_boxes: &[GridBox], max_span: usize, strokes: &mut Vec<Vec<(f64, f64)>>, bounds: Rect, scale: f64) -> Vec<DocBox> {
-    let doc_box = |b: GridBox| -> DocBox {
-        let (x0, y0, x1, y1) = b;
-        (
-            f64::from(bounds.x0) + x0 as f64 * scale,
-            f64::from(bounds.y0) + y0 as f64 * scale,
-            f64::from(bounds.x0) + (x1 as f64 + 1.0) * scale,
-            f64::from(bounds.y0) + (y1 as f64 + 1.0) * scale,
-        )
-    };
-    let mut compact_doc = Vec::new();
-    for &b in comp_boxes {
-        let span = (b.2 - b.0).max(b.3 - b.1);
-        let db = doc_box(b);
-        let covered = strokes.iter().any(|s| {
-            s.iter().any(|&(px, py)| px >= db.0 - scale && px <= db.2 + scale && py >= db.1 - scale && py <= db.3 + scale)
-        });
-        if span * 3 <= max_span.max(1) || !covered {
-            compact_doc.push(db);
-        }
-    }
-    strokes.retain(|s| {
-        !compact_doc.iter().any(|&(x0, y0, x1, y1)| s.iter().all(|&(px, py)| px >= x0 && px <= x1 && py >= y0 && py <= y1))
-    });
-    compact_doc
-}
-
-/// Traces skeleton chains, merges those that continue smoothly through junctions, splits
-/// sharp L-corners, and returns simplified document-space strokes plus compact-component
-/// boxes (document space) that must be preserved as stylized ink dots.
-fn extract_skeleton_chains(base_cov: &[f32], bounds: Rect, w: usize, h: usize) -> (Vec<Vec<(f64, f64)>>, Vec<DocBox>) {
-    if w < 4 || h < 4 {
-        return (Vec::new(), Vec::new());
-    }
-    let (mask, gw, gh, scale, comp_boxes, max_span) = build_skeleton_grid(base_cov, w, h);
-    let mut chains = trace_skeleton_chains(&mask, gw, gh);
-    let active = merge_skeleton_chains(&mut chains);
-    let mut strokes = split_skeleton_chains(&chains, &active, bounds, scale);
-    let compact_doc = compact_component_boxes(&comp_boxes, max_span, &mut strokes, bounds, scale);
-    (strokes, compact_doc)
-}
-
-/// Builds 3..=6 independent variable-width tapered sketch passes per merged stroke.
-/// Core passes keep a dense body with long razor tapers; side whiskers spread wider, tilt
-/// and bow independently and shoot varied needle lengths, producing natural air gaps.
-fn build_shtack_stroke_polygons(strokes: &[Vec<(f64, f64)>], le: &SfxLineEffect) -> Vec<Vec<(f64, f64)>> {
-    let half_w = f64::from(le.shtack_thickness_px).max(4.0) * 0.5;
+/// Builds 3..=6 independent variable-width tapered sketch passes per segment. Core passes keep
+/// a dense body with long razor tapers; whiskers are visibly thinner and offset by a guaranteed
+/// lateral air gap, then tilted and bowed so they diverge organically from the core stroke.
+fn build_shtack_stroke_polygons(strokes: &[Vec<(f64, f64)>], le: &SfxLineEffect, gh: f64) -> Vec<Vec<(f64, f64)>> {
+    let size_scale = (gh / 160.0).clamp(0.65, 4.0);
+    let half_w = (f64::from(le.shtack_thickness_px).max(4.0) * size_scale) * 0.38;
     let bristles = usize::from(le.shtack_bristles.clamp(3, 6));
     let split = (f64::from(le.shtack_split_pct) / 100.0).clamp(0.0, 1.0);
     let dry = (f64::from(le.shtack_dryness_pct) / 100.0).clamp(0.0, 1.0);
     let is_dry = le.shtack_variant == SfxShtackVariant::DryPencil;
-    let needle = f64::from(le.shtack_overshoot_px) * if is_dry { 0.45 } else { 1.0 };
+    let overshoot_ratio = (f64::from(le.shtack_overshoot_px).clamp(0.0, 60.0) / 100.0) * if is_dry { 0.48 } else { 1.0 };
+    let needle_px = gh * overshoot_ratio;
     let seed_base = le.shtack_seed.wrapping_mul(12_347);
     let mut polys = Vec::new();
 
@@ -1759,8 +1486,13 @@ fn build_shtack_stroke_polygons(strokes: &[Vec<(f64, f64)>], le: &SfxLineEffect)
             continue;
         }
         let s_seed = seed_base.wrapping_add((si as u32).wrapping_mul(311));
-        let arc_len: f64 = stroke.windows(2).map(|seg| (seg[1].0 - seg[0].0).hypot(seg[1].1 - seg[0].1)).sum();
-        let samples_n = (arc_len / 3.0).round().clamp(10.0, 36.0) as usize;
+        let seg_len: f64 = stroke.windows(2).map(|seg| (seg[1].0 - seg[0].0).hypot(seg[1].1 - seg[0].1)).sum();
+        let sample_step = if gh < 130.0 { 5.5 } else { 3.0 };
+        let max_samples = if gh < 130.0 { 18.0 } else { 36.0 };
+        let min_samples = if gh < 130.0 { 6.0 } else { 10.0 };
+        let samples_n = (seg_len / sample_step).round().clamp(min_samples, max_samples) as usize;
+        // Clamp relative to segment length so tiny segments never shoot giant needles.
+        let max_needle = needle_px.min(seg_len * 0.95 + gh * 0.12);
 
         for k in 0..bristles {
             let p_seed = s_seed.wrapping_add((k as u32).wrapping_mul(1_073));
@@ -1770,22 +1502,24 @@ fn build_shtack_stroke_polygons(strokes: &[Vec<(f64, f64)>], le: &SfxLineEffect)
             let r3 = f64::from(hash_u32(p_seed.wrapping_add(59)));
             let core = k < 2;
 
-            // Every pass extends past BOTH of its own ends along the end tangent.
-            let factor = if core { 1.0 } else { 0.45 + r3 * 1.1 };
             let mut extended = stroke.clone();
-            extend_stroke_ends(&mut extended, needle, factor, p_seed);
+            let pass_needle = if core { max_needle } else { max_needle * (0.45 + r3 * 0.9) };
+            extend_stroke_ends(&mut extended, pass_needle, p_seed);
             let base = resample_polyline(&extended, samples_n);
             if base.len() < 2 {
                 continue;
             }
 
-            let width = half_w * if core { 0.82 + 0.16 * r0 } else { 0.28 + 0.27 * r0 };
+            // Base passes are dense; whiskers are visibly thinner.
+            let width = half_w * if core { 0.78 + 0.18 * r0 } else { 0.24 + 0.18 * r0 };
             let side = if k >= 2 && (k - 2) % 2 == 0 { 1.0 } else { -1.0 };
             let rank = (k.saturating_sub(2) / 2) as f64;
             let base_off = if core {
-                (if k == 0 { -1.0 } else { 1.0 }) * half_w * 0.10 * r1
+                (if k == 0 { -1.0 } else { 1.0 }) * half_w * 0.15 * (0.5 + 0.5 * r1)
             } else {
-                side * half_w * (0.40 + 0.30 * rank + 0.35 * split) * (0.7 + 0.6 * r1)
+                // Guaranteed minimum clearance so whiskers never fuse into one fat line.
+                let gap = half_w * (1.05 + 0.65 * rank) * (0.45 + 0.75 * split);
+                side * gap.max(half_w * (1.35 + 0.4 * rank)) * (0.85 + 0.3 * r1)
             };
             let tilt = (r2 - 0.5) * half_w * if core { 0.10 } else { 0.55 };
             let bow_amp = (r3 - 0.5) * half_w * if core { 0.18 } else { 0.70 };
@@ -1820,36 +1554,6 @@ fn build_shtack_stroke_polygons(strokes: &[Vec<(f64, f64)>], le: &SfxLineEffect)
     polys
 }
 
-/// Preserves compact glyph parts (dots of `!`, `i`, `?`, hyphens) as a diamond-tapered ink
-/// dot plus a short sketch cross-hatch, using the same multi-pass pen as the rest of Shtack.
-fn build_compact_dot_polys(boxes: &[(f64, f64, f64, f64)], le: &SfxLineEffect) -> Vec<Vec<(f64, f64)>> {
-    let seed = le.shtack_seed.wrapping_mul(5_153);
-    let mut polys = Vec::new();
-    for (i, &(x0, y0, x1, y1)) in boxes.iter().enumerate() {
-        let cx = (x0 + x1) * 0.5;
-        let cy = (y0 + y1) * 0.5;
-        let len = (x1 - x0).max(y1 - y0).max(4.0);
-        let r = f64::from(hash_u32(seed.wrapping_add((i as u32).wrapping_mul(97))));
-        let ang = PI * 0.25 + (r - 0.5) * 0.5;
-        let (sa, ca) = ang.sin_cos();
-        let main = vec![(cx - ca * len * 0.46, cy - sa * len * 0.46), (cx + ca * len * 0.46, cy + sa * len * 0.46)];
-
-        let mut dot_le = *le;
-        dot_le.shtack_thickness_px = (len * 1.05).max(6.0) as f32;
-        dot_le.shtack_bristles = le.shtack_bristles.clamp(3, 4);
-        dot_le.shtack_overshoot_px = (len * 0.5) as f32;
-        polys.extend(build_shtack_stroke_polygons(&[main], &dot_le));
-
-        let cross_ang = ang + PI * 0.55;
-        let (sc, cc) = cross_ang.sin_cos();
-        let slash = vec![(cx - cc * len * 0.32, cy - sc * len * 0.32), (cx + cc * len * 0.32, cy + sc * len * 0.32)];
-        dot_le.shtack_thickness_px = (len * 0.42).max(4.0) as f32;
-        dot_le.shtack_bristles = 3;
-        polys.extend(build_shtack_stroke_polygons(&[slash], &dot_le));
-    }
-    polys
-}
-
 /// Dry Pencil finish: deterministic paper grain + directional dry streaks break up the
 /// rendered coverage, strongest at stroke edges and low-coverage tapered ends. Unlike a
 /// noise texture pasted on top, this removes density from the ink itself.
@@ -1858,17 +1562,26 @@ fn apply_shtack_dry_breakup(cov: &mut [f32], w: usize, h: usize, le: &SfxLineEff
     if dryness <= 0.001 || w == 0 || h == 0 {
         return;
     }
-    let mask: Vec<f32> = cov.iter().map(|&c| if c >= 0.45 { 1.0 } else { 0.0 }).collect();
-    let dist = compute_mask_sdf(&mask, w, h);
+    // Fast 1-pass 4-neighbourhood edge estimate. The old code ran a full 2-pass Felzenszwalb
+    // EDT over EVERY pixel just to find coverage within ~2 px of the stroke boundary; this
+    // local check is ~100x faster and skips all empty pixels entirely.
+    let src = cov.to_vec();
     let seed = le.shtack_seed.wrapping_mul(7_919);
     for (i, c) in cov.iter_mut().enumerate() {
         if *c <= 1e-4 {
             continue;
         }
-        let x = (i % w) as f32;
-        let y = (i / w) as f32;
-        let d = f64::from(dist.get(i).copied().unwrap_or(0.0));
-        let edge = (d / (d + 2.0)).clamp(0.0, 1.0);
+        let px = i % w;
+        let py = i / w;
+        let cv = src[i];
+        let up = if py > 0 { src[i - w] } else { cv };
+        let down = if py + 1 < h { src[i + w] } else { cv };
+        let left = if px > 0 { src[i - 1] } else { cv };
+        let right = if px + 1 < w { src[i + 1] } else { cv };
+        let min_nb = up.min(down).min(left).min(right);
+        let edge = f64::from((cv * min_nb).clamp(0.0, 1.0));
+        let x = px as f32;
+        let y = py as f32;
         let grain = fbm_2d(x * 0.55, y * 0.55, seed) as f64;
         let streak = f64::from(value_noise_2d(x * 0.12, y * 0.85, seed.wrapping_add(31)));
         let noise = (grain * 0.7 + streak * 0.3).clamp(0.0, 1.0);
@@ -2285,8 +1998,14 @@ fn render_inner_glow_passes(data: &SfxData, base_cov: &[f32], w: usize, h: usize
     }
 }
 
-fn prepare_proxy_setup(orig_data: &SfxData, full_geom: &PreparedSfx, full_bounds: Rect) -> (Rect, PreparedSfx, f64, Option<SfxData>) {
-    let (pw, ph, proxy_scale) = proxy_target(full_bounds);
+fn prepare_proxy_setup(orig_data: &SfxData, full_geom: &PreparedSfx, full_bounds: Rect, preview: bool) -> (Rect, PreparedSfx, f64, Option<SfxData>) {
+    // Interactive slider / gizmo drags use a small proxy ceiling for a fast preview; the
+    // committed render uses the full-resolution bounds (proxying only above 16 MP / 4096 px).
+    let (pw, ph, proxy_scale) = if preview {
+        proxy_target_with(full_bounds, PREVIEW_MAX_SIDE, PREVIEW_MAX_PIXELS)
+    } else {
+        proxy_target(full_bounds)
+    };
     if proxy_scale >= 1.0 {
         return (full_bounds, full_geom.clone(), 1.0, None);
     }
@@ -2305,37 +2024,187 @@ fn finish_sfx_surface(rgba: &[[f32; 4]], bounds: Rect, full_bounds: Rect, proxy_
     }
 }
 
-/// Renders an [`SfxData`] non-destructively into offscreen document [`Surface`]`(s)`.
-pub fn render_sfx(data: &SfxData, engine: &mut TextEngine, format: PixelFormat, dpi: f32) -> SfxRenderOutput {
-    let full_geom = build_sfx_geometry(data, engine, dpi);
-    let full_bounds = compute_render_bounds(data, &full_geom);
-    if full_bounds.is_empty() {
-        let s = Surface::new(format);
-        return if data.has_negative_invert() {
-            SfxRenderOutput::InvertPair { under: s.clone(), invert: s, bounds: Rect::EMPTY, geom: full_geom }
-        } else {
-            SfxRenderOutput::Single { surface: s, bounds: Rect::EMPTY, geom: full_geom }
-        };
+// =============================================================================
+// STAGE CACHE — reuse geometry + stroke coverage across halo / colour / shadow drags
+// =============================================================================
+
+/// The expensive front half of the pipeline: warped glyph geometry plus the base fill and
+/// stylized-line / Shtack coverages. Halo width/colour, fill, line colour and vector shadow are
+/// applied AFTER these stages, so interactive drags of those parameters hit this cache.
+struct CachedSfxStages {
+    /// Exact byte-for-byte key over every geometry / stroke parameter (see `sfx_stage_key`).
+    key: Vec<u8>,
+    proxy_scale: f64,
+    /// Halo- and shadow-free coverage rect the cached buffers were rasterized into.
+    cache_bounds: Rect,
+    full_geom: PreparedSfx,
+    raw_base_cov: Vec<f32>,
+    line_or_shtack_cov: Option<Vec<f32>>,
+}
+
+static SFX_STAGE_CACHE: Mutex<Option<CachedSfxStages>> = Mutex::new(None);
+
+/// Test-only stage timing probe (thread-local so parallel tests cannot interfere).
+#[cfg(test)]
+#[derive(Clone, Copy, Default)]
+struct SfxStageTimings {
+    cache_hit: bool,
+    geom_ms: f64,
+    strokes_ms: f64,
+    dry_ms: f64,
+    halo_ms: f64,
+    total_ms: f64,
+}
+
+#[cfg(test)]
+thread_local! {
+    static LAST_SFX_TIMINGS: std::cell::RefCell<SfxStageTimings> = const {
+        std::cell::RefCell::new(SfxStageTimings {
+            cache_hit: false,
+            geom_ms: 0.0,
+            strokes_ms: 0.0,
+            dry_ms: 0.0,
+            halo_ms: 0.0,
+            total_ms: 0.0,
+        })
+    };
+}
+
+/// Deterministic key for all parameters that can change geometry or stroke polygons.
+/// Deliberately EXCLUDES `halo_width_px`, `halo_color`, `fill`, `line_color`, `vector_shadow`,
+/// `styles` and `dry_brush`: those are cheap post-stages that reuse the cached coverage.
+/// Small serde-backed key builder. Avoids a giant `serde_json::json!` expansion (which hits
+/// the macro recursion limit) while keeping an exact, collision-free byte key.
+struct KeyBuilder(Vec<u8>);
+
+impl KeyBuilder {
+    fn new() -> Self {
+        Self(Vec::with_capacity(1024))
     }
 
-    // A >16 MP / >8192 px lettering layer used to be dropped silently. Render it into a bounded
-    // proxy, then upsample onto the full clipped rect so the layer stays visible and editable.
-    let (bounds, geom, proxy_scale, scaled_data) = prepare_proxy_setup(data, &full_geom, full_bounds);
-    let data = scaled_data.as_ref().unwrap_or(data);
+    fn push<T: serde::Serialize>(&mut self, label: &str, value: &T) {
+        self.0.extend_from_slice(label.as_bytes());
+        self.0.push(0);
+        if let Ok(bytes) = serde_json::to_vec(value) {
+            self.0.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+            self.0.extend_from_slice(&bytes);
+        }
+    }
 
-    let w = bounds.width() as usize;
-    let h = bounds.height() as usize;
-    let n = w * h;
-    let mut under_rgba = vec![[0.0_f32; 4]; n];
+    fn finish(self) -> Vec<u8> {
+        self.0
+    }
+}
 
+/// Deterministic key for all parameters that can change geometry or stroke polygons.
+/// Deliberately EXCLUDES `halo_width_px`, `halo_color`, `fill`, `line_color`, `vector_shadow`,
+/// `styles` and `dry_brush`: those are cheap post-stages that reuse the cached coverage.
+fn sfx_stage_key(data: &SfxData, dpi: f32, preview: bool) -> Vec<u8> {
+    let mut k = KeyBuilder::new();
     let le = &data.line_effect;
-    let is_one_bit = le.style == SfxLineStyle::OneBit;
-    let base_ras = fill_rasterizer_from_polys(&geom.polylines, [0.0, 0.0]);
-    let raw_base_cov = base_ras.render(bounds);
+    k.push("dpi", &dpi.to_bits());
+    k.push("preview", &preview);
+    k.push("text", &data.text);
+    k.push("font_family", &data.font_family);
+    k.push("font_style", &data.font_style);
+    k.push("postscript_name", &data.postscript_name);
+    k.push("size_pt", &data.size_pt.to_bits());
+    k.push("weight", &data.weight);
+    k.push("italic", &data.italic);
+    k.push("tracking", &data.tracking.to_bits());
+    k.push("leading_scale", &data.leading_scale.to_bits());
+    k.push("vertical", &data.vertical);
+    k.push("warp_mode", &format!("{:?}", data.warp_mode));
+    k.push("origin", &[data.origin[0].to_bits(), data.origin[1].to_bits()]);
+    k.push("free_transform", &data.free_transform);
+    k.push("spline", &data.spline);
+    k.push("per_glyph", &data.per_glyph);
+    k.push("mesh", &data.mesh);
+    k.push("liquify_strokes", &data.liquify_strokes);
+    k.push("distress", &data.distress);
+    // Line / Shtack stroke parameters.
+    k.push("style", &format!("{:?}", le.style));
+    k.push("line_width_px", &le.line_width_px.to_bits());
+    k.push("one_bit_intensity", &le.one_bit_intensity.to_bits());
+    k.push("spike_shape", &format!("{:?}", le.spike_shape));
+    k.push("spike_length_px", &le.spike_length_px.to_bits());
+    k.push("spike_size_px", &le.spike_size_px.to_bits());
+    k.push("spike_count", &le.spike_count);
+    k.push("spike_random_pct", &le.spike_random_pct.to_bits());
+    k.push("spike_seed", &le.spike_seed);
+    k.push("gpen_contrast_pct", &le.gpen_contrast_pct.to_bits());
+    k.push("gpen_angle_deg", &le.gpen_angle_deg.to_bits());
+    k.push("gpen_pinch_pct", &le.gpen_pinch_pct.to_bits());
+    k.push("gpen_overshoot_px", &le.gpen_overshoot_px.to_bits());
+    k.push("gpen_overshoot_count_pct", &le.gpen_overshoot_count_pct.to_bits());
+    k.push("gpen_overshoot_random_pct", &le.gpen_overshoot_random_pct.to_bits());
+    k.push("gpen_seed", &le.gpen_seed);
+    k.push("ink_brush_roughness_pct", &le.ink_brush_roughness_pct.to_bits());
+    k.push("ink_brush_dropout_pct", &le.ink_brush_dropout_pct.to_bits());
+    k.push("ink_brush_pressure_pct", &le.ink_brush_pressure_pct.to_bits());
+    k.push("ink_brush_overshoot_px", &le.ink_brush_overshoot_px.to_bits());
+    k.push("ink_brush_overshoot_count_pct", &le.ink_brush_overshoot_count_pct.to_bits());
+    k.push("ink_brush_overshoot_random_pct", &le.ink_brush_overshoot_random_pct.to_bits());
+    k.push("ink_brush_seed", &le.ink_brush_seed);
+    k.push("shtack_variant", &format!("{:?}", le.shtack_variant));
+    k.push("shtack_bristles", &le.shtack_bristles);
+    k.push("shtack_split_pct", &le.shtack_split_pct.to_bits());
+    k.push("shtack_overshoot_px", &le.shtack_overshoot_px.to_bits());
+    k.push("shtack_thickness_px", &le.shtack_thickness_px.to_bits());
+    k.push("shtack_dryness_pct", &le.shtack_dryness_pct.to_bits());
+    k.push("shtack_seed", &le.shtack_seed);
+    k.push("shtack_fill_interior", &le.shtack_fill_interior);
+    k.finish()
+}
 
-    // Precompute mode-specific line/silhouette coverages so Pass 1 (Halo) wraps them cleanly.
-    let mut face_cov = raw_base_cov.clone();
-    let mut line_cov: Option<Vec<f32>> = None;
+/// Rasterized coverage rect with halo / vector shadow / legacy style padding removed, so it
+/// stays identical while those cheap passes are being dragged.
+fn cache_bounds_for(data: &SfxData, geom: &PreparedSfx) -> Rect {
+    let mut d = data.clone();
+    d.line_effect.halo_width_px = 0.0;
+    d.vector_shadow.enabled = false;
+    d.styles.clear();
+    compute_render_bounds(&d, geom)
+}
+
+/// Copies cached coverage into the (possibly larger, halo-padded) working rect. Only cheap
+/// row copies — no geometry or polygon rasterization — so a colour/halo drag stays interactive.
+fn embed_coverage(cached: &[f32], from: Rect, to: Rect) -> Vec<f32> {
+    let tw = to.width() as usize;
+    let th = to.height() as usize;
+    let mut out = vec![0.0_f32; tw.saturating_mul(th)];
+    let cw = from.width() as usize;
+    let ch = from.height() as usize;
+    if cached.len() < cw.saturating_mul(ch) || tw == 0 || th == 0 {
+        return out;
+    }
+    let dx = i64::from(from.x0) - i64::from(to.x0);
+    let dy = i64::from(from.y0) - i64::from(to.y0);
+    for cy in 0..ch {
+        let ty = dy + cy as i64;
+        if ty < 0 || ty >= th as i64 {
+            continue;
+        }
+        for cx in 0..cw {
+            let tx = dx + cx as i64;
+            if tx < 0 || tx >= tw as i64 {
+                continue;
+            }
+            out[ty as usize * tw + tx as usize] = cached[cy * cw + cx];
+        }
+    }
+    out
+}
+
+/// Rasterizes the base glyph silhouette and stylized line / Shtack coverage into `cache_bounds`.
+fn rasterize_uncached_stages(geom: &PreparedSfx, le: &SfxLineEffect, cache_bounds: Rect) -> (Vec<f32>, Option<Vec<f32>>, f64) {
+    let cw = cache_bounds.width() as usize;
+    let ch = cache_bounds.height() as usize;
+    let base_ras = fill_rasterizer_from_polys(&geom.polylines, [0.0, 0.0]);
+    let raw = base_ras.render(cache_bounds);
+    let mut face = raw.clone();
+    let mut line: Option<Vec<f32>> = None;
+    let mut dry_ms = 0.0_f64;
 
     match le.style {
         SfxLineStyle::Clean => {
@@ -2349,31 +2218,31 @@ pub fn render_sfx(data: &SfxData, engine: &mut TextEngine, format: PixelFormat, 
                     dash_offset: 0.0,
                 };
                 let sp = stroke_polygons(&geom.polylines, &style, 0.25);
-                line_cov = Some(rasterize_polygon_list(&sp, bounds));
+                line = Some(rasterize_polygon_list(&sp, cache_bounds));
             }
         }
         SfxLineStyle::OneBit => {
             let intensity = le.one_bit_intensity / 100.0;
-            for (i, c) in face_cov.iter_mut().enumerate() {
-                let px = (bounds.x0 + (i % w) as i32) as f32;
-                let py = (bounds.y0 + (i / w) as i32) as f32;
+            for (i, c) in face.iter_mut().enumerate() {
+                let px = (cache_bounds.x0 + (i % cw) as i32) as f32;
+                let py = (cache_bounds.y0 + (i / cw) as i32) as f32;
                 let jitter = (value_noise_2d(px * 0.45, py * 0.45, 701) - 0.5) * intensity * 0.55;
                 *c = if *c + jitter >= 0.5 { 1.0 } else { 0.0 };
             }
             if le.line_width_px > 0.05 {
-                let mut lcov = dilate_coverage_approx(&face_cov, w, h, le.line_width_px * 0.5);
+                let mut lcov = dilate_coverage_approx(&face, cw, ch, le.line_width_px * 0.5);
                 for (i, c) in lcov.iter_mut().enumerate() {
-                    let px = (bounds.x0 + (i % w) as i32) as f32;
-                    let py = (bounds.y0 + (i / w) as i32) as f32;
+                    let px = (cache_bounds.x0 + (i % cw) as i32) as f32;
+                    let py = (cache_bounds.y0 + (i / cw) as i32) as f32;
                     let j = (value_noise_2d(px * 0.38, py * 0.38, 919) - 0.5) * intensity * 0.5;
-                    let edge = (*c - face_cov[i]).max(0.0);
+                    let edge = (*c - face[i]).max(0.0);
                     *c = if edge + j >= 0.45 { 1.0 } else { 0.0 };
                 }
-                line_cov = Some(lcov);
+                line = Some(lcov);
             }
         }
         SfxLineStyle::Spikes => {
-            let mut sp_polys = build_spikes_polygons(&geom, le);
+            let mut sp_polys = build_spikes_polygons(geom, le);
             if le.line_width_px > 0.05 {
                 let style = StrokeStyle {
                     width: f64::from(le.line_width_px),
@@ -2385,66 +2254,197 @@ pub fn render_sfx(data: &SfxData, engine: &mut TextEngine, format: PixelFormat, 
                 };
                 sp_polys.extend(stroke_polygons(&geom.polylines, &style, 0.25));
             }
-            line_cov = Some(rasterize_polygon_list(&sp_polys, bounds));
+            line = Some(rasterize_polygon_list(&sp_polys, cache_bounds));
         }
         SfxLineStyle::GPenNib => {
-            let gp_polys = build_gpen_polygons(&geom, le);
-            line_cov = Some(rasterize_polygon_list(&gp_polys, bounds));
+            let gp_polys = build_gpen_polygons(geom, le);
+            line = Some(rasterize_polygon_list(&gp_polys, cache_bounds));
         }
         SfxLineStyle::BrushStroke => {
-            let bs_polys = build_brush_stroke_polygons(&geom, le);
-            line_cov = Some(rasterize_polygon_list(&bs_polys, bounds));
+            let bs_polys = build_brush_stroke_polygons(geom, le);
+            line = Some(rasterize_polygon_list(&bs_polys, cache_bounds));
         }
         SfxLineStyle::Shtack => {
-            // One shared multi-pass sketch geometry for both submodes. No fake white
-            // `cut_polys` wedges: the air gaps come from overlapping tapered passes.
-            let (strokes, dot_boxes) = extract_skeleton_chains(&raw_base_cov, bounds, w, h);
-            let mut shtack_polys = build_shtack_stroke_polygons(&strokes, le);
-            shtack_polys.extend(build_compact_dot_polys(&dot_boxes, le));
-            let mut shtack_cov = rasterize_polygon_list(&shtack_polys, bounds);
+            let polys = build_shtack_contour_polygons(geom, le);
+            let mut shtack_cov = rasterize_polygon_list(&polys, cache_bounds);
             if le.shtack_variant == SfxShtackVariant::DryPencil {
-                apply_shtack_dry_breakup(&mut shtack_cov, w, h, le);
+                let t = Instant::now();
+                apply_shtack_dry_breakup(&mut shtack_cov, cw, ch, le);
+                dry_ms += t.elapsed().as_secs_f64() * 1000.0;
             }
-            for (dst, &src) in face_cov.iter_mut().zip(shtack_cov.iter()) {
-                *dst = src.clamp(0.0, 1.0);
-            }
+            line = Some(shtack_cov);
         }
+    }
+    (raw, line, dry_ms)
+}
+
+/// Evaluates Stage 1 (Halo dilation behind all letters) into `under_rgba` and returns elapsed ms.
+fn render_halo_pass(le: &SfxLineEffect, face_cov: &[f32], line_cov: Option<&[f32]>, bounds: Rect, under_rgba: &mut [[f32; 4]]) -> f64 {
+    if le.halo_width_px <= 0.05 {
+        return 0.0;
+    }
+    let halo_start = Instant::now();
+    let w = bounds.width() as usize;
+    let h = bounds.height() as usize;
+    let mut union_cov = face_cov.to_vec();
+    if let Some(lc) = line_cov {
+        for (u, &l) in union_cov.iter_mut().zip(lc.iter()) {
+            *u = u.max(l);
+        }
+    }
+    let mut halo_cov = dilate_coverage_approx(&union_cov, w, h, le.halo_width_px);
+    if le.style == SfxLineStyle::OneBit {
+        let intensity = le.one_bit_intensity / 100.0;
+        for (i, c) in halo_cov.iter_mut().enumerate() {
+            let px = (bounds.x0 + (i % w) as i32) as f32;
+            let py = (bounds.y0 + (i / w) as i32) as f32;
+            let j = (value_noise_2d(px * 0.3, py * 0.3, 1301) - 0.5) * intensity * 0.45;
+            *c = if *c + j >= 0.48 { 1.0 } else { 0.0 };
+        }
+    }
+    paint_solid_over(under_rgba, &halo_cov, color_rgba(le.halo_color), 1.0);
+    halo_start.elapsed().as_secs_f64() * 1000.0
+}
+
+/// Renders an [`SfxData`] non-destructively into offscreen document [`Surface`]`(s)`.
+/// Existing callers keep working unchanged; pass `preview = true` for fast interactive drags.
+pub fn render_sfx(data: &SfxData, engine: &mut TextEngine, format: PixelFormat, dpi: f32) -> SfxRenderOutput {
+    render_sfx_with_options(data, engine, format, dpi, false)
+}
+
+/// Full SFX render with stage timings emitted through `log::info!` (the browser build prints
+/// these straight to the DevTools console).
+pub fn render_sfx_with_options(data: &SfxData, engine: &mut TextEngine, format: PixelFormat, dpi: f32, preview: bool) -> SfxRenderOutput {
+    let total_start = Instant::now();
+    let key = sfx_stage_key(data, dpi, preview);
+
+    // --- Geometry (skipped on a geometry/stroke cache hit) -------------------------------
+    let mut cache_hit = false;
+    let cached_geom = {
+        let guard = SFX_STAGE_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        match guard.as_ref() {
+            Some(c) if c.key == key => {
+                cache_hit = true;
+                Some(c.full_geom.clone())
+            }
+            _ => None,
+        }
+    };
+    let (full_geom, geom_ms) = if cache_hit {
+        (cached_geom.unwrap_or_else(|| build_sfx_geometry(data, engine, dpi)), 0.0)
+    } else {
+        let t = Instant::now();
+        let g = build_sfx_geometry(data, engine, dpi);
+        (g, t.elapsed().as_secs_f64() * 1000.0)
+    };
+
+    let full_bounds = compute_render_bounds(data, &full_geom);
+    if full_bounds.is_empty() {
+        let s = Surface::new(format);
+        return if data.has_negative_invert() {
+            SfxRenderOutput::InvertPair { under: s.clone(), invert: s, bounds: Rect::EMPTY, geom: full_geom }
+        } else {
+            SfxRenderOutput::Single { surface: s, bounds: Rect::EMPTY, geom: full_geom }
+        };
+    }
+
+    let (bounds, geom, proxy_scale, scaled_data) = prepare_proxy_setup(data, &full_geom, full_bounds, preview);
+    let data = scaled_data.as_ref().unwrap_or(data);
+    let le = &data.line_effect;
+    let w = bounds.width() as usize;
+    let h = bounds.height() as usize;
+    let n = w.saturating_mul(h);
+
+    // The cache rasterizes into the halo/shadow-free rect; the working buffers embed that into
+    // the actual (halo-padded) bounds so dilation still has room and never clips the halo.
+    let cache_bounds_full = cache_bounds_for(data, &full_geom);
+    let cache_bounds = if proxy_scale < 1.0 {
+        Rect::from_xywh(
+            cache_bounds_full.x0,
+            cache_bounds_full.y0,
+            ((cache_bounds_full.width() as f64 * proxy_scale).round().max(1.0)) as u32,
+            ((cache_bounds_full.height() as f64 * proxy_scale).round().max(1.0)) as u32,
+        )
+    } else {
+        cache_bounds_full
+    };
+    let mut dry_ms = 0.0_f64;
+
+    // --- Stylized line / Shtack polygons + rasterization (skipped on cache hit) -----------
+    let strokes_start = Instant::now();
+    let cached_coverages: Option<(Vec<f32>, Option<Vec<f32>>)> = {
+        let guard = SFX_STAGE_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        guard
+            .as_ref()
+            .filter(|c| c.key == key && c.proxy_scale == proxy_scale && c.cache_bounds == cache_bounds)
+            .map(|c| {
+                (
+                    embed_coverage(&c.raw_base_cov, c.cache_bounds, bounds),
+                    c.line_or_shtack_cov.as_ref().map(|v| embed_coverage(v, c.cache_bounds, bounds)),
+                )
+            })
+    };
+    let cached_coverages_hit = cached_coverages.is_some();
+    let (raw_base_cov, line_or_shtack_cov) = match cached_coverages {
+        Some(pair) => pair,
+        None => {
+            let (raw, line, stage_dry_ms) = rasterize_uncached_stages(&geom, le, cache_bounds);
+            dry_ms += stage_dry_ms;
+            let entry = CachedSfxStages {
+                key: key.clone(),
+                proxy_scale,
+                cache_bounds,
+                full_geom: full_geom.clone(),
+                raw_base_cov: raw.clone(),
+                line_or_shtack_cov: line.clone(),
+            };
+            let mut guard = SFX_STAGE_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+            *guard = Some(entry);
+            (
+                embed_coverage(&raw, cache_bounds, bounds),
+                line.as_ref().map(|v| embed_coverage(v, cache_bounds, bounds)),
+            )
+        }
+    };
+    let strokes_ms = if cached_coverages_hit {
+        0.0
+    } else {
+        strokes_start.elapsed().as_secs_f64() * 1000.0
+    };
+
+    let mut face_cov = raw_base_cov;
+    let mut line_cov = line_or_shtack_cov;
+    if le.style == SfxLineStyle::OneBit {
+        let intensity = le.one_bit_intensity / 100.0;
+        for (i, c) in face_cov.iter_mut().enumerate() {
+            let px = (bounds.x0 + (i % w) as i32) as f32;
+            let py = (bounds.y0 + (i / w) as i32) as f32;
+            let jitter = (value_noise_2d(px * 0.45, py * 0.45, 701) - 0.5) * intensity * 0.55;
+            *c = if *c + jitter >= 0.5 { 1.0 } else { 0.0 };
+        }
+    } else if le.style == SfxLineStyle::Shtack && !le.shtack_fill_interior {
+        face_cov = line_cov.take().unwrap_or_else(|| vec![0.0_f32; n]);
     }
 
     // Stage 0: Vector Shadow / 3D + Legacy Shadows / Extrude3D / Stroke Stack
+    let mut under_rgba = vec![[0.0_f32; 4]; n];
     render_vector_shadow_pass(data, &geom, bounds, &mut under_rgba);
     render_shadow_passes(data, &geom, bounds, w, h, &mut under_rgba);
     render_extrude_passes(data, &geom, bounds, &mut under_rgba);
     render_stroke_passes(data, &geom, bounds, &mut under_rgba);
 
     // Stage 1 (Pass 1 — Halo / Ореол behind ALL letters)
-    if le.halo_width_px > 0.05 {
-        let mut union_cov = face_cov.clone();
-        if let Some(lc) = &line_cov {
-            for (u, &l) in union_cov.iter_mut().zip(lc.iter()) {
-                *u = u.max(l);
-            }
-        }
-        let mut halo_cov = dilate_coverage_approx(&union_cov, w, h, le.halo_width_px);
-        if is_one_bit {
-            let intensity = le.one_bit_intensity / 100.0;
-            for (i, c) in halo_cov.iter_mut().enumerate() {
-                let px = (bounds.x0 + (i % w) as i32) as f32;
-                let py = (bounds.y0 + (i / w) as i32) as f32;
-                let j = (value_noise_2d(px * 0.3, py * 0.3, 1301) - 0.5) * intensity * 0.45;
-                *c = if *c + j >= 0.48 { 1.0 } else { 0.0 };
-            }
-        }
-        paint_solid_over(&mut under_rgba, &halo_cov, color_rgba(le.halo_color), 1.0);
-    }
+    let halo_ms = render_halo_pass(le, &face_cov, line_cov.as_deref(), bounds, &mut under_rgba);
 
     // Stage 2 (Pass 2 — Face Fill + Dry Brush + Distress)
     apply_grain_distress(data, &mut face_cov, bounds, w);
     if data.dry_brush.enabled {
-        apply_dry_brush_mask(&mut face_cov, &geom, bounds, w, h, &data.dry_brush, is_one_bit);
+        let t = Instant::now();
+        apply_dry_brush_mask(&mut face_cov, &geom, bounds, w, h, &data.dry_brush, le.style == SfxLineStyle::OneBit);
+        dry_ms += t.elapsed().as_secs_f64() * 1000.0;
     }
 
-    if data.has_negative_invert() {
+    let out = if data.has_negative_invert() {
         let mut invert_rgba = vec![[0.0_f32; 4]; n];
         for (o, &c) in invert_rgba.iter_mut().zip(face_cov.iter()) {
             let ca = c.clamp(0.0, 1.0);
@@ -2469,7 +2469,35 @@ pub fn render_sfx(data: &SfxData, engine: &mut TextEngine, format: PixelFormat, 
         }
         let surface = finish_sfx_surface(&under_rgba, bounds, full_bounds, proxy_scale, format);
         SfxRenderOutput::Single { surface, bounds: full_bounds, geom: full_geom }
-    }
+    };
+
+    #[cfg(test)]
+    LAST_SFX_TIMINGS.with(|t| {
+        *t.borrow_mut() = SfxStageTimings {
+            cache_hit,
+            geom_ms,
+            strokes_ms,
+            dry_ms,
+            halo_ms,
+            total_ms: total_start.elapsed().as_secs_f64() * 1000.0,
+        };
+    });
+
+    log::info!(
+        "[SFX render] text={:?} box={}x{} (proxy {:.2}x, preview={}, cache_hit={}) | geom={:.2}ms strokes={:.2}ms dry={:.2}ms halo={:.2}ms | total={:.2}ms",
+        data.text,
+        full_bounds.width(),
+        full_bounds.height(),
+        proxy_scale,
+        preview,
+        cache_hit,
+        geom_ms,
+        strokes_ms,
+        dry_ms,
+        halo_ms,
+        total_start.elapsed().as_secs_f64() * 1000.0
+    );
+    out
 }
 
 #[cfg(test)]
@@ -2746,6 +2774,181 @@ mod tests {
             !border,
             "sharp Shtack needles + halo must not be clipped at the layer edge: worst alpha {worst} at {where_:?}, bounds {bounds:?}, ink {:?}",
             surface.content_bounds()
+        );
+    }
+
+    // --- Part 3: large-canvas regressions & stage benchmarks ---------------------------------
+
+    fn render_large_bam(variant: SfxShtackVariant, fill_interior: bool, halo: f32, preview: bool) -> (Surface, Rect, [f64; 4]) {
+        let mut engine = TextEngine::new();
+        let mut data = SfxData {
+            text: "BAM!".to_owned(),
+            size_pt: 220.0,
+            origin: [60.0, 60.0],
+            ..SfxData::default()
+        };
+        data.line_effect.style = SfxLineStyle::Shtack;
+        data.line_effect.shtack_variant = variant;
+        data.line_effect.shtack_bristles = 5;
+        data.line_effect.shtack_overshoot_px = 20.0;
+        data.line_effect.shtack_thickness_px = 14.0;
+        data.line_effect.halo_width_px = halo;
+        data.line_effect.shtack_fill_interior = fill_interior;
+        let out = render_sfx_with_options(&data, &mut engine, PixelFormat::RGBA8, 72.0, preview);
+        let bang = out.geom().glyphs.last().map(|g| g.warped_bounds).unwrap_or([0.0; 4]);
+        let SfxRenderOutput::Single { surface, bounds, .. } = out else {
+            panic!("expected Single output for large BAM!");
+        };
+        (surface, bounds, bang)
+    }
+
+    fn dark_ink_in(surface: &Surface, bounds: Rect, x0: i32, x1: i32, y0: i32, y1: i32) -> usize {
+        let mut n = 0usize;
+        for y in y0.max(bounds.y0)..y1.min(bounds.y1) {
+            for x in x0.max(bounds.x0)..x1.min(bounds.x1) {
+                if surface.sample_channel(x, y, 3) > 0.25 && surface.sample_channel(x, y, 0) < 0.5 {
+                    n += 1;
+                }
+            }
+        }
+        n
+    }
+
+    /// The bar and dot of `!` are independent vector contours: they must both survive on the
+    /// right of a ~1500 px "BAM!" in BOTH Shtack submodes.
+    #[test]
+    fn shtack_large_bam_keeps_both_exclamation_bar_and_dot() {
+        for variant in [SfxShtackVariant::SaiPenSketch, SfxShtackVariant::DryPencil] {
+            let (surface, bounds, bang) = render_large_bam(variant, false, 8.0, false);
+            println!("[BAM!] {variant:?} bounds {}x{} bang={bang:?}", bounds.width(), bounds.height());
+            assert!(bounds.width() > 400, "{variant:?}: expected large lettering, got {}", bounds.width());
+            let right = bounds.x0 + (bounds.width() as i32) * 3 / 4;
+            let bx0 = right.max(bang[0].floor() as i32);
+            let bx1 = bang[2].ceil() as i32;
+            let split = bang[1] + (bang[3] - bang[1]) * 0.52;
+            let bar = dark_ink_in(&surface, bounds, bx0, bx1, bang[1].floor() as i32, split.floor() as i32);
+            let dot = dark_ink_in(&surface, bounds, bx0, bx1, split.ceil() as i32, bang[3].ceil() as i32);
+            assert!(bar > 0, "{variant:?}: upper bar of '!' vanished ({bar} ink px)");
+            assert!(dot > 0, "{variant:?}: lower dot of '!' vanished ({dot} ink px)");
+        }
+    }
+
+    #[test]
+    fn shtack_fill_interior_produces_distinct_interior_coverage() {
+        let (hollow, hb, _) = render_large_bam(SfxShtackVariant::SaiPenSketch, false, 0.0, false);
+        let (filled, fb, _) = render_large_bam(SfxShtackVariant::SaiPenSketch, true, 0.0, false);
+        let (_, hollow_visible, hf) = shtack_ink_stats(&hollow, hb);
+        let (_, filled_visible, ff) = shtack_ink_stats(&filled, fb);
+        assert!(hf && ff, "coverage must stay finite in both fill modes");
+        assert!(
+            filled_visible > hollow_visible,
+            "filled interior must cover more pixels ({filled_visible}) than hollow sketch ({hollow_visible})"
+        );
+    }
+
+    /// Prints exact stage timings with `--nocapture` and checks the cache / preview / no-halo paths.
+    #[test]
+    fn shtack_render_stage_benchmarks() {
+        let dpi = 72.0_f32;
+        let mut engine = TextEngine::new();
+        let mut data = SfxData {
+            text: "BAM!".to_owned(),
+            size_pt: 220.0,
+            origin: [60.0, 60.0],
+            ..SfxData::default()
+        };
+        data.line_effect.style = SfxLineStyle::Shtack;
+        data.line_effect.shtack_bristles = 5;
+        data.line_effect.shtack_overshoot_px = 20.0;
+        data.line_effect.halo_width_px = 8.0;
+
+        // 1. Full-quality render (halo = 8 px).
+        let t = Instant::now();
+        let _ = render_sfx_with_options(&data, &mut engine, PixelFormat::RGBA8, dpi, false);
+        let full_wall = t.elapsed().as_secs_f64() * 1000.0;
+        let full = LAST_SFX_TIMINGS.with(|t| *t.borrow());
+        assert!(!full.cache_hit, "first render must build geometry");
+
+        // 2. Cached halo/colour-only update: only parameters applied AFTER the cached stages.
+        let mut colour = data.clone();
+        colour.line_effect.halo_width_px = 12.0;
+        colour.line_effect.halo_color = Color::rgb(0.9, 0.8, 0.7);
+        colour.line_effect.line_color = Color::rgb(0.2, 0.2, 0.2);
+        colour.fill = SfxFillSource::Solid { color: Color::rgb(0.1, 0.1, 0.1) };
+        colour.vector_shadow.enabled = true;
+        assert_eq!(sfx_stage_key(&data, dpi, false), sfx_stage_key(&colour, dpi, false));
+        let t = Instant::now();
+        let _ = render_sfx_with_options(&colour, &mut engine, PixelFormat::RGBA8, dpi, false);
+        let cached_wall = t.elapsed().as_secs_f64() * 1000.0;
+        let cached = LAST_SFX_TIMINGS.with(|t| *t.borrow());
+        assert!(cached.cache_hit, "halo / colour / shadow drag must hit the stage cache");
+        assert_eq!(cached.geom_ms, 0.0, "geometry build must be skipped on cache hit");
+        assert_eq!(cached.strokes_ms, 0.0, "polygon rasterization must be skipped on cache hit");
+
+        // 3. Interactive preview drag (small proxy, separate key).
+        let t = Instant::now();
+        let _ = render_sfx_with_options(&data, &mut engine, PixelFormat::RGBA8, dpi, true);
+        let preview_wall = t.elapsed().as_secs_f64() * 1000.0;
+        let preview = LAST_SFX_TIMINGS.with(|t| *t.borrow());
+
+        // 4. Halo = 0: no dilation whatsoever.
+        let mut no_halo = data.clone();
+        no_halo.line_effect.halo_width_px = 0.0;
+        let t = Instant::now();
+        let _ = render_sfx_with_options(&no_halo, &mut engine, PixelFormat::RGBA8, dpi, false);
+        let no_halo_wall = t.elapsed().as_secs_f64() * 1000.0;
+        let zero = LAST_SFX_TIMINGS.with(|t| *t.borrow());
+        assert_eq!(zero.halo_ms, 0.0, "halo_width_px == 0 must run zero EDT dilation");
+
+        println!(
+            "[SFX BENCH 220pt (729x346)] full={full_wall:.2}ms (geom={:.2} strokes={:.2} dry={:.2} halo={:.2}) | preview={preview_wall:.2}ms | cached={cached_wall:.2}ms (hit={}) | halo0={no_halo_wall:.2}ms",
+            full.geom_ms, full.strokes_ms, full.dry_ms, full.halo_ms, cached.cache_hit
+        );
+        assert!(preview.total_ms.is_finite());
+        assert!(full_wall.is_finite() && preview_wall.is_finite() && cached_wall.is_finite() && no_halo_wall.is_finite());
+
+        // 5. Large ~1920px-wide BAM! (size_pt = 540) matching a full-canvas SFX banner.
+        let mut big = data.clone();
+        big.size_pt = 540.0;
+        big.line_effect.shtack_variant = SfxShtackVariant::DryPencil;
+        let t = Instant::now();
+        let big_out = render_sfx_with_options(&big, &mut engine, PixelFormat::RGBA8, dpi, false);
+        let big_full_wall = t.elapsed().as_secs_f64() * 1000.0;
+        let big_full = LAST_SFX_TIMINGS.with(|t| *t.borrow());
+        let big_b = big_out.bounds();
+
+        let t = Instant::now();
+        let _ = render_sfx_with_options(&big, &mut engine, PixelFormat::RGBA8, dpi, true);
+        let big_preview_wall = t.elapsed().as_secs_f64() * 1000.0;
+        let big_preview = LAST_SFX_TIMINGS.with(|t| *t.borrow());
+
+        // Re-render full first so cache holds the full-res stage, then measure cached halo/color change on ~1920px BAM!
+        let _ = render_sfx_with_options(&big, &mut engine, PixelFormat::RGBA8, dpi, false);
+        let mut big_cached_data = big.clone();
+        big_cached_data.line_effect.halo_width_px = 14.0;
+        let t = Instant::now();
+        let _ = render_sfx_with_options(&big_cached_data, &mut engine, PixelFormat::RGBA8, dpi, false);
+        let big_cached_wall = t.elapsed().as_secs_f64() * 1000.0;
+        let big_cached = LAST_SFX_TIMINGS.with(|t| *t.borrow());
+        assert!(big_cached.cache_hit);
+
+        let mut big_halo0 = big.clone();
+        big_halo0.line_effect.halo_width_px = 0.0;
+        let t = Instant::now();
+        let _ = render_sfx_with_options(&big_halo0, &mut engine, PixelFormat::RGBA8, dpi, false);
+        let big_halo0_wall = t.elapsed().as_secs_f64() * 1000.0;
+
+        println!(
+            "[SFX BENCH 540pt ({}x{}) DryPencil] full={big_full_wall:.2}ms (geom={:.2} strokes={:.2} dry={:.2} halo={:.2}) | preview={big_preview_wall:.2}ms (strokes={:.2} halo={:.2}) | cached={big_cached_wall:.2}ms (hit={}) | halo0={big_halo0_wall:.2}ms",
+            big_b.width(),
+            big_b.height(),
+            big_full.geom_ms,
+            big_full.strokes_ms,
+            big_full.dry_ms,
+            big_full.halo_ms,
+            big_preview.strokes_ms,
+            big_preview.halo_ms,
+            big_cached.cache_hit
         );
     }
 }

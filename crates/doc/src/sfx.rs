@@ -1175,47 +1175,46 @@ impl SfxData {
         }
     }
 
-    /// Applies an [`SfxPreset`] onto this instance while preserving text, origin, and warp geometry.
+    /// Applies an [`SfxPreset`] onto this instance while preserving text, origin, size,
+    /// orientation, font choice (when already set), and warp geometry. Pixel-sized effect widths
+    /// from the preset are scaled proportionally to `self.size_pt / preset.size_pt`.
     pub fn apply_preset(&mut self, preset: &SfxPreset) {
-        self.font_family = preset.font_family.clone();
-        self.weight = preset.weight;
-        self.italic = preset.italic;
-        self.size_pt = preset.size_pt;
+        let kept_size = finite_f32(self.size_pt, 54.0).clamp(4.0, MAX_SFX_SIZE_PT);
+        let base_size = finite_f32(preset.size_pt, 64.0).clamp(8.0, MAX_SFX_SIZE_PT);
+        let scale = (f64::from(kept_size) / f64::from(base_size)).clamp(0.25, 32.0);
+        if self.font_family.trim().is_empty() {
+            self.font_family = preset.font_family.clone();
+            self.weight = preset.weight;
+            self.italic = preset.italic;
+        }
         self.tracking = preset.tracking;
-        self.leading_scale = preset.leading_scale;
-        self.vertical = preset.vertical;
         self.fill = preset.fill.clone();
         self.line_effect = preset.line_effect;
         self.dry_brush = preset.dry_brush;
         self.vector_shadow = preset.vector_shadow;
         self.styles = preset.styles.clone();
         self.distress = preset.distress;
+        if (scale - 1.0).abs() > 1e-4 {
+            scale_sfx_pixel_effects(self, scale);
+        }
         self.validate();
     }
 }
 
-/// Scale the pixel-sized defaults of a **newly created** SFX layer to the document's min side.
-///
-/// `scale = (min_side / SFX_REFERENCE_MIN_SIDE).max(1.0)`, so canvases at or below 1200 px keep
-/// their exact historical values. Call this only for freshly derived defaults: caller-supplied
-/// values in an `sfx.create` payload are already explicit and must not be overwritten.
-pub fn scale_new_sfx_for_document(data: &mut SfxData, doc_width: u32, doc_height: u32) {
-    let scale = (f64::from(doc_width.min(doc_height)) / SFX_REFERENCE_MIN_SIDE).max(1.0);
-    if scale <= 1.0 {
-        return;
-    }
+/// Scales pixel-sized effect dimensions (leaving `size_pt` and percentage fields such as
+/// `shtack_overshoot_px` untouched) by `scale`.
+fn scale_sfx_pixel_effects(data: &mut SfxData, scale: f64) {
     let cap = f64::from(MAX_SFX_EFFECT_PX);
     let scaled = |v: f32| -> f32 { (f64::from(finite_f32(v, 0.0)) * scale).clamp(0.0, cap) as f32 };
     let scaled_signed = |v: f32| -> f32 { (f64::from(finite_f32(v, 0.0)) * scale).clamp(-cap, cap) as f32 };
 
-    data.size_pt = (f64::from(finite_f32(data.size_pt, 54.0)) * scale).clamp(4.0, f64::from(MAX_SFX_SIZE_PT)) as f32;
     data.line_effect.halo_width_px = scaled(data.line_effect.halo_width_px);
     data.line_effect.line_width_px = scaled(data.line_effect.line_width_px);
     data.line_effect.spike_length_px = scaled(data.line_effect.spike_length_px).max(2.0);
     data.line_effect.spike_size_px = scaled(data.line_effect.spike_size_px).max(2.0);
     data.line_effect.gpen_overshoot_px = scaled(data.line_effect.gpen_overshoot_px);
     data.line_effect.ink_brush_overshoot_px = scaled(data.line_effect.ink_brush_overshoot_px);
-    // `shtack_overshoot_px` is a percentage of glyph height, so it must NOT be scaled with the document.
+    // `shtack_overshoot_px` is a percentage of glyph height, so it must NOT be scaled here.
     data.line_effect.shtack_thickness_px = scaled(data.line_effect.shtack_thickness_px).max(6.0);
     data.dry_brush.lic_length_px = scaled(data.dry_brush.lic_length_px).max(4.0);
     data.vector_shadow.distance_px = scaled(data.vector_shadow.distance_px);
@@ -1236,6 +1235,20 @@ pub fn scale_new_sfx_for_document(data: &mut SfxData, doc_width: u32, doc_height
             SfxStylePass::NegativeInvert { .. } => {}
         }
     }
+}
+
+/// Scale the pixel-sized defaults of a **newly created** SFX layer to the document's min side.
+///
+/// `scale = (min_side / SFX_REFERENCE_MIN_SIDE).max(1.0)`, so canvases at or below 1200 px keep
+/// their exact historical values. Call this only for freshly derived defaults: caller-supplied
+/// values in an `sfx.create` payload are already explicit and must not be overwritten.
+pub fn scale_new_sfx_for_document(data: &mut SfxData, doc_width: u32, doc_height: u32) {
+    let scale = (f64::from(doc_width.min(doc_height)) / SFX_REFERENCE_MIN_SIDE).max(1.0);
+    if scale <= 1.0 {
+        return;
+    }
+    data.size_pt = (f64::from(finite_f32(data.size_pt, 54.0)) * scale).clamp(4.0, f64::from(MAX_SFX_SIZE_PT)) as f32;
+    scale_sfx_pixel_effects(data, scale);
 }
 
 /// Clear per-instance warps when a *new* SFX layer is created from tool state.
@@ -1296,19 +1309,24 @@ impl SfxPreset {
         if self.name.trim().is_empty() {
             self.name = "Untitled SFX".to_owned();
         }
-        let mut tmp = SfxData::default();
-        tmp.apply_preset(self);
-        self.font_family = tmp.font_family;
-        self.weight = tmp.weight;
-        self.size_pt = tmp.size_pt;
-        self.tracking = tmp.tracking;
-        self.leading_scale = tmp.leading_scale;
-        self.fill = tmp.fill;
-        self.line_effect = tmp.line_effect;
-        self.dry_brush = tmp.dry_brush;
-        self.vector_shadow = tmp.vector_shadow;
-        self.styles = tmp.styles;
-        self.distress = tmp.distress;
+        if self.font_family.trim().is_empty() {
+            self.font_family = default_font_family();
+        }
+        self.weight = self.weight.clamp(100, 900);
+        self.size_pt = finite_f32(self.size_pt, 54.0).clamp(4.0, MAX_SFX_SIZE_PT);
+        self.tracking = finite_f32(self.tracking, 0.0).clamp(-500.0, 2000.0);
+        self.leading_scale = finite_f32(self.leading_scale, 1.05).clamp(0.4, 4.0);
+        self.fill.validate();
+        self.line_effect.validate();
+        self.dry_brush.validate();
+        self.vector_shadow.validate();
+        if self.styles.len() > MAX_SFX_STYLE_PASSES {
+            self.styles.truncate(MAX_SFX_STYLE_PASSES);
+        }
+        for pass in &mut self.styles {
+            pass.validate();
+        }
+        self.distress.validate();
     }
 }
 
@@ -1431,5 +1449,37 @@ mod tests {
         )
         .unwrap();
         assert_eq!(legacy.line_effect.shtack_variant, SfxShtackVariant::DryPencil);
+    }
+
+    #[test]
+    fn apply_preset_preserves_size_font_vertical_and_scales_effect_widths() {
+        let mut data = SfxData {
+            text: "BOOM!".to_owned(),
+            font_family: "Anime Ace".to_owned(),
+            size_pt: 256.0,
+            vertical: true,
+            ..SfxData::default()
+        };
+        let mut preset = SfxPreset {
+            name: "Test Shtack".to_owned(),
+            font_family: "Impact".to_owned(),
+            size_pt: 64.0,
+            vertical: false,
+            ..SfxPreset::default()
+        };
+        preset.line_effect.style = SfxLineStyle::Shtack;
+        preset.line_effect.halo_width_px = 10.0;
+        preset.line_effect.shtack_overshoot_px = 20.0;
+        preset.vector_shadow.enabled = true;
+        preset.vector_shadow.distance_px = 12.0;
+
+        data.apply_preset(&preset);
+        assert_eq!(data.size_pt, 256.0, "applying a style preset must never reset SFX size_pt");
+        assert_eq!(data.font_family, "Anime Ace", "applying a style preset must keep the chosen font");
+        assert!(data.vertical, "applying a style preset must keep vertical orientation");
+        assert_eq!(data.line_effect.style, SfxLineStyle::Shtack);
+        assert!((data.line_effect.halo_width_px - 40.0).abs() < 1e-3, "halo scales 4x with 256/64 size");
+        assert!((data.vector_shadow.distance_px - 48.0).abs() < 1e-3, "shadow distance scales 4x");
+        assert!((data.line_effect.shtack_overshoot_px - 20.0).abs() < 1e-3, "needle overshoot % must NOT double-scale");
     }
 }

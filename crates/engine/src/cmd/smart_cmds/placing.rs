@@ -153,6 +153,12 @@ pub(super) fn shift_layer(l: &mut Layer, dx: i32, dy: i32) {
     if let Some(fc) = &mut l.fill_cache {
         fc.surface = mv(&fc.surface);
     }
+    if let Some(sfx) = &mut l.sfx {
+        let mut updated = (**sfx).clone();
+        updated.origin[0] += f64::from(dx);
+        updated.origin[1] += f64::from(dy);
+        *sfx = Arc::new(updated);
+    }
     match &mut l.content {
         LayerContent::Raster(s) => *s = mv(s),
         LayerContent::Text(t) => {

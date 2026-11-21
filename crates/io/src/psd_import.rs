@@ -432,6 +432,17 @@ impl Ctx<'_> {
                 .filter(photocraft_doc::Frame::valid)
                 .map(Box::new);
         }
+        if let Some(data) = rec.block(b"pcSf").filter(|b| b.data.len() <= 8 << 20) {
+            let end = data.data.iter().rposition(|b| *b != 0).map_or(0, |n| n.saturating_add(1));
+            l.sfx = data
+                .data
+                .get(..end)
+                .and_then(|bytes| serde_json::from_slice::<photocraft_doc::sfx::SfxData>(bytes).ok())
+                .map(|mut sfx| {
+                    sfx.validate();
+                    Arc::new(sfx)
+                });
+        }
         l.visible = rec.is_visible();
         l.opacity = f32::from(rec.opacity) / 255.0;
         l.fill_opacity = f32::from(rec.fill_opacity()) / 255.0;
@@ -871,10 +882,11 @@ pub(crate) fn group_depth(file: &PsdFile) -> usize {
 /// Most pixel bytes the smart-filter `FEid` sources may keep decoded across one import.
 const MAX_UNFILTERED_BYTES: u64 = 1 << 30;
 
-const LAYER_INFO_KEYS: [&[u8; 4]; 50] = [
+const LAYER_INFO_KEYS: [&[u8; 4]; 52] = [
     b"luni", b"lyid", b"lnsr", b"lsct", b"lsdk", b"lspf", b"lclr", b"iOpa", b"clbl", b"infx", b"knko", b"tsly", b"lmgm", b"vmgm", b"brst", b"shmd", b"fxrp",
     b"lfx2", b"lfxs", b"lmfx", b"lrFX", b"lyvr", b"sn2P", b"cust", b"CgEd", b"vmsk", b"vsms", b"vogk", b"vowv", b"vstk", b"vscg", b"artb", b"artd", b"abdd",
-    b"FMsk", b"PxSc", b"PxSD", b"cinf", b"ffxi", b"shpa", b"anFX", b"SoCo", b"GdFl", b"PtFl", b"TySh", b"tySh", b"SoLd", b"SoLE", b"PlLd", b"plLd",
+    b"FMsk", b"PxSc", b"PxSD", b"cinf", b"ffxi", b"shpa", b"anFX", b"SoCo", b"GdFl", b"PtFl", b"TySh", b"tySh", b"SoLd", b"SoLE", b"PlLd", b"plLd", b"pcFr",
+    b"pcSf",
 ];
 
 /// The key of an adjustment layer whose type no mapper knows (#6575), e.g. Photoshop 4's

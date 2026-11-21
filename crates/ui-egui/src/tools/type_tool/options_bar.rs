@@ -1,4 +1,4 @@
-use super::defaults::{apply, formatting_params, open_color_picker, shown_scale, target, target_doc, type_unit};
+use super::defaults::{apply, formatting_params, open_color_picker, sfx_styles_at, shown_scale, target, target_doc, target_sfx, type_unit};
 use super::editing::{cancel, commit_with};
 use super::fonts::{font_picker, font_picker_tip, fonts_ready, selected_style, style_label, styles};
 use super::keys::is_vertical;
@@ -15,14 +15,22 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         Some((f, s, z, _)) => (f.clone(), if s.is_empty() { "Regular".into() } else { s.clone() }, *z),
         None => (o.type_font.clone(), o.type_style.clone(), o.type_size),
     };
-    if crate::icons::button(ui, "text-cursor", 24.0, false, tl!("Toggle text orientation")).clicked()
-        && let Some((layer, _)) = target(app)
-        && let Some(params) = formatting_params(app)
-    {
-        let to = if is_vertical(app, LayerId(layer)) { "horizontal" } else { "vertical" };
-        if let Err(e) = app.run(&format!("type.orientation.{to}"), params) {
-            app.ui.status = e;
-            app.ui.status_error = true;
+    if crate::icons::button(ui, "text-cursor", 24.0, false, tl!("Toggle text orientation")).clicked() {
+        if let Some((layer, _)) = target(app)
+            && let Some(params) = formatting_params(app)
+        {
+            let to = if is_vertical(app, LayerId(layer)) { "horizontal" } else { "vertical" };
+            if let Err(e) = app.run(&format!("type.orientation.{to}"), params) {
+                app.ui.status = e;
+                app.ui.status_error = true;
+            }
+        } else if let Some((layer_id, mut sfx)) = target_sfx(app) {
+            sfx.vertical = !sfx.vertical;
+            sfx.validate();
+            if let Err(e) = app.run("sfx.update", json!({ "layer": layer_id, "sfx": sfx })) {
+                app.ui.status = e;
+                app.ui.status_error = true;
+            }
         }
     }
     // Font family and style menus (one placeholder in their place while the fonts load), in one
@@ -219,9 +227,12 @@ pub(super) fn shown_family(app: &PhotocraftApp, c: &photocraft_doc::text::CharSt
 }
 
 /// Character and paragraph style at the selection, caret, or first run of selected layers.
-/// The paragraph at a collapsed caret is the caret's, as the options bar and Paragraph panel show it.
+/// Falls back to the active SFX layer when no Type layer is targeted so the native Character
+/// dock edits SFX typography directly.
 pub(crate) fn styles_at(app: &PhotocraftApp) -> Option<(photocraft_doc::text::CharStyle, photocraft_doc::text::ParagraphStyle)> {
-    let (layer, range) = target(app)?;
+    let Some((layer, range)) = target(app) else {
+        return sfx_styles_at(app);
+    };
     let t = text_layer(&target_doc(app)?.doc, LayerId(layer))?;
     let at = range.map_or_else(|| app.ui.text_edit.as_ref().map_or(0, |ed| byte_of(&t.text, ed.caret.saturating_sub(1))), |r| byte_of(&t.text, r[0]));
     let para_at = match (range, &app.ui.text_edit) {

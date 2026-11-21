@@ -857,18 +857,28 @@ mod native {
     fn render_sfx(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         let presets = app.session.manga.sfx_presets.presets().to_vec();
         let target = if let Some(st) = app.session.active() {
+            let active_layer = st.active_layer.and_then(|id| st.doc.layer(id));
             let active_is_text = active_text_layer_id(st).is_some()
-                && st.active_layer.and_then(|id| st.doc.layer(id)).is_some_and(|l| matches!(l.content, LayerContent::Text(_)));
-            let sfx_data = st.active_layer.and_then(|id| st.doc.layer(id)).and_then(|l| l.sfx.as_deref().cloned());
+                && active_layer.is_some_and(|l| matches!(l.content, LayerContent::Text(_)));
+            let active_is_smart = active_layer.is_some_and(|l| matches!(l.content, LayerContent::Smart(_)));
+            let sfx_data = active_layer.and_then(|l| l.sfx.as_deref().cloned());
             photocraft_manga_ui::sfx_panel::SfxTargetInfo {
                 doc_id: Some(BridgeDocId(st.doc.id.0)),
                 layer_id: st.active_layer,
                 data: sfx_data,
                 active_is_text,
+                active_is_smart,
                 presets: &presets,
             }
         } else {
-            photocraft_manga_ui::sfx_panel::SfxTargetInfo { doc_id: None, layer_id: None, data: None, active_is_text: false, presets: &presets }
+            photocraft_manga_ui::sfx_panel::SfxTargetInfo {
+                doc_id: None,
+                layer_id: None,
+                data: None,
+                active_is_text: false,
+                active_is_smart: false,
+                presets: &presets,
+            }
         };
         let out = photocraft_manga_ui::sfx_panel::panel(ui, &mut app.manga.ui.sfx_panel, &mut app.manga.ui.sfx_gizmo, &target);
         dispatch_commands(app, out.commands);
@@ -1468,12 +1478,43 @@ mod native {
         app.manga.ui.layer_search_open = true;
     }
 
+    /// Commits a full-resolution SFX render once the user releases the mouse after dragging a
+    /// control in the SFX dock, standard Character dock, or Canvas Bar.
+    fn flush_pending_sfx_full_render(app: &mut PhotocraftApp, ctx: &egui::Context) {
+        if !app.manga.ui.sfx_panel.pending_full_render || ctx.input(|i| i.pointer.primary_down()) {
+            return;
+        }
+        app.manga.ui.sfx_panel.pending_full_render = false;
+        let Some((doc_id, layer_id)) = app.manga.ui.sfx_panel.pending_full_target.take() else {
+            return;
+        };
+        let sfx = app
+            .session
+            .active()
+            .filter(|st| st.doc.id.0 == doc_id.0)
+            .and_then(|st| st.doc.layer(layer_id))
+            .and_then(|l| l.sfx.as_deref().cloned());
+        if let Some(sfx) = sfx {
+            let coalesce = format!("sfx-panel:{}:{}", doc_id.0, layer_id.0);
+            let _ = app.run(
+                "sfx.update",
+                json!({
+                    "layer": layer_id.0,
+                    "sfx": sfx,
+                    "coalesce": coalesce,
+                    "preview": false,
+                }),
+            );
+        }
+    }
+
     /// Applies any queued typesetter requests, renders the Canvas Capsule and Layer Search palette.
     pub fn frame_overlays(app: &mut PhotocraftApp, ctx: &egui::Context) {
         sync_tokens(app, ctx);
         typesetter_requests(app, ctx);
         draw_typesetter_aux_windows(app, ctx);
         show_canvas_capsule(app, ctx);
+        flush_pending_sfx_full_render(app, ctx);
         show_layer_search(app, ctx);
     }
 
@@ -1563,6 +1604,13 @@ mod native {
             None => return,
         };
         let balloon_fit_mode = active_balloon_fit_context(app);
+        let sfx_target = doc_id.zip(active_layer).and_then(|(did, lid)| {
+            doc_arc
+                .as_deref()
+                .and_then(|d| d.layer(lid))
+                .and_then(|l| l.sfx.as_deref().cloned())
+                .map(|sfx| (did, lid, sfx))
+        });
         let view = CapsuleView {
             visible: true,
             view_xform: to_manga_xf(&xf),
@@ -1574,6 +1622,7 @@ mod native {
             is_desktop: true,
             screentone_target: active_tone,
             balloon_fit_mode,
+            sfx_target,
         };
         let mut capsule = std::mem::take(&mut app.manga.ui.canvas_capsule);
         let mut tone = app.manga.ui.screentone_ui.clone();
@@ -1583,6 +1632,10 @@ mod native {
         };
         app.manga.ui.canvas_capsule = capsule;
         app.manga.ui.screentone_ui = tone;
+        if let Some(pending) = out.sfx_preview_pending {
+            app.manga.ui.sfx_panel.pending_full_render = true;
+            app.manga.ui.sfx_panel.pending_full_target = Some(pending);
+        }
         if out.detach_screentone_gizmo {
             app.manga.ui.screentone_gizmo.detach();
         }

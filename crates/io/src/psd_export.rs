@@ -613,6 +613,7 @@ impl Ex<'_> {
                 Err(e) => self.warnings.push(format!("frame metadata could not be written: {e}")),
             }
         }
+        self.layer_sfx_block(l, &mut raw);
         crate::comps_map::artboard_block(&self.guides, l, &mut raw);
         if let Some((comps, last)) = &self.comps {
             // Ids are assigned to every layer before emitting.
@@ -621,6 +622,20 @@ impl Ex<'_> {
         }
         self.layer_xmp_block(l, &mut raw);
         regenerated.into_iter().chain(raw).map(|(k, d)| TaggedBlock::new(k, d)).collect()
+    }
+
+    /// Writes the layer's live Manga SFX metadata into its `pcSf` block, padded to 4 bytes with
+    /// NUL bytes to match Photoshop's layer tagged-block alignment.
+    fn layer_sfx_block(&mut self, l: &Layer, raw: &mut Vec<([u8; 4], Vec<u8>)>) {
+        raw.retain(|(k, _)| k != b"pcSf");
+        let Some(sfx) = &l.sfx else { return };
+        match serde_json::to_vec(sfx.as_ref()) {
+            Ok(mut data) => {
+                data.resize(data.len().next_multiple_of(4), 0);
+                raw.push((*b"pcSf", data));
+            }
+            Err(e) => self.warnings.push(format!("SFX metadata could not be written: {e}")),
+        }
     }
 
     /// Writes the layer's XMP packet into its `shmd` block (created when it has none). Import

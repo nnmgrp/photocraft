@@ -21,7 +21,7 @@ use crate::color_picker_ui::{hex, parse_hex};
 /// The commands previewed: the text colour (`type_tool::open_color_picker`) and a gradient fill
 /// layer's colour stop (`gradient_ui::edit_stop_color`). Only commands that edit the active
 /// document belong here: a preset editor's picker (`gradient.presets.stop`) changes no pixels.
-const COMMANDS: [&str; 2] = ["type.setStyle", photocraft_engine::gradient_fill_cmds::STOP];
+const COMMANDS: [&str; 3] = ["type.setStyle", photocraft_engine::gradient_fill_cmds::STOP, "sfx.update"];
 /// Preview cache keys carry this bit so they never equal a committed document's key (0).
 const TAG: u64 = 1 << 60;
 /// How many previewed colours keep their ink bounds for canvas invalidation.

@@ -7,8 +7,8 @@
 use egui::{Color32, RichText, Stroke, Ui, vec2};
 use photocraft_algo::{DotShape, PatternType};
 use photocraft_doc::sfx::{
-    MAX_SFX_SIZE_PT, MAX_SFX_SPLINE_POINTS, ScreentoneSpec, SfxData, SfxDistress, SfxDryBrushEngine, SfxFillSource, SfxFreeTransform,
-    SfxGlyphTransform, SfxLineJoin, SfxLineStyle, SfxMeshInterpolation, SfxPreset, SfxShtackVariant, SfxSpikeShape, SfxStylePass, SfxWarpMode,
+    MAX_SFX_SPLINE_POINTS, ScreentoneSpec, SfxData, SfxDistress, SfxDryBrushEngine, SfxFillSource, SfxFreeTransform, SfxGlyphTransform, SfxLineJoin,
+    SfxLineStyle, SfxMeshInterpolation, SfxPreset, SfxShtackVariant, SfxSpikeShape, SfxStylePass, SfxWarpMode,
 };
 use photocraft_doc::{Color, LayerId};
 use serde_json::{Value, json};
@@ -53,7 +53,6 @@ impl SfxGlyphTool {
 enum DockTab {
     #[default]
     Sfx,
-    Character,
     Color,
 }
 
@@ -63,6 +62,7 @@ pub struct SfxTargetInfo<'a> {
     pub layer_id: Option<LayerId>,
     pub data: Option<SfxData>,
     pub active_is_text: bool,
+    pub active_is_smart: bool,
     pub presets: &'a [SfxPreset],
 }
 
@@ -72,29 +72,18 @@ pub struct SfxPanelState {
     pub draft: SfxData,
     pub bound_target: Option<(BridgeDocId, LayerId)>,
     pub synced_data: Option<SfxData>,
-    pub font_query: String,
-    pub cached_fonts: Option<Vec<String>>,
     pub preset_name: String,
     /// True while a slider/colour drag is in progress: the next committed (non-preview) render
     /// is deferred until the pointer is released. Transient only — `SfxPanelState` has no serde
     /// derives and is never persisted, so this field is intentionally not part of any saved state.
     pub pending_full_render: bool,
+    /// `(doc_id, layer_id)` that needs a final `preview: false` commit once the pointer is released
+    /// (shared across the SFX dock, standard Character dock, and Canvas Bar).
+    pub pending_full_target: Option<(BridgeDocId, LayerId)>,
     active_tab: DockTab,
 }
 
 impl SfxPanelState {
-    /// Lazily populates the cached font family list once without scanning fonts per frame.
-    pub fn ensure_fonts(&mut self) {
-        if self.cached_fonts.is_some() {
-            return;
-        }
-        let families = match photocraft_text::shared().lock() {
-            Ok(mut engine) => engine.fonts.families(),
-            Err(poisoned) => poisoned.into_inner().fonts.families(),
-        };
-        self.cached_fonts = Some(families);
-    }
-
     /// Synchronizes `draft` from the active SFX layer when selection or undo/redo updates it.
     pub fn sync_from_host(&mut self, target: &SfxTargetInfo<'_>) {
         let next_key = target.layer_id.map(|id| (target.doc_id.unwrap_or(BridgeDocId(0)), id));
@@ -352,7 +341,6 @@ fn preset_title_color(preset: &SfxPreset, t: Tokens) -> Color32 {
 /// Renders the SFX authoring dock panel and emits deferred engine commands.
 pub fn panel(ui: &mut Ui, st: &mut SfxPanelState, gizmo: &mut SfxGizmoState, target: &SfxTargetInfo<'_>) -> SfxPanelOutput {
     let mut out = SfxPanelOutput::default();
-    st.ensure_fonts();
     st.sync_from_host(target);
     let t = Tokens::get(ui.ctx());
     let before = st.draft.clone();
@@ -364,7 +352,6 @@ pub fn panel(ui: &mut Ui, st: &mut SfxPanelState, gizmo: &mut SfxGizmoState, tar
         ui.spacing_mut().item_spacing.y = 6.0;
         match st.active_tab {
             DockTab::Sfx => draw_sfx_tab(ui, st, gizmo, t, target, &mut out),
-            DockTab::Character => draw_character_tab(ui, st, t),
             DockTab::Color => draw_color_tab(ui, st, t),
         }
         crate::widgets::hairline(ui);
@@ -381,6 +368,7 @@ pub fn panel(ui: &mut Ui, st: &mut SfxPanelState, gizmo: &mut SfxGizmoState, tar
             let coalesce = format!("sfx-panel:{}:{}", doc_id.0, layer_id.0);
             let preview = pointer_down;
             st.pending_full_render = pointer_down;
+            st.pending_full_target = pointer_down.then_some((doc_id, layer_id));
             out.commands.push(OutCommand::new(
                 "sfx.update",
                 json!({
@@ -394,6 +382,7 @@ pub fn panel(ui: &mut Ui, st: &mut SfxPanelState, gizmo: &mut SfxGizmoState, tar
         } else if st.pending_full_render && !pointer_down {
             // The user just released the mouse after dragging a slider / colour picker.
             st.pending_full_render = false;
+            st.pending_full_target = None;
             let coalesce = format!("sfx-panel:{}:{}", doc_id.0, layer_id.0);
             out.commands.push(OutCommand::new(
                 "sfx.update",
@@ -424,8 +413,19 @@ fn draw_header_and_tabs(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens, target: 
         });
     });
 
-    // Quick text + Halo/Line strip (mirrors mockup top seam bar)
-    ui.add(egui::TextEdit::singleline(&mut st.draft.text).hint_text("SFX текст (напр. БА-БАХ!)...").desired_width(f32::INFINITY));
+    // Quick text + vertical orientation toggle + Halo/Line strip
+    ui.horizontal(|ui| {
+        let spacing = ui.spacing().item_spacing.x;
+        let text_w = (ui.available_width() - 28.0 - spacing).max(80.0);
+        ui.add(egui::TextEdit::singleline(&mut st.draft.text).hint_text("SFX текст (напр. БА-БАХ!)...").desired_width(text_w));
+        if ui
+            .add_sized([26.0, 22.0], egui::Button::selectable(st.draft.vertical, "↕"))
+            .on_hover_text("Вертикальный текст (шрифт и размер — в стандартной панели Character)")
+            .clicked()
+        {
+            st.draft.vertical = !st.draft.vertical;
+        }
+    });
     ui.horizontal(|ui| {
         dim_label(ui, t, "Ореол:");
         color_swatch_compact(ui, &mut st.draft.line_effect.halo_color);
@@ -437,14 +437,11 @@ fn draw_header_and_tabs(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens, target: 
     });
 
     ui.add_space(2.0);
-    ui.columns(3, |cols| {
+    ui.columns(2, |cols| {
         if seg_button(&mut cols[0], st.active_tab == DockTab::Sfx, ACCENT_SKY, "SFX ●", t).clicked() {
             st.active_tab = DockTab::Sfx;
         }
-        if seg_button(&mut cols[1], st.active_tab == DockTab::Character, ACCENT_SKY, "Character", t).clicked() {
-            st.active_tab = DockTab::Character;
-        }
-        if seg_button(&mut cols[2], st.active_tab == DockTab::Color, ACCENT_SKY, "Color", t).clicked() {
+        if seg_button(&mut cols[1], st.active_tab == DockTab::Color, ACCENT_SKY, "Color", t).clicked() {
             st.active_tab = DockTab::Color;
         }
     });
@@ -962,114 +959,6 @@ fn draw_advanced_fx_collapsible(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens) 
         });
 }
 
-fn draw_character_tab(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens) {
-    section_card(ui, t, |ui| {
-        section_header(ui, t, "НАТИВНАЯ ПАНЕЛЬ CHARACTER", "Shaping Seam", TEXT_SKY);
-        ui.add_space(3.0);
-
-        egui::Grid::new("sfx-type-grid").num_columns(2).spacing(vec2(8.0, 4.0)).show(ui, |ui| {
-            dim_label(ui, t, "Шрифт:");
-            ui.horizontal(|ui| {
-                let selected = st.draft.font_family.clone();
-                craft_ui::ComboBox::from_id_salt("sfx-font-family").width(146.0).selected_text(selected).show_ui(ui, |ui| {
-                    ui.add(egui::TextEdit::singleline(&mut st.font_query).hint_text("Поиск шрифта...").desired_width(142.0));
-                    let q = st.font_query.trim().to_ascii_lowercase();
-                    let list = st.cached_fonts.as_deref().unwrap_or(&[]);
-                    egui::ScrollArea::vertical().max_height(210.0).show(ui, |ui| {
-                        let mut shown = 0usize;
-                        for fam in list {
-                            if !q.is_empty() && !fam.to_ascii_lowercase().contains(&q) {
-                                continue;
-                            }
-                            if ui.selectable_label(st.draft.font_family == *fam, fam).clicked() {
-                                st.draft.font_family = fam.clone();
-                            }
-                            shown += 1;
-                            if shown >= 200 {
-                                break;
-                            }
-                        }
-                    });
-                });
-                if ui.small_button("↻").on_hover_text("Обновить список системных шрифтов").clicked() {
-                    st.cached_fonts = None;
-                    st.ensure_fonts();
-                }
-            });
-            ui.end_row();
-
-            dim_label(ui, t, "Насыщенность:");
-            ui.horizontal(|ui| {
-                let mut w = st.draft.weight;
-                let weights = [(400u16, "Regular"), (700u16, "Bold"), (800u16, "Heavy"), (900u16, "Black")];
-                if crate::widgets::dropdown_literal(ui, "sfx-font-weight", &mut w, &weights, 88.0) {
-                    st.draft.weight = w;
-                }
-                ui.checkbox(&mut st.draft.italic, "Italic");
-            });
-            ui.end_row();
-
-            dim_label(ui, t, "Ориентация:");
-            ui.checkbox(&mut st.draft.vertical, "Вертикальный (Vertical)");
-            ui.end_row();
-        });
-
-        ui.add_space(4.0);
-        slider_row_f32(ui, t, "Кегль:", &mut st.draft.size_pt, 12.0..=MAX_SFX_SIZE_PT, "pt");
-        slider_row_f32(ui, t, "Трекинг:", &mut st.draft.tracking, -40.0..=120.0, "px");
-        ui.horizontal(|ui| {
-            dim_label(ui, t, "Интерлиньяж:");
-            crate::widgets::value_field(ui, &mut st.draft.leading_scale, 0.4..=3.0, "x", 64.0);
-        });
-    });
-
-    section_card(ui, t, |ui| {
-        section_header(ui, t, "ТОЧНАЯ ТРАНСФОРМАЦИЯ (FT)", "Degrees / Scale", t.text_dim);
-        ui.add_space(3.0);
-        let ft = &mut st.draft.free_transform;
-        egui::Grid::new("sfx-ft-grid").num_columns(2).spacing(vec2(8.0, 4.0)).show(ui, |ui| {
-            let (mut sx, mut sy) = (ft.scale_x as f32, ft.scale_y as f32);
-            dim_label(ui, t, "Scale X / Y:");
-            ui.horizontal(|ui| {
-                if crate::widgets::value_field(ui, &mut sx, 0.1..=12.0, "x", 62.0).changed() {
-                    ft.scale_x = f64::from(sx);
-                }
-                if crate::widgets::value_field(ui, &mut sy, 0.1..=12.0, "x", 62.0).changed() {
-                    ft.scale_y = f64::from(sy);
-                }
-            });
-            ui.end_row();
-
-            let (mut rot, mut skx) = (ft.rotation_deg as f32, ft.skew_x_deg as f32);
-            dim_label(ui, t, "Rotate / SkewX:");
-            ui.horizontal(|ui| {
-                if crate::widgets::value_field(ui, &mut rot, -360.0..=360.0, "°", 62.0).changed() {
-                    ft.rotation_deg = f64::from(rot);
-                }
-                if crate::widgets::value_field(ui, &mut skx, -75.0..=75.0, "°", 62.0).changed() {
-                    ft.skew_x_deg = f64::from(skx);
-                }
-            });
-            ui.end_row();
-
-            let (mut sky, mut px, mut py) = (ft.skew_y_deg as f32, ft.perspective_x as f32, ft.perspective_y as f32);
-            dim_label(ui, t, "SkewY / Persp:");
-            ui.horizontal(|ui| {
-                if crate::widgets::value_field(ui, &mut sky, -75.0..=75.0, "°", 48.0).changed() {
-                    ft.skew_y_deg = f64::from(sky);
-                }
-                if crate::widgets::value_field(ui, &mut px, -0.75..=0.75, "", 44.0).changed() {
-                    ft.perspective_x = f64::from(px);
-                }
-                if crate::widgets::value_field(ui, &mut py, -0.75..=0.75, "", 44.0).changed() {
-                    ft.perspective_y = f64::from(py);
-                }
-            });
-            ui.end_row();
-        });
-    });
-}
-
 fn draw_color_tab(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens) {
     let scale = ui_scale(st);
     section_card(ui, t, |ui| {
@@ -1361,6 +1250,31 @@ fn draw_actions_section(ui: &mut Ui, st: &mut SfxPanelState, target: &SfxTargetI
         {
             out.commands.push(OutCommand::new("sfx.convertFromText", json!({ "layer": id.0 })));
         }
+        if has_sfx
+            && let Some(id) = target.layer_id
+            && ui
+                .button("To Smart Object")
+                .on_hover_text("Wrap this SFX layer in a Smart Object (keeps live SFX editable via Edit Contents and exports as a Photoshop Smart Object in PSD)")
+                .clicked()
+        {
+            out.commands.push(OutCommand::new("layer.smartObjects.convertToSmartObject", json!({ "layer": id.0 })));
+        }
+        if !has_sfx && target.active_is_smart && let Some(id) = target.layer_id {
+            if ui
+                .button("Edit Smart Contents")
+                .on_hover_text("Open the embedded Smart Object document to edit its live SFX layer")
+                .clicked()
+            {
+                out.commands.push(OutCommand::new("layer.smartObjects.editContents", json!({ "layer": id.0 })));
+            }
+            if ui
+                .button("Unpack Smart")
+                .on_hover_text("Convert Smart Object back into regular layers on this page")
+                .clicked()
+            {
+                out.commands.push(OutCommand::new("layer.smartObjects.convertToLayers", json!({ "layer": id.0 })));
+            }
+        }
         if ui
             .add_enabled(has_sfx, egui::Button::new("Bake to Raster"))
             .on_hover_text("Freeze the SFX layer into standard pixels")
@@ -1388,6 +1302,7 @@ mod tests {
             layer_id: Some(LayerId(9)),
             data: Some(SfxData::default()),
             active_is_text: false,
+            active_is_smart: false,
             presets: &presets,
         };
         let ctx = egui::Context::default();
@@ -1398,7 +1313,6 @@ mod tests {
         });
         out.textures_delta.clear();
         assert!(captured.is_some());
-        assert!(st.cached_fonts.is_some());
     }
 
     #[test]
@@ -1406,7 +1320,14 @@ mod tests {
         let mut st = SfxPanelState::default();
         let presets = Vec::new();
         let d1 = SfxData { text: "CRACK".to_owned(), ..SfxData::default() };
-        let t1 = SfxTargetInfo { doc_id: Some(BridgeDocId(1)), layer_id: Some(LayerId(2)), data: Some(d1), active_is_text: false, presets: &presets };
+        let t1 = SfxTargetInfo {
+            doc_id: Some(BridgeDocId(1)),
+            layer_id: Some(LayerId(2)),
+            data: Some(d1),
+            active_is_text: false,
+            active_is_smart: false,
+            presets: &presets,
+        };
         st.sync_from_host(&t1);
         assert_eq!(st.draft.text, "CRACK");
     }
@@ -1419,7 +1340,7 @@ mod tests {
         let ctx = egui::Context::default();
         let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(320.0, 900.0))), ..Default::default() };
 
-        for tab in [DockTab::Sfx, DockTab::Character, DockTab::Color] {
+        for tab in [DockTab::Sfx, DockTab::Color] {
             st.active_tab = tab;
             for style in [
                 SfxLineStyle::Clean,
@@ -1433,7 +1354,14 @@ mod tests {
                 data.line_effect.style = style;
                 data.dry_brush.enabled = true;
                 data.dry_brush.engine = SfxDryBrushEngine::Vector;
-                let target = SfxTargetInfo { doc_id: Some(BridgeDocId(1)), layer_id: Some(LayerId(3)), data: Some(data), active_is_text: false, presets: &presets };
+                let target = SfxTargetInfo {
+                    doc_id: Some(BridgeDocId(1)),
+                    layer_id: Some(LayerId(3)),
+                    data: Some(data),
+                    active_is_text: false,
+                    active_is_smart: false,
+                    presets: &presets,
+                };
                 let mut out = ctx.run_ui(input.clone(), |ui| {
                     let _ = egui::CentralPanel::default().show(ui, |ui| panel(ui, &mut st, &mut gizmo, &target));
                 });

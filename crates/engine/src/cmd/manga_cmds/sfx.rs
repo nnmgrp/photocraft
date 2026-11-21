@@ -491,16 +491,28 @@ fn check_layer_unlocked(doc: &photocraft_doc::Document, id: LayerId) -> Result<(
 fn sfx_update(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "sfx.update";
     let id = layer_param(s, p)?;
-    let data = parse_sfx_data(CMD, p)?;
-    let (fmt, dpi) = {
+    let (fmt, dpi, existing) = {
         let st = s.active().ok_or(EngineError::NoDocument)?;
         check_layer_unlocked(&st.doc, id)?;
         let l = st.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
-        if l.sfx.is_none() {
-            return Err(sfx_bad(CMD, "target layer is not an SFX layer"));
-        }
-        (st.doc.pixel_format(), st.doc.resolution_dpi)
+        let cur = l.sfx.as_deref().ok_or_else(|| sfx_bad(CMD, "target layer is not an SFX layer"))?;
+        (st.doc.pixel_format(), st.doc.resolution_dpi, cur.clone())
     };
+    let mut data = if p.get("sfx").is_some() {
+        parse_sfx_data(CMD, p)?
+    } else if let Some(col_val) = p.get("color") {
+        let parsed = crate::vector_cmds::params::color(col_val).ok_or_else(|| sfx_bad(CMD, "invalid `color`"))?;
+        let mut d = existing;
+        match &mut d.fill {
+            SfxFillSource::Solid { color } => *color = parsed,
+            SfxFillSource::Gradient { start, .. } => *start = parsed,
+            SfxFillSource::Screentone { .. } => d.line_effect.line_color = parsed,
+        }
+        d
+    } else {
+        return Err(sfx_bad(CMD, "missing `sfx` payload or `color`"));
+    };
+    data.validate();
     // Interactive slider / gizmo drags ask for a fast proxy preview; the final full-resolution
     // render is emitted on pointer release with `preview: false`.
     let preview = p.get("preview").and_then(Value::as_bool).unwrap_or(false);
@@ -854,5 +866,47 @@ mod tests {
         assert!((rt.mesh.points[0][0] + 0.08).abs() < 1e-9);
         assert!(rt.distress.enabled);
         assert_eq!(rt.distress.seed, 777);
+    }
+
+    #[test]
+    fn sfx_psd_and_smart_object_roundtrip_preserve_live_sfx_and_alignment() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({ "width": 640, "height": 480, "background": "white" })).unwrap();
+        let mut sfx = SfxData { text: "BAM!".to_owned(), origin: [140.0, 110.0], size_pt: 96.0, ..SfxData::default() };
+        sfx.line_effect.style = SfxLineStyle::Shtack;
+        sfx.line_effect.shtack_overshoot_px = 25.0;
+        let created = s.execute("sfx.create", json!({ "sfx": sfx })).unwrap();
+        let id = LayerId(created["layer"].as_u64().unwrap());
+
+        // 1. Direct PSD export/import preserves live SFX metadata with 4-byte padded `pcSf`.
+        let psd = photocraft_io::document_to_psd(&s.active().unwrap().doc).unwrap();
+        let sfx_rec = psd.layers().iter().find(|r| r.block(b"pcSf").is_some()).expect("pcSf block written");
+        assert_eq!(sfx_rec.block(b"pcSf").unwrap().data.len() % 4, 0, "pcSf block must be 4-byte aligned");
+        let psd_bytes = psd.to_bytes().unwrap();
+        let imported = photocraft_io::import("sfx.psd", &psd_bytes).unwrap().document;
+        let imp_sfx = imported.layers.iter().find_map(|l| l.sfx.as_deref()).expect("pcSf restored on PSD import");
+        assert_eq!(imp_sfx.text, "BAM!");
+        assert_eq!(imp_sfx.size_pt, 96.0);
+        assert_eq!(imp_sfx.line_effect.style, SfxLineStyle::Shtack);
+
+        // 2. Convert SFX -> Smart Object, export to PSD (embedded PSB in lnk2), re-import and Edit Contents.
+        let conv = s.execute("layer.smartObjects.convertToSmartObject", json!({ "layer": id.0 })).unwrap();
+        let smart_id = LayerId(conv["layer"].as_u64().unwrap());
+        assert!(matches!(s.active().unwrap().doc.layer(smart_id).unwrap().content, LayerContent::Smart(_)));
+
+        let smart_psd = photocraft_io::document_to_psd(&s.active().unwrap().doc).unwrap();
+        assert!(smart_psd.global_blocks.iter().any(|b| &b.key == b"lnk2"), "smart SFX embeds PSB in lnk2");
+        let smart_bytes = smart_psd.to_bytes().unwrap();
+        let mut s2 = Session::new();
+        let reopened = photocraft_io::import("smart_sfx.psd", &smart_bytes).unwrap().document;
+        let re_smart_id = reopened.layers.iter().find(|l| matches!(l.content, LayerContent::Smart(_))).expect("smart object survives PSD").id;
+        s2.add_document(reopened, None);
+        s2.execute("layer.select", json!({ "layer": re_smart_id.0 })).unwrap();
+        s2.execute("layer.smartObjects.editContents", json!({ "layer": re_smart_id.0 })).unwrap();
+        let child_sfx = s2.active().unwrap().doc.layers.iter().find_map(|l| l.sfx.as_deref()).expect("live SFX preserved inside smart object PSB");
+        assert_eq!(child_sfx.text, "BAM!");
+        assert_eq!(child_sfx.size_pt, 96.0);
+        // Origin inside the cropped smart object document was shifted relative to the layer's bounds.
+        assert!(child_sfx.origin[0] < 140.0 && child_sfx.origin[1] < 110.0, "origin shifted into smart doc space: {:?}", child_sfx.origin);
     }
 }

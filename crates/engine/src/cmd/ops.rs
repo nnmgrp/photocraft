@@ -175,6 +175,12 @@ pub(crate) fn translate_layer_wrapped(doc: &Document, l: &mut Layer, dx: i32, dy
     if let Some(r) = &mut l.effects.reference {
         *r = (r.0 + f64::from(dx), r.1 + f64::from(dy));
     }
+    if let Some(sfx) = &mut l.sfx {
+        let mut updated = (**sfx).clone();
+        updated.origin[0] += f64::from(dx);
+        updated.origin[1] += f64::from(dy);
+        *sfx = std::sync::Arc::new(updated);
+    }
     let mask_wrap = wrap.filter(|_| crate::layer_multi_cmds::wraps_linked_masks(&l.content));
     for m in l.pixel_masks_mut().filter(|m| m.linked) {
         m.surface = move_px(&m.surface, mask_wrap);

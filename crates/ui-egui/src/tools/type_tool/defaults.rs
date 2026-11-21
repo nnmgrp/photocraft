@@ -202,14 +202,165 @@ pub(super) fn apply_defaults(app: &mut PhotocraftApp, props: &serde_json::Value)
     }
 }
 
+/// The active SFX layer when no inline text edit or standard Type layer is targeted.
+/// Lets the native Character dock and Type Options Bar edit SFX font, size, leading,
+/// tracking, scale, orientation and color directly.
+pub(super) fn target_sfx(app: &PhotocraftApp) -> Option<(u64, photocraft_doc::sfx::SfxData)> {
+    if app.ui.text_edit.is_some() {
+        return None;
+    }
+    let st = app.session.active()?;
+    let id = st.active_layer?;
+    let l = st.doc.layer(id)?;
+    if matches!(l.content, photocraft_doc::LayerContent::Text(_)) {
+        return None;
+    }
+    l.sfx.as_deref().cloned().map(|sfx| (id.0, sfx))
+}
+
+fn sfx_style_label(weight: u16, italic: bool) -> String {
+    let base = match weight {
+        ..=150 => "Thin",
+        151..=250 => "ExtraLight",
+        251..=350 => "Light",
+        351..=450 => "Regular",
+        451..=550 => "Medium",
+        551..=650 => "SemiBold",
+        651..=750 => "Bold",
+        751..=850 => "ExtraBold",
+        _ => "Black",
+    };
+    match (base, italic) {
+        ("Regular", true) => "Italic".to_owned(),
+        (w, true) => format!("{w} Italic"),
+        (w, false) => w.to_owned(),
+    }
+}
+
+/// Synthesizes a `CharStyle` / `ParagraphStyle` view of the active SFX layer so the native
+/// Character dock displays its typography metrics live.
+pub(super) fn sfx_styles_at(app: &PhotocraftApp) -> Option<(photocraft_doc::text::CharStyle, photocraft_doc::text::ParagraphStyle)> {
+    let (_, sfx) = target_sfx(app)?;
+    let mut c = photocraft_doc::text::CharStyle::default();
+    c.font_family = sfx.font_family.clone();
+    c.font_style = if sfx.font_style.trim().is_empty() { sfx_style_label(sfx.weight, sfx.italic) } else { sfx.font_style.clone() };
+    c.postscript_name = sfx.postscript_name.clone();
+    c.weight = sfx.weight;
+    c.italic = sfx.italic;
+    c.size_pt = sfx.size_pt;
+    c.leading_pt = Some((sfx.size_pt * sfx.leading_scale).max(0.1));
+    c.tracking = sfx.tracking;
+    c.horizontal_scale = (sfx.free_transform.scale_x as f32).clamp(0.1, 12.0);
+    c.vertical_scale = (sfx.free_transform.scale_y as f32).clamp(0.1, 12.0);
+    c.faux_bold = sfx.weight >= 700;
+    c.faux_italic = sfx.italic;
+    c.color = match &sfx.fill {
+        photocraft_doc::sfx::SfxFillSource::Solid { color } => *color,
+        photocraft_doc::sfx::SfxFillSource::Gradient { start, .. } => *start,
+        photocraft_doc::sfx::SfxFillSource::Screentone { .. } => sfx.line_effect.line_color,
+    };
+    Some((c, photocraft_doc::text::ParagraphStyle::default()))
+}
+
+/// Applies Character-dock property updates onto the active SFX layer via `sfx.update`.
+fn apply_sfx(app: &mut PhotocraftApp, ctx: &egui::Context, layer_id: u64, mut sfx: photocraft_doc::sfx::SfxData, props: &serde_json::Value) {
+    let Some(obj) = props.as_object() else { return };
+    let mut c = sfx_styles_at(app).map(|(c, _)| c).unwrap_or_default();
+    let changed_char = photocraft_engine::type_cmds::apply_char_props(&mut c, props);
+    let mut touched = false;
+
+    if obj.contains_key("font") || obj.contains_key("family") || obj.contains_key("fontStyle") || obj.contains_key("weight") || obj.contains_key("italic") || obj.contains_key("postscriptName") {
+        sfx.font_family = c.font_family.clone();
+        sfx.font_style = c.font_style.clone();
+        sfx.postscript_name = c.postscript_name.clone();
+        sfx.weight = c.weight;
+        sfx.italic = c.italic;
+        touched = true;
+    }
+    if obj.contains_key("variations")
+        && let Some(wght) = c.variations.iter().find(|v| v.axis == "wght").map(|v| v.value)
+    {
+        sfx.weight = wght.round().clamp(100.0, 900.0) as u16;
+        touched = true;
+    }
+    if obj.contains_key("fauxBold") {
+        sfx.weight = if c.faux_bold { 800 } else { 400 };
+        sfx.font_style = sfx_style_label(sfx.weight, sfx.italic);
+        sfx.postscript_name = None;
+        touched = true;
+    }
+    if obj.contains_key("fauxItalic") {
+        sfx.italic = c.faux_italic;
+        sfx.font_style = sfx_style_label(sfx.weight, sfx.italic);
+        sfx.postscript_name = None;
+        touched = true;
+    }
+    if obj.contains_key("size") {
+        sfx.size_pt = c.size_pt;
+        touched = true;
+    }
+    if obj.contains_key("leading") {
+        sfx.leading_scale = match c.leading_pt {
+            Some(pt) if sfx.size_pt > 1e-3 => (pt / sfx.size_pt).clamp(0.4, 4.0),
+            _ => 1.05,
+        };
+        touched = true;
+    }
+    if obj.contains_key("tracking") {
+        sfx.tracking = c.tracking;
+        touched = true;
+    }
+    if obj.contains_key("horizontalScale") {
+        sfx.free_transform.scale_x = f64::from(c.horizontal_scale).clamp(0.1, 12.0);
+        touched = true;
+    }
+    if obj.contains_key("verticalScale") {
+        sfx.free_transform.scale_y = f64::from(c.vertical_scale).clamp(0.1, 12.0);
+        touched = true;
+    }
+    if obj.contains_key("color") && changed_char {
+        match &mut sfx.fill {
+            photocraft_doc::sfx::SfxFillSource::Solid { color } => *color = c.color,
+            photocraft_doc::sfx::SfxFillSource::Gradient { start, .. } => *start = c.color,
+            photocraft_doc::sfx::SfxFillSource::Screentone { .. } => sfx.line_effect.line_color = c.color,
+        }
+        touched = true;
+    }
+    if !touched {
+        return;
+    }
+    sfx.validate();
+    let pointer_down = ctx.input(|i| i.pointer.primary_down());
+    let doc_id = app.session.active().map(|st| photocraft_manga_ui::BridgeDocId(st.doc.id.0));
+    let coalesce = drag_key(ctx).unwrap_or_else(|| format!("sfx-char:{layer_id}"));
+    if pointer_down && let Some(did) = doc_id {
+        app.manga.ui.sfx_panel.pending_full_render = true;
+        app.manga.ui.sfx_panel.pending_full_target = Some((did, LayerId(layer_id)));
+    }
+    let _ = app.run(
+        "sfx.update",
+        json!({
+            "layer": layer_id,
+            "sfx": sfx,
+            "coalesce": coalesce,
+            "preview": pointer_down,
+        }),
+    );
+}
+
 /// Apply only the supplied properties to the text-edit scope or selected type layers; without
-/// a type target, prepare the defaults for the next layer instead.
+/// a type target, edit the active SFX layer if one is selected, else prepare the defaults for
+/// the next Type-tool layer.
 pub(super) fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, props: serde_json::Value) {
     if insertion_style::set_font(app, &props) {
         return;
     }
     app.ui.type_insertion_style = None;
     let Some(mut p) = formatting_params(app) else {
+        if let Some((layer_id, sfx)) = target_sfx(app) {
+            apply_sfx(app, ctx, layer_id, sfx, &props);
+            return;
+        }
         apply_defaults(app, &props);
         return;
     };
@@ -229,6 +380,8 @@ pub(super) fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, props: serde_j
 pub fn open_color_picker(app: &mut PhotocraftApp, rgb: [f32; 3]) -> u64 {
     if let Some(params) = formatting_params(app) {
         crate::color_picker_ui::open_for_command(app, "Color Picker (Text Color)", rgb, "type.setStyle", params)
+    } else if let Some((layer_id, _)) = target_sfx(app) {
+        crate::color_picker_ui::open_for_command(app, "Color Picker (SFX Color)", rgb, "sfx.update", json!({"layer": layer_id}))
     } else {
         crate::color_picker_ui::open(app, "foreground")
     }

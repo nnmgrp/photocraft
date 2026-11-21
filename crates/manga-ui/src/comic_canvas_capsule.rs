@@ -16,6 +16,7 @@
 //! dragged to a custom offset, fade via an opacity slider, and choose the generative AI backend.
 
 use egui::{Color32, CornerRadius, DragValue, Frame, Id, Margin, Order, Pos2, Rect, RichText, Sense, Stroke, Ui, pos2, vec2};
+use photocraft_doc::sfx::{SfxData, SfxFreeTransform};
 use photocraft_doc::vector::BalloonTextFitMode;
 use photocraft_doc::{Document, LayerContent, LayerId};
 use photocraft_geom::Rect as DocRect;
@@ -101,6 +102,8 @@ pub struct CapsuleView<'a> {
     /// `(balloon layer, chamber id, current mode)` when a balloon is active or the active text
     /// layer is linked to one. Shows the compact `Safe | Outer | Contour` strip.
     pub balloon_fit_mode: Option<(LayerId, u32, BalloonTextFitMode)>,
+    /// Active SFX layer payload when an SFX layer is selected. Shows exact Free Transform controls.
+    pub sfx_target: Option<(BridgeDocId, LayerId, SfxData)>,
 }
 
 /// Actions the host should perform after [`show`] returns.
@@ -113,6 +116,8 @@ pub struct CapsuleOutput {
     pub notice: Option<String>,
     /// The user picked a new text fit mode for this balloon chamber.
     pub set_balloon_fit_mode: Option<(LayerId, u32, BalloonTextFitMode)>,
+    /// Set when an interactive SFX drag emitted a `preview: true` update from the capsule.
+    pub sfx_preview_pending: Option<(BridgeDocId, LayerId)>,
 }
 
 /// Host-provided drawing hooks the capsule cannot implement without L6 dependencies.
@@ -130,14 +135,18 @@ enum CapsuleMode {
     Type,
     Screentone,
     Balloon,
+    Sfx,
 }
 
-/// Resolves the active workflow, with screentone taking precedence over the other contexts.
+/// Resolves the active workflow, with screentone and SFX taking precedence over idle/selection.
 fn capsule_mode(view: &CapsuleView<'_>) -> CapsuleMode {
     let layer = view.active_layer.and_then(|id| view.doc.and_then(|doc| doc.layer(id)));
     let is_screentone = view.screentone_target.is_some() || layer.is_some_and(|l| l.is_screentone());
     if is_screentone {
         return CapsuleMode::Screentone;
+    }
+    if view.sfx_target.is_some() || layer.is_some_and(|l| l.sfx.is_some()) {
+        return CapsuleMode::Sfx;
     }
     let is_text_layer = layer.is_some_and(|l| matches!(l.content, LayerContent::Text(_)));
     if view.tool_name == "type" || is_text_layer {
@@ -196,6 +205,95 @@ fn follow_bounds(view: &CapsuleView<'_>, bounds: DocRect, rect: Rect) -> Pos2 {
     pos2(center_x, target_y)
 }
 
+/// Bounds of the active SFX layer's rendered pixels, when available.
+fn sfx_bounds(view: &CapsuleView<'_>) -> Option<DocRect> {
+    let layer = view.active_layer.and_then(|id| view.doc.and_then(|doc| doc.layer(id)))?;
+    let bounds = match &layer.content {
+        LayerContent::Group(g) => g
+            .children
+            .iter()
+            .filter_map(|c| c.surface().map(|s| s.content_bounds()))
+            .fold(DocRect::EMPTY, |a, b| a.union(&b)),
+        _ => layer.surface().map_or(DocRect::EMPTY, |s| s.content_bounds()),
+    };
+    (!bounds.is_empty()).then_some(bounds)
+}
+
+/// Compact exact Free Transform controls for an active SFX layer (`SX / SY / Rot / Skew / Persp`).
+fn draw_sfx_ft(ui: &mut Ui, view: &CapsuleView<'_>, out: &mut CapsuleOutput) {
+    let Some((doc_id, layer_id, orig)) = view.sfx_target.as_ref() else { return };
+    let mut sfx = orig.clone();
+    let ft = &mut sfx.free_transform;
+    let mut changed = false;
+
+    ui.label(RichText::new("SFX FT").strong().color(Color32::from_rgb(125, 211, 252)));
+    let (mut sx, mut sy) = (ft.scale_x as f32, ft.scale_y as f32);
+    let sx_l = ui.label(RichText::new("SX:").small());
+    if ui.add(DragValue::new(&mut sx).speed(0.02).range(0.1..=12.0).max_decimals(2).suffix("x")).labelled_by(sx_l.id).changed() {
+        ft.scale_x = f64::from(sx);
+        changed = true;
+    }
+    let sy_l = ui.label(RichText::new("SY:").small());
+    if ui.add(DragValue::new(&mut sy).speed(0.02).range(0.1..=12.0).max_decimals(2).suffix("x")).labelled_by(sy_l.id).changed() {
+        ft.scale_y = f64::from(sy);
+        changed = true;
+    }
+
+    let mut rot = ft.rotation_deg as f32;
+    let r_l = ui.label(RichText::new("Rot:").small());
+    if ui.add(DragValue::new(&mut rot).speed(0.5).range(-360.0..=360.0).max_decimals(1).suffix("°")).labelled_by(r_l.id).changed() {
+        ft.rotation_deg = f64::from(rot);
+        changed = true;
+    }
+
+    let (mut skx, mut sky) = (ft.skew_x_deg as f32, ft.skew_y_deg as f32);
+    let skx_l = ui.label(RichText::new("SkX:").small());
+    if ui.add(DragValue::new(&mut skx).speed(0.5).range(-75.0..=75.0).max_decimals(1).suffix("°")).labelled_by(skx_l.id).changed() {
+        ft.skew_x_deg = f64::from(skx);
+        changed = true;
+    }
+    let sky_l = ui.label(RichText::new("SkY:").small());
+    if ui.add(DragValue::new(&mut sky).speed(0.5).range(-75.0..=75.0).max_decimals(1).suffix("°")).labelled_by(sky_l.id).changed() {
+        ft.skew_y_deg = f64::from(sky);
+        changed = true;
+    }
+
+    let (mut px, mut py) = (ft.perspective_x as f32, ft.perspective_y as f32);
+    let px_l = ui.label(RichText::new("PX:").small());
+    if ui.add(DragValue::new(&mut px).speed(0.005).range(-0.75..=0.75).max_decimals(2)).labelled_by(px_l.id).changed() {
+        ft.perspective_x = f64::from(px);
+        changed = true;
+    }
+    let py_l = ui.label(RichText::new("PY:").small());
+    if ui.add(DragValue::new(&mut py).speed(0.005).range(-0.75..=0.75).max_decimals(2)).labelled_by(py_l.id).changed() {
+        ft.perspective_y = f64::from(py);
+        changed = true;
+    }
+
+    if ui.small_button("Reset").on_hover_text("Reset SFX Free Transform").clicked() {
+        *ft = SfxFreeTransform::default();
+        changed = true;
+    }
+
+    if changed {
+        sfx.validate();
+        let pointer_down = ui.ctx().input(|i| i.pointer.primary_down());
+        let coalesce = format!("sfx-capsule:{}:{}", doc_id.0, layer_id.0);
+        if pointer_down {
+            out.sfx_preview_pending = Some((*doc_id, *layer_id));
+        }
+        out.commands.push(OutCommand::new(
+            "sfx.update",
+            json!({
+                "layer": layer_id.0,
+                "sfx": sfx,
+                "coalesce": coalesce,
+                "preview": pointer_down,
+            }),
+        ));
+    }
+}
+
 /// Computes the final, clamped capsule position from its state and the current context.
 fn anchor_position(state: &CanvasCapsuleState, view: &CapsuleView<'_>, mode: CapsuleMode) -> Pos2 {
     let rect = view.view_xform.rect;
@@ -205,6 +303,10 @@ fn anchor_position(state: &CanvasCapsuleState, view: &CapsuleView<'_>, mode: Cap
             if let Some(bounds) = selection_bounds(view) {
                 base = follow_bounds(view, bounds, rect);
             }
+        } else if mode == CapsuleMode::Sfx
+            && let Some(bounds) = sfx_bounds(view)
+        {
+            base = follow_bounds(view, bounds, rect);
         } else if mode == CapsuleMode::Type
             && let Some(bounds) = text_bounds(view)
         {
@@ -408,6 +510,7 @@ fn draw_context(
 ) {
     match mode {
         CapsuleMode::Screentone => draw_screentone(ui, screentone, view, out),
+        CapsuleMode::Sfx => draw_sfx_ft(ui, view, out),
         CapsuleMode::Type => {
             callbacks.draw_type_controls(ui);
             if view.balloon_fit_mode.is_some() {
@@ -499,6 +602,7 @@ mod tests {
             is_desktop: true,
             screentone_target: target,
             balloon_fit_mode: None,
+            sfx_target: None,
         }
     }
 
@@ -591,6 +695,15 @@ mod tests {
         let view = sample_view(true, "move", Some(tone_target()));
         let mut out = ctx.run_ui(Default::default(), |ui| {
             let _ = show(ui.ctx(), &mut state, &mut tone, &view, &mut callbacks);
+        });
+        out.textures_delta.clear();
+
+        // SFX layer: shows exact Free Transform controls.
+        let mut sfx_view = sample_view(false, "move", None);
+        sfx_view.sfx_target = Some((BridgeDocId(1), LayerId(1), photocraft_doc::sfx::SfxData::default()));
+        assert_eq!(capsule_mode(&sfx_view), CapsuleMode::Sfx);
+        let mut out = ctx.run_ui(Default::default(), |ui| {
+            let _ = show(ui.ctx(), &mut state, &mut tone, &sfx_view, &mut callbacks);
         });
         out.textures_delta.clear();
     }

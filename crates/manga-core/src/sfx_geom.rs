@@ -202,10 +202,20 @@ pub fn sample_catmull_rom(pts: &[[f64; 2]], t_norm: f64) -> SplineSample {
     let u = t_norm.clamp(0.0, 1.0) * segs as f64;
     let i = (u.floor() as usize).min(segs - 1);
     let t = u - i as f64;
-    let p0 = pts[i.saturating_sub(1)];
     let p1 = pts[i];
     let p2 = pts[(i + 1).min(n - 1)];
-    let p3 = pts[(i + 2).min(n - 1)];
+    // Linearly reflect phantom endpoints (instead of clamping `p0 = p1`, which halves
+    // endpoint speed and pinches letters toward the ends of a straight or curved arc).
+    let p0 = if i == 0 {
+        [2.0 * p1[0] - p2[0], 2.0 * p1[1] - p2[1]]
+    } else {
+        pts[i - 1]
+    };
+    let p3 = if i + 2 >= n {
+        [2.0 * p2[0] - p1[0], 2.0 * p2[1] - p1[1]]
+    } else {
+        pts[i + 2]
+    };
     let t2 = t * t;
     let t3 = t2 * t;
 

@@ -592,6 +592,7 @@ fn sfx_update(s: &mut Session, p: &Value) -> Result<Value> {
             SfxFillSource::None | SfxFillSource::Screentone { .. } => d.line_effect.line_color = parsed,
             SfxFillSource::Solid { color } => *color = parsed,
             SfxFillSource::Gradient { start, .. } => *start = parsed,
+            SfxFillSource::DryBrush { color, .. } => *color = parsed,
             SfxFillSource::ShtackHatch { spec } => spec.color = parsed,
         }
         d

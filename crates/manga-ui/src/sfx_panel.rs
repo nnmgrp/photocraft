@@ -7,11 +7,13 @@
 use egui::{Color32, RichText, Stroke, Ui, vec2};
 use photocraft_algo::{DotShape, PatternType};
 use photocraft_doc::sfx::{
-    MAX_SFX_SPLINE_POINTS, ScreentoneSpec, SfxBlending, SfxChannelBlend, SfxData, SfxDistress, SfxDryBrushEngine, SfxFillSource, SfxFreeTransform,
-    SfxGlyphTransform, SfxLineJoin, SfxLineStyle, SfxMeshInterpolation, SfxPreset, SfxShtackFillMode, SfxShtackFillSpec, SfxShtackFlowOvershoot,
-    SfxShtackOvershootMode, SfxShtackVariant, SfxSpikeShape, SfxStylePass, SfxWarpMode,
+    MAX_SFX_BLEND_EFFECTS, MAX_SFX_SPLINE_POINTS, ScreentoneSpec, SfxBlendEffect, SfxBlending, SfxChannelBlend, SfxData, SfxDistress,
+    SfxDryBrushEngine, SfxDryBrushSpec, SfxFillSource, SfxFreeTransform, SfxGlyphTransform, SfxLineJoin, SfxLineStyle, SfxMeshInterpolation,
+    SfxPreset, SfxShtackFillMode, SfxShtackFillSpec, SfxShtackFlowOvershoot, SfxShtackOvershootMode, SfxShtackVariant, SfxSpikeShape,
+    SfxStrokePosition, SfxStylePass, SfxWarpMode,
 };
 use photocraft_doc::{Color, LayerId};
+use photocraft_manga_core::sfx_geom::{PreparedSfx, sample_catmull_rom};
 use serde_json::{Value, json};
 
 use crate::sfx_gizmo::{SfxGizmoState, reset_mesh};
@@ -93,6 +95,8 @@ pub struct SfxPanelState {
     /// (shared across the SFX dock, standard Character dock, and Canvas Bar).
     pub pending_full_target: Option<(BridgeDocId, LayerId)>,
     active_tab: DockTab,
+    /// Selected index inside `draft.blending.effects` for the Photoshop-style FX inspector.
+    selected_blend_fx: Option<usize>,
 }
 
 impl SfxPanelState {
@@ -279,18 +283,31 @@ fn row_with_reroll(ui: &mut Ui, height: f32, seed: &mut u32, tooltip: &str, add_
     });
 }
 
-fn add_spline_point(draft: &mut SfxData) {
+/// Initializes or subdivides the Catmull-Rom arc spline without squishing or shifting letters:
+/// the first 3 control points span the exact first-to-last glyph rest centers at `y = 0`.
+fn add_spline_point(draft: &mut SfxData, geom: &PreparedSfx) {
     if draft.spline.points.len() >= MAX_SFX_SPLINE_POINTS {
         return;
     }
     if draft.spline.points.len() < 2 {
-        draft.spline.points = vec![[-160.0, 18.0], [0.0, -24.0], [160.0, 14.0]];
+        let rb = geom.rest_box;
+        let box_cx = (rb[0] + rb[2]) * 0.5;
+        let half_w = ((rb[2] - rb[0]) * 0.5).max(40.0);
+        let (lx0, lx1) = if geom.glyphs.len() >= 2 {
+            let a = geom.glyphs[0].rest_center[0] - box_cx;
+            let b = geom.glyphs[geom.glyphs.len() - 1].rest_center[0] - box_cx;
+            if (b - a).abs() >= 8.0 { (a, b) } else { (-half_w, half_w) }
+        } else {
+            (-half_w, half_w)
+        };
+        draft.spline.points = vec![[lx0, 0.0], [(lx0 + lx1) * 0.5, 0.0], [lx1, 0.0]];
         draft.spline.show_arc = true;
         return;
     }
+    let segs = draft.spline.points.len() - 1;
     let mut best_i = 0usize;
     let mut best_d = -1.0_f64;
-    for i in 0..(draft.spline.points.len() - 1) {
+    for i in 0..segs {
         let a = draft.spline.points[i];
         let b = draft.spline.points[i + 1];
         let d = (b[0] - a[0]).hypot(b[1] - a[1]);
@@ -299,15 +316,15 @@ fn add_spline_point(draft: &mut SfxData) {
             best_i = i;
         }
     }
-    let a = draft.spline.points[best_i];
-    let b = draft.spline.points[best_i + 1];
-    draft.spline.points.insert(best_i + 1, [(a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5]);
+    let t_mid = (best_i as f64 + 0.5) / segs as f64;
+    let sp = sample_catmull_rom(&draft.spline.points, t_mid);
+    draft.spline.points.insert(best_i + 1, [sp.lx, sp.ly]);
     draft.spline.show_arc = true;
 }
 
 fn face_color_mut(fill: &mut SfxFillSource) -> Option<&mut Color> {
     match fill {
-        SfxFillSource::Solid { color } => Some(color),
+        SfxFillSource::Solid { color } | SfxFillSource::DryBrush { color, .. } => Some(color),
         SfxFillSource::Gradient { start, .. } => Some(start),
         SfxFillSource::ShtackHatch { spec } => Some(&mut spec.color),
         SfxFillSource::None | SfxFillSource::Screentone { .. } => None,
@@ -316,7 +333,7 @@ fn face_color_mut(fill: &mut SfxFillSource) -> Option<&mut Color> {
 
 fn face_color_copy(fill: &SfxFillSource) -> Color {
     match fill {
-        SfxFillSource::Solid { color } => *color,
+        SfxFillSource::Solid { color } | SfxFillSource::DryBrush { color, .. } => *color,
         SfxFillSource::Gradient { start, .. } => *start,
         SfxFillSource::ShtackHatch { spec } => spec.color,
         SfxFillSource::None | SfxFillSource::Screentone { .. } => Color::rgb(15.0 / 255.0, 23.0 / 255.0, 42.0 / 255.0),
@@ -350,6 +367,12 @@ fn fill_style_badge(draft: &SfxData) -> &'static str {
             SfxFillSource::None => "Полый (None)",
             SfxFillSource::Solid { .. } => "Solid",
             SfxFillSource::Gradient { .. } => "Gradient",
+            SfxFillSource::DryBrush { spec, .. } => match spec.engine {
+                SfxDryBrushEngine::SdfPhysics => "Dry: А SDF",
+                SfxDryBrushEngine::SdfSeg => "Dry: Б1 Seg",
+                SfxDryBrushEngine::SdfEtf => "Dry: Б2 ETF",
+                SfxDryBrushEngine::Vector => "Dry: Вектор",
+            },
             SfxFillSource::Screentone { .. } => "Screentone",
             SfxFillSource::ShtackHatch { spec } => match spec.mode {
                 SfxShtackFillMode::Hatch => "Shtack Hatch",
@@ -635,7 +658,8 @@ fn draw_gizmo_card(ui: &mut Ui, st: &mut SfxPanelState, gizmo: &mut SfxGizmoStat
                         )
                         .clicked()
                     {
-                        add_spline_point(&mut st.draft);
+                        let geom = gizmo.ensure_geom(&st.draft, gizmo.last_dpi());
+                        add_spline_point(&mut st.draft, &geom);
                     }
                     if cols[1]
                         .add(egui::Button::new(RichText::new("Выпрямить дугу").size(10.5)).min_size(vec2(cols[1].available_width(), 22.0)))
@@ -974,8 +998,9 @@ fn draw_shtack_fill_editor(ui: &mut Ui, spec: &mut SfxShtackFillSpec, t: Tokens)
             let show_nodes = flow_nodes_visible(ui.ctx());
             ui.horizontal(|ui| {
                 let lbl = if show_nodes { "🎯 Узлы вылетов (ВКЛ)" } else { "🎯 Узлы вылетов (ВЫКЛ)" };
-                let resp = seg_button(ui, show_nodes, ACCENT_AMBER, lbl, t)
-                    .on_hover_text("Показывает точки по сторонам сочленений на холсте: клик включает/выключает иглу именно в этом узле");
+                let resp = seg_button(ui, show_nodes, ACCENT_AMBER, lbl, t).on_hover_text(
+                    "Клик: вкл/выкл иглу · Тяни узел: ручной угол и длина · Shift: шаг 15° · Alt+клик: сброс к авто",
+                );
                 if resp.clicked() {
                     set_flow_nodes_visible(ui.ctx(), !show_nodes);
                 }
@@ -1021,6 +1046,65 @@ fn draw_open_gentonik_button(ui: &mut Ui, out: &mut SfxPanelOutput) {
     }
 }
 
+/// Shared 4-engine Dry Brush editor used by both the primary `ЗАЛИВКА (FILL)` card
+/// and Photoshop-style `Blending` overlays (100% parity, zero drift).
+fn draw_dry_brush_editor(ui: &mut Ui, db: &mut SfxDryBrushSpec, scale: f32, t: Tokens) {
+    row_with_reroll(ui, 48.0, &mut db.seed, "Новый Seed щетины", |ui| {
+        ui.columns(2, |cols| {
+            if seg_button(&mut cols[0], db.engine == SfxDryBrushEngine::SdfPhysics, ACCENT_SKY, "А: Физика SDF", t).clicked() {
+                db.engine = SfxDryBrushEngine::SdfPhysics;
+            }
+            if seg_button(&mut cols[1], db.engine == SfxDryBrushEngine::SdfSeg, ACCENT_SKY, "Б1: Штрихи (Seg)", t).clicked() {
+                db.engine = SfxDryBrushEngine::SdfSeg;
+            }
+        });
+        ui.add_space(2.0);
+        ui.columns(2, |cols| {
+            if seg_button(&mut cols[0], db.engine == SfxDryBrushEngine::SdfEtf, ACCENT_SKY, "Б2: Диффузия ETF", t).clicked() {
+                db.engine = SfxDryBrushEngine::SdfEtf;
+            }
+            if seg_button(&mut cols[1], db.engine == SfxDryBrushEngine::Vector, ACCENT_SKY, "Вектор", t).clicked() {
+                db.engine = SfxDryBrushEngine::Vector;
+            }
+        });
+    });
+
+    slider_row_f32(ui, t, "Сухость (Порог):", &mut db.dryness_pct, 10.0..=85.0, "%");
+
+    match db.engine {
+        SfxDryBrushEngine::SdfPhysics | SfxDryBrushEngine::SdfSeg | SfxDryBrushEngine::SdfEtf => {
+            slider_row_f32(ui, t, "Плотность щетины:", &mut db.freq_pct, 10.0..=100.0, "%");
+            if db.engine == SfxDryBrushEngine::SdfEtf {
+                slider_row_f32(ui, t, "Длина LIC:", &mut db.lic_length_px, 6.0..=26.0 * scale, "px");
+            }
+            slider_row_f32(ui, t, "Изгиб (Warp):", &mut db.warp_pct, 0.0..=100.0, "%");
+            slider_row_f32(ui, t, "Зерно бумаги:", &mut db.paper_grain_pct, 0.0..=100.0, "%");
+            slider_row_f32(ui, t, "Чёткость зерна:", &mut db.grain_sharpness_pct, 0.0..=100.0, "%");
+            slider_row_f32(ui, t, "Износ краёв SDF:", &mut db.edge_wear_pct, 0.0..=100.0, "%");
+        }
+        SfxDryBrushEngine::Vector => {
+            slider_row_u16(ui, t, "Щетинок:", &mut db.vec_bristle_count, 4..=40, "");
+            slider_row_f32(ui, t, "Рандом щетины:", &mut db.vec_bristle_random_pct, 0.0..=100.0, "%");
+            slider_row_f32(ui, t, "Наклон друг к другу:", &mut db.vec_mutual_tilt_deg, -10.0..=10.0, "°");
+            slider_row_f32(ui, t, "Рандом наклона:", &mut db.vec_tilt_random_deg, 0.0..=10.0, "°");
+            slider_row_f32(ui, t, "Гаусс. точки:", &mut db.vec_gauss_dots_pct, 0.0..=100.0, "%");
+        }
+    }
+
+    crate::widgets::hairline(ui);
+    if matches!(db.engine, SfxDryBrushEngine::SdfPhysics | SfxDryBrushEngine::Vector) {
+        slider_row_f32(ui, t, "Угол мазка:", &mut db.angle_deg, -90.0..=90.0, "°");
+    } else {
+        let tag = if db.engine == SfxDryBrushEngine::SdfEtf { "Harmonic ETF" } else { "Segment Axis" };
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Угол: авто по штрихам буквы").size(10.0).color(TEXT_CYAN));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(RichText::new(tag).monospace().size(9.5).color(TEXT_CYAN));
+            });
+        });
+    }
+}
+
 fn draw_fill_card(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens, out: &mut SfxPanelOutput) {
     let scale = ui_scale(st);
     section_card(ui, t, |ui| {
@@ -1030,7 +1114,7 @@ fn draw_fill_card(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens, out: &mut SfxP
 
         let is_none = matches!(st.draft.fill, SfxFillSource::None);
         let is_hatch = matches!(st.draft.fill, SfxFillSource::ShtackHatch { .. });
-        let is_dry = !is_none && !is_hatch && st.draft.dry_brush.enabled;
+        let is_dry = !is_none && !is_hatch && (st.draft.dry_brush.enabled || matches!(st.draft.fill, SfxFillSource::DryBrush { .. }));
         let is_tone = !is_none && !is_hatch && !is_dry && matches!(st.draft.fill, SfxFillSource::Screentone { .. });
         let is_solid = !is_none && !is_hatch && !is_dry && !is_tone;
 
@@ -1049,7 +1133,10 @@ fn draw_fill_card(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens, out: &mut SfxP
             if seg_button(&mut cols[2], is_dry, ACCENT_SKY, "Dry Brush", t).clicked() {
                 let c = face_color_copy(&st.draft.fill);
                 st.draft.dry_brush.enabled = true;
-                if matches!(st.draft.fill, SfxFillSource::None | SfxFillSource::Screentone { .. } | SfxFillSource::ShtackHatch { .. }) {
+                if matches!(
+                    st.draft.fill,
+                    SfxFillSource::None | SfxFillSource::Screentone { .. } | SfxFillSource::ShtackHatch { .. } | SfxFillSource::DryBrush { .. }
+                ) {
                     st.draft.fill = SfxFillSource::Solid { color: c };
                 }
             }
@@ -1076,62 +1163,11 @@ fn draw_fill_card(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens, out: &mut SfxP
             ui.label(RichText::new("Внутренность букв прозрачна — отображаются только обводка и ореол.").size(10.0).color(t.text_dim));
         } else if let SfxFillSource::ShtackHatch { spec } = &mut st.draft.fill {
             draw_shtack_fill_editor(ui, spec, t);
+        } else if let SfxFillSource::DryBrush { color, spec } = &mut st.draft.fill {
+            color_swatch(ui, "Цвет заливки:", color);
+            draw_dry_brush_editor(ui, spec, scale, t);
         } else if st.draft.dry_brush.enabled {
-            let db = &mut st.draft.dry_brush;
-            row_with_reroll(ui, 48.0, &mut db.seed, "Новый Seed щетины", |ui| {
-                ui.columns(2, |cols| {
-                    if seg_button(&mut cols[0], db.engine == SfxDryBrushEngine::SdfPhysics, ACCENT_SKY, "А: Физика SDF", t).clicked() {
-                        db.engine = SfxDryBrushEngine::SdfPhysics;
-                    }
-                    if seg_button(&mut cols[1], db.engine == SfxDryBrushEngine::SdfSeg, ACCENT_SKY, "Б1: Штрихи (Seg)", t).clicked() {
-                        db.engine = SfxDryBrushEngine::SdfSeg;
-                    }
-                });
-                ui.add_space(2.0);
-                ui.columns(2, |cols| {
-                    if seg_button(&mut cols[0], db.engine == SfxDryBrushEngine::SdfEtf, ACCENT_SKY, "Б2: Диффузия ETF", t).clicked() {
-                        db.engine = SfxDryBrushEngine::SdfEtf;
-                    }
-                    if seg_button(&mut cols[1], db.engine == SfxDryBrushEngine::Vector, ACCENT_SKY, "Вектор", t).clicked() {
-                        db.engine = SfxDryBrushEngine::Vector;
-                    }
-                });
-            });
-
-            slider_row_f32(ui, t, "Сухость (Порог):", &mut db.dryness_pct, 10.0..=85.0, "%");
-
-            match db.engine {
-                SfxDryBrushEngine::SdfPhysics | SfxDryBrushEngine::SdfSeg | SfxDryBrushEngine::SdfEtf => {
-                    slider_row_f32(ui, t, "Плотность щетины:", &mut db.freq_pct, 10.0..=100.0, "%");
-                    if db.engine == SfxDryBrushEngine::SdfEtf {
-                        slider_row_f32(ui, t, "Длина LIC:", &mut db.lic_length_px, 6.0..=26.0 * scale, "px");
-                    }
-                    slider_row_f32(ui, t, "Изгиб (Warp):", &mut db.warp_pct, 0.0..=100.0, "%");
-                    slider_row_f32(ui, t, "Зерно бумаги:", &mut db.paper_grain_pct, 0.0..=100.0, "%");
-                    slider_row_f32(ui, t, "Чёткость зерна:", &mut db.grain_sharpness_pct, 0.0..=100.0, "%");
-                    slider_row_f32(ui, t, "Износ краёв SDF:", &mut db.edge_wear_pct, 0.0..=100.0, "%");
-                }
-                SfxDryBrushEngine::Vector => {
-                    slider_row_u16(ui, t, "Щетинок:", &mut db.vec_bristle_count, 4..=40, "");
-                    slider_row_f32(ui, t, "Рандом щетины:", &mut db.vec_bristle_random_pct, 0.0..=100.0, "%");
-                    slider_row_f32(ui, t, "Наклон друг к другу:", &mut db.vec_mutual_tilt_deg, -10.0..=10.0, "°");
-                    slider_row_f32(ui, t, "Рандом наклона:", &mut db.vec_tilt_random_deg, 0.0..=10.0, "°");
-                    slider_row_f32(ui, t, "Гаусс. точки:", &mut db.vec_gauss_dots_pct, 0.0..=100.0, "%");
-                }
-            }
-
-            crate::widgets::hairline(ui);
-            if matches!(db.engine, SfxDryBrushEngine::SdfPhysics | SfxDryBrushEngine::Vector) {
-                slider_row_f32(ui, t, "Угол мазка:", &mut db.angle_deg, -90.0..=90.0, "°");
-            } else {
-                let tag = if db.engine == SfxDryBrushEngine::SdfEtf { "Harmonic ETF" } else { "Segment Axis" };
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("Угол: авто по штрихам буквы").size(10.0).color(TEXT_CYAN));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(RichText::new(tag).monospace().size(9.5).color(TEXT_CYAN));
-                    });
-                });
-            }
+            draw_dry_brush_editor(ui, &mut st.draft.dry_brush, scale, t);
         } else if let SfxFillSource::Screentone { spec, opacity } = &mut st.draft.fill {
             let mut spacing = spec.spacing_x;
             if slider_row_f32(ui, t, "Шаг точек:", &mut spacing, 3.0..=24.0, "px") {
@@ -1192,14 +1228,19 @@ fn draw_advanced_fx_collapsible(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens) 
         });
 }
 
-const BLEND_MODES: [(SfxChannelBlend, &str); 8] = [
+const BLEND_MODES: [(SfxChannelBlend, &str); 13] = [
     (SfxChannelBlend::Normal, "Normal"),
     (SfxChannelBlend::Multiply, "Multiply"),
-    (SfxChannelBlend::Screen, "Screen"),
-    (SfxChannelBlend::Overlay, "Overlay"),
+    (SfxChannelBlend::ColorBurn, "Color Burn"),
     (SfxChannelBlend::Darken, "Darken"),
+    (SfxChannelBlend::Screen, "Screen"),
+    (SfxChannelBlend::ColorDodge, "Color Dodge"),
     (SfxChannelBlend::Lighten, "Lighten"),
+    (SfxChannelBlend::Overlay, "Overlay"),
+    (SfxChannelBlend::SoftLight, "Soft Light"),
+    (SfxChannelBlend::HardLight, "Hard Light"),
     (SfxChannelBlend::Difference, "Difference"),
+    (SfxChannelBlend::Exclusion, "Exclusion"),
     (SfxChannelBlend::Knockout, "Knockout (Вырез)"),
 ];
 
@@ -1222,14 +1263,372 @@ fn draw_blend_channel_controls(ui: &mut Ui, id_salt: &str, title: &str, blend: &
     }
 }
 
+fn default_dry_brush_fill(color: Color) -> SfxFillSource {
+    SfxFillSource::DryBrush { color, spec: SfxDryBrushSpec { enabled: true, ..SfxDryBrushSpec::default() } }
+}
+
+/// Full-parity Manga fill editor shared by `Blending` overlays, `Stroke` FX, and `Secondary Fill`.
+fn draw_parity_fill_editor(ui: &mut Ui, id_salt: &str, fill: &mut SfxFillSource, scale: f32, t: Tokens, out: &mut SfxPanelOutput) {
+    let is_solid = matches!(fill, SfxFillSource::Solid { .. });
+    let is_grad = matches!(fill, SfxFillSource::Gradient { .. });
+    let is_dry = matches!(fill, SfxFillSource::DryBrush { .. });
+    let is_tone = matches!(fill, SfxFillSource::Screentone { .. });
+    let is_hatch = matches!(fill, SfxFillSource::ShtackHatch { .. });
+
+    ui.columns(3, |cols| {
+        if seg_button(&mut cols[0], is_solid, ACCENT_AMBER, "Solid", t).clicked() && !is_solid {
+            *fill = SfxFillSource::Solid { color: face_color_copy(fill) };
+        }
+        if seg_button(&mut cols[1], is_grad, ACCENT_AMBER, "Gradient", t).clicked() && !is_grad {
+            *fill = SfxFillSource::Gradient { start: face_color_copy(fill), end: Color::WHITE, angle_deg: 90.0 };
+        }
+        if seg_button(&mut cols[2], is_dry, ACCENT_AMBER, "Dry Brush", t).clicked() && !is_dry {
+            *fill = default_dry_brush_fill(face_color_copy(fill));
+        }
+    });
+    ui.add_space(2.0);
+    ui.columns(2, |cols| {
+        if seg_button(&mut cols[0], is_tone, ACCENT_AMBER, "Screentone", t).clicked() && !is_tone {
+            *fill = default_sfx_screentone();
+        }
+        if seg_button(&mut cols[1], is_hatch, ACCENT_AMBER, "⚡ Shtack Fill", t).clicked() && !is_hatch {
+            *fill = SfxFillSource::ShtackHatch { spec: SfxShtackFillSpec { color: face_color_copy(fill), ..SfxShtackFillSpec::default() } };
+        }
+    });
+    ui.add_space(3.0);
+    match fill {
+        SfxFillSource::None => {}
+        SfxFillSource::Solid { color } => {
+            color_swatch(ui, "Цвет:", color);
+        }
+        SfxFillSource::Gradient { start, end, angle_deg } => {
+            ui.horizontal(|ui| {
+                color_swatch(ui, "A:", start);
+                color_swatch(ui, "B:", end);
+                crate::widgets::value_field(ui, angle_deg, 0.0..=360.0, "°", 54.0);
+            });
+        }
+        SfxFillSource::DryBrush { color, spec } => {
+            color_swatch(ui, "Цвет кисти:", color);
+            draw_dry_brush_editor(ui, spec, scale, t);
+        }
+        SfxFillSource::Screentone { spec, opacity } => {
+            draw_screentone_grid(ui, id_salt, spec, opacity, t);
+            ui.add_space(2.0);
+            draw_open_gentonik_button(ui, out);
+        }
+        SfxFillSource::ShtackHatch { spec } => {
+            draw_shtack_fill_editor(ui, spec, t);
+        }
+    }
+}
+
+fn blend_fx_title(fx: &SfxBlendEffect) -> &'static str {
+    match fx {
+        SfxBlendEffect::Bevel { .. } => "Тиснение",
+        SfxBlendEffect::Stroke { .. } => "Выполнить обводку",
+        SfxBlendEffect::InnerShadow { .. } => "Внутренняя тень",
+        SfxBlendEffect::InnerGlow { .. } => "Внутреннее свечение",
+        SfxBlendEffect::FillOverlay { fill, .. } => match fill {
+            SfxFillSource::Solid { .. } | SfxFillSource::None => "Наложение цвета",
+            SfxFillSource::Gradient { .. } => "Наложение градиента",
+            SfxFillSource::DryBrush { .. } => "Наложение Dry Brush",
+            SfxFillSource::Screentone { .. } => "Наложение скринтона",
+            SfxFillSource::ShtackHatch { .. } => "Наложение Shtack Fill",
+        },
+        SfxBlendEffect::OuterGlow { .. } => "Внешнее свечение",
+        SfxBlendEffect::DropShadow { .. } => "Тень",
+    }
+}
+
+fn make_default_blend_fx(kind: u8) -> SfxBlendEffect {
+    match kind {
+        0 => SfxBlendEffect::Bevel {
+            enabled: true,
+            depth_px: 5.0,
+            angle_deg: 120.0,
+            highlight_color: Color::WHITE,
+            highlight_opacity: 0.75,
+            shadow_color: Color::BLACK,
+            shadow_opacity: 0.75,
+        },
+        1 => SfxBlendEffect::Stroke {
+            enabled: true,
+            width_px: 4.0,
+            position: SfxStrokePosition::Outside,
+            join: SfxLineJoin::Round,
+            fill: SfxFillSource::Solid { color: Color::BLACK },
+            blend: SfxChannelBlend::Normal,
+            opacity: 1.0,
+        },
+        2 => SfxBlendEffect::InnerShadow {
+            enabled: true,
+            angle_deg: 120.0,
+            distance_px: 6.0,
+            blur_px: 4.0,
+            color: Color::BLACK,
+            blend: SfxChannelBlend::Multiply,
+            opacity: 0.75,
+        },
+        3 => SfxBlendEffect::InnerGlow {
+            enabled: true,
+            width_px: 6.0,
+            color: Color::WHITE,
+            blend: SfxChannelBlend::Screen,
+            opacity: 0.75,
+        },
+        4 => SfxBlendEffect::FillOverlay {
+            enabled: true,
+            fill: SfxFillSource::Solid { color: Color::rgb(0.9, 0.15, 0.15) },
+            blend: SfxChannelBlend::Multiply,
+            opacity: 0.8,
+        },
+        5 => SfxBlendEffect::FillOverlay {
+            enabled: true,
+            fill: SfxFillSource::Gradient { start: Color::BLACK, end: Color::WHITE, angle_deg: 90.0 },
+            blend: SfxChannelBlend::Overlay,
+            opacity: 0.85,
+        },
+        6 => SfxBlendEffect::FillOverlay {
+            enabled: true,
+            fill: default_sfx_screentone(),
+            blend: SfxChannelBlend::Multiply,
+            opacity: 0.85,
+        },
+        7 => SfxBlendEffect::OuterGlow {
+            enabled: true,
+            spread_px: 4.0,
+            blur_px: 10.0,
+            color: Color::WHITE,
+            blend: SfxChannelBlend::Screen,
+            opacity: 0.8,
+        },
+        _ => SfxBlendEffect::DropShadow {
+            enabled: true,
+            angle_deg: 120.0,
+            distance_px: 8.0,
+            blur_px: 0.0,
+            color: Color::BLACK,
+            blend: SfxChannelBlend::Multiply,
+            opacity: 0.8,
+        },
+    }
+}
+
+/// Photoshop-style quick-add / toggle checklist (`Параметры наложения`).
+fn draw_blend_fx_catalog(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens) {
+    let items: [(u8, &str, bool); 9] = [
+        (0, "Тиснение", false),
+        (1, "Выполнить обводку", true),
+        (2, "Внутренняя тень", true),
+        (3, "Внутреннее свечение", false),
+        (4, "Наложение цвета", true),
+        (5, "Наложение градиента", true),
+        (6, "Наложение узора / Dry / Tone", true),
+        (7, "Внешнее свечение", false),
+        (8, "Тень", true),
+    ];
+    let can_add = st.draft.blending.effects.len() < MAX_SFX_BLEND_EFFECTS;
+    for (kind, label, stackable) in items {
+        let first_idx = st.draft.blending.effects.iter().position(|fx| {
+            matches!(
+                (kind, fx),
+                (0, SfxBlendEffect::Bevel { .. })
+                    | (1, SfxBlendEffect::Stroke { .. })
+                    | (2, SfxBlendEffect::InnerShadow { .. })
+                    | (3, SfxBlendEffect::InnerGlow { .. })
+                    | (4, SfxBlendEffect::FillOverlay { fill: SfxFillSource::Solid { .. }, .. })
+                    | (5, SfxBlendEffect::FillOverlay { fill: SfxFillSource::Gradient { .. }, .. })
+                    | (
+                        6,
+                        SfxBlendEffect::FillOverlay {
+                            fill: SfxFillSource::DryBrush { .. } | SfxFillSource::Screentone { .. } | SfxFillSource::ShtackHatch { .. },
+                            ..
+                        },
+                    )
+                    | (7, SfxBlendEffect::OuterGlow { .. })
+                    | (8, SfxBlendEffect::DropShadow { .. })
+            )
+        });
+        let mut active = first_idx.is_some_and(|i| st.draft.blending.effects[i].enabled());
+        ui.horizontal(|ui| {
+            if ui.checkbox(&mut active, "").changed() {
+                if let Some(i) = first_idx {
+                    *st.draft.blending.effects[i].enabled_mut() = active;
+                    st.selected_blend_fx = Some(i);
+                } else if active && can_add {
+                    st.draft.blending.effects.push(make_default_blend_fx(kind));
+                    st.selected_blend_fx = Some(st.draft.blending.effects.len() - 1);
+                }
+            }
+            let is_sel = first_idx.is_some() && st.selected_blend_fx == first_idx;
+            let row_col = if is_sel {
+                TEXT_SKY
+            } else if active {
+                t.text
+            } else {
+                t.text_dim
+            };
+            if ui.selectable_label(is_sel, RichText::new(label).size(10.5).color(row_col)).clicked() {
+                if let Some(i) = first_idx {
+                    st.selected_blend_fx = Some(i);
+                } else if can_add {
+                    st.draft.blending.effects.push(make_default_blend_fx(kind));
+                    st.selected_blend_fx = Some(st.draft.blending.effects.len() - 1);
+                }
+            }
+            if stackable {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.add_enabled(can_add, egui::Button::new(RichText::new("+").strong().size(10.5)).min_size(vec2(20.0, 18.0))).clicked() {
+                        st.draft.blending.effects.push(make_default_blend_fx(kind));
+                        st.selected_blend_fx = Some(st.draft.blending.effects.len() - 1);
+                    }
+                });
+            }
+        });
+    }
+}
+
+fn draw_blend_fx_inspector(ui: &mut Ui, fx: &mut SfxBlendEffect, idx: usize, scale: f32, t: Tokens, out: &mut SfxPanelOutput) {
+    let salt = format!("sfx-bfx-{idx}");
+    match fx {
+        SfxBlendEffect::Bevel { depth_px, angle_deg, highlight_color, highlight_opacity, shadow_color, shadow_opacity, .. } => {
+            slider_row_f32(ui, t, "Глубина:", depth_px, 1.0..=32.0 * scale, "px");
+            slider_row_f32(ui, t, "Угол света:", angle_deg, -180.0..=180.0, "°");
+            color_swatch(ui, "Блик:", highlight_color);
+            let mut hp = *highlight_opacity * 100.0;
+            if slider_row_f32(ui, t, "Яркость блика:", &mut hp, 0.0..=100.0, "%") {
+                *highlight_opacity = (hp / 100.0).clamp(0.0, 1.0);
+            }
+            color_swatch(ui, "Тень:", shadow_color);
+            let mut sp = *shadow_opacity * 100.0;
+            if slider_row_f32(ui, t, "Плотность тени:", &mut sp, 0.0..=100.0, "%") {
+                *shadow_opacity = (sp / 100.0).clamp(0.0, 1.0);
+            }
+        }
+        SfxBlendEffect::Stroke { width_px, position, fill, blend, opacity, .. } => {
+            slider_row_f32(ui, t, "Размер обводки:", width_px, 0.5..=64.0 * scale, "px");
+            ui.columns(3, |cols| {
+                if seg_button(&mut cols[0], *position == SfxStrokePosition::Outside, ACCENT_SKY, "Снаружи", t).clicked() {
+                    *position = SfxStrokePosition::Outside;
+                }
+                if seg_button(&mut cols[1], *position == SfxStrokePosition::Center, ACCENT_SKY, "Из центра", t).clicked() {
+                    *position = SfxStrokePosition::Center;
+                }
+                if seg_button(&mut cols[2], *position == SfxStrokePosition::Inside, ACCENT_SKY, "Внутри", t).clicked() {
+                    *position = SfxStrokePosition::Inside;
+                }
+            });
+            ui.add_space(2.0);
+            draw_blend_channel_controls(ui, &format!("{salt}-bl"), "Режим обводки", blend, opacity, t);
+            crate::widgets::hairline(ui);
+            draw_parity_fill_editor(ui, &format!("{salt}-fill"), fill, scale, t, out);
+        }
+        SfxBlendEffect::InnerShadow { angle_deg, distance_px, blur_px, color, blend, opacity, .. }
+        | SfxBlendEffect::DropShadow { angle_deg, distance_px, blur_px, color, blend, opacity, .. } => {
+            draw_blend_channel_controls(ui, &format!("{salt}-bl"), "Режим тени", blend, opacity, t);
+            color_swatch(ui, "Цвет тени:", color);
+            slider_row_f32(ui, t, "Угол:", angle_deg, -180.0..=180.0, "°");
+            slider_row_f32(ui, t, "Смещение:", distance_px, 0.0..=96.0 * scale, "px");
+            slider_row_f32(ui, t, "Размытие:", blur_px, 0.0..=48.0 * scale, "px");
+        }
+        SfxBlendEffect::InnerGlow { width_px, color, blend, opacity, .. } => {
+            draw_blend_channel_controls(ui, &format!("{salt}-bl"), "Режим свечения", blend, opacity, t);
+            color_swatch(ui, "Цвет:", color);
+            slider_row_f32(ui, t, "Размер:", width_px, 0.5..=48.0 * scale, "px");
+        }
+        SfxBlendEffect::OuterGlow { spread_px, blur_px, color, blend, opacity, .. } => {
+            draw_blend_channel_controls(ui, &format!("{salt}-bl"), "Режим свечения", blend, opacity, t);
+            color_swatch(ui, "Цвет:", color);
+            slider_row_f32(ui, t, "Размах:", spread_px, 0.0..=48.0 * scale, "px");
+            slider_row_f32(ui, t, "Размытие:", blur_px, 0.0..=48.0 * scale, "px");
+        }
+        SfxBlendEffect::FillOverlay { fill, blend, opacity, .. } => {
+            draw_blend_channel_controls(ui, &format!("{salt}-bl"), "Режим наложения", blend, opacity, t);
+            crate::widgets::hairline(ui);
+            draw_parity_fill_editor(ui, &format!("{salt}-fill"), fill, scale, t, out);
+        }
+    }
+}
+
 fn draw_blending_tab(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens, out: &mut SfxPanelOutput) {
+    let scale = ui_scale(st);
+    // 1. Photoshop-style Manga FX ("Параметры наложения")
+    section_card(ui, t, |ui| {
+        let fx_badge = format!("{} FX", st.draft.blending.effects.len());
+        section_header(ui, t, "ПАРАМЕТРЫ НАЛОЖЕНИЯ (MANGA FX)", &fx_badge, TEXT_AMBER);
+        ui.add_space(3.0);
+        draw_blend_fx_catalog(ui, st, t);
+
+        if !st.draft.blending.effects.is_empty() {
+            crate::widgets::hairline(ui);
+            dim_label(ui, t, "Активный стек FX (сверху вниз):");
+            let total = st.draft.blending.effects.len();
+            let mut swap_op: Option<(usize, usize)> = None;
+            let mut del_idx: Option<usize> = None;
+            for idx in 0..total {
+                let is_sel = st.selected_blend_fx == Some(idx);
+                let title = blend_fx_title(&st.draft.blending.effects[idx]);
+                ui.horizontal(|ui| {
+                    ui.checkbox(st.draft.blending.effects[idx].enabled_mut(), "");
+                    let lbl = format!("{}. {title}", idx + 1);
+                    if ui.selectable_label(is_sel, RichText::new(lbl).size(10.5).color(if is_sel { TEXT_SKY } else { t.text })).clicked() {
+                        st.selected_blend_fx = Some(idx);
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button("🗑").on_hover_text("Удалить эффект").clicked() {
+                            del_idx = Some(idx);
+                        }
+                        if idx + 1 < total && ui.small_button("↓").clicked() {
+                            swap_op = Some((idx, idx + 1));
+                        }
+                        if idx > 0 && ui.small_button("↑").clicked() {
+                            swap_op = Some((idx - 1, idx));
+                        }
+                    });
+                });
+            }
+            if let Some((a, b)) = swap_op {
+                st.draft.blending.effects.swap(a, b);
+                if st.selected_blend_fx == Some(a) {
+                    st.selected_blend_fx = Some(b);
+                } else if st.selected_blend_fx == Some(b) {
+                    st.selected_blend_fx = Some(a);
+                }
+            }
+            if let Some(rm) = del_idx {
+                st.draft.blending.effects.remove(rm);
+                st.selected_blend_fx = if st.draft.blending.effects.is_empty() {
+                    None
+                } else {
+                    Some(rm.min(st.draft.blending.effects.len() - 1))
+                };
+            }
+            let sel = st.selected_blend_fx.filter(|&i| i < st.draft.blending.effects.len()).or(if st.draft.blending.effects.is_empty() {
+                None
+            } else {
+                Some(0)
+            });
+            st.selected_blend_fx = sel;
+            if let Some(idx) = sel {
+                crate::widgets::hairline(ui);
+                let hdr = format!("НАСТРОЙКИ: {}", blend_fx_title(&st.draft.blending.effects[idx]));
+                ui.label(RichText::new(hdr).strong().size(10.0).color(TEXT_SKY));
+                ui.add_space(2.0);
+                draw_blend_fx_inspector(ui, &mut st.draft.blending.effects[idx], idx, scale, t, out);
+            }
+        }
+    });
+
+    // 2. Base channel ordering & per-channel blend modes
     let bl = &mut st.draft.blending;
     section_card(ui, t, |ui| {
         ui.horizontal(|ui| {
             ui.label(RichText::new("ПОРЯДОК И КАНАЛЫ").strong().size(10.5).color(t.text));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.small_button("Сбросить").clicked() {
+                if ui.small_button("Сбросить всё").clicked() {
                     *bl = SfxBlending::default();
+                    st.selected_blend_fx = None;
                 }
             });
         });
@@ -1251,41 +1650,25 @@ fn draw_blending_tab(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens, out: &mut S
         draw_blend_channel_controls(ui, "sfx-bl-halo", "Ореол (Halo)", &mut bl.halo_blend, &mut bl.halo_opacity, t);
     });
 
+    // 3. Quick Secondary Fill (100% parity with primary Fill card, including Dry Brush)
+    let bl = &mut st.draft.blending;
     section_card(ui, t, |ui| {
         let badge = match &bl.secondary_fill {
             None | Some(SfxFillSource::None) => "Выкл",
             Some(SfxFillSource::Solid { .. }) => "Solid",
             Some(SfxFillSource::Gradient { .. }) => "Gradient",
+            Some(SfxFillSource::DryBrush { .. }) => "Dry Brush",
             Some(SfxFillSource::Screentone { .. }) => "Screentone",
             Some(SfxFillSource::ShtackHatch { .. }) => "Shtack Fill",
         };
-        section_header(ui, t, "2-Я ЗАЛИВКА (МИКС СТИЛЕЙ)", badge, TEXT_AMBER);
+        section_header(ui, t, "2-Я ЗАЛИВКА (БЫСТРЫЙ МИКС)", badge, TEXT_AMBER);
         ui.add_space(3.0);
 
         let is_off = bl.secondary_fill.is_none();
-        let is_solid = matches!(bl.secondary_fill, Some(SfxFillSource::Solid { .. }));
-        let is_grad = matches!(bl.secondary_fill, Some(SfxFillSource::Gradient { .. }));
-        let is_tone = matches!(bl.secondary_fill, Some(SfxFillSource::Screentone { .. }));
-        let is_hatch = matches!(bl.secondary_fill, Some(SfxFillSource::ShtackHatch { .. }));
-
-        ui.columns(3, |cols| {
-            if seg_button(&mut cols[0], is_off, ACCENT_AMBER, "Выкл", t).clicked() {
-                bl.secondary_fill = None;
-            }
-            if seg_button(&mut cols[1], is_solid, ACCENT_AMBER, "Solid", t).clicked() {
-                bl.secondary_fill = Some(SfxFillSource::Solid { color: Color::BLACK });
-            }
-            if seg_button(&mut cols[2], is_grad, ACCENT_AMBER, "Gradient", t).clicked() {
-                bl.secondary_fill = Some(SfxFillSource::Gradient { start: Color::BLACK, end: Color::WHITE, angle_deg: 90.0 });
-            }
-        });
-        ui.add_space(2.0);
-        ui.columns(2, |cols| {
-            if seg_button(&mut cols[0], is_tone, ACCENT_AMBER, "Screentone", t).clicked() {
-                bl.secondary_fill = Some(default_sfx_screentone());
-            }
-            if seg_button(&mut cols[1], is_hatch, ACCENT_AMBER, "⚡ Shtack Fill", t).clicked() {
-                bl.secondary_fill = Some(SfxFillSource::ShtackHatch { spec: SfxShtackFillSpec::default() });
+        ui.horizontal(|ui| {
+            let lbl = if is_off { "Включить 2-ю заливку" } else { "Выключить 2-ю заливку" };
+            if seg_button(ui, !is_off, ACCENT_AMBER, lbl, t).clicked() {
+                bl.secondary_fill = if is_off { Some(default_dry_brush_fill(Color::BLACK)) } else { None };
             }
         });
 
@@ -1293,31 +1676,11 @@ fn draw_blending_tab(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens, out: &mut S
             ui.add_space(4.0);
             draw_blend_channel_controls(ui, "sfx-bl-sec", "Смешивание 2-й заливки", &mut bl.secondary_blend, &mut bl.secondary_opacity, t);
             crate::widgets::hairline(ui);
-            match sec {
-                SfxFillSource::None => {}
-                SfxFillSource::Solid { color } => {
-                    color_swatch(ui, "Цвет 2-й заливки:", color);
-                }
-                SfxFillSource::Gradient { start, end, angle_deg } => {
-                    ui.horizontal(|ui| {
-                        color_swatch(ui, "A:", start);
-                        color_swatch(ui, "B:", end);
-                        crate::widgets::value_field(ui, angle_deg, 0.0..=360.0, "°", 54.0);
-                    });
-                }
-                SfxFillSource::Screentone { spec, opacity } => {
-                    draw_screentone_grid(ui, "sfx-sec-tone", spec, opacity, t);
-                    ui.add_space(2.0);
-                    draw_open_gentonik_button(ui, out);
-                }
-                SfxFillSource::ShtackHatch { spec } => {
-                    draw_shtack_fill_editor(ui, spec, t);
-                }
-            }
+            draw_parity_fill_editor(ui, "sfx-sec-fill", sec, scale, t, out);
         } else {
             ui.add_space(3.0);
             ui.label(
-                RichText::new("Позволяет наложить вторую заливку поверх основной — например, Shtack Fill или Screentone поверх Solid (включая вырез Knockout).")
+                RichText::new("Полный паритет с основной заливкой: Solid, Gradient, Dry Brush (все 4 движка), Screentone (+ Gentonik) и Shtack Fill.")
                     .size(9.5)
                     .color(t.text_dim),
             );
@@ -1398,23 +1761,26 @@ fn draw_fill_source_editor(ui: &mut Ui, id_salt: &str, fill: &mut SfxFillSource,
         SfxFillSource::None => 0u8,
         SfxFillSource::Solid { .. } => 1u8,
         SfxFillSource::Gradient { .. } => 2u8,
-        SfxFillSource::Screentone { .. } => 3u8,
-        SfxFillSource::ShtackHatch { .. } => 4u8,
+        SfxFillSource::DryBrush { .. } => 3u8,
+        SfxFillSource::Screentone { .. } => 4u8,
+        SfxFillSource::ShtackHatch { .. } => 5u8,
     };
     let mut picked = kind_idx;
     ui.horizontal_wrapped(|ui| {
         ui.selectable_value(&mut picked, 0, "None");
         ui.selectable_value(&mut picked, 1, "Solid");
         ui.selectable_value(&mut picked, 2, "Gradient");
-        ui.selectable_value(&mut picked, 3, "Screentone");
-        ui.selectable_value(&mut picked, 4, "Shtack Fill");
+        ui.selectable_value(&mut picked, 3, "Dry Brush");
+        ui.selectable_value(&mut picked, 4, "Screentone");
+        ui.selectable_value(&mut picked, 5, "Shtack Fill");
     });
     if picked != kind_idx {
         *fill = match picked {
             0 => SfxFillSource::None,
             1 => SfxFillSource::Solid { color: Color::BLACK },
             2 => SfxFillSource::Gradient { start: Color::BLACK, end: Color::WHITE, angle_deg: 90.0 },
-            3 => default_sfx_screentone(),
+            3 => default_dry_brush_fill(Color::BLACK),
+            4 => default_sfx_screentone(),
             _ => SfxFillSource::ShtackHatch { spec: SfxShtackFillSpec::default() },
         };
     }
@@ -1432,6 +1798,10 @@ fn draw_fill_source_editor(ui: &mut Ui, id_salt: &str, fill: &mut SfxFillSource,
                 color_swatch(ui, "B:", end);
                 crate::widgets::value_field(ui, angle_deg, 0.0..=360.0, "°", 54.0);
             });
+        }
+        SfxFillSource::DryBrush { color, spec } => {
+            color_swatch(ui, "Цвет кисти:", color);
+            draw_dry_brush_editor(ui, spec, 1.0, t);
         }
         SfxFillSource::Screentone { spec, opacity } => {
             draw_screentone_grid(ui, id_salt, spec, opacity, t);
@@ -1731,7 +2101,8 @@ mod tests {
                 let mut data = SfxData::default();
                 data.line_effect.style = style;
                 if tab == DockTab::Blending {
-                    data.blending.secondary_fill = Some(SfxFillSource::ShtackHatch { spec: SfxShtackFillSpec::default() });
+                    data.blending.secondary_fill = Some(default_dry_brush_fill(Color::BLACK));
+                    data.blending.effects = vec![make_default_blend_fx(0), make_default_blend_fx(1), make_default_blend_fx(6), make_default_blend_fx(8)];
                 } else if style == SfxLineStyle::Shtack {
                     data.fill = SfxFillSource::ShtackHatch { spec: SfxShtackFillSpec::default() };
                 } else {
@@ -1751,6 +2122,28 @@ mod tests {
                 });
                 out.textures_delta.clear();
             }
+        }
+    }
+
+    /// Regression: clicking `+ Точка на дуге` on wide SFX used to hardcode `[-160, 160]` and crush
+    /// letters together. Initializing from real glyph rest centers keeps every letter at its exact
+    /// original position (zero squishing / zero jump).
+    #[test]
+    fn add_spline_point_preserves_glyph_spacing_on_wide_sfx() {
+        let mut draft = SfxData { text: "BAM!".to_owned(), size_pt: 260.0, origin: [80.0, 80.0], ..SfxData::default() };
+        let gizmo = SfxGizmoState::default();
+        let before_geom = gizmo.ensure_geom(&draft, 72.0);
+        assert!(before_geom.glyphs.len() >= 4);
+        let before_centers: Vec<[f64; 2]> = before_geom.glyphs.iter().map(|g| g.warped_center).collect();
+
+        add_spline_point(&mut draft, &before_geom);
+        assert_eq!(draft.spline.points.len(), 3);
+        let after_geom = gizmo.ensure_geom(&draft, 72.0);
+        for (i, (a, b)) in before_centers.iter().zip(after_geom.glyphs.iter().map(|g| g.warped_center)).enumerate() {
+            assert!(
+                (a[0] - b[0]).abs() < 1.5 && (a[1] - b[1]).abs() < 1.5,
+                "glyph {i} jumped/squished when adding spline point: before={a:?}, after={b:?}"
+            );
         }
     }
 }

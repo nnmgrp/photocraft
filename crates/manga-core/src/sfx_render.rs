@@ -16,8 +16,9 @@ use std::sync::Mutex;
 use photocraft_algo::comic_screentone::{ScreentoneMode, render_screentone_to_surface};
 use photocraft_color::PixelFormat;
 use photocraft_doc::sfx::{
-    SfxChannelBlend, SfxData, SfxDryBrushEngine, SfxDryBrushSpec, SfxFillSource, SfxLineEffect, SfxLineJoin, SfxLineStyle, SfxShtackFillMode,
-    SfxShtackFillSpec, SfxShtackFlowOvershoot, SfxShtackOvershootMode, SfxShtackVariant, SfxSpikeShape, SfxStylePass,
+    SfxBlendEffect, SfxChannelBlend, SfxData, SfxDryBrushEngine, SfxDryBrushSpec, SfxFillSource, SfxLineEffect, SfxLineJoin, SfxLineStyle,
+    SfxShtackFillMode, SfxShtackFillSpec, SfxShtackFlowOvershoot, SfxShtackOvershootMode, SfxShtackVariant, SfxSpikeShape, SfxStrokePosition,
+    SfxStylePass,
 };
 use photocraft_doc::{FillRule, LineCap, LineJoin, PathOp};
 use photocraft_geom::Rect;
@@ -479,19 +480,61 @@ fn compute_render_bounds(data: &SfxData, geom: &PreparedSfx) -> Rect {
     let gh_box = (geom.warped_box[3] - geom.warped_box[1]).abs().max(24.0);
     let hatch_pad = |fill: &SfxFillSource| -> f64 {
         if let SfxFillSource::ShtackHatch { spec } = fill {
-            gh_box * (f64::from(spec.overshoot_pct).clamp(0.0, 45.0) / 100.0) * 1.55
+            let max_len_scale = spec
+                .flow_overrides
+                .iter()
+                .filter(|ov| ov.enabled)
+                .map(|ov| f64::from(ov.length_scale.clamp(1.0, 3.0)))
+                .fold(1.0_f64, f64::max);
+            let ov_pct = f64::from(spec.overshoot_pct).clamp(0.0, 45.0).max(if spec.flow_overrides.iter().any(|ov| ov.enabled) { 14.0 } else { 0.0 });
+            gh_box * (ov_pct / 100.0) * 1.55 * max_len_scale
                 + gh_box * (f64::from(spec.thickness_pct).clamp(0.4, 5.0) / 100.0)
                 + 6.0
         } else {
             0.0
         }
     };
-    stroke_pad += hatch_pad(&data.fill).max(data.blending.secondary_fill.as_ref().map_or(0.0, hatch_pad));
+    let mut fill_hatch_pad = hatch_pad(&data.fill).max(data.blending.secondary_fill.as_ref().map_or(0.0, hatch_pad));
 
     let mut min_dx: f64 = 0.0;
     let mut max_dx: f64 = 0.0;
     let mut min_dy: f64 = 0.0;
     let mut max_dy: f64 = 0.0;
+
+    for fx in &data.blending.effects {
+        if !fx.enabled() {
+            continue;
+        }
+        match fx {
+            SfxBlendEffect::Stroke { width_px, position, fill, .. } => {
+                let w = f64::from((*width_px).max(0.0));
+                match position {
+                    SfxStrokePosition::Outside => stroke_pad += w,
+                    SfxStrokePosition::Center => stroke_pad += w * 0.5,
+                    SfxStrokePosition::Inside => {}
+                }
+                fill_hatch_pad = fill_hatch_pad.max(hatch_pad(fill));
+            }
+            SfxBlendEffect::FillOverlay { fill, .. } => {
+                fill_hatch_pad = fill_hatch_pad.max(hatch_pad(fill));
+            }
+            SfxBlendEffect::OuterGlow { spread_px, blur_px, .. } => {
+                stroke_pad += f64::from((*spread_px).max(0.0)) + f64::from((*blur_px).max(0.0)) * 2.5;
+            }
+            SfxBlendEffect::DropShadow { angle_deg, distance_px, blur_px, .. } => {
+                let rad = f64::from(*angle_deg).to_radians();
+                let dx = rad.cos() * f64::from((*distance_px).max(0.0));
+                let dy = rad.sin() * f64::from((*distance_px).max(0.0));
+                let b = f64::from((*blur_px).max(0.0)) * 2.5;
+                min_dx = min_dx.min(dx - b);
+                max_dx = max_dx.max(dx + b);
+                min_dy = min_dy.min(dy - b);
+                max_dy = max_dy.max(dy + b);
+            }
+            SfxBlendEffect::Bevel { .. } | SfxBlendEffect::InnerShadow { .. } | SfxBlendEffect::InnerGlow { .. } => {}
+        }
+    }
+    stroke_pad += fill_hatch_pad;
 
     if data.vector_shadow.enabled {
         let off = data.vector_shadow.offset_px();
@@ -676,7 +719,7 @@ fn eval_fill_rgba(fill: &SfxFillSource, rect: Rect) -> Vec<[f32; 4]> {
     let n = rect.width() as usize * rect.height() as usize;
     match fill {
         SfxFillSource::None => vec![[0.0; 4]; n],
-        SfxFillSource::Solid { color } => vec![color_rgba(*color); n],
+        SfxFillSource::Solid { color } | SfxFillSource::DryBrush { color, .. } => vec![color_rgba(*color); n],
         SfxFillSource::ShtackHatch { spec } => vec![color_rgba(spec.color); n],
         SfxFillSource::Gradient { start, end, angle_deg } => {
             let s_rgb = start.to_rgb();
@@ -725,7 +768,23 @@ fn blend_channel_rgb(b: f32, s: f32, mode: SfxChannelBlend) -> f32 {
     match mode {
         SfxChannelBlend::Normal | SfxChannelBlend::Knockout => s,
         SfxChannelBlend::Multiply => b * s,
+        SfxChannelBlend::ColorBurn => {
+            if s <= 1e-6 {
+                0.0
+            } else {
+                1.0 - ((1.0 - b) / s).min(1.0)
+            }
+        }
+        SfxChannelBlend::Darken => b.min(s),
         SfxChannelBlend::Screen => 1.0 - (1.0 - b) * (1.0 - s),
+        SfxChannelBlend::ColorDodge => {
+            if s >= 1.0 - 1e-6 {
+                1.0
+            } else {
+                (b / (1.0 - s)).min(1.0)
+            }
+        }
+        SfxChannelBlend::Lighten => b.max(s),
         SfxChannelBlend::Overlay => {
             if b < 0.5 {
                 2.0 * b * s
@@ -733,9 +792,23 @@ fn blend_channel_rgb(b: f32, s: f32, mode: SfxChannelBlend) -> f32 {
                 1.0 - 2.0 * (1.0 - b) * (1.0 - s)
             }
         }
-        SfxChannelBlend::Darken => b.min(s),
-        SfxChannelBlend::Lighten => b.max(s),
+        SfxChannelBlend::SoftLight => {
+            if s <= 0.5 {
+                b - (1.0 - 2.0 * s) * b * (1.0 - b)
+            } else {
+                let d = if b <= 0.25 { ((16.0 * b - 12.0) * b + 4.0) * b } else { b.sqrt() };
+                b + (2.0 * s - 1.0) * (d - b)
+            }
+        }
+        SfxChannelBlend::HardLight => {
+            if s < 0.5 {
+                2.0 * b * s
+            } else {
+                1.0 - 2.0 * (1.0 - b) * (1.0 - s)
+            }
+        }
         SfxChannelBlend::Difference => (b - s).abs(),
+        SfxChannelBlend::Exclusion => b + s - 2.0 * b * s,
     }
 }
 
@@ -994,6 +1067,35 @@ fn proxy_scaled_data(data: &SfxData, scale: f64) -> SfxData {
             }
             SfxStylePass::InnerGlow { width_px, .. } => *width_px = px(*width_px),
             SfxStylePass::NegativeInvert { .. } => {}
+        }
+    }
+    let scale_fill_px = |fill: &mut SfxFillSource| {
+        if let SfxFillSource::DryBrush { spec, .. } = fill {
+            spec.lic_length_px = px(spec.lic_length_px);
+        }
+    };
+    scale_fill_px(&mut out.fill);
+    if let Some(sec) = &mut out.blending.secondary_fill {
+        scale_fill_px(sec);
+    }
+    for fx in &mut out.blending.effects {
+        match fx {
+            SfxBlendEffect::Bevel { depth_px, .. } => *depth_px = px(*depth_px).max(1.0),
+            SfxBlendEffect::Stroke { width_px, fill, .. } => {
+                *width_px = px(*width_px);
+                scale_fill_px(fill);
+            }
+            SfxBlendEffect::InnerShadow { distance_px, blur_px, .. }
+            | SfxBlendEffect::DropShadow { distance_px, blur_px, .. } => {
+                *distance_px = px(*distance_px);
+                *blur_px = px(*blur_px);
+            }
+            SfxBlendEffect::InnerGlow { width_px, .. } => *width_px = px(*width_px),
+            SfxBlendEffect::FillOverlay { fill, .. } => scale_fill_px(fill),
+            SfxBlendEffect::OuterGlow { spread_px, blur_px, .. } => {
+                *spread_px = px(*spread_px);
+                *blur_px = px(*blur_px);
+            }
         }
     }
     out
@@ -2018,8 +2120,10 @@ pub struct SfxFlowNeedleHandle {
     pub glyph_index: u16,
     /// Document-space position of the stroke endpoint.
     pub end_doc: [f64; 2],
-    /// Unit outgoing needle direction in document space.
+    /// Effective outgoing unit needle direction in document space (includes `angle_offset_deg`).
     pub dir: [f64; 2],
+    /// Original unrotated base outgoing unit direction (used as the stable override key).
+    pub base_dir: [f64; 2],
     /// Normalized `[u, v]` inside the glyph's warped bounding box (invariant to move/resize).
     pub uv: [f32; 2],
     /// Effective needle state after applying automatic rules + any user override.
@@ -2028,6 +2132,12 @@ pub struct SfxFlowNeedleHandle {
     pub overridden: bool,
     /// Automatic default state before user overrides (toggling back clears the override).
     pub default_enabled: bool,
+    /// User-dragged angle offset relative to `base_dir` in degrees (`-165..=165`).
+    pub angle_offset_deg: f32,
+    /// User-dragged length multiplier (`0.15..=3.0`, default `1.0`).
+    pub length_scale: f32,
+    /// Baseline document-space needle reach (px) before `length_scale`, for tip handle placement.
+    pub base_needle_px: f64,
 }
 
 /// Per-glyph context for stroke-flow and Ukiyo-e brush synthesis.
@@ -2094,7 +2204,26 @@ fn flow_end_default_enabled(
     }
 }
 
-/// Resolves `(effective_enabled, default_enabled, is_overridden, uv)` for one open stroke endpoint.
+#[derive(Clone, Copy)]
+struct ResolvedFlowEnd {
+    enabled: bool,
+    default_enabled: bool,
+    overridden: bool,
+    uv: [f32; 2],
+    angle_offset_deg: f32,
+    length_scale: f32,
+}
+
+#[inline]
+fn rotate_unit_dir(dir: (f64, f64), angle_deg: f32) -> (f64, f64) {
+    if angle_deg.abs() <= 1e-4 {
+        return dir;
+    }
+    let (s, c) = f64::from(angle_deg).to_radians().sin_cos();
+    (dir.0 * c - dir.1 * s, dir.0 * s + dir.1 * c)
+}
+
+/// Resolves effective state + angle/length overrides for one open stroke endpoint.
 fn resolve_flow_end(
     kind: FlowEndKind,
     spec: &SfxShtackFillSpec,
@@ -2102,14 +2231,29 @@ fn resolve_flow_end(
     dir: (f64, f64),
     r_end: f64,
     gctx: &FlowGlyphCtx<'_>,
-) -> (bool, bool, bool, [f32; 2]) {
+) -> ResolvedFlowEnd {
     let uv = gctx.normalized_uv(end_pt);
     let default_enabled = flow_end_default_enabled(kind, spec.flow_overshoot, end_pt, dir, r_end, gctx);
     let dir_f = [dir.0 as f32, dir.1 as f32];
     if let Some(idx) = spec.find_flow_override_idx(gctx.glyph_index, uv, dir_f) {
-        (spec.flow_overrides[idx].enabled, default_enabled, true, uv)
+        let ov = spec.flow_overrides[idx];
+        ResolvedFlowEnd {
+            enabled: ov.enabled,
+            default_enabled,
+            overridden: true,
+            uv,
+            angle_offset_deg: ov.angle_offset_deg.clamp(-165.0, 165.0),
+            length_scale: ov.length_scale.clamp(0.15, 3.0),
+        }
     } else {
-        (default_enabled, default_enabled, false, uv)
+        ResolvedFlowEnd {
+            enabled: default_enabled,
+            default_enabled,
+            overridden: false,
+            uv,
+            angle_offset_deg: 0.0,
+            length_scale: 1.0,
+        }
     }
 }
 
@@ -2137,22 +2281,32 @@ pub fn extract_sfx_flow_handles(geom: &PreparedSfx, spec: &SfxShtackFillSpec) ->
             if st.is_dot || st.closed || st.pts.len() < 2 {
                 continue;
             }
+            let seg_len: f64 = st.pts.windows(2).map(|w| (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1)).sum();
+            let r_med = median_flow_radius(&st.pts);
+            let needle_px = gh * (f64::from(spec.overshoot_pct).clamp(0.0, 45.0).max(14.0) / 100.0);
+            let stub_scale = (seg_len / (r_med * 2.2).max(1.0)).clamp(0.25, 1.0);
+            let base_needle_px = (needle_px * stub_scale).min(seg_len * 0.85 + gh * 0.14).max(12.0);
+
             let first = st.pts[0];
             let second = st.pts[1];
             let d0 = (first.0 - second.0, first.1 - second.1);
             let l0 = d0.0.hypot(d0.1);
             if st.start_kind != FlowEndKind::ShortBridge && l0 > 1e-4 {
                 let t0 = (d0.0 / l0, d0.1 / l0);
-                let (enabled, default_enabled, overridden, uv) =
-                    resolve_flow_end(st.start_kind, spec, (first.0, first.1), t0, first.2, &gctx);
+                let res = resolve_flow_end(st.start_kind, spec, (first.0, first.1), t0, first.2, &gctx);
+                let eff = rotate_unit_dir(t0, res.angle_offset_deg);
                 handles.push(SfxFlowNeedleHandle {
                     glyph_index: gctx.glyph_index,
                     end_doc: [first.0, first.1],
-                    dir: [t0.0, t0.1],
-                    uv,
-                    enabled,
-                    overridden,
-                    default_enabled,
+                    dir: [eff.0, eff.1],
+                    base_dir: [t0.0, t0.1],
+                    uv: res.uv,
+                    enabled: res.enabled,
+                    overridden: res.overridden,
+                    default_enabled: res.default_enabled,
+                    angle_offset_deg: res.angle_offset_deg,
+                    length_scale: res.length_scale,
+                    base_needle_px,
                 });
             }
             let last = st.pts[st.pts.len() - 1];
@@ -2161,16 +2315,20 @@ pub fn extract_sfx_flow_handles(geom: &PreparedSfx, spec: &SfxShtackFillSpec) ->
             let l1 = d1.0.hypot(d1.1);
             if st.end_kind != FlowEndKind::ShortBridge && l1 > 1e-4 {
                 let t1 = (d1.0 / l1, d1.1 / l1);
-                let (enabled, default_enabled, overridden, uv) =
-                    resolve_flow_end(st.end_kind, spec, (last.0, last.1), t1, last.2, &gctx);
+                let res = resolve_flow_end(st.end_kind, spec, (last.0, last.1), t1, last.2, &gctx);
+                let eff = rotate_unit_dir(t1, res.angle_offset_deg);
                 handles.push(SfxFlowNeedleHandle {
                     glyph_index: gctx.glyph_index,
                     end_doc: [last.0, last.1],
-                    dir: [t1.0, t1.1],
-                    uv,
-                    enabled,
-                    overridden,
-                    default_enabled,
+                    dir: [eff.0, eff.1],
+                    base_dir: [t1.0, t1.1],
+                    uv: res.uv,
+                    enabled: res.enabled,
+                    overridden: res.overridden,
+                    default_enabled: res.default_enabled,
+                    angle_offset_deg: res.angle_offset_deg,
+                    length_scale: res.length_scale,
+                    base_needle_px,
                 });
             }
         }
@@ -2207,7 +2365,6 @@ fn build_flow_open_stroke_polys(
     let needle_px = gh * (f64::from(spec.overshoot_pct).clamp(0.0, 45.0) / 100.0);
     let stub_scale = (seg_len / (r_med * 2.2).max(1.0)).clamp(0.25, 1.0);
     let max_needle = (needle_px * stub_scale).min(seg_len * 0.85 + gh * 0.14);
-    let samples_n = ((seg_len + max_needle * 2.0) / if gh < 130.0 { 4.0 } else { 2.4 }).round().clamp(14.0, 72.0) as usize;
 
     let first = pts[0];
     let second = pts[1];
@@ -2221,8 +2378,15 @@ fn build_flow_open_stroke_polys(
     let l1 = d1.0.hypot(d1.1).max(1e-6);
     let t1 = (d1.0 / l1, d1.1 / l1);
 
-    let (allow_start, _, _, _) = resolve_flow_end(stroke.start_kind, spec, (first.0, first.1), t0, first.2, gctx);
-    let (allow_end, _, _, _) = resolve_flow_end(stroke.end_kind, spec, (last.0, last.1), t1, last.2, gctx);
+    let res0 = resolve_flow_end(stroke.start_kind, spec, (first.0, first.1), t0, first.2, gctx);
+    let res1 = resolve_flow_end(stroke.end_kind, spec, (last.0, last.1), t1, last.2, gctx);
+    let shoot0 = rotate_unit_dir(t0, res0.angle_offset_deg);
+    let shoot1 = rotate_unit_dir(t1, res1.angle_offset_deg);
+    let fallback_needle = (gh * 0.14 * stub_scale).min(seg_len * 0.85 + gh * 0.14);
+    let eff_needle0 = if res0.overridden && res0.enabled { max_needle.max(fallback_needle) } else { max_needle };
+    let eff_needle1 = if res1.overridden && res1.enabled { max_needle.max(fallback_needle) } else { max_needle };
+    let max_reach = (eff_needle0 * f64::from(res0.length_scale)).max(eff_needle1 * f64::from(res1.length_scale));
+    let samples_n = ((seg_len + max_reach * 2.0) / if gh < 130.0 { 4.0 } else { 2.4 }).round().clamp(14.0, 96.0) as usize;
 
     let mut polys = Vec::with_capacity(passes);
     for k in 0..passes {
@@ -2252,21 +2416,37 @@ fn build_flow_open_stroke_polys(
                 0.92 + 0.42 * rv
             } else if k == core_count {
                 0.55 + 0.45 * rv
-            } else if k == 1 && spec.overshoot_pct >= 10.0 {
+            } else if k == 1 && (spec.overshoot_pct >= 10.0 || res0.overridden || res1.overridden) {
                 0.28 + 0.34 * rv
             } else {
                 0.0
             }
         };
-        let o0 = if allow_start && max_needle > 0.1 { max_needle * needle_mult(r2) } else { 0.0 };
-        let o1 = if allow_end && max_needle > 0.1 { max_needle * needle_mult(r3) } else { 0.0 };
+        let o0 = if res0.enabled && eff_needle0 > 0.1 {
+            eff_needle0 * f64::from(res0.length_scale) * needle_mult(r2)
+        } else {
+            0.0
+        };
+        let o1 = if res1.enabled && eff_needle1 > 0.1 {
+            eff_needle1 * f64::from(res1.length_scale) * needle_mult(r3)
+        } else {
+            0.0
+        };
 
         let mut ext = pts.clone();
         if o0 > 0.1 {
-            ext.insert(0, (first.0 + t0.0 * o0, first.1 + t0.1 * o0, first.2 * 0.72));
+            if res0.angle_offset_deg.abs() > 2.0 {
+                let p_mid = (first.0 + t0.0 * (o0 * 0.14), first.1 + t0.1 * (o0 * 0.14), first.2 * 0.88);
+                ext.insert(0, p_mid);
+            }
+            ext.insert(0, (first.0 + shoot0.0 * o0, first.1 + shoot0.1 * o0, first.2 * 0.72));
         }
         if o1 > 0.1 {
-            ext.push((last.0 + t1.0 * o1, last.1 + t1.1 * o1, last.2 * 0.72));
+            if res1.angle_offset_deg.abs() > 2.0 {
+                let p_mid = (last.0 + t1.0 * (o1 * 0.14), last.1 + t1.1 * (o1 * 0.14), last.2 * 0.88);
+                ext.push(p_mid);
+            }
+            ext.push((last.0 + shoot1.0 * o1, last.1 + shoot1.1 * o1, last.2 * 0.72));
         }
         let base = catmull_rom_resample_flow(&ext, samples_n);
         if base.len() < 2 {
@@ -3761,15 +3941,32 @@ fn sfx_stage_key(data: &SfxData, dpi: f32, preview: bool) -> Vec<u8> {
     k.finish()
 }
 
-/// True when neither primary fill, secondary blended fill, nor dry brush paints the glyph interior.
+/// True when neither primary fill, secondary blended fill, dry brush, nor any interior Blending FX
+/// paints the glyph interior.
 fn sfx_has_hollow_interior(data: &SfxData) -> bool {
-    matches!(data.fill, SfxFillSource::None) && !data.dry_brush.enabled && data.blending.secondary_fill.is_none()
+    matches!(data.fill, SfxFillSource::None)
+        && !data.dry_brush.enabled
+        && data.blending.secondary_fill.is_none()
+        && !data.blending.effects.iter().any(|fx| {
+            fx.enabled()
+                && matches!(
+                    fx,
+                    SfxBlendEffect::FillOverlay { .. }
+                        | SfxBlendEffect::InnerShadow { .. }
+                        | SfxBlendEffect::InnerGlow { .. }
+                        | SfxBlendEffect::Bevel { .. }
+                        | SfxBlendEffect::Stroke { position: SfxStrokePosition::Inside | SfxStrokePosition::Center, .. }
+                )
+        })
 }
 
-/// Rasterized coverage rect with halo / vector shadow / legacy style padding removed, so it
-/// stays identical while those cheap passes are being dragged.
+/// Rasterized coverage rect with halo / vector shadow / legacy style / blending FX padding removed,
+/// so it stays identical while those cheap passes (or flow needle drags) are edited interactively.
 fn cache_bounds_for(data: &SfxData, geom: &PreparedSfx) -> Rect {
     let mut d = data.clone();
+    d.fill = SfxFillSource::None;
+    d.blending.secondary_fill = None;
+    d.blending.effects.clear();
     d.line_effect.halo_width_px = 0.0;
     d.vector_shadow.enabled = false;
     d.styles.clear();
@@ -3958,6 +4155,15 @@ fn render_fill_channel(
             composite_solid_blend(dst, &cov, color_rgba(spec.color), opacity, blend);
             t.elapsed().as_secs_f64() * 1000.0
         }
+        SfxFillSource::DryBrush { color, spec } => {
+            let t = Instant::now();
+            let mut cov = ctx.base_cov.to_vec();
+            let mut db = *spec;
+            db.enabled = true;
+            apply_dry_brush_mask(&mut cov, ctx.geom, ctx.bounds, w, h, &db, ctx.is_binary);
+            composite_solid_blend(dst, &cov, color_rgba(*color), opacity, blend);
+            t.elapsed().as_secs_f64() * 1000.0
+        }
         SfxFillSource::Solid { .. } | SfxFillSource::Gradient { .. } | SfxFillSource::Screentone { .. } => {
             let mut dry_ms = 0.0_f64;
             let mut cov = ctx.base_cov.to_vec();
@@ -3971,6 +4177,294 @@ fn render_fill_channel(
             dry_ms
         }
     }
+}
+
+/// Bilinear pixel shift of a coverage mask by `(dx, dy)` pixels (used by DropShadow & InnerShadow).
+fn shift_coverage(cov: &[f32], w: usize, h: usize, dx: f32, dy: f32) -> Vec<f32> {
+    let mut out = vec![0.0_f32; w * h];
+    if w == 0 || h == 0 || cov.len() < w * h {
+        return out;
+    }
+    let wi = w as isize;
+    let hi = h as isize;
+    for y in 0..h {
+        let sy = y as f32 - dy;
+        let y0 = sy.floor() as isize;
+        let fy = sy - y0 as f32;
+        for x in 0..w {
+            let sx = x as f32 - dx;
+            let x0 = sx.floor() as isize;
+            let fx = sx - x0 as f32;
+            let sample = |ix: isize, iy: isize| -> f32 {
+                if ix >= 0 && iy >= 0 && ix < wi && iy < hi {
+                    cov[iy as usize * w + ix as usize]
+                } else {
+                    0.0
+                }
+            };
+            let v00 = sample(x0, y0);
+            let v10 = sample(x0 + 1, y0);
+            let v01 = sample(x0, y0 + 1);
+            let v11 = sample(x0 + 1, y0 + 1);
+            out[y * w + x] = (v00 * (1.0 - fx) * (1.0 - fy) + v10 * fx * (1.0 - fy) + v01 * (1.0 - fx) * fy + v11 * fx * fy).clamp(0.0, 1.0);
+        }
+    }
+    out
+}
+
+/// Builds a combined silhouette mask for outer effects (DropShadow / OuterGlow / Outside Stroke).
+fn union_silhouette_cov(face_cov: Option<&[f32]>, line_cov: Option<&[f32]>, n: usize) -> Vec<f32> {
+    let mut u = face_cov.map_or_else(|| vec![0.0_f32; n], <[f32]>::to_vec);
+    if let Some(lc) = line_cov {
+        for (dst, &l) in u.iter_mut().zip(lc.iter()) {
+            *dst = dst.max(l);
+        }
+    }
+    u
+}
+
+/// Stage 0B: Photoshop-style outer effects rendered BEHIND Halo & letters (`DropShadow`, `OuterGlow`).
+fn render_blend_effects_behind(
+    effects: &[SfxBlendEffect],
+    union_cov: &[f32],
+    w: usize,
+    h: usize,
+    dst: &mut [[f32; 4]],
+) {
+    for fx in effects.iter().rev() {
+        if !fx.enabled() {
+            continue;
+        }
+        match fx {
+            SfxBlendEffect::DropShadow { angle_deg, distance_px, blur_px, color, blend, opacity, .. } => {
+                if *opacity <= 1e-4 {
+                    continue;
+                }
+                let rad = angle_deg.to_radians();
+                let shifted = shift_coverage(union_cov, w, h, rad.cos() * *distance_px, rad.sin() * *distance_px);
+                let scov = if *blur_px > 0.1 { blur_coverage(&shifted, w, h, *blur_px) } else { shifted };
+                composite_solid_blend(dst, &scov, color_rgba(*color), *opacity, *blend);
+            }
+            SfxBlendEffect::OuterGlow { spread_px, blur_px, color, blend, opacity, .. } => {
+                if *opacity <= 1e-4 || (*spread_px <= 0.05 && *blur_px <= 0.05) {
+                    continue;
+                }
+                let expanded = if *spread_px > 0.05 {
+                    dilate_coverage_approx(union_cov, w, h, *spread_px)
+                } else {
+                    union_cov.to_vec()
+                };
+                let gcov = if *blur_px > 0.1 { blur_coverage(&expanded, w, h, *blur_px) } else { expanded };
+                composite_solid_blend(dst, &gcov, color_rgba(*color), *opacity, *blend);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Stage 1B: Outside Strokes from `SfxBlending::effects` (rendered over Halo, just outside letters).
+fn render_blend_outside_strokes(
+    effects: &[SfxBlendEffect],
+    union_cov: &[f32],
+    ctx: &FillPassCtx<'_>,
+    dst: &mut [[f32; 4]],
+) -> f64 {
+    let w = ctx.bounds.width() as usize;
+    let h = ctx.bounds.height() as usize;
+    let mut ms = 0.0_f64;
+    for fx in effects.iter().rev() {
+        if let SfxBlendEffect::Stroke { enabled: true, width_px, position: SfxStrokePosition::Outside, fill, blend, opacity, .. } = fx
+            && *width_px > 0.05
+            && *opacity > 1e-4
+        {
+            let dilated = dilate_coverage_approx(union_cov, w, h, *width_px);
+            let ring_cov: Vec<f32> = dilated.iter().zip(union_cov.iter()).map(|(&d, &u)| (d - u).clamp(0.0, 1.0)).collect();
+            let sctx = FillPassCtx { geom: ctx.geom, base_cov: &ring_cov, bounds: ctx.bounds, is_binary: ctx.is_binary };
+            ms += render_fill_channel(fill, &sctx, None, *opacity, *blend, dst);
+        }
+    }
+    ms
+}
+
+struct BevelParams {
+    depth_px: f32,
+    angle_deg: f32,
+    hi_rgba: [f32; 4],
+    hi_op: f32,
+    sh_rgba: [f32; 4],
+    sh_op: f32,
+}
+
+/// Crisp SDF-based bevel highlight & shadow clipped to `face_cov`.
+fn apply_bevel_effect(sdf: &[f32], face_cov: &[f32], w: usize, h: usize, p: BevelParams, dst: &mut [[f32; 4]]) {
+    if w < 3 || h < 3 || p.depth_px <= 0.1 {
+        return;
+    }
+    let rad = p.angle_deg.to_radians();
+    let (lx, ly) = (rad.cos(), rad.sin());
+    let depth = p.depth_px.max(1.0);
+    for y in 1..(h - 1) {
+        for x in 1..(w - 1) {
+            let i = y * w + x;
+            let fc = face_cov[i];
+            if fc <= 0.02 || sdf[i] >= depth + 1.0 {
+                continue;
+            }
+            let gx = sdf[i + 1] - sdf[i - 1];
+            let gy = sdf[i + w] - sdf[i - w];
+            let mag = gx.hypot(gy);
+            if mag <= 1e-4 {
+                continue;
+            }
+            let ramp = ((depth + 0.5 - sdf[i]) / depth).clamp(0.0, 1.0);
+            let ndotl = (gx / mag) * lx + (gy / mag) * ly;
+            if ndotl > 0.05 && p.hi_op > 1e-4 {
+                let cov = (ndotl * ramp * fc).clamp(0.0, 1.0);
+                composite_pixel_blend(&mut dst[i], p.hi_rgba, cov, p.hi_op, SfxChannelBlend::Screen);
+            } else if ndotl < -0.05 && p.sh_op > 1e-4 {
+                let cov = ((-ndotl) * ramp * fc).clamp(0.0, 1.0);
+                composite_pixel_blend(&mut dst[i], p.sh_rgba, cov, p.sh_op, SfxChannelBlend::Multiply);
+            }
+        }
+    }
+}
+
+fn render_inside_or_center_stroke(
+    fx: &SfxBlendEffect,
+    ctx: &FillPassCtx<'_>,
+    union_cov: &[f32],
+    cached_sdf: &mut Option<Vec<f32>>,
+    dst: &mut [[f32; 4]],
+) -> f64 {
+    let w = ctx.bounds.width() as usize;
+    let h = ctx.bounds.height() as usize;
+    match fx {
+        SfxBlendEffect::Stroke { width_px, position: SfxStrokePosition::Inside, fill, blend, opacity, .. }
+            if *width_px > 0.05 && *opacity > 1e-4 =>
+        {
+            let sdf = cached_sdf.get_or_insert_with(|| compute_mask_sdf(ctx.base_cov, w, h));
+            let ring_cov: Vec<f32> = ctx.base_cov.iter().zip(sdf.iter()).map(|(&bc, &d)| ((width_px + 0.5 - d).clamp(0.0, 1.0)) * bc).collect();
+            let sctx = FillPassCtx { geom: ctx.geom, base_cov: &ring_cov, bounds: ctx.bounds, is_binary: ctx.is_binary };
+            render_fill_channel(fill, &sctx, None, *opacity, *blend, dst)
+        }
+        SfxBlendEffect::Stroke { width_px, position: SfxStrokePosition::Center, fill, blend, opacity, .. }
+            if *width_px > 0.05 && *opacity > 1e-4 =>
+        {
+            let half = (*width_px * 0.5).max(0.5);
+            let dilated = dilate_coverage_approx(union_cov, w, h, half);
+            let u_sdf = compute_mask_sdf(union_cov, w, h);
+            let ring_cov: Vec<f32> = dilated
+                .iter()
+                .zip(union_cov.iter().zip(u_sdf.iter()))
+                .map(|(&dl, (&uc, &d))| (dl - uc).clamp(0.0, 1.0).max(((half + 0.5 - d).clamp(0.0, 1.0)) * uc))
+                .collect();
+            let sctx = FillPassCtx { geom: ctx.geom, base_cov: &ring_cov, bounds: ctx.bounds, is_binary: ctx.is_binary };
+            render_fill_channel(fill, &sctx, None, *opacity, *blend, dst)
+        }
+        _ => 0.0,
+    }
+}
+
+/// Stage 2B: Photoshop-style interior & overlay effects rendered OVER primary/secondary fill.
+fn render_blend_effects_over(effects: &[SfxBlendEffect], ctx: &FillPassCtx<'_>, union_cov: &[f32], dst: &mut [[f32; 4]]) -> f64 {
+    let w = ctx.bounds.width() as usize;
+    let h = ctx.bounds.height() as usize;
+    let mut cached_sdf: Option<Vec<f32>> = None;
+    let mut ms = 0.0_f64;
+
+    for fx in effects.iter().rev() {
+        if !fx.enabled() {
+            continue;
+        }
+        match fx {
+            SfxBlendEffect::FillOverlay { fill, blend, opacity, .. } => {
+                ms += render_fill_channel(fill, ctx, None, *opacity, *blend, dst);
+            }
+            SfxBlendEffect::Stroke { position: SfxStrokePosition::Inside | SfxStrokePosition::Center, .. } => {
+                ms += render_inside_or_center_stroke(fx, ctx, union_cov, &mut cached_sdf, dst);
+            }
+            SfxBlendEffect::InnerShadow { angle_deg, distance_px, blur_px, color, blend, opacity, .. } if *opacity > 1e-4 => {
+                let rad = angle_deg.to_radians();
+                let shifted = shift_coverage(ctx.base_cov, w, h, rad.cos() * *distance_px, rad.sin() * *distance_px);
+                let inv: Vec<f32> = shifted.iter().map(|&v| (1.0 - v).clamp(0.0, 1.0)).collect();
+                let blurred = if *blur_px > 0.1 { blur_coverage(&inv, w, h, *blur_px) } else { inv };
+                let scov: Vec<f32> = blurred.iter().zip(ctx.base_cov.iter()).map(|(&b, &fc)| b * fc).collect();
+                composite_solid_blend(dst, &scov, color_rgba(*color), *opacity, *blend);
+            }
+            SfxBlendEffect::InnerGlow { width_px, color, blend, opacity, .. } if *width_px > 0.05 && *opacity > 1e-4 => {
+                let inner_blur = blur_coverage(ctx.base_cov, w, h, *width_px);
+                let gcov: Vec<f32> = ctx.base_cov.iter().zip(inner_blur.iter()).map(|(&bc, &ib)| (((1.0 - ib) * 2.0).clamp(0.0, 1.0)) * bc).collect();
+                composite_solid_blend(dst, &gcov, color_rgba(*color), *opacity, *blend);
+            }
+            SfxBlendEffect::Bevel { depth_px, angle_deg, highlight_color, highlight_opacity, shadow_color, shadow_opacity, .. } => {
+                let sdf = cached_sdf.get_or_insert_with(|| compute_mask_sdf(ctx.base_cov, w, h));
+                let bp = BevelParams {
+                    depth_px: *depth_px,
+                    angle_deg: *angle_deg,
+                    hi_rgba: color_rgba(*highlight_color),
+                    hi_op: *highlight_opacity,
+                    sh_rgba: color_rgba(*shadow_color),
+                    sh_op: *shadow_opacity,
+                };
+                apply_bevel_effect(sdf, ctx.base_cov, w, h, bp, dst);
+            }
+            _ => {}
+        }
+    }
+    ms
+}
+
+struct OuterFxResult {
+    primary_shtack_cov: Option<Vec<f32>>,
+    union_cov: Option<Vec<f32>>,
+    halo_ms: f64,
+    extra_dry_ms: f64,
+}
+
+/// Stage 1: precomputes primary Shtack coverage when outer passes need it, renders behind-halo
+/// Blending FX (`DropShadow`, `OuterGlow`), renders the Halo, and paints `Outside` strokes.
+fn render_outer_fx_and_halo(
+    data: &SfxData,
+    ctx: &FillPassCtx<'_>,
+    line_cov: Option<&[f32]>,
+    hollow_interior: bool,
+    under_rgba: &mut [[f32; 4]],
+) -> OuterFxResult {
+    let le = &data.line_effect;
+    let w = ctx.bounds.width() as usize;
+    let h = ctx.bounds.height() as usize;
+    let n = w.saturating_mul(h);
+    let mut extra_dry_ms = 0.0_f64;
+
+    let has_outer_fx = data.blending.effects.iter().any(|fx| {
+        fx.enabled()
+            && matches!(
+                fx,
+                SfxBlendEffect::DropShadow { .. }
+                    | SfxBlendEffect::OuterGlow { .. }
+                    | SfxBlendEffect::Stroke { position: SfxStrokePosition::Outside | SfxStrokePosition::Center, .. }
+            )
+    });
+    let primary_shtack_cov = if let SfxFillSource::ShtackHatch { spec } = &data.fill
+        && ((le.halo_width_px > 0.05 && data.blending.halo_opacity > 1e-4) || has_outer_fx)
+    {
+        let t = Instant::now();
+        let cov = render_shtack_fill_coverage(ctx.geom, ctx.base_cov, ctx.bounds, spec);
+        extra_dry_ms += t.elapsed().as_secs_f64() * 1000.0;
+        Some(cov)
+    } else {
+        None
+    };
+    let halo_face = primary_shtack_cov.as_deref().or((!hollow_interior).then_some(ctx.base_cov));
+    let union_cov = has_outer_fx.then(|| union_silhouette_cov(halo_face, line_cov, n));
+    if let Some(uc) = union_cov.as_deref() {
+        render_blend_effects_behind(&data.blending.effects, uc, w, h, under_rgba);
+    }
+    let halo_ms = render_halo_pass(data, halo_face, line_cov, ctx.bounds, under_rgba);
+    if let Some(uc) = union_cov.as_deref() {
+        extra_dry_ms += render_blend_outside_strokes(&data.blending.effects, uc, ctx, under_rgba);
+    }
+    OuterFxResult { primary_shtack_cov, union_cov, halo_ms, extra_dry_ms }
 }
 
 /// Renders an [`SfxData`] non-destructively into offscreen document [`Surface`]`(s)`.
@@ -4098,27 +4592,13 @@ pub fn render_sfx_with_options(data: &SfxData, engine: &mut TextEngine, format: 
     render_extrude_passes(data, &geom, bounds, &mut under_rgba);
     render_stroke_passes(data, &geom, bounds, &mut under_rgba);
 
-    // Stage 1 (Pass 1 — Halo / Ореол behind ALL letters; hollow letters dilate around outline only;
-    // ShtackHatch fills precompute once so protruding SAI needles receive the round halo too).
-    let primary_shtack_cov: Option<Vec<f32>> = if let SfxFillSource::ShtackHatch { spec } = &data.fill
-        && le.halo_width_px > 0.05
-        && data.blending.halo_opacity > 1e-4
-    {
-        let t = Instant::now();
-        let cov = render_shtack_fill_coverage(&geom, &face_cov, bounds, spec);
-        dry_ms += t.elapsed().as_secs_f64() * 1000.0;
-        Some(cov)
-    } else {
-        None
-    };
-    let halo_face = if let Some(sc) = primary_shtack_cov.as_deref() {
-        Some(sc)
-    } else {
-        (!hollow_interior).then_some(face_cov.as_slice())
-    };
-    let halo_ms = render_halo_pass(data, halo_face, line_cov.as_deref(), bounds, &mut under_rgba);
+    // Stage 1 (Pass 1 — Outer Blending FX + Halo / Ореол + Outside Strokes)
+    let stage1_ctx = FillPassCtx { geom: &geom, base_cov: &face_cov, bounds, is_binary: le.style == SfxLineStyle::OneBit };
+    let OuterFxResult { primary_shtack_cov, union_cov, halo_ms, extra_dry_ms } =
+        render_outer_fx_and_halo(data, &stage1_ctx, line_cov.as_deref(), hollow_interior, &mut under_rgba);
+    dry_ms += extra_dry_ms;
 
-    // Stage 2 (Pass 2 — Independent Fill 1, Secondary Blended Fill 2 & Stylized Line)
+    // Stage 2 (Pass 2 — Independent Fill 1, Secondary Blended Fill 2, Photoshop FX & Stylized Line)
     apply_grain_distress(data, &mut face_cov, bounds, w);
     let blending = &data.blending;
     let out = if data.has_negative_invert() {
@@ -4164,6 +4644,18 @@ pub fn render_sfx_with_options(data: &SfxData, engine: &mut TextEngine, format: 
         }
         if let Some(sec) = &blending.secondary_fill {
             dry_ms += render_fill_channel(sec, &ctx, None, blending.secondary_opacity, blending.secondary_blend, &mut under_rgba);
+        }
+        if !blending.effects.is_empty() {
+            let fallback_union;
+            let uc = match union_cov.as_deref() {
+                Some(u) => u,
+                None => {
+                    let eff_face = primary_shtack_cov.as_deref().or((!hollow_interior).then_some(face_cov.as_slice()));
+                    fallback_union = union_silhouette_cov(eff_face, line_cov.as_deref(), n);
+                    &fallback_union
+                }
+            };
+            dry_ms += render_blend_effects_over(&blending.effects, &ctx, uc, &mut under_rgba);
         }
         if !hollow_interior {
             render_inner_glow_passes(data, &face_cov, w, h, &mut under_rgba);
@@ -5261,5 +5753,171 @@ mod tests {
         };
         assert!(left_ink(&s_on, b_on) > 20, "baseline B must have left-protruding needles");
         assert_eq!(left_ink(&s_off, b_off), 0, "disabling all left handles must eliminate left needles completely");
+    }
+
+    /// Steering a flow needle's angle and length via `set_flow_override_vector` physically rotates
+    /// and extends the rendered needle in `StrokeFlow` mode without clipping its bounds.
+    #[test]
+    fn flow_needle_angle_and_length_override_steers_rendered_needle() {
+        let mut engine = TextEngine::new();
+        let mut base = SfxData {
+            text: "B".to_owned(),
+            size_pt: 220.0,
+            origin: [80.0, 80.0],
+            fill: SfxFillSource::ShtackHatch {
+                spec: SfxShtackFillSpec {
+                    mode: SfxShtackFillMode::StrokeFlow,
+                    flow_overshoot: SfxShtackFlowOvershoot::OuterJunctions,
+                    overshoot_pct: 20.0,
+                    dryness_pct: 0.0,
+                    ..SfxShtackFillSpec::default()
+                },
+            },
+            ..SfxData::default()
+        };
+        base.line_effect.style = SfxLineStyle::Clean;
+        base.line_effect.line_width_px = 0.0;
+        base.line_effect.halo_width_px = 0.0;
+
+        let SfxRenderOutput::Single { surface: s_base, bounds: b_base, geom } = render_sfx(&base, &mut engine, PixelFormat::RGBA8, 72.0) else {
+            panic!("expected Single");
+        };
+        let SfxFillSource::ShtackHatch { spec } = &base.fill else { panic!("expected ShtackHatch") };
+        let handles = extract_sfx_flow_handles(&geom, spec);
+        let top_left = handles
+            .iter()
+            .filter(|h| h.enabled && h.base_dir[0] < -0.5)
+            .min_by(|a, b| a.end_doc[1].total_cmp(&b.end_doc[1]))
+            .copied()
+            .expect("expected an enabled left-pointing handle on B");
+
+        let mut steered = base.clone();
+        if let SfxFillSource::ShtackHatch { spec: sp } = &mut steered.fill {
+            sp.set_flow_override_vector(
+                top_left.glyph_index,
+                top_left.uv,
+                [top_left.base_dir[0] as f32, top_left.base_dir[1] as f32],
+                45.0,
+                2.4,
+            );
+        }
+        let SfxRenderOutput::Single { surface: s_steered, bounds: b_steered, .. } = render_sfx(&steered, &mut engine, PixelFormat::RGBA8, 72.0) else {
+            panic!("expected Single");
+        };
+        assert!(b_steered.width() > b_base.width(), "2.4x needle length_scale must expand render bounds");
+        let far_left_ink = |surf: &Surface, b: Rect| -> usize {
+            let mut n = 0;
+            let limit = geom.warped_box[0] - 42.0;
+            for y in b.y0..b.y1 {
+                for x in b.x0..b.x1 {
+                    if (x as f64) < limit && surf.sample_channel(x, y, 3) > 0.35 {
+                        n += 1;
+                    }
+                }
+            }
+            n
+        };
+        assert!(
+            far_left_ink(&s_steered, b_steered) > far_left_ink(&s_base, b_base),
+            "steered 2.4x needle must push ink much farther left than baseline"
+        );
+    }
+
+    /// Photoshop-style Manga Blending FX (`Bevel`, `Stroke`, `InnerShadow`, `FillOverlay(DryBrush)`,
+    /// `OuterGlow`, `DropShadow`) expand bounds appropriately and visibly paint the SFX surface.
+    #[test]
+    fn blending_effects_bevel_inner_shadow_outer_glow_and_dry_overlay_render() {
+        let mut engine = TextEngine::new();
+        let mut plain = SfxData {
+            text: "A".to_owned(),
+            size_pt: 180.0,
+            origin: [60.0, 60.0],
+            fill: SfxFillSource::Solid { color: Color::rgb(0.85, 0.2, 0.2) },
+            ..SfxData::default()
+        };
+        plain.line_effect.style = SfxLineStyle::Clean;
+        plain.line_effect.line_width_px = 0.0;
+        plain.line_effect.halo_width_px = 0.0;
+
+        let SfxRenderOutput::Single { surface: s_plain, bounds: b_plain, .. } = render_sfx(&plain, &mut engine, PixelFormat::RGBA8, 72.0) else {
+            panic!("expected Single");
+        };
+
+        let mut fx_data = plain.clone();
+        fx_data.blending.effects = vec![
+            SfxBlendEffect::Bevel {
+                enabled: true,
+                depth_px: 8.0,
+                angle_deg: 120.0,
+                highlight_color: Color::WHITE,
+                highlight_opacity: 0.9,
+                shadow_color: Color::BLACK,
+                shadow_opacity: 0.9,
+            },
+            SfxBlendEffect::Stroke {
+                enabled: true,
+                width_px: 6.0,
+                position: SfxStrokePosition::Outside,
+                join: SfxLineJoin::Round,
+                fill: SfxFillSource::Solid { color: Color::rgb(0.05, 0.05, 0.85) },
+                blend: SfxChannelBlend::Normal,
+                opacity: 1.0,
+            },
+            SfxBlendEffect::FillOverlay {
+                enabled: true,
+                fill: SfxFillSource::DryBrush {
+                    color: Color::BLACK,
+                    spec: SfxDryBrushSpec { enabled: true, dryness_pct: 45.0, ..SfxDryBrushSpec::default() },
+                },
+                blend: SfxChannelBlend::Multiply,
+                opacity: 0.7,
+            },
+            SfxBlendEffect::InnerShadow {
+                enabled: true,
+                angle_deg: 135.0,
+                distance_px: 6.0,
+                blur_px: 3.0,
+                color: Color::BLACK,
+                blend: SfxChannelBlend::Multiply,
+                opacity: 0.8,
+            },
+            SfxBlendEffect::OuterGlow {
+                enabled: true,
+                spread_px: 4.0,
+                blur_px: 8.0,
+                color: Color::rgb(1.0, 0.95, 0.2),
+                blend: SfxChannelBlend::Screen,
+                opacity: 0.85,
+            },
+            SfxBlendEffect::DropShadow {
+                enabled: true,
+                angle_deg: 45.0,
+                distance_px: 14.0,
+                blur_px: 4.0,
+                color: Color::BLACK,
+                blend: SfxChannelBlend::Multiply,
+                opacity: 0.8,
+            },
+        ];
+
+        let SfxRenderOutput::Single { surface: s_fx, bounds: b_fx, .. } = render_sfx(&fx_data, &mut engine, PixelFormat::RGBA8, 72.0) else {
+            panic!("expected Single");
+        };
+        assert!(b_fx.width() > b_plain.width() + 20 && b_fx.height() > b_plain.height() + 20, "outer FX must expand render bounds");
+        let count_opaque = |surf: &Surface, b: Rect| -> usize {
+            let mut c = 0;
+            for y in b.y0..b.y1 {
+                for x in b.x0..b.x1 {
+                    if surf.sample_channel(x, y, 3) > 0.2 {
+                        c += 1;
+                    }
+                }
+            }
+            c
+        };
+        assert!(
+            count_opaque(&s_fx, b_fx) > count_opaque(&s_plain, b_plain) + 500,
+            "Photoshop Manga FX stack must visibly add stroke, glow, and drop shadow ink"
+        );
     }
 }

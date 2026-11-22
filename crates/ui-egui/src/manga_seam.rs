@@ -379,7 +379,7 @@ mod native {
         app.session.manga.vector_brushes.presets().iter().map(|p| (p.id.clone(), p.name.clone())).collect()
     }
 
-    /// Active SFX layer whose primary or secondary fill uses `SfxFillSource::Screentone`.
+    /// Active SFX layer whose primary fill, secondary fill, or a Blending effect uses `Screentone`.
     fn active_sfx_screentone(app: &PhotocraftApp) -> Option<(BridgeDocId, LayerId, String, SfxData, photocraft_algo::ScreentoneSpec, bool)> {
         let st = app.session.active()?;
         let lid = st.active_layer?;
@@ -391,13 +391,36 @@ mod native {
         if let Some(SfxFillSource::Screentone { spec, .. }) = &sfx.blending.secondary_fill {
             return Some((BridgeDocId(st.doc.id.0), lid, layer.name.clone(), sfx.clone(), spec.clone(), true));
         }
+        for fx in &sfx.blending.effects {
+            match fx {
+                photocraft_doc::sfx::SfxBlendEffect::FillOverlay { enabled: true, fill: SfxFillSource::Screentone { spec, .. }, .. }
+                | photocraft_doc::sfx::SfxBlendEffect::Stroke { enabled: true, fill: SfxFillSource::Screentone { spec, .. }, .. } => {
+                    return Some((BridgeDocId(st.doc.id.0), lid, layer.name.clone(), sfx.clone(), spec.clone(), true));
+                }
+                _ => {}
+            }
+        }
         None
     }
 
     fn apply_sfx_screentone_spec(sfx: &mut SfxData, spec: photocraft_algo::ScreentoneSpec, is_secondary: bool) {
-        let slot = if is_secondary { sfx.blending.secondary_fill.as_mut() } else { Some(&mut sfx.fill) };
-        if let Some(SfxFillSource::Screentone { spec: dst, .. }) = slot {
+        if !is_secondary {
+            if let SfxFillSource::Screentone { spec: dst, .. } = &mut sfx.fill {
+                *dst = spec;
+            }
+        } else if let Some(SfxFillSource::Screentone { spec: dst, .. }) = sfx.blending.secondary_fill.as_mut() {
             *dst = spec;
+        } else {
+            for fx in &mut sfx.blending.effects {
+                match fx {
+                    photocraft_doc::sfx::SfxBlendEffect::FillOverlay { enabled: true, fill: SfxFillSource::Screentone { spec: dst, .. }, .. }
+                    | photocraft_doc::sfx::SfxBlendEffect::Stroke { enabled: true, fill: SfxFillSource::Screentone { spec: dst, .. }, .. } => {
+                        *dst = spec;
+                        break;
+                    }
+                    _ => {}
+                }
+            }
         }
         sfx.validate();
     }

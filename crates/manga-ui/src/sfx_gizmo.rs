@@ -8,12 +8,12 @@
 //! All document mutations are emitted as `OutCommand` (`"sfx.update"` with `"coalesce"`) so dragging
 //! collapses into a single history step and `Escape` restores the pre-drag snapshot cleanly.
 
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 
 use egui::{Color32, CursorIcon, Pos2, Rect, Stroke, pos2, vec2};
 use photocraft_doc::sfx::{
-    MAX_SFX_EFFECT_PX, MAX_SFX_LIQUIFY_STROKES, MAX_SFX_SIZE_PT, MAX_SFX_SPLINE_POINTS, SfxData, SfxFillSource, SfxFreeTransform, SfxGlyphTransform,
-    SfxLiquifyBrush, SfxMeshLattice, SfxShtackFillMode, SfxShtackFillSpec, SfxWarpMode,
+    MAX_SFX_EFFECT_PX, MAX_SFX_LIQUIFY_STROKES, MAX_SFX_SIZE_PT, MAX_SFX_SPLINE_POINTS, SfxBlendEffect, SfxData, SfxFillSource, SfxFreeTransform,
+    SfxGlyphTransform, SfxLiquifyBrush, SfxMeshLattice, SfxShtackFillMode, SfxShtackFillSpec, SfxWarpMode,
 };
 use photocraft_doc::{Document, LayerId};
 use photocraft_manga_core::sfx_geom::{
@@ -98,6 +98,7 @@ enum DragMode {
     Free(FreeHandle),
     SplinePoint { index: usize },
     VectorShadow,
+    FlowNeedle { handle: SfxFlowNeedleHandle, moved: bool },
     Glyph { handle: GlyphHandle, arc_angle_rad: f64, rest_center: [f64; 2] },
     MeshNode { row: usize, col: usize, multi: bool },
     MeshMarquee { start_doc: [f64; 2], cur_doc: [f64; 2], additive: bool },
@@ -147,6 +148,7 @@ pub struct SfxGizmoState {
     bound_target: Option<(BridgeDocId, LayerId)>,
     glyph_tool_code: AtomicU8,
     show_flow_nodes: AtomicBool,
+    last_dpi_bits: AtomicU32,
 }
 
 impl Default for SfxGizmoState {
@@ -163,6 +165,7 @@ impl Default for SfxGizmoState {
             bound_target: None,
             glyph_tool_code: AtomicU8::new(0),
             show_flow_nodes: AtomicBool::new(true),
+            last_dpi_bits: AtomicU32::new(72.0_f32.to_bits()),
         }
     }
 }
@@ -170,6 +173,11 @@ impl Default for SfxGizmoState {
 impl SfxGizmoState {
     pub fn has_active_drag(&self) -> bool {
         self.drag.is_some()
+    }
+
+    pub fn last_dpi(&self) -> f32 {
+        let d = f32::from_bits(self.last_dpi_bits.load(Ordering::Relaxed));
+        if d.is_finite() && d >= 1.0 { d } else { 72.0 }
     }
 
     pub fn current_glyph_tool(&self) -> SfxGlyphTool {
@@ -223,6 +231,7 @@ impl SfxGizmoState {
     pub fn ensure_geom(&self, data: &SfxData, dpi: f32) -> PreparedSfx {
         let dpi = dpi.clamp(1.0, 1200.0);
         let dpi_bits = dpi.to_bits();
+        self.last_dpi_bits.store(dpi_bits, Ordering::Relaxed);
         let mut guard = self.cached.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(c) = guard.as_ref().filter(|c| c.dpi_bits == dpi_bits && &c.data == data) {
             return c.geom.clone();
@@ -318,6 +327,13 @@ fn active_stroke_flow_spec(data: &SfxData) -> Option<&SfxShtackFillSpec> {
     {
         return Some(spec);
     }
+    for fx in &data.blending.effects {
+        if let SfxBlendEffect::FillOverlay { enabled: true, fill: SfxFillSource::ShtackHatch { spec }, .. } = fx
+            && spec.mode == SfxShtackFillMode::StrokeFlow
+        {
+            return Some(spec);
+        }
+    }
     None
 }
 
@@ -332,22 +348,33 @@ fn active_stroke_flow_spec_mut(data: &mut SfxData) -> Option<&mut SfxShtackFillS
     {
         return Some(spec);
     }
+    for fx in &mut data.blending.effects {
+        if let SfxBlendEffect::FillOverlay { enabled: true, fill: SfxFillSource::ShtackHatch { spec }, .. } = fx
+            && spec.mode == SfxShtackFillMode::StrokeFlow
+        {
+            return Some(spec);
+        }
+    }
     None
 }
 
-/// Projects a flow needle handle to screen space, offsetting the clickable knob 12 screen px
-/// along its outgoing ray so multiple rays at one corner never overlap.
+/// Projects a flow needle handle to screen space. Enabled needles place their draggable knob
+/// near the live needle tip (clamped to `16..=110` screen px so it stays grabbable at any zoom);
+/// disabled endpoints keep a compact `12 px` dot along their base outgoing tangent.
 fn flow_handle_screen(h: &SfxFlowNeedleHandle, xf: &CanvasViewXform) -> (Pos2, Pos2, egui::Vec2) {
     let end_scr = xf.to_screen(h.end_doc[0] as f32, h.end_doc[1] as f32);
-    let probe_scr = xf.to_screen((h.end_doc[0] + h.dir[0] * 10.0) as f32, (h.end_doc[1] + h.dir[1] * 10.0) as f32);
-    let mut dir_scr = probe_scr - end_scr;
-    let len = dir_scr.length();
-    if len > 1e-3 {
-        dir_scr /= len;
+    let ray_dir = if h.enabled { h.dir } else { h.base_dir };
+    let reach_doc = if h.enabled {
+        (h.base_needle_px * f64::from(h.length_scale.clamp(0.15, 3.0))).max(12.0)
     } else {
-        dir_scr = vec2(0.0, -1.0);
-    }
-    let knob_scr = end_scr + dir_scr * 12.0;
+        12.0
+    };
+    let tip_scr = xf.to_screen((h.end_doc[0] + ray_dir[0] * reach_doc) as f32, (h.end_doc[1] + ray_dir[1] * reach_doc) as f32);
+    let delta = tip_scr - end_scr;
+    let raw_len = delta.length();
+    let dir_scr = if raw_len > 1e-3 { delta / raw_len } else { vec2(0.0, -1.0) };
+    let stem_px = if h.enabled { raw_len.clamp(16.0, 110.0) } else { 12.0 };
+    let knob_scr = end_scr + dir_scr * stem_px;
     (end_scr, knob_scr, dir_scr)
 }
 
@@ -1037,6 +1064,31 @@ fn apply_shadow_drag(drag: &ActiveDrag, at_doc: [f64; 2], mods: egui::Modifiers,
     next.validate();
 }
 
+/// Steers a single `StrokeFlow` needle's custom angle offset (`Shift` snaps 15°) and length scale.
+fn apply_flow_needle_drag(h: SfxFlowNeedleHandle, at_doc: [f64; 2], mods: egui::Modifiers, next: &mut SfxData) {
+    let dx = at_doc[0] - h.end_doc[0];
+    let dy = at_doc[1] - h.end_doc[1];
+    let dist = dx.hypot(dy);
+    let base_ang = h.base_dir[1].atan2(h.base_dir[0]);
+    let cur_ang = if dist > 1e-3 { dy.atan2(dx) } else { base_ang };
+    let mut delta_deg = (cur_ang - base_ang).to_degrees();
+    while delta_deg > 180.0 {
+        delta_deg -= 360.0;
+    }
+    while delta_deg < -180.0 {
+        delta_deg += 360.0;
+    }
+    if mods.shift {
+        delta_deg = (delta_deg / 15.0).round() * 15.0;
+    }
+    let angle_offset_deg = delta_deg.clamp(-165.0, 165.0) as f32;
+    let length_scale = (dist / h.base_needle_px.max(12.0)).clamp(0.15, 3.0) as f32;
+    if let Some(spec) = active_stroke_flow_spec_mut(next) {
+        spec.set_flow_override_vector(h.glyph_index, h.uv, [h.base_dir[0] as f32, h.base_dir[1] as f32], angle_offset_deg, length_scale);
+    }
+    next.validate();
+}
+
 fn find_or_insert_glyph_mut(data: &mut SfxData, glyph_index: usize) -> &mut SfxGlyphTransform {
     if let Some(pos) = data.per_glyph.iter().position(|g| g.glyph_index == glyph_index) {
         return &mut data.per_glyph[pos];
@@ -1266,22 +1318,41 @@ pub fn pointer(gizmo: &mut SfxGizmoState, view: &SfxView<'_>, ev: CanvasToolEven
                 return out;
             }
 
-            // 1B. Per-endpoint SAI needle toggle handles (`🎯 Узлы вылетов`).
+            // 1B. Per-endpoint SAI needle handles (`🎯 Узлы вылетов`):
+            //     - Quick click: toggle needle ON/OFF
+            //     - Drag: aim angle (`Shift` = 15° snap) + stretch length live
+            //     - `Alt + Click`: reset endpoint to automatic default
             if matches!(sfx.warp_mode, SfxWarpMode::Resize | SfxWarpMode::FreeTransform | SfxWarpMode::PerGlyph) {
                 let flow_handles = gizmo.ensure_flow_handles(&sfx, dpi, &geom);
                 if let Some(h_idx) = hit_flow_needle_handle(&flow_handles, xf, [x, y]) {
                     let h = flow_handles[h_idx];
-                    if let Some(spec) = active_stroke_flow_spec_mut(&mut sfx) {
-                        spec.toggle_flow_override(h.glyph_index, h.uv, [h.dir[0] as f32, h.dir[1] as f32], h.default_enabled);
-                        sfx.validate();
-                        out.commands.push(OutCommand::new(
-                            "sfx.update",
-                            json!({ "layer": layer_id.0, "sfx": sfx, "preview": false }),
-                        ));
-                        out.updated_sfx = Some(sfx);
+                    if mods.alt {
+                        if let Some(spec) = active_stroke_flow_spec_mut(&mut sfx)
+                            && spec.clear_flow_override(h.glyph_index, h.uv, [h.base_dir[0] as f32, h.base_dir[1] as f32])
+                        {
+                            sfx.validate();
+                            out.commands.push(OutCommand::new(
+                                "sfx.update",
+                                json!({ "layer": layer_id.0, "sfx": sfx, "preview": false }),
+                            ));
+                            out.updated_sfx = Some(sfx);
+                        }
                         out.handled = true;
                         return out;
                     }
+                    gizmo.drag = Some(ActiveDrag {
+                        doc_id,
+                        layer_id,
+                        coalesce: format!("sfx-flow:{}:{}:{}:{}", doc_id.0, layer_id.0, h.glyph_index, h_idx),
+                        start_doc: [x, y],
+                        reported_sfx: sfx.clone(),
+                        initial_sfx: sfx,
+                        rest_box: rb,
+                        init_inv_h,
+                        mode: DragMode::FlowNeedle { handle: h, moved: false },
+                    });
+                    out.handled = true;
+                    return out;
                 }
             }
 
@@ -1434,6 +1505,17 @@ pub fn pointer(gizmo: &mut SfxGizmoState, view: &SfxView<'_>, ev: CanvasToolEven
                     next = drag.initial_sfx.clone();
                     apply_shadow_drag(&drag, [x, y], mods, &mut next);
                 }
+                DragMode::FlowNeedle { handle, moved } => {
+                    let h = *handle;
+                    let start_scr = view.view_xform.to_screen(drag.start_doc[0] as f32, drag.start_doc[1] as f32);
+                    let cur_scr = view.view_xform.to_screen(x as f32, y as f32);
+                    let is_moved = *moved || cur_scr.distance(start_scr) > 4.0;
+                    if is_moved {
+                        drag.mode = DragMode::FlowNeedle { handle: h, moved: true };
+                        next = drag.initial_sfx.clone();
+                        apply_flow_needle_drag(h, [x, y], mods, &mut next);
+                    }
+                }
                 DragMode::Glyph { .. } => {
                     next = drag.initial_sfx.clone();
                     apply_glyph_drag(&drag, [x, y], mods, &mut next);
@@ -1483,6 +1565,32 @@ pub fn pointer(gizmo: &mut SfxGizmoState, view: &SfxView<'_>, ev: CanvasToolEven
                     next = drag.initial_sfx.clone();
                     apply_shadow_drag(&drag, [x, y], mods, &mut next);
                     push_update(&mut drag, next, &mut out, false);
+                }
+                DragMode::FlowNeedle { handle, moved } => {
+                    let start_scr = view.view_xform.to_screen(drag.start_doc[0] as f32, drag.start_doc[1] as f32);
+                    let cur_scr = view.view_xform.to_screen(x as f32, y as f32);
+                    next = drag.initial_sfx.clone();
+                    if moved || cur_scr.distance(start_scr) > 4.0 {
+                        apply_flow_needle_drag(handle, [x, y], mods, &mut next);
+                    } else if let Some(spec) = active_stroke_flow_spec_mut(&mut next) {
+                        spec.toggle_flow_override(
+                            handle.glyph_index,
+                            handle.uv,
+                            [handle.base_dir[0] as f32, handle.base_dir[1] as f32],
+                            handle.default_enabled,
+                        );
+                        next.validate();
+                    }
+                    out.commands.push(OutCommand::new(
+                        "sfx.update",
+                        json!({
+                            "layer": drag.layer_id.0,
+                            "sfx": next,
+                            "coalesce": drag.coalesce,
+                            "preview": false,
+                        }),
+                    ));
+                    out.updated_sfx = Some(next);
                 }
                 DragMode::Glyph { .. } => {
                     next = drag.initial_sfx.clone();
@@ -1562,9 +1670,12 @@ pub fn hover_cursor(gizmo: &SfxGizmoState, view: &SfxView<'_>, cursor_scr: Pos2)
     if let Some(drag) = &gizmo.drag {
         return Some(match drag.mode {
             DragMode::Free(FreeHandle::Rotate) | DragMode::Glyph { handle: GlyphHandle::Rotate(_), .. } => CursorIcon::Alias,
-            DragMode::Free(_) | DragMode::Glyph { .. } | DragMode::MeshNode { .. } | DragMode::SplinePoint { .. } | DragMode::VectorShadow => {
-                CursorIcon::Grabbing
-            }
+            DragMode::Free(_)
+            | DragMode::Glyph { .. }
+            | DragMode::MeshNode { .. }
+            | DragMode::SplinePoint { .. }
+            | DragMode::VectorShadow
+            | DragMode::FlowNeedle { .. } => CursorIcon::Grabbing,
             DragMode::MeshMarquee { .. } | DragMode::Liquify { .. } => CursorIcon::Crosshair,
         });
     }
@@ -1581,7 +1692,7 @@ pub fn hover_cursor(gizmo: &SfxGizmoState, view: &SfxView<'_>, cursor_scr: Pos2)
         }
         let flow_handles = gizmo.ensure_flow_handles(&sfx, dpi, &geom);
         if hit_flow_needle_handle(&flow_handles, xf, at_doc).is_some() {
-            return Some(CursorIcon::PointingHand);
+            return Some(CursorIcon::Grab);
         }
     }
 
@@ -1775,8 +1886,8 @@ fn draw_vector_shadow_ray(painter: &egui::Painter, data: &SfxData, rb: [f64; 4],
     painter.circle_stroke(k_scr, 6.0, Stroke::new(1.4, Color32::from_rgb(120, 53, 15)));
 }
 
-/// Draws per-endpoint clickable SAI needle dots offset cleanly on each side of every junction.
-/// Filled amber dots = needle ON; hollow slate rings = needle OFF; cyan outer halo = manual override.
+/// Draws per-endpoint draggable SAI needle handles (`Клик`: вкл/выкл, `Тяни`: угол/длина, `Alt+клик`: сброс).
+/// Filled amber knobs = needle ON (placed near the live tip); hollow rings = needle OFF; cyan halo = manual override.
 fn draw_flow_needle_handles(painter: &egui::Painter, handles: &[SfxFlowNeedleHandle], xf: &CanvasViewXform, hover_scr: Option<Pos2>) {
     if handles.is_empty() {
         return;
@@ -1799,13 +1910,28 @@ fn draw_flow_needle_handles(painter: &egui::Painter, handles: &[SfxFlowNeedleHan
         let is_hovered = hovered_idx == Some(idx);
 
         if h.enabled {
-            let ray_col = if is_hovered { COLOR_SUN } else { COLOR_AMBER.gamma_multiply(0.85) };
-            let tip_len = if is_hovered { 16.0 } else { 7.0 };
-            painter.line_segment([end_scr, knob_scr + dir_scr * tip_len], Stroke::new(1.4, ray_col));
-            painter.circle_filled(knob_scr, if is_hovered { 5.4 } else { 4.4 }, COLOR_AMBER);
-            painter.circle_stroke(knob_scr, if is_hovered { 5.4 } else { 4.4 }, Stroke::new(1.3, Color32::WHITE));
-            if h.overridden {
-                painter.circle_stroke(knob_scr, 6.6, Stroke::new(1.3, COLOR_CYAN));
+            let ray_col = if is_hovered {
+                COLOR_SUN
+            } else if h.overridden {
+                COLOR_CYAN.gamma_multiply(0.9)
+            } else {
+                COLOR_AMBER.gamma_multiply(0.8)
+            };
+            painter.line_segment([end_scr, knob_scr], Stroke::new(if is_hovered { 2.0 } else { 1.4 }, ray_col));
+            painter.circle_filled(end_scr, 2.2, ray_col);
+            let r = if is_hovered { 5.8 } else { 4.6 };
+            painter.circle_filled(knob_scr, r, if h.overridden { COLOR_CYAN } else { COLOR_AMBER });
+            painter.circle_stroke(knob_scr, r, Stroke::new(1.3, Color32::WHITE));
+            if is_hovered {
+                painter.circle_stroke(knob_scr, 8.2, Stroke::new(1.4, Color32::WHITE.gamma_multiply(0.9)));
+                let label = format!("{:+.0}° · {:.1}x", h.angle_offset_deg, h.length_scale);
+                let pill_pos = knob_scr + dir_scr * 14.0 + vec2(0.0, -10.0);
+                let font = egui::FontId::proportional(10.5);
+                let galley = painter.layout_no_wrap(label, font, Color32::WHITE);
+                let bg = Rect::from_center_size(pill_pos, galley.size() + vec2(8.0, 4.0));
+                painter.rect_filled(bg, 3.0, Color32::from_rgba_unmultiplied(15, 23, 42, 225));
+                painter.rect_stroke(bg, 3.0, Stroke::new(1.0, ray_col), egui::StrokeKind::Inside);
+                painter.galley(bg.min + vec2(4.0, 2.0), galley, Color32::WHITE);
             }
         } else {
             let stem_col = Color32::from_rgba_unmultiplied(148, 163, 184, if is_hovered { 210 } else { 110 });
@@ -1820,9 +1946,9 @@ fn draw_flow_needle_handles(painter: &egui::Painter, handles: &[SfxFlowNeedleHan
             };
             painter.circle_filled(knob_scr, if is_hovered { 5.0 } else { 3.9 }, fill);
             painter.circle_stroke(knob_scr, if is_hovered { 5.0 } else { 3.9 }, Stroke::new(1.3, rim));
-        }
-        if is_hovered {
-            painter.circle_stroke(knob_scr, 7.8, Stroke::new(1.4, Color32::WHITE.gamma_multiply(0.9)));
+            if is_hovered {
+                painter.circle_stroke(knob_scr, 7.8, Stroke::new(1.4, Color32::WHITE.gamma_multiply(0.9)));
+            }
         }
     }
 }
@@ -2297,22 +2423,88 @@ mod tests {
         let (_, knob_scr, _) = flow_handle_screen(&target, &view.view_xform);
         let knob_doc = view.view_xform.to_doc(knob_scr);
 
-        assert_eq!(hover_cursor(&gizmo, &view, knob_scr), Some(CursorIcon::PointingHand));
-        let click1 = pointer(&mut gizmo, &view, CanvasToolEvent::Down { x: knob_doc[0], y: knob_doc[1], pressure: 1.0 }, Modifiers::NONE);
-        assert!(click1.handled, "clicking a flow needle handle must be handled");
-        assert!(!gizmo.has_active_drag(), "flow handle click must toggle immediately without starting a drag");
-        let u1 = click1.updated_sfx.expect("updated sfx after first toggle");
+        assert_eq!(hover_cursor(&gizmo, &view, knob_scr), Some(CursorIcon::Grab));
+        let down1 = pointer(&mut gizmo, &view, CanvasToolEvent::Down { x: knob_doc[0], y: knob_doc[1], pressure: 1.0 }, Modifiers::NONE);
+        assert!(down1.handled, "clicking a flow needle handle must be handled");
+        let up1 = pointer(&mut gizmo, &view, CanvasToolEvent::Up { x: knob_doc[0], y: knob_doc[1] }, Modifiers::NONE);
+        assert!(up1.handled);
+        let u1 = up1.updated_sfx.expect("updated sfx after first click toggle");
         let SfxFillSource::ShtackHatch { spec: s1 } = &u1.fill else { panic!("expected ShtackHatch") };
         assert_eq!(s1.flow_overrides.len(), 1);
-        assert!(!s1.flow_overrides[0].enabled, "clicking an enabled needle must disable it");
+        assert!(!s1.flow_overrides[0].enabled, "quick clicking an enabled needle must disable it");
 
-        // Second click on the same handle must revert to default and clear flow_overrides.
+        // Second quick click on the disabled dot must revert to default and clear flow_overrides.
         let (doc2, id2) = sfx_doc(u1.clone());
         let view2 = view_for(&doc2, id2);
-        let click2 = pointer(&mut gizmo, &view2, CanvasToolEvent::Down { x: knob_doc[0], y: knob_doc[1], pressure: 1.0 }, Modifiers::NONE);
-        assert!(click2.handled);
-        let u2 = click2.updated_sfx.expect("updated sfx after second toggle");
+        let geom2 = gizmo.ensure_geom(&u1, 72.0);
+        let h2 = gizmo
+            .ensure_flow_handles(&u1, 72.0, &geom2)
+            .into_iter()
+            .find(|h| h.overridden)
+            .expect("overridden disabled handle");
+        let (_, knob_scr2, _) = flow_handle_screen(&h2, &view2.view_xform);
+        let knob_doc2 = view2.view_xform.to_doc(knob_scr2);
+        assert!(pointer(&mut gizmo, &view2, CanvasToolEvent::Down { x: knob_doc2[0], y: knob_doc2[1], pressure: 1.0 }, Modifiers::NONE).handled);
+        let up2 = pointer(&mut gizmo, &view2, CanvasToolEvent::Up { x: knob_doc2[0], y: knob_doc2[1] }, Modifiers::NONE);
+        let u2 = up2.updated_sfx.expect("updated sfx after second toggle");
         let SfxFillSource::ShtackHatch { spec: s2 } = &u2.fill else { panic!("expected ShtackHatch") };
         assert!(s2.flow_overrides.is_empty(), "toggling back to default must clear the override entry");
+    }
+
+    #[test]
+    fn flow_needle_gizmo_drag_rotates_and_scales_needle_and_alt_resets() {
+        let sfx = SfxData {
+            text: "B".to_owned(),
+            size_pt: 200.0,
+            origin: [120.0, 120.0],
+            fill: SfxFillSource::ShtackHatch {
+                spec: SfxShtackFillSpec {
+                    mode: SfxShtackFillMode::StrokeFlow,
+                    overshoot_pct: 22.0,
+                    ..SfxShtackFillSpec::default()
+                },
+            },
+            ..SfxData::default()
+        };
+        let (doc, id) = sfx_doc(sfx.clone());
+        let mut gizmo = SfxGizmoState::default();
+        let geom = gizmo.ensure_geom(&sfx, 72.0);
+        let handles = gizmo.ensure_flow_handles(&sfx, 72.0, &geom);
+        let target = handles.iter().find(|h| h.enabled).copied().expect("at least one enabled needle on B");
+
+        let view = view_for(&doc, id);
+        let (_, knob_scr, _) = flow_handle_screen(&target, &view.view_xform);
+        let knob_doc = view.view_xform.to_doc(knob_scr);
+
+        // Drag the needle knob to +45 deg from its base ray at 2.0x base length.
+        let base_ang = target.base_dir[1].atan2(target.base_dir[0]);
+        let new_ang = base_ang + 45.0_f64.to_radians();
+        let drag_dist = target.base_needle_px * 2.0;
+        let drag_to = [target.end_doc[0] + new_ang.cos() * drag_dist, target.end_doc[1] + new_ang.sin() * drag_dist];
+
+        assert!(pointer(&mut gizmo, &view, CanvasToolEvent::Down { x: knob_doc[0], y: knob_doc[1], pressure: 1.0 }, Modifiers::NONE).handled);
+        let moved = pointer(&mut gizmo, &view, CanvasToolEvent::Move { x: drag_to[0], y: drag_to[1], pressure: 1.0 }, Modifiers::SHIFT);
+        assert!(moved.handled);
+        let up = pointer(&mut gizmo, &view, CanvasToolEvent::Up { x: drag_to[0], y: drag_to[1] }, Modifiers::SHIFT);
+        let u = up.updated_sfx.expect("committed dragged needle");
+        let SfxFillSource::ShtackHatch { spec: su } = &u.fill else { panic!("expected ShtackHatch") };
+        assert_eq!(su.flow_overrides.len(), 1);
+        assert!(su.flow_overrides[0].enabled);
+        assert!((su.flow_overrides[0].angle_offset_deg - 45.0).abs() < 1.0, "angle={}", su.flow_overrides[0].angle_offset_deg);
+        assert!((su.flow_overrides[0].length_scale - 2.0).abs() < 0.1, "len={}", su.flow_overrides[0].length_scale);
+
+        // Alt+Click on the steered needle resets it back to auto.
+        let (doc2, id2) = sfx_doc(u.clone());
+        let view2 = view_for(&doc2, id2);
+        let geom2 = gizmo.ensure_geom(&u, 72.0);
+        let h2 = gizmo.ensure_flow_handles(&u, 72.0, &geom2).into_iter().find(|h| h.overridden).expect("steered handle");
+        let (_, k2_scr, _) = flow_handle_screen(&h2, &view2.view_xform);
+        let k2_doc = view2.view_xform.to_doc(k2_scr);
+        let alt = Modifiers { alt: true, ..Modifiers::NONE };
+        let reset = pointer(&mut gizmo, &view2, CanvasToolEvent::Down { x: k2_doc[0], y: k2_doc[1], pressure: 1.0 }, alt);
+        assert!(reset.handled);
+        let u_reset = reset.updated_sfx.expect("alt+click reset update");
+        let SfxFillSource::ShtackHatch { spec: sr } = &u_reset.fill else { panic!("expected ShtackHatch") };
+        assert!(sr.flow_overrides.is_empty(), "Alt+Click must clear manual needle vector");
     }
 }

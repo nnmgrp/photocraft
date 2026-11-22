@@ -694,10 +694,14 @@ pub enum SfxShtackFlowOvershoot {
 /// Maximum per-endpoint overshoot overrides stored in one [`SfxShtackFillSpec`].
 pub const MAX_SFX_FLOW_OVERRIDES: usize = 256;
 
+/// Maximum Photoshop-style manga blending effects in [`SfxBlending::effects`].
+pub const MAX_SFX_BLEND_EFFECTS: usize = 16;
+
 /// Per-endpoint overshoot override edited interactively on the canvas via the SFX Gizmo.
 ///
-/// Keyed by `(glyph_index, normalized_uv, outgoing_dir)` so overrides survive moving,
-/// resizing, and recolouring the SFX layer without drifting.
+/// Keyed by `(glyph_index, normalized_uv, base_outgoing_dir)` so overrides survive moving,
+/// resizing, and recolouring the SFX layer without drifting. Dragging the handle updates
+/// `angle_offset_deg` and `length_scale` in real time.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SfxFlowEndOverride {
@@ -705,10 +709,16 @@ pub struct SfxFlowEndOverride {
     pub glyph_index: u16,
     /// Endpoint position normalized to the glyph's warped bounding box (`[0..1, 0..1]`).
     pub uv: [f32; 2],
-    /// Unit outgoing shoot direction `[dx, dy]` (disambiguates multiple rays at one corner).
+    /// Original base outgoing unit direction `[dx, dy]` (disambiguates multiple rays at one corner).
     pub dir: [f32; 2],
     /// `true` forces a needle ON at this endpoint; `false` forces it OFF.
     pub enabled: bool,
+    /// User-dragged angle offset relative to `dir`, in degrees (`-165..=165`).
+    #[serde(default)]
+    pub angle_offset_deg: f32,
+    /// User-dragged needle length multiplier (`0.15..=3.0`, default `1.0`).
+    #[serde(default = "default_one_f32")]
+    pub length_scale: f32,
 }
 
 /// Parameters for an independent interior Shtack fill (`SfxFillSource::ShtackHatch`),
@@ -804,6 +814,8 @@ impl SfxShtackFillSpec {
             ov.uv[1] = ov.uv[1].clamp(-0.5, 1.5);
             ov.dir[0] /= len;
             ov.dir[1] /= len;
+            ov.angle_offset_deg = finite_f32(ov.angle_offset_deg, 0.0).clamp(-165.0, 165.0);
+            ov.length_scale = finite_f32(ov.length_scale, 1.0).clamp(0.15, 3.0);
             true
         });
         if self.flow_overrides.len() > MAX_SFX_FLOW_OVERRIDES {
@@ -832,13 +844,14 @@ impl SfxShtackFillSpec {
     }
 
     /// Toggles one stroke endpoint's needle state relative to `default_enabled`.
-    /// Toggling back to `default_enabled` removes the override cleanly.
+    /// Toggling back to `default_enabled` with default angle/length removes the override cleanly.
     pub fn toggle_flow_override(&mut self, glyph_index: u16, uv: [f32; 2], dir: [f32; 2], default_enabled: bool) {
         let dl = dir[0].hypot(dir[1]).max(1e-6);
         let ndir = [dir[0] / dl, dir[1] / dl];
         if let Some(idx) = self.find_flow_override_idx(glyph_index, uv, ndir) {
             let next_enabled = !self.flow_overrides[idx].enabled;
-            if next_enabled == default_enabled {
+            let has_custom_vec = self.flow_overrides[idx].angle_offset_deg.abs() > 0.5 || (self.flow_overrides[idx].length_scale - 1.0).abs() > 0.03;
+            if next_enabled == default_enabled && !has_custom_vec {
                 self.flow_overrides.remove(idx);
             } else {
                 self.flow_overrides[idx].enabled = next_enabled;
@@ -849,12 +862,53 @@ impl SfxShtackFillSpec {
                 uv,
                 dir: ndir,
                 enabled: !default_enabled,
+                angle_offset_deg: 0.0,
+                length_scale: 1.0,
             });
+        }
+    }
+
+    /// Sets a custom dragged angle offset and length scale on one endpoint (enabling it).
+    pub fn set_flow_override_vector(
+        &mut self,
+        glyph_index: u16,
+        uv: [f32; 2],
+        base_dir: [f32; 2],
+        angle_offset_deg: f32,
+        length_scale: f32,
+    ) {
+        let dl = base_dir[0].hypot(base_dir[1]).max(1e-6);
+        let ndir = [base_dir[0] / dl, base_dir[1] / dl];
+        let ang = finite_f32(angle_offset_deg, 0.0).clamp(-165.0, 165.0);
+        let len = finite_f32(length_scale, 1.0).clamp(0.15, 3.0);
+        if let Some(idx) = self.find_flow_override_idx(glyph_index, uv, ndir) {
+            self.flow_overrides[idx].enabled = true;
+            self.flow_overrides[idx].angle_offset_deg = ang;
+            self.flow_overrides[idx].length_scale = len;
+        } else if self.flow_overrides.len() < MAX_SFX_FLOW_OVERRIDES {
+            self.flow_overrides.push(SfxFlowEndOverride {
+                glyph_index,
+                uv,
+                dir: ndir,
+                enabled: true,
+                angle_offset_deg: ang,
+                length_scale: len,
+            });
+        }
+    }
+
+    /// Clears any manual override on one endpoint (e.g. `Alt + Click` in Gizmo).
+    pub fn clear_flow_override(&mut self, glyph_index: u16, uv: [f32; 2], base_dir: [f32; 2]) -> bool {
+        if let Some(idx) = self.find_flow_override_idx(glyph_index, uv, base_dir) {
+            self.flow_overrides.remove(idx);
+            true
+        } else {
+            false
         }
     }
 }
 
-/// Fill paint for either the base SFX face, a secondary blended fill, or a style pass.
+/// Fill paint for either the base SFX face, a secondary blended fill, or a Blending effect pass.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum SfxFillSource {
@@ -872,13 +926,20 @@ pub enum SfxFillSource {
         #[serde(default)]
         angle_deg: f32,
     },
+    /// Full 4-engine Dry Brush fill (full parity with primary Fill card in Blending overlays).
+    DryBrush {
+        #[serde(default = "default_ink")]
+        color: Color,
+        #[serde(default)]
+        spec: SfxDryBrushSpec,
+    },
     Screentone {
         #[serde(default)]
         spec: ScreentoneSpec,
         #[serde(default = "default_one_f32")]
         opacity: f32,
     },
-    /// Independent interior Shtack hatching fill (does not require Shtack outline).
+    /// Independent interior Shtack fill (`Hatch`, `StrokeFlow` SAI, or `UkiyoBrush`).
     ShtackHatch {
         #[serde(default)]
         spec: SfxShtackFillSpec,
@@ -901,6 +962,11 @@ impl SfxFillSource {
                 *end = finite_color(*end);
                 *angle_deg = finite_f32(*angle_deg, 90.0).rem_euclid(360.0);
             }
+            Self::DryBrush { color, spec } => {
+                *color = finite_color(*color);
+                spec.validate();
+                spec.enabled = true;
+            }
             Self::Screentone { spec, opacity } => {
                 spec.dot_size = finite_f32(spec.dot_size, 6.0).clamp(0.5, 256.0);
                 spec.spacing_x = finite_f32(spec.spacing_x, 16.0).clamp(2.0, 512.0);
@@ -915,30 +981,255 @@ impl SfxFillSource {
     }
 }
 
-/// Per-channel blend mode inside an SFX layer (`Blending` dock tab).
+/// Full Photoshop + Manga per-channel blend modes inside an SFX layer (`Blending` dock tab).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SfxChannelBlend {
     #[default]
     Normal,
     Multiply,
-    Screen,
-    Overlay,
+    ColorBurn,
     Darken,
+    Screen,
+    ColorDodge,
     Lighten,
+    Overlay,
+    SoftLight,
+    HardLight,
     Difference,
+    Exclusion,
     /// Cuts alpha out of the accumulated SFX pixels below (masking / stencil punch-out).
     Knockout,
 }
 
-/// Independent channel mixing & ordering (`Fill 1`, optional `Fill 2`, `Line`, `Halo`).
+/// Stroke placement inside [`SfxBlendEffect::Stroke`], matching Photoshop Layer Style.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SfxStrokePosition {
+    #[default]
+    Outside,
+    Center,
+    Inside,
+}
+
+/// Photoshop-style Manga Layer Style effects inside [`SfxBlending::effects`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum SfxBlendEffect {
+    /// Тиснение / Фаска — crisp manga SDF bevel highlight & shadow.
+    Bevel {
+        #[serde(default = "default_true")]
+        enabled: bool,
+        #[serde(default = "default_4")]
+        depth_px: f32,
+        #[serde(default = "default_120")]
+        angle_deg: f32,
+        #[serde(default = "default_white")]
+        highlight_color: Color,
+        #[serde(default = "default_0_75")]
+        highlight_opacity: f32,
+        #[serde(default = "default_black")]
+        shadow_color: Color,
+        #[serde(default = "default_0_75")]
+        shadow_opacity: f32,
+    },
+    /// Выполнить обводку — stackable stroke (Outside/Center/Inside) with full fill parity.
+    Stroke {
+        #[serde(default = "default_true")]
+        enabled: bool,
+        #[serde(default = "default_4")]
+        width_px: f32,
+        #[serde(default)]
+        position: SfxStrokePosition,
+        #[serde(default)]
+        join: SfxLineJoin,
+        #[serde(default)]
+        fill: SfxFillSource,
+        #[serde(default)]
+        blend: SfxChannelBlend,
+        #[serde(default = "default_one_f32")]
+        opacity: f32,
+    },
+    /// Внутренняя тень — stackable directional inner shadow.
+    InnerShadow {
+        #[serde(default = "default_true")]
+        enabled: bool,
+        #[serde(default = "default_120")]
+        angle_deg: f32,
+        #[serde(default = "default_6")]
+        distance_px: f32,
+        #[serde(default = "default_4")]
+        blur_px: f32,
+        #[serde(default = "default_black")]
+        color: Color,
+        #[serde(default = "default_multiply")]
+        blend: SfxChannelBlend,
+        #[serde(default = "default_0_75")]
+        opacity: f32,
+    },
+    /// Внутреннее свечение — inner contour glow.
+    InnerGlow {
+        #[serde(default = "default_true")]
+        enabled: bool,
+        #[serde(default = "default_6")]
+        width_px: f32,
+        #[serde(default = "default_white")]
+        color: Color,
+        #[serde(default = "default_screen")]
+        blend: SfxChannelBlend,
+        #[serde(default = "default_0_75")]
+        opacity: f32,
+    },
+    /// Наложение заливки (Color / Gradient / Dry Brush / Screentone / Shtack Fill) — full parity!
+    FillOverlay {
+        #[serde(default = "default_true")]
+        enabled: bool,
+        #[serde(default)]
+        fill: SfxFillSource,
+        #[serde(default)]
+        blend: SfxChannelBlend,
+        #[serde(default = "default_one_f32")]
+        opacity: f32,
+    },
+    /// Внешнее свечение — manga aura / outer bloom behind letters.
+    OuterGlow {
+        #[serde(default = "default_true")]
+        enabled: bool,
+        #[serde(default = "default_4")]
+        spread_px: f32,
+        #[serde(default = "default_10")]
+        blur_px: f32,
+        #[serde(default = "default_white")]
+        color: Color,
+        #[serde(default = "default_screen")]
+        blend: SfxChannelBlend,
+        #[serde(default = "default_0_75")]
+        opacity: f32,
+    },
+    /// Тень — stackable drop shadow (blur=0 gives crisp manga cut shadow).
+    DropShadow {
+        #[serde(default = "default_true")]
+        enabled: bool,
+        #[serde(default = "default_120")]
+        angle_deg: f32,
+        #[serde(default = "default_8")]
+        distance_px: f32,
+        #[serde(default)]
+        blur_px: f32,
+        #[serde(default = "default_black")]
+        color: Color,
+        #[serde(default = "default_multiply")]
+        blend: SfxChannelBlend,
+        #[serde(default = "default_0_75")]
+        opacity: f32,
+    },
+}
+
+fn default_120() -> f32 {
+    120.0
+}
+
+fn default_0_75() -> f32 {
+    0.75
+}
+
+fn default_10() -> f32 {
+    10.0
+}
+
+fn default_8() -> f32 {
+    8.0
+}
+
+fn default_multiply() -> SfxChannelBlend {
+    SfxChannelBlend::Multiply
+}
+
+fn default_screen() -> SfxChannelBlend {
+    SfxChannelBlend::Screen
+}
+
+impl SfxBlendEffect {
+    pub fn enabled(&self) -> bool {
+        match self {
+            Self::Bevel { enabled, .. }
+            | Self::Stroke { enabled, .. }
+            | Self::InnerShadow { enabled, .. }
+            | Self::InnerGlow { enabled, .. }
+            | Self::FillOverlay { enabled, .. }
+            | Self::OuterGlow { enabled, .. }
+            | Self::DropShadow { enabled, .. } => *enabled,
+        }
+    }
+
+    pub fn enabled_mut(&mut self) -> &mut bool {
+        match self {
+            Self::Bevel { enabled, .. }
+            | Self::Stroke { enabled, .. }
+            | Self::InnerShadow { enabled, .. }
+            | Self::InnerGlow { enabled, .. }
+            | Self::FillOverlay { enabled, .. }
+            | Self::OuterGlow { enabled, .. }
+            | Self::DropShadow { enabled, .. } => enabled,
+        }
+    }
+
+    pub fn validate(&mut self) {
+        match self {
+            Self::Bevel { depth_px, angle_deg, highlight_color, highlight_opacity, shadow_color, shadow_opacity, .. } => {
+                *depth_px = finite_f32(*depth_px, 4.0).clamp(1.0, 64.0);
+                *angle_deg = finite_f32(*angle_deg, 120.0).clamp(-180.0, 180.0);
+                *highlight_color = finite_color(*highlight_color);
+                *highlight_opacity = finite_f32(*highlight_opacity, 0.75).clamp(0.0, 1.0);
+                *shadow_color = finite_color(*shadow_color);
+                *shadow_opacity = finite_f32(*shadow_opacity, 0.75).clamp(0.0, 1.0);
+            }
+            Self::Stroke { width_px, fill, opacity, .. } => {
+                *width_px = finite_f32(*width_px, 4.0).clamp(0.0, MAX_SFX_EFFECT_PX);
+                fill.validate();
+                *opacity = finite_f32(*opacity, 1.0).clamp(0.0, 1.0);
+            }
+            Self::InnerShadow { angle_deg, distance_px, blur_px, color, opacity, .. } => {
+                *angle_deg = finite_f32(*angle_deg, 120.0).clamp(-180.0, 180.0);
+                *distance_px = finite_f32(*distance_px, 6.0).clamp(0.0, 128.0);
+                *blur_px = finite_f32(*blur_px, 4.0).clamp(0.0, 64.0);
+                *color = finite_color(*color);
+                *opacity = finite_f32(*opacity, 0.75).clamp(0.0, 1.0);
+            }
+            Self::InnerGlow { width_px, color, opacity, .. } => {
+                *width_px = finite_f32(*width_px, 6.0).clamp(0.0, 64.0);
+                *color = finite_color(*color);
+                *opacity = finite_f32(*opacity, 0.75).clamp(0.0, 1.0);
+            }
+            Self::FillOverlay { fill, opacity, .. } => {
+                fill.validate();
+                *opacity = finite_f32(*opacity, 1.0).clamp(0.0, 1.0);
+            }
+            Self::OuterGlow { spread_px, blur_px, color, opacity, .. } => {
+                *spread_px = finite_f32(*spread_px, 4.0).clamp(0.0, 64.0);
+                *blur_px = finite_f32(*blur_px, 10.0).clamp(0.0, 64.0);
+                *color = finite_color(*color);
+                *opacity = finite_f32(*opacity, 0.75).clamp(0.0, 1.0);
+            }
+            Self::DropShadow { angle_deg, distance_px, blur_px, color, opacity, .. } => {
+                *angle_deg = finite_f32(*angle_deg, 120.0).clamp(-180.0, 180.0);
+                *distance_px = finite_f32(*distance_px, 8.0).clamp(0.0, 256.0);
+                *blur_px = finite_f32(*blur_px, 0.0).clamp(0.0, 64.0);
+                *color = finite_color(*color);
+                *opacity = finite_f32(*opacity, 0.75).clamp(0.0, 1.0);
+            }
+        }
+    }
+}
+
+/// Independent channel mixing, ordering & Photoshop-style Manga Layer Effects (`Blending` tab).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct SfxBlending {
     pub fill_blend: SfxChannelBlend,
     #[serde(default = "default_one_f32")]
     pub fill_opacity: f32,
-    /// Optional second fill composited on top of the primary fill (e.g. `ShtackHatch` over `Screentone`).
+    /// Optional second fill composited on top of the primary fill (kept for backward compatibility).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secondary_fill: Option<SfxFillSource>,
     pub secondary_blend: SfxChannelBlend,
@@ -952,6 +1243,10 @@ pub struct SfxBlending {
     pub halo_blend: SfxChannelBlend,
     #[serde(default = "default_one_f32")]
     pub halo_opacity: f32,
+    /// Photoshop-style stackable Manga Blending Effects (`Bevel`, `Stroke`, `InnerShadow`,
+    /// `InnerGlow`, `FillOverlay`, `OuterGlow`, `DropShadow`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effects: Vec<SfxBlendEffect>,
 }
 
 impl Default for SfxBlending {
@@ -967,6 +1262,7 @@ impl Default for SfxBlending {
             line_behind_fill: false,
             halo_blend: SfxChannelBlend::Normal,
             halo_opacity: 1.0,
+            effects: Vec::new(),
         }
     }
 }
@@ -983,6 +1279,12 @@ impl SfxBlending {
         self.secondary_opacity = finite_f32(self.secondary_opacity, 1.0).clamp(0.0, 1.0);
         self.line_opacity = finite_f32(self.line_opacity, 1.0).clamp(0.0, 1.0);
         self.halo_opacity = finite_f32(self.halo_opacity, 1.0).clamp(0.0, 1.0);
+        if self.effects.len() > MAX_SFX_BLEND_EFFECTS {
+            self.effects.truncate(MAX_SFX_BLEND_EFFECTS);
+        }
+        for fx in &mut self.effects {
+            fx.validate();
+        }
     }
 
     pub fn is_default(&self) -> bool {
@@ -1921,6 +2223,23 @@ mod tests {
                 line_behind_fill: true,
                 halo_blend: SfxChannelBlend::Normal,
                 halo_opacity: 0.75,
+                effects: vec![
+                    SfxBlendEffect::DropShadow {
+                        enabled: true,
+                        angle_deg: 135.0,
+                        distance_px: 12.0,
+                        blur_px: 0.0,
+                        color: Color::BLACK,
+                        blend: SfxChannelBlend::Multiply,
+                        opacity: 0.9,
+                    },
+                    SfxBlendEffect::FillOverlay {
+                        enabled: true,
+                        fill: SfxFillSource::DryBrush { color: Color::BLACK, spec: SfxDryBrushSpec::default() },
+                        blend: SfxChannelBlend::SoftLight,
+                        opacity: 0.8,
+                    },
+                ],
             },
             ..SfxData::default()
         };

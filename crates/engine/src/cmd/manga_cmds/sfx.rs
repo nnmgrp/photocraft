@@ -8,12 +8,13 @@ use std::sync::Arc;
 use photocraft_algo::{PatternType, ScreentoneSpec};
 use photocraft_color::{BlendMode, Color, PixelFormat};
 use photocraft_doc::sfx::{
-    SfxData, SfxDryBrushEngine, SfxDryBrushSpec, SfxFillSource, SfxLineEffect, SfxLineStyle, SfxPreset, SfxShtackVariant, SfxSpikeShape,
-    SfxVectorShadow, reset_sfx_warps_for_new_layer, scale_new_sfx_for_document,
+    SfxBlendEffect, SfxData, SfxDryBrushEngine, SfxDryBrushSpec, SfxFillSource, SfxLineEffect, SfxLineStyle, SfxPreset, SfxShtackVariant,
+    SfxSpikeShape, SfxVectorShadow, reset_sfx_warps_for_new_layer, scale_new_sfx_for_document,
 };
 use photocraft_doc::text::Orientation;
 use photocraft_doc::{Group, Layer, LayerContent, LayerId, Rect};
 use photocraft_manga_core::sfx_render::{SfxRenderOutput, render_sfx_with_options};
+use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
 use crate::commands::{CommandSpec, bad, has_doc, layer_param};
@@ -477,6 +478,50 @@ impl SfxPresetLibrary {
     }
 }
 
+/// Returns true when `data` can be rendered with 100% fidelity by the hardware `wgpu` SFX
+/// pipeline (`photocraft-gpu`). Legacy/special passes (`NegativeInvert`, `Distress`, deprecated
+/// `SfxStylePass`, or unimplemented `to be added` effects) automatically fall back to the CPU oracle.
+pub fn sfx_gpu_compatible(data: &SfxData) -> bool {
+    !data.has_negative_invert()
+        && !data.distress.enabled
+        && !data.styles.iter().any(|s| {
+            matches!(
+                s,
+                photocraft_doc::sfx::SfxStylePass::Stroke { enabled: true, .. }
+                    | photocraft_doc::sfx::SfxStylePass::Extrude3D { enabled: true, .. }
+                    | photocraft_doc::sfx::SfxStylePass::Shadow { enabled: true, .. }
+                    | photocraft_doc::sfx::SfxStylePass::InnerGlow { enabled: true, .. }
+                    | photocraft_doc::sfx::SfxStylePass::NegativeInvert { enabled: true }
+            )
+        })
+        && !data.blending.effects.iter().any(|fx| {
+            fx.enabled()
+                && matches!(
+                    fx,
+                    SfxBlendEffect::InnerShadow { .. }
+                        | SfxBlendEffect::OuterGlow { .. }
+                        | SfxBlendEffect::InnerGlow { .. }
+                        | SfxBlendEffect::Bevel { .. }
+                )
+        })
+}
+
+/// Optional native GPU tiled renderer hook registered by the UI host (`photocraft-ui-egui`) so
+/// full-resolution SFX commits on large documents (up to 12 000 × 17 000 px) execute on GPU.
+#[cfg(not(target_arch = "wasm32"))]
+pub type SfxGpuRenderHook = Arc<dyn Fn(&SfxData, PixelFormat, f32) -> Option<SfxRenderOutput> + Send + Sync>;
+
+#[cfg(not(target_arch = "wasm32"))]
+static SFX_GPU_HOOK: std::sync::RwLock<Option<SfxGpuRenderHook>> = std::sync::RwLock::new(None);
+
+/// Installs or clears the optional native GPU SFX renderer hook.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn set_sfx_gpu_renderer_hook(hook: Option<SfxGpuRenderHook>) {
+    if let Ok(mut slot) = SFX_GPU_HOOK.write() {
+        *slot = hook;
+    }
+}
+
 fn auto_layer_name(data: &SfxData) -> String {
     let clean: String = data.text.chars().filter(|c| !c.is_control()).take(20).collect();
     let trimmed = clean.trim();
@@ -488,6 +533,15 @@ fn render_with_shared_text(data: &SfxData, format: PixelFormat, dpi: f32) -> Sfx
 }
 
 fn render_with_shared_text_preview(data: &SfxData, format: PixelFormat, dpi: f32, preview: bool) -> SfxRenderOutput {
+    #[cfg(not(target_arch = "wasm32"))]
+    if !preview && sfx_gpu_compatible(data) {
+        let hook = SFX_GPU_HOOK.read().ok().and_then(|g| g.clone());
+        if let Some(cb) = hook
+            && let Some(rendered) = cb(data, format, dpi)
+        {
+            return rendered;
+        }
+    }
     let mut guard = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
     render_sfx_with_options(data, &mut guard, format, dpi, preview)
 }
@@ -600,10 +654,21 @@ fn sfx_update(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(sfx_bad(CMD, "missing `sfx` payload or `color`"));
     };
     data.validate();
-    // Interactive slider / gizmo drags ask for a fast proxy preview; the final full-resolution
-    // render is emitted on pointer release with `preview: false`.
+    // Interactive slider / gizmo drags ask for a fast preview; when the host provides a live
+    // zero-readback GPU viewport overlay (`gpuPreview: true`), skip CPU rasterization completely
+    // and clear the layer surface so no stale ghost appears behind the live GPU overlay. The final
+    // full-resolution render is committed on pointer release with `preview: false`.
     let preview = p.get("preview").and_then(Value::as_bool).unwrap_or(false);
-    let rendered = render_with_shared_text_preview(&data, fmt, dpi, preview);
+    let gpu_preview = preview && p.get("gpuPreview").and_then(Value::as_bool).unwrap_or(false) && sfx_gpu_compatible(&data);
+    let rendered = if gpu_preview {
+        SfxRenderOutput::Single {
+            surface: Surface::new(fmt),
+            bounds: Rect::EMPTY,
+            geom: photocraft_manga_core::sfx_geom::PreparedSfx::default(),
+        }
+    } else {
+        render_with_shared_text_preview(&data, fmt, dpi, preview)
+    };
     let bounds = rendered.bounds();
 
     s.edit("Update SFX", |doc, _| {

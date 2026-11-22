@@ -31,6 +31,7 @@ impl PhotocraftApp {
         self.window_device = Some((rs.device.clone(), gpu.health().clone()));
         self.gpu = Some(gpu);
         self.prefs_rt.gpu_style = None;
+        crate::canvas::sfx_gpu_preview::init_for_render_state(&rs);
     }
 
     /// Begin preparing the compositor after the GPU canvas is initialized.

@@ -46,6 +46,7 @@ pub mod scroll_all_windows;
 pub mod scrollbars;
 pub mod select_mask_view;
 mod selection;
+pub mod sfx_gpu_preview;
 pub mod snap_ui;
 mod start_screen;
 mod strokes;

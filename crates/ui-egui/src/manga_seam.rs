@@ -109,6 +109,9 @@ mod native {
         pub sfx_screentone_ui: ScreentoneUi,
         pub sfx_screentone_bound: Option<(BridgeDocId, LayerId, bool)>,
         pub sfx_screentone_pending_full: bool,
+        /// Active SFX layer currently rendered via zero-readback GPU viewport overlay during an
+        /// interactive drag (`gpuPreview: true`); cleared on pointer release (`preview: false`).
+        pub sfx_gpu_preview_layer: Option<(DocId, LayerId)>,
     }
 
     /// Canonical order matches [`Group::Manga::tabs`].
@@ -351,9 +354,46 @@ mod native {
         normalize_panel(id.strip_prefix("window.panel.").or_else(|| id.strip_prefix("window.toggle.")).unwrap_or(id)).map(|short| is_panel_active(app, short))
     }
 
+    fn sfx_gpu_preview_ready(app: &PhotocraftApp) -> bool {
+        app.gpu.is_some()
+            && app.gpu_render_state.as_ref().is_some_and(crate::canvas::sfx_gpu_preview::is_supported)
+    }
+
     fn dispatch_commands(app: &mut PhotocraftApp, cmds: Vec<OutCommand>) -> Option<Value> {
         let mut last = None;
-        for cmd in cmds {
+        let gpu_ready = sfx_gpu_preview_ready(app);
+        for mut cmd in cmds {
+            if cmd.id == "sfx.update" {
+                let is_preview = cmd.params.get("preview").and_then(Value::as_bool).unwrap_or(false);
+                if is_preview && gpu_ready {
+                    let sfx_ok = cmd
+                        .params
+                        .get("sfx")
+                        .and_then(|v| serde_json::from_value::<SfxData>(v.clone()).ok())
+                        .is_some_and(|d| photocraft_engine::cmd::manga_cmds::sfx::sfx_gpu_compatible(&d));
+                    if sfx_ok {
+                        if let Some(obj) = cmd.params.as_object_mut() {
+                            obj.insert("gpuPreview".to_owned(), Value::Bool(true));
+                        }
+                        let target = app.session.active().and_then(|st| {
+                            let lid = cmd
+                                .params
+                                .get("layer")
+                                .and_then(Value::as_u64)
+                                .map(LayerId)
+                                .or(st.active_layer)?;
+                            Some((st.doc.id, lid))
+                        });
+                        app.manga.sfx_gpu_preview_layer = target;
+                    } else {
+                        app.manga.sfx_gpu_preview_layer = None;
+                    }
+                } else if !is_preview {
+                    app.manga.sfx_gpu_preview_layer = None;
+                }
+            } else if matches!(cmd.id, "sfx.bakeToRaster" | "sfx.create" | "sfx.presets.apply") {
+                app.manga.sfx_gpu_preview_layer = None;
+            }
             match app.run(cmd.id, cmd.params) {
                 Ok(v) => last = Some(v),
                 Err(e) => {
@@ -443,12 +483,17 @@ mod native {
                 app.manga.ui.sfx_panel.draft = sfx.clone();
                 app.manga.ui.sfx_panel.synced_data = Some(sfx.clone());
                 app.manga.sfx_screentone_pending_full = pointer_down;
+                let gpu_prev = pointer_down
+                    && sfx_gpu_preview_ready(app)
+                    && photocraft_engine::cmd::manga_cmds::sfx::sfx_gpu_compatible(&sfx);
+                app.manga.sfx_gpu_preview_layer = gpu_prev.then_some((DocId(doc_id.0), lid));
                 let _ = app.run(
                     "sfx.update",
-                    json!({ "layer": lid.0, "sfx": sfx, "coalesce": coalesce, "preview": pointer_down }),
+                    json!({ "layer": lid.0, "sfx": sfx, "coalesce": coalesce, "preview": pointer_down, "gpuPreview": gpu_prev }),
                 );
             } else if app.manga.sfx_screentone_pending_full && !pointer_down {
                 app.manga.sfx_screentone_pending_full = false;
+                app.manga.sfx_gpu_preview_layer = None;
                 let _ = app.run(
                     "sfx.update",
                     json!({ "layer": lid.0, "sfx": sfx, "coalesce": coalesce, "preview": false }),
@@ -1602,6 +1647,23 @@ mod native {
             story_links: balloon_story_links(&st.doc, st.active_layer),
         };
         balloon_gizmo::draw(painter, &app.manga.ui.balloon_gizmo, &bview);
+        if let Some((prev_doc, prev_lid)) = app.manga.sfx_gpu_preview_layer
+            && prev_doc == st.doc.id
+            && sfx_gpu_preview_ready(app)
+            && let Some(layer) = st.doc.layer(prev_lid)
+            && layer.visible
+            && let Some(sfx) = layer.sfx.as_deref()
+            && photocraft_engine::cmd::manga_cmds::sfx::sfx_gpu_compatible(sfx)
+        {
+            crate::canvas::sfx_gpu_preview::paint(
+                painter,
+                xf.rect,
+                *xf,
+                sfx.clone(),
+                st.doc.resolution_dpi.max(1.0),
+                layer.opacity,
+            );
+        }
         let sfx_v = sfx_view_from(&st.doc, st.active_layer, app.active_tool() == Tool::Sfx, is_panel_active(app, "sfx"), xf);
         photocraft_manga_ui::sfx_gizmo::draw(painter, &app.manga.ui.sfx_gizmo, &sfx_v);
         if let Some(drag) = app.manga.sfx_create_drag {
@@ -1749,30 +1811,58 @@ mod native {
     /// Commits a full-resolution SFX render once the user releases the mouse after dragging a
     /// control in the SFX dock, standard Character dock, or Canvas Bar.
     fn flush_pending_sfx_full_render(app: &mut PhotocraftApp, ctx: &egui::Context) {
-        if !app.manga.ui.sfx_panel.pending_full_render || ctx.input(|i| i.pointer.primary_down()) {
+        let pointer_down = ctx.input(|i| i.pointer.primary_down());
+        if app.manga.ui.sfx_panel.pending_full_render && !pointer_down {
+            app.manga.ui.sfx_panel.pending_full_render = false;
+            app.manga.sfx_gpu_preview_layer = None;
+            if let Some((doc_id, layer_id)) = app.manga.ui.sfx_panel.pending_full_target.take() {
+                let sfx = app
+                    .session
+                    .active()
+                    .filter(|st| st.doc.id.0 == doc_id.0)
+                    .and_then(|st| st.doc.layer(layer_id))
+                    .and_then(|l| l.sfx.as_deref().cloned());
+                if let Some(sfx) = sfx {
+                    let coalesce = format!("sfx-panel:{}:{}", doc_id.0, layer_id.0);
+                    let _ = app.run(
+                        "sfx.update",
+                        json!({
+                            "layer": layer_id.0,
+                            "sfx": sfx,
+                            "coalesce": coalesce,
+                            "preview": false,
+                        }),
+                    );
+                }
+            }
             return;
         }
-        app.manga.ui.sfx_panel.pending_full_render = false;
-        let Some((doc_id, layer_id)) = app.manga.ui.sfx_panel.pending_full_target.take() else {
-            return;
-        };
-        let sfx = app
-            .session
-            .active()
-            .filter(|st| st.doc.id.0 == doc_id.0)
-            .and_then(|st| st.doc.layer(layer_id))
-            .and_then(|l| l.sfx.as_deref().cloned());
-        if let Some(sfx) = sfx {
-            let coalesce = format!("sfx-panel:{}:{}", doc_id.0, layer_id.0);
-            let _ = app.run(
-                "sfx.update",
-                json!({
-                    "layer": layer_id.0,
-                    "sfx": sfx,
-                    "coalesce": coalesce,
-                    "preview": false,
-                }),
-            );
+        // Safety net: if a live GPU preview drag ended abnormally (focus loss / alt-tab / widget
+        // blur without a release event), flush full-res raster pixels so the layer is never empty.
+        if !pointer_down
+            && !app.manga.ui.sfx_gizmo.has_active_drag()
+            && !app.manga.ui.sfx_panel.pending_full_render
+            && !app.manga.sfx_screentone_pending_full
+            && let Some((doc_id, layer_id)) = app.manga.sfx_gpu_preview_layer.take()
+        {
+            let sfx = app
+                .session
+                .active()
+                .filter(|st| st.doc.id == doc_id)
+                .and_then(|st| st.doc.layer(layer_id))
+                .and_then(|l| l.sfx.as_deref().cloned());
+            if let Some(sfx) = sfx {
+                let coalesce = format!("sfx-panel:{}:{}", doc_id.0, layer_id.0);
+                let _ = app.run(
+                    "sfx.update",
+                    json!({
+                        "layer": layer_id.0,
+                        "sfx": sfx,
+                        "coalesce": coalesce,
+                        "preview": false,
+                    }),
+                );
+            }
         }
     }
 

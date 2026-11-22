@@ -10,6 +10,8 @@
 //! 7. `FreeTransform` 4-corner 3×3 homography + affine/skew/clamped keystone around rest bounds center.
 //! 8. Deterministic `Distress` normal perturbation.
 
+use std::sync::{Arc, Mutex};
+
 use photocraft_doc::TextLayer;
 use photocraft_doc::sfx::{SfxData, SfxFreeTransform, SfxGlyphTransform, SfxMeshInterpolation, SfxMeshLattice};
 use photocraft_doc::text::{CharStyle, Orientation, TextRun};
@@ -22,7 +24,29 @@ const MAX_FLATTEN_DEPTH: u8 = 7;
 const MAX_CONTOUR_VERTS: usize = 4096;
 const MAX_TOTAL_VERTS: usize = 120_000;
 const SUBDIVIDE_STEP_PX: f64 = 4.0;
+const MAX_SFX_DPI: f32 = 4800.0;
 const SMOOTH_CORNER_COS: f64 = 0.9396926207859084; // cos(20 deg)
+
+#[derive(Clone, PartialEq, Eq)]
+struct FlattenedGlyphKey {
+    text: String,
+    font_family: String,
+    font_style: String,
+    postscript_name: Option<String>,
+    weight: u16,
+    italic: bool,
+    size_pt_bits: u32,
+    tracking_bits: u32,
+    leading_bits: u32,
+    vertical: bool,
+    dpi_bits: u32,
+    step_bits: u64,
+    tol_bits: u64,
+}
+
+type FlattenedGlyphEntry = Arc<(Vec<(usize, Vec<Vec<ContourPt>>)>, [f64; 4])>;
+
+static FLATTENED_CACHE: Mutex<Vec<(FlattenedGlyphKey, FlattenedGlyphEntry)>> = Mutex::new(Vec::new());
 
 const IDENTITY_H: [f64; 9] = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
 
@@ -312,7 +336,7 @@ fn point_line_dist(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
     ((p[0] - a[0]) * dy - (p[1] - a[1]) * dx).abs() / len2.sqrt()
 }
 
-fn flatten_elements(elements: &[PathEl], subdivide_step: f64) -> Vec<Vec<ContourPt>> {
+fn flatten_elements(elements: &[PathEl], subdivide_step: f64, flatten_tol: f64) -> Vec<Vec<ContourPt>> {
     let mut contours = Vec::new();
     let mut cur: Vec<ContourPt> = Vec::new();
     let mut start = [0.0_f64; 2];
@@ -358,11 +382,11 @@ fn flatten_elements(elements: &[PathEl], subdivide_step: f64) -> Vec<Vec<Contour
             PathEl::QuadTo(q, p) => {
                 let c1 = [pos[0] + (2.0 / 3.0) * (q[0] - pos[0]), pos[1] + (2.0 / 3.0) * (q[1] - pos[1])];
                 let c2 = [p[0] + (2.0 / 3.0) * (q[0] - p[0]), p[1] + (2.0 / 3.0) * (q[1] - p[1])];
-                flatten_cubic(&mut cur, pos, c1, c2, p, 0.25, subdivide_step, 0, true);
+                flatten_cubic(&mut cur, pos, c1, c2, p, flatten_tol, subdivide_step, 0, true);
                 pos = p;
             }
             PathEl::CurveTo(c1, c2, p) => {
-                flatten_cubic(&mut cur, pos, c1, c2, p, 0.25, subdivide_step, 0, true);
+                flatten_cubic(&mut cur, pos, c1, c2, p, flatten_tol, subdivide_step, 0, true);
                 pos = p;
             }
             PathEl::Close => {
@@ -715,52 +739,92 @@ pub fn build_sfx_geometry(data: &SfxData, engine: &mut TextEngine, dpi: f32) -> 
     if data.text.is_empty() {
         return PreparedSfx::default();
     }
-    let layer = build_temp_text_layer(data);
-    let layout = engine.layout(&layer, dpi.clamp(1.0, 1200.0));
-    let raw_outlines = glyph_outlines(&layout, &Affine::IDENTITY, None);
-    if raw_outlines.is_empty() {
-        return PreparedSfx::default();
-    }
+    let dpi_clamped = dpi.clamp(1.0, MAX_SFX_DPI);
+    let em_px = f64::from(data.size_pt.max(1.0)) * f64::from(dpi_clamped) / 72.0;
+    let flatten_tol = (em_px / 480.0).clamp(0.25, 6.0);
 
     let any_glyph_corner_warp = data.per_glyph.iter().any(SfxGlyphTransform::has_corner_warp);
     let has_spline = data.spline.points.len() >= 2;
+    // NOTE: `has_spline` only translates + rotates each glyph rigidly as a whole, so it does NOT
+    // require per-segment subdivision. Only non-affine per-vertex warps subdivide, and their step
+    // scales proportionally with glyph height so 2400 DPI / 12K×17K lettering stays lightweight.
     let need_subdivide = !data.mesh.is_identity()
         || !data.liquify_strokes.is_empty()
         || data.free_transform.has_corner_warp()
         || any_glyph_corner_warp
-        || has_spline
         || data.free_transform.perspective_x.abs() > 1e-4
         || data.free_transform.perspective_y.abs() > 1e-4
         || (data.distress.enabled && data.distress.roughness > 1e-4);
-    let step = if need_subdivide { SUBDIVIDE_STEP_PX } else { 0.0 };
+    let step = if need_subdivide { (em_px / 28.0).clamp(SUBDIVIDE_STEP_PX, 96.0) } else { 0.0 };
 
-    let mut raw_glyphs: Vec<(usize, Vec<Vec<ContourPt>>)> = Vec::with_capacity(raw_outlines.len());
-    let mut total_verts = 0usize;
-    let mut base_bounds: Option<[f64; 4]> = None;
+    let cache_key = FlattenedGlyphKey {
+        text: data.text.clone(),
+        font_family: data.font_family.clone(),
+        font_style: data.font_style.clone(),
+        postscript_name: data.postscript_name.clone(),
+        weight: data.weight,
+        italic: data.italic,
+        size_pt_bits: data.size_pt.to_bits(),
+        tracking_bits: data.tracking.to_bits(),
+        leading_bits: data.leading_scale.to_bits(),
+        vertical: data.vertical,
+        dpi_bits: dpi_clamped.to_bits(),
+        step_bits: step.to_bits(),
+        tol_bits: flatten_tol.to_bits(),
+    };
 
-    for go in raw_outlines {
-        let mut contours = flatten_elements(&go.elements, step);
-        if total_verts >= MAX_TOTAL_VERTS {
-            break;
+    let cached_entry: Option<FlattenedGlyphEntry> = FLATTENED_CACHE
+        .lock()
+        .ok()
+        .and_then(|g| g.iter().find(|(k, _)| *k == cache_key).map(|(_, v)| Arc::clone(v)));
+
+    let entry = if let Some(hit) = cached_entry {
+        hit
+    } else {
+        let layer = build_temp_text_layer(data);
+        let layout = engine.layout(&layer, dpi_clamped);
+        let raw_outlines = glyph_outlines(&layout, &Affine::IDENTITY, None);
+        if raw_outlines.is_empty() {
+            return PreparedSfx::default();
         }
-        contours.retain(|c| !c.is_empty());
-        for c in &contours {
-            total_verts += c.len();
-            if let Some(cb) = contour_bounds(c.iter().map(|pt| pt.p)) {
-                base_bounds = Some(match base_bounds {
-                    None => cb,
-                    Some(b) => [b[0].min(cb[0]), b[1].min(cb[1]), b[2].max(cb[2]), b[3].max(cb[3])],
-                });
+        let mut raw_glyphs: Vec<(usize, Vec<Vec<ContourPt>>)> = Vec::with_capacity(raw_outlines.len());
+        let mut total_verts = 0usize;
+        let mut base_bounds: Option<[f64; 4]> = None;
+
+        for go in raw_outlines {
+            let mut contours = flatten_elements(&go.elements, step, flatten_tol);
+            if total_verts >= MAX_TOTAL_VERTS {
+                break;
+            }
+            contours.retain(|c| !c.is_empty());
+            for c in &contours {
+                total_verts += c.len();
+                if let Some(cb) = contour_bounds(c.iter().map(|pt| pt.p)) {
+                    base_bounds = Some(match base_bounds {
+                        None => cb,
+                        Some(b) => [b[0].min(cb[0]), b[1].min(cb[1]), b[2].max(cb[2]), b[3].max(cb[3])],
+                    });
+                }
+            }
+            if !contours.is_empty() {
+                raw_glyphs.push((go.glyph_index, contours));
             }
         }
-        if !contours.is_empty() {
-            raw_glyphs.push((go.glyph_index, contours));
+        let Some(base_b) = base_bounds else {
+            return PreparedSfx::default();
+        };
+        let built: FlattenedGlyphEntry = Arc::new((raw_glyphs, base_b));
+        if let Ok(mut g) = FLATTENED_CACHE.lock() {
+            if g.len() >= 8 {
+                g.remove(0);
+            }
+            g.push((cache_key, Arc::clone(&built)));
         }
-    }
-
-    let Some(base_b) = base_bounds else {
-        return PreparedSfx::default();
+        built
     };
+
+    let (raw_glyphs_ref, base_b) = (&entry.0, entry.1);
+    let raw_glyphs = raw_glyphs_ref.clone();
     let shift = [data.origin[0] - base_b[0], data.origin[1] - base_b[1]];
     let rest_box = [data.origin[0], data.origin[1], data.origin[0] + (base_b[2] - base_b[0]), data.origin[1] + (base_b[3] - base_b[1])];
     let box_cx = (rest_box[0] + rest_box[2]) * 0.5;
@@ -996,5 +1060,35 @@ mod tests {
         };
         assert!(signed_area(&geom.world_corners) > 0.0, "default FT quad must not be mirrored");
         assert!(signed_area(&geom.glyphs[0].quad_doc) > 0.0, "default glyph quad must not be mirrored");
+    }
+
+    #[test]
+    fn spline_at_2400_dpi_does_not_explode_vertex_count_and_preserves_full_dpi() {
+        let mut engine = TextEngine::new();
+        let base = SfxData { text: "BAM!".to_owned(), size_pt: 72.0, origin: [100.0, 100.0], ..SfxData::default() };
+        let mut curved = base.clone();
+        curved.spline.points = vec![[-1200.0, 200.0], [0.0, -450.0], [1200.0, 200.0]];
+
+        let g_1200 = build_sfx_geometry(&base, &mut engine, 1200.0);
+        let g_2400 = build_sfx_geometry(&base, &mut engine, 2400.0);
+        let g_spline = build_sfx_geometry(&curved, &mut engine, 2400.0);
+
+        let h_1200 = (g_1200.rest_box[3] - g_1200.rest_box[1]).abs();
+        let h_2400 = (g_2400.rest_box[3] - g_2400.rest_box[1]).abs();
+        assert!(
+            h_2400 > h_1200 * 1.8,
+            "2400 DPI must NOT be clamped to 1200 DPI (h_1200={h_1200:.1}, h_2400={h_2400:.1})"
+        );
+
+        let verts_base: usize = g_2400.polylines.iter().map(|p| p.pts.len()).sum();
+        let verts_spline: usize = g_spline.polylines.iter().map(|p| p.pts.len()).sum();
+        assert_eq!(
+            verts_spline, verts_base,
+            "Catmull-Rom spline must NOT trigger per-segment subdivision (base={verts_base}, spline={verts_spline})"
+        );
+        assert!(
+            verts_spline < 2000,
+            "2400 DPI BAM! spline vertex count must stay lightweight (got {verts_spline})"
+        );
     }
 }

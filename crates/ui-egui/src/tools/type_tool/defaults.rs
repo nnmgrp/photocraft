@@ -241,25 +241,27 @@ fn sfx_style_label(weight: u16, italic: bool) -> String {
 /// Character dock displays its typography metrics live.
 pub(super) fn sfx_styles_at(app: &PhotocraftApp) -> Option<(photocraft_doc::text::CharStyle, photocraft_doc::text::ParagraphStyle)> {
     let (_, sfx) = target_sfx(app)?;
-    let mut c = photocraft_doc::text::CharStyle::default();
-    c.font_family = sfx.font_family.clone();
-    c.font_style = if sfx.font_style.trim().is_empty() { sfx_style_label(sfx.weight, sfx.italic) } else { sfx.font_style.clone() };
-    c.postscript_name = sfx.postscript_name.clone();
-    c.weight = sfx.weight;
-    c.italic = sfx.italic;
-    c.size_pt = sfx.size_pt;
-    c.leading_pt = Some((sfx.size_pt * sfx.leading_scale).max(0.1));
-    c.tracking = sfx.tracking;
-    c.horizontal_scale = (sfx.free_transform.scale_x as f32).clamp(0.1, 12.0);
-    c.vertical_scale = (sfx.free_transform.scale_y as f32).clamp(0.1, 12.0);
-    c.faux_bold = sfx.weight >= 700;
-    c.faux_italic = sfx.italic;
-    c.color = match &sfx.fill {
-        photocraft_doc::sfx::SfxFillSource::Solid { color } => *color,
-        photocraft_doc::sfx::SfxFillSource::Gradient { start, .. } => *start,
-        photocraft_doc::sfx::SfxFillSource::DryBrush { color, .. } => *color,
-        photocraft_doc::sfx::SfxFillSource::ShtackHatch { spec } => spec.color,
-        photocraft_doc::sfx::SfxFillSource::None | photocraft_doc::sfx::SfxFillSource::Screentone { .. } => sfx.line_effect.line_color,
+    let c = photocraft_doc::text::CharStyle {
+        font_family: sfx.font_family.clone(),
+        font_style: if sfx.font_style.trim().is_empty() { sfx_style_label(sfx.weight, sfx.italic) } else { sfx.font_style.clone() },
+        postscript_name: sfx.postscript_name.clone(),
+        weight: sfx.weight,
+        italic: sfx.italic,
+        size_pt: sfx.size_pt,
+        leading_pt: Some((sfx.size_pt * sfx.leading_scale).max(0.1)),
+        tracking: sfx.tracking,
+        horizontal_scale: (sfx.free_transform.scale_x as f32).clamp(0.1, 12.0),
+        vertical_scale: (sfx.free_transform.scale_y as f32).clamp(0.1, 12.0),
+        faux_bold: sfx.weight >= 700,
+        faux_italic: sfx.italic,
+        color: match &sfx.fill {
+            photocraft_doc::sfx::SfxFillSource::Solid { color } => *color,
+            photocraft_doc::sfx::SfxFillSource::Gradient { start, .. } => *start,
+            photocraft_doc::sfx::SfxFillSource::DryBrush { color, .. } => *color,
+            photocraft_doc::sfx::SfxFillSource::ShtackHatch { spec } => spec.color,
+            photocraft_doc::sfx::SfxFillSource::None | photocraft_doc::sfx::SfxFillSource::Screentone { .. } => sfx.line_effect.line_color,
+        },
+        ..Default::default()
     };
     Some((c, photocraft_doc::text::ParagraphStyle::default()))
 }

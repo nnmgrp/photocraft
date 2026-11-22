@@ -714,8 +714,11 @@ pub struct PhotocraftApp {
     /// That device was lost: frames draw nothing and the app closes once its work is saved (#3438).
     window_lost: bool,
     /// When (in `egui::InputState::time`) to try saving unsaved work for recovery again after a
-    /// failed attempt; the app closes only once it succeeded.
+    /// failed attempt; stops after `gpu_status::MAX_RECOVERY_RETRIES` failed attempts so we never
+    /// burn CPU in an infinite retry loop after device loss.
     window_recovery_retry: Option<f64>,
+    /// Number of failed crash-recovery save attempts after `window_lost`.
+    window_recovery_attempts: u32,
     /// The render state the GPU canvas was built on, kept after it is dropped so Retry GPU can
     /// build a new one on the same device (see `gpu_status::choose_recovery`, #6577).
     gpu_render_state: Option<eframe::egui_wgpu::RenderState>,

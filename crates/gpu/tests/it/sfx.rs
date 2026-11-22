@@ -311,3 +311,116 @@ fn gpu_tiled_render_large_sfx_is_seamless_and_fast() {
     let right_of_seam = surf.pixel(2020, 200);
     assert!(left_of_seam[3] > 0.5 && right_of_seam[3] > 0.5, "tiled render dropped pixels near tile seam");
 }
+
+#[test]
+fn gpu_work_targets_reuse_subviewport_without_realloc_or_edge_leakage() {
+    let Some(mut g) = gpu() else { return };
+    g.renderer.set_max_dim(1024);
+
+    let face = holed_square_contours(40.0, 40.0, 220.0);
+    let seg_pts = seg_contour_from_poly(&face[0]);
+    let seg_len = seg_pts.last().map_or(1.0, |p| p[2]);
+
+    let mut data = SfxData {
+        fill: SfxFillSource::DryBrush {
+            color: Color::rgb(0.85, 0.12, 0.15),
+            spec: SfxDryBrushSpec {
+                enabled: true,
+                engine: SfxDryBrushEngine::SdfSeg,
+                dryness_pct: 36.0,
+                freq_pct: 55.0,
+                ..SfxDryBrushSpec::default()
+            },
+        },
+        ..SfxData::default()
+    };
+    data.line_effect.halo_width_px = 14.0;
+    data.line_effect.halo_color = Color::WHITE;
+    data.vector_shadow.enabled = true;
+    data.vector_shadow.angle_deg = 45.0;
+    data.vector_shadow.distance_px = 12.0;
+    data.vector_shadow.extrude_depth_px = 8.0;
+    data.validate();
+
+    let scene = SfxGpuScene {
+        data: &data,
+        full_bounds: Rect::from_xywh(0, 0, 300, 300),
+        glyph_em_px: 220.0,
+        face_contours: &face,
+        line_polygons: &[],
+        primary_shtack_polygons: &[],
+        secondary_shtack_polygons: &[],
+        primary_dry_vector_cuts: &[],
+        effect_shtack_polygons: &[],
+        effect_dry_vector_cuts: &[],
+        seg_contours: vec![SfxGpuSegContour { pts: &seg_pts, total_len: seg_len, phase: 0.0 }],
+    };
+
+    // 1. Prime capacity at 512x512 with full-area content so pixels at x>=300, y>=260 are populated.
+    let _ = g
+        .renderer
+        .render_region(&g.device, &g.queue, &scene, [0.0, 0.0, 300.0, 300.0], [512, 512])
+        .expect("prime 512x512");
+    assert_eq!(g.renderer.targets_alloc_count(), 1);
+    assert_eq!(g.renderer.targets_capacity(), Some([512, 512]));
+
+    // 2. Render a series of varying sizes <= [512, 512] (simulating continuous Gizmo arc drag).
+    for sz in [[500, 480], [420, 390], [317, 289], [495, 505], [256, 256], [300, 260]] {
+        let _ = g
+            .renderer
+            .render_region(&g.device, &g.queue, &scene, [0.0, 0.0, 300.0, 260.0], sz)
+            .expect("sub-viewport render");
+    }
+    assert_eq!(
+        g.renderer.targets_alloc_count(),
+        1,
+        "varying [w, h] <= capacity must perform ZERO WorkTargets reallocations"
+    );
+    assert_eq!(g.renderer.targets_capacity(), Some([512, 512]));
+
+    // 3. Compare sub-viewport [300, 260] output (inside 512x512 pool) against a fresh renderer at [300, 260].
+    let read_rgba = |renderer: &SfxGpuRenderer, device: &wgpu::Device, queue: &wgpu::Queue| -> Vec<u8> {
+        let (buf, padded_row, rw, rh) = renderer.copy_last_output_to_buffer(device, queue).expect("copy");
+        let slice = buf.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |res| {
+            let _ = tx.send(res);
+        });
+        let _ = device.poll(wgpu::PollType::wait_indefinitely());
+        rx.recv().unwrap().unwrap();
+        let mapped = slice.get_mapped_range().expect("mapped range");
+        let mut out = vec![0u8; (rw * rh * 4) as usize];
+        for row in 0..rh as usize {
+            let s = row * padded_row as usize;
+            let d = row * (rw as usize * 4);
+            out[d..d + rw as usize * 4].copy_from_slice(&mapped[s..s + rw as usize * 4]);
+        }
+        drop(mapped);
+        buf.unmap();
+        buf.destroy();
+        out
+    };
+
+    let pooled_px = read_rgba(&g.renderer, &g.device, &g.queue);
+    let mut fresh = SfxGpuRenderer::new(&g.device).expect("fresh renderer");
+    let _ = fresh
+        .render_region(&g.device, &g.queue, &scene, [0.0, 0.0, 300.0, 260.0], [300, 260])
+        .expect("fresh 300x260");
+    let fresh_px = read_rgba(&fresh, &g.device, &g.queue);
+
+    assert_eq!(pooled_px.len(), fresh_px.len());
+    let max_diff = pooled_px
+        .iter()
+        .zip(fresh_px.iter())
+        .map(|(&a, &b)| a.abs_diff(b))
+        .max()
+        .unwrap_or(0);
+    assert!(
+        max_diff <= 1,
+        "sub-viewport render leaked edge pixels from larger capacity pool (max_diff={max_diff})"
+    );
+
+    // 4. Verify explicit target release drops pooled textures immediately.
+    g.renderer.release_targets();
+    assert_eq!(g.renderer.targets_capacity(), None);
+}

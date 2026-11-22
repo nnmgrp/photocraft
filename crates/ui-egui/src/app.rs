@@ -200,6 +200,7 @@ impl PhotocraftApp {
             window_device: None,
             window_lost: false,
             window_recovery_retry: None,
+            window_recovery_attempts: 0,
             gpu_render_state: None,
             gpu_fault: None,
             gpu_oom_retries: 0,

@@ -1358,9 +1358,19 @@ mod native {
         pointer_screentone(app, ev, mods, &xf) || pointer_balloon(app, ev, mods, &xf) || pointer_sfx(app, ev, mods, &xf)
     }
 
+    fn live_sfx_for(app: &PhotocraftApp, doc_id: DocId, active_layer: Option<LayerId>) -> Option<&SfxData> {
+        let active_lid = active_layer?;
+        app.manga
+            .sfx_gpu_live_draft
+            .as_ref()
+            .filter(|(d, l, _)| *d == doc_id && *l == active_lid)
+            .map(|(_, _, sfx)| sfx)
+    }
+
     fn sfx_view_from<'a>(
         doc: &'a Document,
         active_layer: Option<LayerId>,
+        live_sfx: Option<&'a SfxData>,
         tool_is_sfx: bool,
         panel_open: bool,
         xf: &ViewXform,
@@ -1369,6 +1379,7 @@ mod native {
             doc_id: Some(BridgeDocId(doc.id.0)),
             doc: Some(doc),
             active_layer,
+            live_sfx,
             tool_is_sfx,
             panel_open,
             view_xform: to_manga_xf(xf),
@@ -1388,8 +1399,9 @@ mod native {
             ToolEvent::Down { x, y, .. } => Some([x, y]),
             _ => None,
         };
+        let live_sfx_owned = live_sfx_for(app, doc.id, active_layer).cloned();
         let out = {
-            let view = sfx_view_from(&doc, active_layer, tool_is_sfx, panel_open, xf);
+            let view = sfx_view_from(&doc, active_layer, live_sfx_owned.as_ref(), tool_is_sfx, panel_open, xf);
             app.manga.ui.sfx_gizmo.sync_target(&view);
             photocraft_manga_ui::sfx_gizmo::pointer(&mut app.manga.ui.sfx_gizmo, &view, to_manga_ev(ev), mods)
         };
@@ -1444,8 +1456,9 @@ mod native {
         let active_layer = st.active_layer;
         let tool_is_sfx = app.active_tool() == Tool::Sfx;
         let panel_open = is_panel_active(app, "sfx");
+        let live_sfx_owned = live_sfx_for(app, doc.id, active_layer).cloned();
         let out = {
-            let view = sfx_view_from(&doc, active_layer, tool_is_sfx, panel_open, &xf);
+            let view = sfx_view_from(&doc, active_layer, live_sfx_owned.as_ref(), tool_is_sfx, panel_open, &xf);
             photocraft_manga_ui::sfx_gizmo::cancel_drag(&mut app.manga.ui.sfx_gizmo, &view)
         };
         if let Some(updated) = out.updated_sfx {
@@ -1682,7 +1695,8 @@ mod native {
         if let Some(c) = balloon_gizmo::hover_cursor(&app.manga.ui.balloon_gizmo, &bview, Some(cursor_scr)) {
             return Some(c);
         }
-        let sfx_v = sfx_view_from(&st.doc, st.active_layer, app.active_tool() == Tool::Sfx, is_panel_active(app, "sfx"), xf);
+        let live_sfx = live_sfx_for(app, st.doc.id, st.active_layer);
+        let sfx_v = sfx_view_from(&st.doc, st.active_layer, live_sfx, app.active_tool() == Tool::Sfx, is_panel_active(app, "sfx"), xf);
         photocraft_manga_ui::sfx_gizmo::hover_cursor(&app.manga.ui.sfx_gizmo, &sfx_v, cursor_scr)
     }
 
@@ -1723,7 +1737,8 @@ mod native {
                 layer.opacity,
             );
         }
-        let sfx_v = sfx_view_from(&st.doc, st.active_layer, app.active_tool() == Tool::Sfx, is_panel_active(app, "sfx"), xf);
+        let live_sfx = live_sfx_for(app, st.doc.id, st.active_layer);
+        let sfx_v = sfx_view_from(&st.doc, st.active_layer, live_sfx, app.active_tool() == Tool::Sfx, is_panel_active(app, "sfx"), xf);
         photocraft_manga_ui::sfx_gizmo::draw(painter, &app.manga.ui.sfx_gizmo, &sfx_v);
         if let Some(drag) = app.manga.sfx_create_drag {
             draw_sfx_create_marquee(painter, xf, drag);

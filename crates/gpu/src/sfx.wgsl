@@ -204,18 +204,18 @@ fn composite_pixel_blend(dst: vec4<f32>, src: vec4<f32>, cov: f32, opacity: f32,
 // 5. PIXEL FX TEXTURE HELPERS
 // =============================================================================
 
-fn tex_dims(t: texture_2d<f32>) -> vec2<i32> {
-    return vec2<i32>(textureDimensions(t, 0));
+fn active_dims() -> vec2<i32> {
+    return max(vec2<i32>(i32(round(fx.p1.x)), i32(round(fx.p1.y))), vec2<i32>(1));
 }
 
 fn load_clamped(t: texture_2d<f32>, p: vec2<i32>) -> vec4<f32> {
-    let d = tex_dims(t);
-    let c = clamp(p, vec2<i32>(0), max(d - vec2<i32>(1), vec2<i32>(0)));
+    let d = active_dims();
+    let c = clamp(p, vec2<i32>(0), d - vec2<i32>(1));
     return textureLoad(t, c, 0);
 }
 
 fn load_zero_oob(t: texture_2d<f32>, p: vec2<i32>) -> vec4<f32> {
-    let d = tex_dims(t);
+    let d = active_dims();
     if p.x < 0 || p.y < 0 || p.x >= d.x || p.y >= d.y {
         return vec4<f32>(0.0);
     }
@@ -278,7 +278,7 @@ fn fs_one_bit_face(inp: QuadOut) -> @location(0) vec4<f32> {
 @fragment
 fn fs_jfa_init_mask(inp: QuadOut) -> @location(0) vec4<f32> {
     let p = vec2<i32>(floor(inp.pos.xy));
-    let d = tex_dims(tex_a);
+    let d = active_dims();
     let m = load_clamped(tex_a, p).r;
     let invert = fx.u0.x; // 0 = seed inside (exterior dist), 1 = seed outside/border (interior SDF)
     var is_seed = false;
@@ -299,7 +299,7 @@ fn fs_jfa_step(inp: QuadOut) -> @location(0) vec4<f32> {
     let p = vec2<i32>(floor(inp.pos.xy));
     let pf = vec2<f32>(p);
     let step = i32(fx.u0.w);
-    let d = tex_dims(tex_a);
+    let d = active_dims();
     var best = load_clamped(tex_a, p);
     var best_d2 = 1e30;
     if best.x > -1e6 {
@@ -804,7 +804,7 @@ fn load_premul_zero(tex: texture_2d<f32>, p: vec2<i32>, dims: vec2<i32>, to_lin:
 
 @fragment
 fn fs_blit_premul(inp: QuadOut) -> @location(0) vec4<f32> {
-    let dims_i = tex_dims(tex_a);
+    let dims_i = max(vec2<i32>(i32(round(fx.p2.y)), i32(round(fx.p2.z))), vec2<i32>(1));
     let dims = vec2<f32>(dims_i);
     var uv = inp.uv;
     var opacity = 1.0;

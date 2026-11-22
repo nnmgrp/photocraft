@@ -72,13 +72,17 @@ pub fn check_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     ctx.graphics_mut(|g| *g = Default::default());
     let now = ctx.input(|i| i.time);
+    let reason = health.fault().map_or_else(|| "GPU device lost".to_string(), |f| f.to_string());
     if !app.window_lost {
         app.window_lost = true;
-        let reason = health.fault().map_or_else(|| "GPU device lost".to_string(), |f| f.to_string());
+        app.window_recovery_attempts = 0;
         log::error!("{reason}: the window can't be drawn any more; saving unsaved documents for recovery and closing");
     } else {
+        if app.window_recovery_attempts >= MAX_RECOVERY_RETRIES {
+            return;
+        }
         match app.window_recovery_retry {
-            // Saved, and the close is on its way.
+            // Saved (or gave up), and no further retry is scheduled.
             None => return,
             Some(at) if now < at => {
                 ctx.request_repaint_after(std::time::Duration::from_secs_f64((at - now).max(0.0)));
@@ -94,15 +98,74 @@ pub fn check_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
         Err(e) => {
-            log::error!("{e}; keeping the documents open and trying again in {RECOVERY_RETRY_SECS} s");
-            app.window_recovery_retry = Some(now + RECOVERY_RETRY_SECS);
-            ctx.request_repaint_after(std::time::Duration::from_secs_f64(RECOVERY_RETRY_SECS));
+            app.window_recovery_attempts = app.window_recovery_attempts.saturating_add(1);
+            if app.window_recovery_attempts >= MAX_RECOVERY_RETRIES {
+                app.window_recovery_retry = None;
+                let msg = format!("{reason}: {e}");
+                log::error!("{msg}; stopped automatic recovery after {MAX_RECOVERY_RETRIES} attempts (reload/restart required)");
+                queue_fallback_notice(app, msg.clone());
+                #[cfg(target_arch = "wasm32")]
+                show_web_gpu_lost_overlay(&msg);
+            } else {
+                log::error!(
+                    "{e}; keeping the documents open and trying again in {RECOVERY_RETRY_SECS} s (attempt {}/{MAX_RECOVERY_RETRIES})",
+                    app.window_recovery_attempts
+                );
+                app.window_recovery_retry = Some(now + RECOVERY_RETRY_SECS);
+                ctx.request_repaint_after(std::time::Duration::from_secs_f64(RECOVERY_RETRY_SECS));
+            }
         }
     }
 }
 
 /// Seconds between attempts to save unsaved work for recovery after the window's device was lost.
 pub const RECOVERY_RETRY_SECS: f64 = 2.0;
+
+/// Maximum failed crash-recovery attempts after device loss before stopping the retry loop so
+/// the app stops burning CPU and hands control to an explicit reload/restart action.
+pub const MAX_RECOVERY_RETRIES: u32 = 3;
+
+#[cfg(target_arch = "wasm32")]
+fn show_web_gpu_lost_overlay(reason: &str) {
+    let Some(win) = eframe::web_sys::window() else { return };
+    let Some(doc) = win.document() else { return };
+    if doc.get_element_by_id("photocraft-gpu-lost-overlay").is_some() {
+        return;
+    }
+    let Some(body) = doc.body() else { return };
+    let Ok(wrap) = doc.create_element("div") else { return };
+    wrap.set_id("photocraft-gpu-lost-overlay");
+    let _ = wrap.set_attribute(
+        "style",
+        "position:fixed;inset:0;z-index:99999;display:flex;align-items:center;justify-content:center;background:rgba(15,17,22,0.82);font-family:system-ui,sans-serif;color:#f3f4f6;",
+    );
+    let Ok(card) = doc.create_element("div") else { return };
+    let _ = card.set_attribute(
+        "style",
+        "max-width:440px;padding:20px 24px;border-radius:10px;background:#1e222b;border:1px solid #374151;box-shadow:0 12px 32px rgba(0,0,0,0.45);",
+    );
+    if let Ok(title) = doc.create_element("div") {
+        let _ = title.set_attribute("style", "font-size:16px;font-weight:600;margin-bottom:8px;color:#fbbf24;");
+        title.set_text_content(Some("GPU device lost — rendering paused"));
+        let _ = card.append_child(&title);
+    }
+    if let Ok(desc) = doc.create_element("div") {
+        let _ = desc.set_attribute("style", "font-size:13px;line-height:1.45;margin-bottom:14px;color:#d1d5db;word-break:break-word;");
+        desc.set_text_content(Some(reason));
+        let _ = card.append_child(&desc);
+    }
+    if let Ok(btn) = doc.create_element("button") {
+        let _ = btn.set_attribute(
+            "style",
+            "padding:8px 16px;border-radius:6px;border:none;background:#2563eb;color:#fff;font-size:13px;font-weight:600;cursor:pointer;",
+        );
+        let _ = btn.set_attribute("onclick", "window.location.reload()");
+        btn.set_text_content(Some("Reload Page"));
+        let _ = card.append_child(&btn);
+    }
+    let _ = wrap.append_child(&card);
+    let _ = body.append_child(&wrap);
+}
 
 /// Write every document with unsaved changes to crash recovery, whatever the autosave timer and
 /// preference, and wait until the writes finished (see `Services::flush_autosaves`). `Ok` only when
@@ -477,5 +540,39 @@ mod tests {
         choose_recovery(&mut app, true).unwrap();
         assert!(!app.gpu_active());
         assert_eq!(app.ui.notices.len(), 1, "the restart notice");
+    }
+
+    #[test]
+    fn check_window_stops_retrying_after_max_recovery_retries() {
+        let _gpu = photocraft_testkit::gpu_lock();
+        let rs = std::panic::catch_unwind(|| egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default()));
+        let Ok(rs) = rs else {
+            eprintln!("skipping: no GPU adapter");
+            return;
+        };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.set_wgpu(rs);
+        app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+        // Dirty the document without configuring an autosave service so `save_for_recovery` fails.
+        app.run("layer.new.layer", json!({})).unwrap();
+        // Destroy the wgpu device to fire the real device-lost callback watched by `window_device`.
+        app.window_device.as_ref().unwrap().0.destroy();
+
+        let ctx = egui::Context::default();
+        for attempt in 1..=(MAX_RECOVERY_RETRIES + 2) {
+            let mut raw = egui::RawInput::default();
+            raw.time = Some(f64::from(attempt) * (RECOVERY_RETRY_SECS + 1.0));
+            ctx.begin_pass(raw);
+            check_window(&mut app, &ctx);
+            let mut out = ctx.end_pass();
+            out.textures_delta.clear();
+        }
+        assert!(app.window_lost);
+        assert_eq!(app.window_recovery_attempts, MAX_RECOVERY_RETRIES);
+        assert!(
+            app.window_recovery_retry.is_none(),
+            "retry timer must be cleared after {MAX_RECOVERY_RETRIES} failures so idle CPU stays 0%"
+        );
+        assert!(app.ui.gpu_fallback_notice.is_some());
     }
 }

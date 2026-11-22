@@ -21,14 +21,24 @@ use eframe::wgpu;
 use photocraft_color::PixelFormat;
 use photocraft_doc::sfx::{SfxBlendEffect, SfxData};
 use photocraft_doc::{DocId, LayerId, Rect};
-use photocraft_gpu::{MAX_SFX_TILE_DIM, SfxGpuRenderer, SfxGpuScene, SfxGpuSegContour};
+#[cfg(not(target_arch = "wasm32"))]
+use photocraft_gpu::MAX_SFX_TILE_DIM;
+#[cfg(target_arch = "wasm32")]
+use photocraft_gpu::MAX_SFX_TILE_DIM_WASM;
+use photocraft_gpu::{SfxGpuRenderer, SfxGpuScene, SfxGpuSegContour};
 use photocraft_manga_core::sfx_render::{SfxVectorCache, SfxVectorScene, extract_sfx_vector_scene};
 use photocraft_raster::{Surface, from_rgba_into};
 
 use super::ViewXform;
 
-/// Cap live interactive viewport preview textures at 2048 px per side so 12K×17K pages stay 60 FPS.
-const MAX_PREVIEW_DIM: u32 = 2048;
+/// Cap live interactive viewport preview textures at 1280 px per side so 12K×17K drags stay 60 FPS
+/// with bounded VRAM (~90–220 MB max, 0 reallocations per frame).
+const MAX_PREVIEW_DIM: u32 = 1280;
+
+#[cfg(target_arch = "wasm32")]
+const ASYNC_BAKE_TILE_DIM: u32 = MAX_SFX_TILE_DIM_WASM;
+#[cfg(not(target_arch = "wasm32"))]
+const ASYNC_BAKE_TILE_DIM: u32 = MAX_SFX_TILE_DIM;
 
 static GPU_SFX_FAILED: AtomicBool = AtomicBool::new(false);
 
@@ -59,7 +69,10 @@ impl SfxGpuPreviewResource {
         }
         if self.renderer.is_none() {
             match SfxGpuRenderer::new_for_adapter(&self.adapter, device) {
-                Ok(r) => self.renderer = Some(r),
+                Ok(mut r) => {
+                    r.set_max_dim(MAX_PREVIEW_DIM);
+                    self.renderer = Some(r);
+                }
                 Err(e) => {
                     log::warn!("SFX GPU preview disabled (falling back to CPU): {}", e.0);
                     self.failed = true;
@@ -199,6 +212,76 @@ struct InFlightTile {
     pad_w: u32,
     pad_h: u32,
     done: Arc<Mutex<Option<bool>>>,
+    mapped: bool,
+}
+
+impl Drop for InFlightTile {
+    fn drop(&mut self) {
+        if self.mapped {
+            self.buf.unmap();
+            self.mapped = false;
+        }
+        self.buf.destroy();
+    }
+}
+
+fn poly_aabb(pts: &[(f64, f64)]) -> Option<[f64; 4]> {
+    let mut b = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+    for &(x, y) in pts {
+        if x.is_finite() && y.is_finite() {
+            b[0] = b[0].min(x);
+            b[1] = b[1].min(y);
+            b[2] = b[2].max(x);
+            b[3] = b[3].max(y);
+        }
+    }
+    (b[0] <= b[2] && b[1] <= b[3]).then_some(b)
+}
+
+fn collect_scene_content_boxes(vec_scene: &SfxVectorScene) -> Vec<[f64; 4]> {
+    let mut boxes = Vec::with_capacity(
+        vec_scene.geom.glyphs.len()
+            + vec_scene.line_polygons.len()
+            + vec_scene.primary_shtack_polygons.len()
+            + vec_scene.secondary_shtack_polygons.len(),
+    );
+    for g in &vec_scene.geom.glyphs {
+        boxes.push(g.warped_bounds);
+    }
+    for p in &vec_scene.line_polygons {
+        if let Some(b) = poly_aabb(p) {
+            boxes.push(b);
+        }
+    }
+    for p in &vec_scene.primary_shtack_polygons {
+        if let Some(b) = poly_aabb(p) {
+            boxes.push(b);
+        }
+    }
+    for p in &vec_scene.secondary_shtack_polygons {
+        if let Some(b) = poly_aabb(p) {
+            boxes.push(b);
+        }
+    }
+    for (_, list) in &vec_scene.effect_shtack_polygons {
+        for p in list {
+            if let Some(b) = poly_aabb(p) {
+                boxes.push(b);
+            }
+        }
+    }
+    boxes
+}
+
+fn tile_intersects_content(tile_rect: [f64; 4], boxes: &[[f64; 4]], reach: f64) -> bool {
+    if boxes.is_empty() {
+        return false;
+    }
+    let rx0 = tile_rect[0] - reach;
+    let ry0 = tile_rect[1] - reach;
+    let rx1 = tile_rect[2] + reach;
+    let ry1 = tile_rect[3] + reach;
+    boxes.iter().any(|b| b[2] >= rx0 && b[0] <= rx1 && b[3] >= ry0 && b[1] <= ry1)
 }
 
 /// Drives non-blocking tiled GPU commits (1 tile readback in flight at a time via `map_async`).
@@ -227,6 +310,9 @@ impl SfxGpuAsyncBake {
 
     pub fn cancel(&mut self) {
         self.active = None;
+        if let Some(r) = self.renderer.as_mut() {
+            r.release_targets();
+        }
     }
 
     /// Starts a non-blocking GPU tiled bake for `(doc_id, layer_id)`. Returns `false` if GPU
@@ -242,12 +328,17 @@ impl SfxGpuAsyncBake {
         dpi: f32,
         coalesce: Option<String>,
     ) -> bool {
+        // Cancel any previous in-flight bake first (immediately destroys its staging buffer).
+        self.active = None;
         if !is_supported(rs) {
             return false;
         }
         if self.renderer.is_none() {
             match SfxGpuRenderer::new_for_adapter(&rs.adapter, &rs.device) {
-                Ok(r) => self.renderer = Some(r),
+                Ok(mut r) => {
+                    r.set_max_dim(ASYNC_BAKE_TILE_DIM);
+                    self.renderer = Some(r);
+                }
                 Err(e) => {
                     log::warn!("SFX async GPU bake disabled: {}", e.0);
                     GPU_SFX_FAILED.store(true, Ordering::Relaxed);
@@ -258,6 +349,7 @@ impl SfxGpuAsyncBake {
         let Some(renderer) = self.renderer.as_mut() else {
             return false;
         };
+        let tile_dim = renderer.max_texture_dim().min(ASYNC_BAKE_TILE_DIM);
         let vec_scene = {
             let mut text = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
             extract_sfx_vector_scene(&data, &mut text, dpi)
@@ -265,15 +357,20 @@ impl SfxGpuAsyncBake {
         let full = vec_scene.full_bounds;
         let mut pending_tiles = Vec::new();
         if !full.is_empty() {
-            let apron = SfxGpuRenderer::tile_apron_px(&data) as i32;
-            let max_inner = renderer.max_texture_dim().min(MAX_SFX_TILE_DIM).saturating_sub((apron as u32) * 2).max(256) as i32;
+            let apron = SfxGpuRenderer::tile_apron_px_for_tile(&data, tile_dim) as i32;
+            let max_inner = tile_dim.saturating_sub((apron as u32) * 2).max(256) as i32;
+            let content_boxes = collect_scene_content_boxes(&vec_scene);
+            let effect_reach = f64::from(SfxGpuRenderer::tile_apron_px(&data).max(apron as u32)) + 8.0;
             let mut ty = full.y0;
             while ty < full.y1 {
                 let inner_h = (full.y1 - ty).min(max_inner);
                 let mut tx = full.x0;
                 while tx < full.x1 {
                     let inner_w = (full.x1 - tx).min(max_inner);
-                    pending_tiles.push(TileJob { tx, ty, inner_w, inner_h, apron });
+                    let tile_doc = [f64::from(tx), f64::from(ty), f64::from(tx + inner_w), f64::from(ty + inner_h)];
+                    if tile_intersects_content(tile_doc, &content_boxes, effect_reach) {
+                        pending_tiles.push(TileJob { tx, ty, inner_w, inner_h, apron });
+                    }
                     tx += inner_w;
                 }
                 ty += inner_h;
@@ -294,6 +391,7 @@ impl SfxGpuAsyncBake {
         };
         if !Self::launch_next_tile(renderer, rs, &mut job) {
             self.active = None;
+            renderer.release_targets();
             return false;
         }
         self.active = Some(job);
@@ -324,18 +422,17 @@ impl SfxGpuAsyncBake {
                 *g = Some(res.is_ok());
             }
         });
-        job.in_flight = Some(InFlightTile { job: tile, buf, padded_row, pad_w: rw, pad_h: rh, done });
+        job.in_flight = Some(InFlightTile { job: tile, buf, padded_row, pad_w: rw, pad_h: rh, done, mapped: false });
         true
     }
 
     /// Polls any in-flight GPU tile readback without blocking. Returns `Some(CompletedGpuBake)`
     /// once all tiles have been assembled into the sparse `Surface`.
     pub fn poll(&mut self, rs: &RenderState, ctx: &egui::Context) -> Option<CompletedGpuBake> {
+        #[cfg(not(target_arch = "wasm32"))]
         let _ = rs.device.poll(wgpu::PollType::Poll);
-        let Some(job) = self.active.as_mut() else {
-            return None;
-        };
-        if let Some(inflight) = job.in_flight.as_ref() {
+        let job = self.active.as_mut()?;
+        if let Some(inflight) = job.in_flight.as_mut() {
             let status = inflight.done.lock().ok().and_then(|g| *g);
             match status {
                 None => {
@@ -345,50 +442,93 @@ impl SfxGpuAsyncBake {
                 Some(false) => {
                     log::warn!("SFX async GPU map_async failed");
                     self.active = None;
+                    if let Some(r) = self.renderer.as_mut() {
+                        r.release_targets();
+                    }
                     return None;
                 }
-                Some(true) => {}
+                Some(true) => {
+                    inflight.mapped = true;
+                }
             }
         }
-        if let Some(inflight) = job.in_flight.take() {
-            let slice = inflight.buf.slice(..);
-            if let Ok(mapped) = slice.get_mapped_range() {
-                let ch = job.format.channels();
-                let iw = inflight.job.inner_w as usize;
-                let ih = inflight.job.inner_h as usize;
-                let apron = inflight.job.apron as usize;
-                let padded_row = inflight.padded_row as usize;
-                let mut vals = vec![0.0_f32; iw * ih * ch];
-                let mut any = false;
-                for row in 0..ih {
-                    let src_y = (row + apron).min(inflight.pad_h.saturating_sub(1) as usize);
-                    let row_off = src_y * padded_row;
-                    for col in 0..iw {
-                        let src_x = (col + apron).min(inflight.pad_w.saturating_sub(1) as usize);
-                        let si = row_off + src_x * 4;
-                        if si + 3 >= mapped.len() {
-                            continue;
+        if let Some(mut inflight) = job.in_flight.take() {
+            {
+                let slice = inflight.buf.slice(..);
+                if let Ok(mapped) = slice.get_mapped_range() {
+                    let iw = inflight.job.inner_w as usize;
+                    let ih = inflight.job.inner_h as usize;
+                    let apron = inflight.job.apron as usize;
+                    let padded_row = inflight.padded_row as usize;
+                    let max_y = inflight.pad_h.saturating_sub(1) as usize;
+                    let max_x = inflight.pad_w.saturating_sub(1) as usize;
+
+                    let mut any = false;
+                    'scan: for row in 0..ih {
+                        let src_y = (row + apron).min(max_y);
+                        let row_off = src_y * padded_row;
+                        for col in 0..iw {
+                            let src_x = (col + apron).min(max_x);
+                            let si = row_off + src_x * 4;
+                            if si + 3 < mapped.len() && mapped[si + 3] != 0 {
+                                any = true;
+                                break 'scan;
+                            }
                         }
-                        let a = f32::from(mapped[si + 3]) / 255.0;
-                        if a > 1e-6 {
-                            let px = [
-                                f32::from(mapped[si]) / 255.0,
-                                f32::from(mapped[si + 1]) / 255.0,
-                                f32::from(mapped[si + 2]) / 255.0,
-                                a,
-                            ];
-                            let di = (row * iw + col) * ch;
-                            from_rgba_into(&job.format, px, &mut vals[di..di + ch]);
-                            any = true;
+                    }
+
+                    if any {
+                        let rect = Rect::from_xywh(inflight.job.tx, inflight.job.ty, inflight.job.inner_w as u32, inflight.job.inner_h as u32);
+                        if job.format == PixelFormat::RGBA8 {
+                            let ty = inflight.job.ty;
+                            let tx = inflight.job.tx;
+                            let _ = job.surface.try_write_rows_with(rect, |y, x0, dst| {
+                                let row = (y - ty) as usize;
+                                let col = (x0 - tx) as usize;
+                                let src_y = (row + apron).min(max_y);
+                                let src_x = (col + apron).min(max_x);
+                                let src_off = src_y * padded_row + src_x * 4;
+                                let len = dst.len();
+                                if let Some(src) = mapped.get(src_off..src_off + len) {
+                                    dst.copy_from_slice(src);
+                                }
+                            });
+                        } else {
+                            let ch = job.format.channels();
+                            let mut vals = vec![0.0_f32; iw * ih * ch];
+                            for row in 0..ih {
+                                let src_y = (row + apron).min(max_y);
+                                let row_off = src_y * padded_row;
+                                for col in 0..iw {
+                                    let src_x = (col + apron).min(max_x);
+                                    let si = row_off + src_x * 4;
+                                    if si + 3 >= mapped.len() {
+                                        continue;
+                                    }
+                                    let a = f32::from(mapped[si + 3]) / 255.0;
+                                    if a > 1e-6 {
+                                        let px = [
+                                            f32::from(mapped[si]) / 255.0,
+                                            f32::from(mapped[si + 1]) / 255.0,
+                                            f32::from(mapped[si + 2]) / 255.0,
+                                            a,
+                                        ];
+                                        let di = (row * iw + col) * ch;
+                                        from_rgba_into(&job.format, px, &mut vals[di..di + ch]);
+                                    }
+                                }
+                            }
+                            job.surface.write_region(rect, &vals);
                         }
                     }
                 }
-                if any {
-                    let rect = Rect::from_xywh(inflight.job.tx, inflight.job.ty, inflight.job.inner_w as u32, inflight.job.inner_h as u32);
-                    job.surface.write_region(rect, &vals);
-                }
             }
-            inflight.buf.unmap();
+            if inflight.mapped {
+                inflight.buf.unmap();
+                inflight.mapped = false;
+            }
+            // Drop immediately invokes `inflight.buf.destroy()` so VRAM is freed right away.
+            drop(inflight);
         }
 
         if !job.pending_tiles.is_empty() {
@@ -398,6 +538,7 @@ impl SfxGpuAsyncBake {
             };
             if !Self::launch_next_tile(renderer, rs, job) {
                 self.active = None;
+                renderer.release_targets();
                 return None;
             }
             ctx.request_repaint();
@@ -405,6 +546,9 @@ impl SfxGpuAsyncBake {
         }
 
         let mut finished = self.active.take()?;
+        if let Some(r) = self.renderer.as_mut() {
+            r.release_targets();
+        }
         finished.surface.prune();
         Some(CompletedGpuBake {
             doc_id: finished.doc_id,

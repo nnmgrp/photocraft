@@ -45,6 +45,8 @@ pub struct SfxView<'a> {
     pub doc_id: Option<BridgeDocId>,
     pub doc: Option<&'a Document>,
     pub active_layer: Option<LayerId>,
+    /// Live GPU preview draft overriding `doc.layer(active_layer).sfx` during interactive drags.
+    pub live_sfx: Option<&'a SfxData>,
     pub tool_is_sfx: bool,
     pub panel_open: bool,
     pub view_xform: CanvasViewXform,
@@ -204,7 +206,7 @@ impl SfxGizmoState {
         let Some(spec) = active_stroke_flow_spec(data) else {
             return Vec::new();
         };
-        let dpi_bits = dpi.clamp(1.0, 1200.0).to_bits();
+        let dpi_bits = dpi.clamp(1.0, 4800.0).to_bits();
         let mut guard = self.cached_flow.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(c) = guard.as_ref().filter(|c| c.dpi_bits == dpi_bits && &c.data == data) {
             return c.handles.clone();
@@ -216,7 +218,7 @@ impl SfxGizmoState {
 
     /// Computes or returns the cached `PreparedSfx` geometry using `engine`.
     pub fn ensure_geom_with(&self, data: &SfxData, dpi: f32, engine: &mut TextEngine) -> PreparedSfx {
-        let dpi = dpi.clamp(1.0, 1200.0);
+        let dpi = dpi.clamp(1.0, 4800.0);
         let dpi_bits = dpi.to_bits();
         let mut guard = self.cached.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(c) = guard.as_ref().filter(|c| c.dpi_bits == dpi_bits && &c.data == data) {
@@ -229,7 +231,7 @@ impl SfxGizmoState {
 
     /// Computes or returns the cached `PreparedSfx` geometry using the global shared text engine.
     pub fn ensure_geom(&self, data: &SfxData, dpi: f32) -> PreparedSfx {
-        let dpi = dpi.clamp(1.0, 1200.0);
+        let dpi = dpi.clamp(1.0, 4800.0);
         let dpi_bits = dpi.to_bits();
         self.last_dpi_bits.store(dpi_bits, Ordering::Relaxed);
         let mut guard = self.cached.lock().unwrap_or_else(|e| e.into_inner());
@@ -265,8 +267,8 @@ fn active_sfx_target<'a>(view: &'a SfxView<'_>) -> Option<(LayerId, &'a SfxData)
     let doc = view.doc?;
     let id = view.active_layer?;
     let layer = doc.layer(id)?;
-    let sfx = layer.sfx.as_deref()?;
-    Some((id, sfx))
+    let doc_sfx = layer.sfx.as_deref()?;
+    Some((id, view.live_sfx.unwrap_or(doc_sfx)))
 }
 
 fn is_active_on_canvas(gizmo: &SfxGizmoState, view: &SfxView<'_>) -> bool {
@@ -2047,6 +2049,7 @@ mod tests {
             doc_id: Some(BridgeDocId(doc.id.0)),
             doc: Some(doc),
             active_layer: Some(layer_id),
+            live_sfx: None,
             tool_is_sfx: true,
             panel_open: true,
             view_xform: CanvasViewXform {

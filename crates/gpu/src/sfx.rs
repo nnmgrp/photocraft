@@ -33,8 +33,12 @@ const JFA_FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
 const RGBA_FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const STENCIL_FMT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24PlusStencil8;
 
-/// Maximum single-pass tile dimension for tiled full-res renders (keeps VRAM bounded even on 12K×17K).
+/// Maximum single-pass tile dimension for tiled full-res renders on native (keeps VRAM bounded even on 12K×17K).
 pub const MAX_SFX_TILE_DIM: u32 = 2048;
+/// Maximum single-pass tile dimension on `wasm32` (4× smaller VRAM + staging readback footprint).
+pub const MAX_SFX_TILE_DIM_WASM: u32 = 1024;
+/// Capacity bucket step for [`WorkTargets`] reuse so sub-viewport drags perform 0 texture reallocations.
+const WORK_TARGET_BUCKET_PX: u32 = 256;
 
 /// Smoothed closed glyph contour with cumulative arc-length `pts: [x, y, s_arc]` for GPU JFA `Б1: Seg`.
 #[derive(Clone, Copy, Debug)]
@@ -101,6 +105,12 @@ struct Tex2d {
     view: wgpu::TextureView,
 }
 
+impl Drop for Tex2d {
+    fn drop(&mut self) {
+        self.tex.destroy();
+    }
+}
+
 impl Tex2d {
     fn new(device: &wgpu::Device, label: &str, w: u32, h: u32, format: wgpu::TextureFormat, sample_count: u32, extra: wgpu::TextureUsages) -> Self {
         let tex = device.create_texture(&wgpu::TextureDescriptor {
@@ -118,8 +128,55 @@ impl Tex2d {
     }
 }
 
+#[derive(Clone, Copy, Default)]
+struct JfaUsage {
+    ab: bool,
+    ext: bool,
+    int: bool,
+    seg: bool,
+}
+
+impl JfaUsage {
+    fn mark_slot(&mut self, slot: TexSlot) {
+        match slot {
+            TexSlot::JfaA | TexSlot::JfaB => self.ab = true,
+            TexSlot::JfaExt => self.ext = true,
+            TexSlot::JfaInt => self.int = true,
+            TexSlot::JfaSeg => self.seg = true,
+            _ => {}
+        }
+    }
+
+    fn from_cmds(cmds: &[GpuCmd]) -> Self {
+        let mut u = Self::default();
+        for cmd in cmds {
+            match *cmd {
+                GpuCmd::RasterSegSeed { .. } => u.ab = true,
+                GpuCmd::Quad { a, b, c, dst, .. } => {
+                    u.mark_slot(a);
+                    u.mark_slot(b);
+                    u.mark_slot(c);
+                    u.mark_slot(dst);
+                }
+                GpuCmd::CopyTex { src, dst } => {
+                    u.mark_slot(src);
+                    u.mark_slot(dst);
+                }
+                GpuCmd::ClearMask(_) | GpuCmd::RasterPolys { .. } => {}
+            }
+        }
+        u
+    }
+}
+
+fn round_cap_dim(dim: u32, max_dim: u32) -> u32 {
+    let max_d = max_dim.max(1);
+    let clamped = dim.clamp(1, max_d);
+    clamped.div_ceil(WORK_TARGET_BUCKET_PX).saturating_mul(WORK_TARGET_BUCKET_PX).min(max_d)
+}
+
 struct WorkTargets {
-    size: [u32; 2],
+    cap: [u32; 2],
     stencil: Tex2d,
     msaa_mask: Option<Tex2d>,
     face_mask: Tex2d,
@@ -128,22 +185,22 @@ struct WorkTargets {
     scratch_mask_a: Tex2d,
     scratch_mask_b: Tex2d,
     shtack_mask: Tex2d,
-    jfa_a: Tex2d,
-    jfa_b: Tex2d,
-    jfa_ext: Tex2d,
-    jfa_int: Tex2d,
-    jfa_seg: Tex2d,
+    jfa_a: Option<Tex2d>,
+    jfa_b: Option<Tex2d>,
+    jfa_ext: Option<Tex2d>,
+    jfa_int: Option<Tex2d>,
+    jfa_seg: Option<Tex2d>,
     accum_a: Tex2d,
     accum_b: Tex2d,
 }
 
 impl WorkTargets {
-    fn new(device: &wgpu::Device, w: u32, h: u32, msaa_samples: u32) -> Self {
+    fn new(device: &wgpu::Device, w: u32, h: u32, msaa_samples: u32, need_jfa: JfaUsage) -> Self {
         let bindable = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST;
         let stencil = Tex2d::new(device, "sfx-stencil", w, h, STENCIL_FMT, msaa_samples, wgpu::TextureUsages::empty());
         let msaa_mask = (msaa_samples > 1).then(|| Tex2d::new(device, "sfx-msaa-mask", w, h, MASK_FMT, msaa_samples, wgpu::TextureUsages::empty()));
-        Self {
-            size: [w, h],
+        let mut wt = Self {
+            cap: [w, h],
             stencil,
             msaa_mask,
             face_mask: Tex2d::new(device, "sfx-face", w, h, MASK_FMT, 1, bindable),
@@ -152,13 +209,37 @@ impl WorkTargets {
             scratch_mask_a: Tex2d::new(device, "sfx-scratch-a", w, h, MASK_FMT, 1, bindable),
             scratch_mask_b: Tex2d::new(device, "sfx-scratch-b", w, h, MASK_FMT, 1, bindable),
             shtack_mask: Tex2d::new(device, "sfx-shtack", w, h, MASK_FMT, 1, bindable),
-            jfa_a: Tex2d::new(device, "sfx-jfa-a", w, h, JFA_FMT, 1, bindable),
-            jfa_b: Tex2d::new(device, "sfx-jfa-b", w, h, JFA_FMT, 1, bindable),
-            jfa_ext: Tex2d::new(device, "sfx-jfa-ext", w, h, JFA_FMT, 1, bindable),
-            jfa_int: Tex2d::new(device, "sfx-jfa-int", w, h, JFA_FMT, 1, bindable),
-            jfa_seg: Tex2d::new(device, "sfx-jfa-seg", w, h, JFA_FMT, 1, bindable),
+            jfa_a: None,
+            jfa_b: None,
+            jfa_ext: None,
+            jfa_int: None,
+            jfa_seg: None,
             accum_a: Tex2d::new(device, "sfx-accum-a", w, h, RGBA_FMT, 1, bindable),
             accum_b: Tex2d::new(device, "sfx-accum-b", w, h, RGBA_FMT, 1, bindable),
+        };
+        wt.ensure_jfa(device, need_jfa);
+        wt
+    }
+
+    fn ensure_jfa(&mut self, device: &wgpu::Device, need: JfaUsage) {
+        let [w, h] = self.cap;
+        let bindable = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST;
+        if need.ab {
+            if self.jfa_a.is_none() {
+                self.jfa_a = Some(Tex2d::new(device, "sfx-jfa-a", w, h, JFA_FMT, 1, bindable));
+            }
+            if self.jfa_b.is_none() {
+                self.jfa_b = Some(Tex2d::new(device, "sfx-jfa-b", w, h, JFA_FMT, 1, bindable));
+            }
+        }
+        if need.ext && self.jfa_ext.is_none() {
+            self.jfa_ext = Some(Tex2d::new(device, "sfx-jfa-ext", w, h, JFA_FMT, 1, bindable));
+        }
+        if need.int && self.jfa_int.is_none() {
+            self.jfa_int = Some(Tex2d::new(device, "sfx-jfa-int", w, h, JFA_FMT, 1, bindable));
+        }
+        if need.seg && self.jfa_seg.is_none() {
+            self.jfa_seg = Some(Tex2d::new(device, "sfx-jfa-seg", w, h, JFA_FMT, 1, bindable));
         }
     }
 }
@@ -169,6 +250,12 @@ struct UniformRing {
     bytes: Vec<u8>,
     buf: wgpu::Buffer,
     cap: usize,
+}
+
+impl Drop for UniformRing {
+    fn drop(&mut self) {
+        self.buf.destroy();
+    }
 }
 
 impl UniformRing {
@@ -202,6 +289,7 @@ impl UniformRing {
             return;
         }
         if self.bytes.len() > self.cap {
+            self.buf.destroy();
             self.cap = self.bytes.len().next_power_of_two();
             self.buf = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("sfx-fx-ring"),
@@ -218,6 +306,12 @@ struct VertexArena {
     data: Vec<u8>,
     buf: wgpu::Buffer,
     cap: usize,
+}
+
+impl Drop for VertexArena {
+    fn drop(&mut self) {
+        self.buf.destroy();
+    }
 }
 
 impl VertexArena {
@@ -250,6 +344,7 @@ impl VertexArena {
             return;
         }
         if self.data.len() > self.cap {
+            self.buf.destroy();
             self.cap = self.data.len().next_power_of_two();
             self.buf = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("sfx-vbuf"),
@@ -296,10 +391,23 @@ pub struct SfxGpuRenderer {
     ring: UniformRing,
     vbuf: VertexArena,
     targets: Option<WorkTargets>,
+    targets_alloc_count: u32,
     last_accum_is_a: bool,
     last_size: [u32; 2],
     #[cfg(not(target_arch = "wasm32"))]
     readback: Option<(wgpu::Buffer, u64)>,
+}
+
+impl Drop for SfxGpuRenderer {
+    fn drop(&mut self) {
+        self.blit_bg = None;
+        self.targets = None;
+        self.blit_uni.destroy();
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some((buf, _)) = self.readback.take() {
+            buf.destroy();
+        }
+    }
 }
 
 fn color_rgba(c: Color) -> [f32; 4] {
@@ -1080,6 +1188,7 @@ impl SfxGpuRenderer {
             ring: UniformRing::new(device),
             vbuf: VertexArena::new(device, "sfx-vbuf"),
             targets: None,
+            targets_alloc_count: 0,
             last_accum_is_a: true,
             last_size: [0, 0],
             #[cfg(not(target_arch = "wasm32"))]
@@ -1089,6 +1198,37 @@ impl SfxGpuRenderer {
 
     pub fn max_texture_dim(&self) -> u32 {
         self.max_dim
+    }
+
+    /// Caps the maximum texture capacity allowed for this renderer (e.g. `1280` for interactive
+    /// previews or `1024` for `wasm32` tiled bakes). Releases existing targets if they exceed it.
+    pub fn set_max_dim(&mut self, max_dim: u32) {
+        let clamped = max_dim.max(WORK_TARGET_BUCKET_PX);
+        self.max_dim = self.max_dim.min(clamped);
+        if self.targets.as_ref().is_some_and(|t| t.cap[0] > self.max_dim || t.cap[1] > self.max_dim) {
+            self.release_targets();
+        }
+    }
+
+    /// Immediately destroys all pooled working textures (freeing VRAM right away on WebGPU/Dawn).
+    pub fn release_targets(&mut self) {
+        self.blit_bg = None;
+        self.targets = None;
+        self.last_size = [0, 0];
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some((buf, _)) = self.readback.take() {
+            buf.destroy();
+        }
+    }
+
+    /// Number of times [`WorkTargets`] has been freshly allocated (monotonic; used to verify reuse).
+    pub fn targets_alloc_count(&self) -> u32 {
+        self.targets_alloc_count
+    }
+
+    /// Current allocated capacity `[cap_w, cap_h]` of the working target pool, if any.
+    pub fn targets_capacity(&self) -> Option<[u32; 2]> {
+        self.targets.as_ref().map(|t| t.cap)
     }
 
     /// Returns the view of the most recently rendered straight-alpha RGBA texture.
@@ -1152,11 +1292,13 @@ impl SfxGpuRenderer {
         }
         let mut params = FxParams::default();
         params.u0[1] = u32::from(target_format.is_srgb());
+        params.p2[1] = self.last_size[0] as f32;
+        params.p2[2] = self.last_size[1] as f32;
         if let Some((ru, rv, opacity)) = screen_to_uv {
             params.u0[0] = 1;
             params.p0 = [ru[0], ru[1], ru[2], 0.0];
             params.p1 = [rv[0], rv[1], rv[2], 0.0];
-            params.p2 = [opacity.clamp(0.0, 1.0), 0.0, 0.0, 0.0];
+            params.p2[0] = opacity.clamp(0.0, 1.0);
         }
         queue.write_buffer(&self.blit_uni, 0, bytemuck::bytes_of(&params));
         let Some(t) = self.targets.as_ref() else {
@@ -1215,10 +1357,6 @@ impl SfxGpuRenderer {
             px_w: w,
             px_h: h,
         };
-        if self.targets.as_ref().is_none_or(|t| t.size != [w, h]) {
-            self.targets = Some(WorkTargets::new(device, w, h, self.msaa_samples));
-        }
-
         let auto_scale = (scene.glyph_em_px / 120.0).clamp(0.75, 64.0);
         self.ring.reset();
         self.vbuf.reset();
@@ -1235,11 +1373,32 @@ impl SfxGpuRenderer {
             record_scene_passes(&mut rec, scene);
             (rec.cmds, rec.accum_is_a)
         };
+        let jfa_need = JfaUsage::from_cmds(&cmds);
+
+        // Reuse pooled WorkTargets whenever the requested active `[w, h]` fits inside current
+        // capacity. Any resize drops (and explicitly `.destroy()`s) the old textures BEFORE
+        // creating the new `CommandEncoder`, so no in-flight encoder ever references a destroyed
+        // texture.
+        let fits = self.targets.as_ref().is_some_and(|t| t.cap[0] >= w && t.cap[1] >= h);
+        if fits {
+            if let Some(t) = self.targets.as_mut() {
+                t.ensure_jfa(device, jfa_need);
+            }
+        } else {
+            let prev_cap = self.targets.as_ref().map_or([0, 0], |t| t.cap);
+            self.blit_bg = None;
+            self.targets = None;
+            let cap_w = round_cap_dim(w.max(prev_cap[0]), self.max_dim);
+            let cap_h = round_cap_dim(h.max(prev_cap[1]), self.max_dim);
+            self.targets = Some(WorkTargets::new(device, cap_w, cap_h, self.msaa_samples, jfa_need));
+            self.targets_alloc_count = self.targets_alloc_count.saturating_add(1);
+        }
+
         self.ring.upload(device, queue);
         self.vbuf.upload(device, queue);
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("sfx-gpu-encoder") });
-        self.execute_commands(device, &mut encoder, &cmds);
+        self.execute_commands(device, &mut encoder, &cmds, [w, h]);
         queue.submit(Some(encoder.finish()));
 
         self.last_accum_is_a = accum_is_a;
@@ -1247,9 +1406,9 @@ impl SfxGpuRenderer {
         self.last_output_view().ok_or_else(|| Unsupported("SFX GPU target missing".into()))
     }
 
-    fn execute_commands(&self, device: &wgpu::Device, enc: &mut wgpu::CommandEncoder, cmds: &[GpuCmd]) {
+    fn execute_commands(&self, device: &wgpu::Device, enc: &mut wgpu::CommandEncoder, cmds: &[GpuCmd], active_size: [u32; 2]) {
         let Some(t) = self.targets.as_ref() else { return };
-        let [w, h] = t.size;
+        let [w, h] = active_size;
         // Clear initial RGBA accumulator A to transparent black.
         {
             let _ = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1299,11 +1458,11 @@ impl SfxGpuRenderer {
                 TexSlot::Shtack => &t.shtack_mask,
                 TexSlot::ScratchA => &t.scratch_mask_a,
                 TexSlot::ScratchB => &t.scratch_mask_b,
-                TexSlot::JfaA => &t.jfa_a,
-                TexSlot::JfaB => &t.jfa_b,
-                TexSlot::JfaExt => &t.jfa_ext,
-                TexSlot::JfaInt => &t.jfa_int,
-                TexSlot::JfaSeg => &t.jfa_seg,
+                TexSlot::JfaA => t.jfa_a.as_ref().unwrap_or(&self.dummy_tex),
+                TexSlot::JfaB => t.jfa_b.as_ref().unwrap_or(&self.dummy_tex),
+                TexSlot::JfaExt => t.jfa_ext.as_ref().unwrap_or(&self.dummy_tex),
+                TexSlot::JfaInt => t.jfa_int.as_ref().unwrap_or(&self.dummy_tex),
+                TexSlot::JfaSeg => t.jfa_seg.as_ref().unwrap_or(&self.dummy_tex),
                 TexSlot::AccumA => &t.accum_a,
                 TexSlot::AccumB => &t.accum_b,
             }
@@ -1350,6 +1509,8 @@ impl SfxGpuRenderer {
                         occlusion_query_set: None,
                         multiview_mask: None,
                     });
+                    rp.set_viewport(0.0, 0.0, w as f32, h as f32, 0.0, 1.0);
+                    rp.set_scissor_rect(0, 0, w, h);
                     rp.set_stencil_reference(0);
                     rp.set_pipeline(&self.stencil_pipe);
                     rp.set_bind_group(0, &raster_bg, &[uni_off]);
@@ -1360,10 +1521,11 @@ impl SfxGpuRenderer {
                     rp.draw(0..3, 0..1);
                 }
                 GpuCmd::RasterSegSeed { v_off, v_count, uni_off } => {
+                    let Some(jfa_a) = t.jfa_a.as_ref() else { continue };
                     let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("sfx-seg-seed"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: &t.jfa_a.view,
+                            view: &jfa_a.view,
                             depth_slice: None,
                             resolve_target: None,
                             ops: wgpu::Operations {
@@ -1376,6 +1538,8 @@ impl SfxGpuRenderer {
                         occlusion_query_set: None,
                         multiview_mask: None,
                     });
+                    rp.set_viewport(0.0, 0.0, w as f32, h as f32, 0.0, 1.0);
+                    rp.set_scissor_rect(0, 0, w, h);
                     rp.set_pipeline(&self.seg_seed_pipe);
                     rp.set_bind_group(0, &raster_bg, &[uni_off]);
                     rp.set_vertex_buffer(0, self.vbuf.buf.slice(v_off..));
@@ -1438,6 +1602,8 @@ impl SfxGpuRenderer {
                         occlusion_query_set: None,
                         multiview_mask: None,
                     });
+                    rp.set_viewport(0.0, 0.0, w as f32, h as f32, 0.0, 1.0);
+                    rp.set_scissor_rect(0, 0, w, h);
                     rp.set_pipeline(rp_pipe);
                     rp.set_bind_group(0, &bg, &[uni_off]);
                     rp.draw(0..3, 0..1);
@@ -1446,9 +1612,16 @@ impl SfxGpuRenderer {
         }
     }
 
+    /// Recommended seamless tile overlap apron (in document pixels) for `data` given `tile_dim`.
+    /// Always leaves at least `max(256, tile_dim / 2)` useful inner pixels per tile.
+    pub fn tile_apron_px_for_tile(data: &SfxData, tile_dim: u32) -> u32 {
+        let max_apron = (tile_dim / 4).min(512);
+        max_tile_apron_px(data).min(max_apron)
+    }
+
     /// Recommended seamless tile overlap apron (in document pixels) for `data`.
     pub fn tile_apron_px(data: &SfxData) -> u32 {
-        max_tile_apron_px(data).min(512)
+        Self::tile_apron_px_for_tile(data, MAX_SFX_TILE_DIM)
     }
 
     /// Copies the most recently rendered straight-alpha RGBA8 output into a caller-owned
@@ -1527,29 +1700,53 @@ impl SfxGpuRenderer {
 
                 let rgba = self.readback_last_rgba8(device, queue)?;
                 let tile_rect = Rect::from_xywh(tx, ty, inner_w as u32, inner_h as u32);
-                let mut vals = vec![0.0_f32; (inner_w as usize) * (inner_h as usize) * ch];
                 let mut any = false;
-                for row in 0..(inner_h as usize) {
-                    let src_y = row + apron as usize;
-                    for col in 0..(inner_w as usize) {
-                        let src_x = col + apron as usize;
-                        let si = (src_y * (pad_w as usize) + src_x) * 4;
-                        let a = f32::from(rgba[si + 3]) / 255.0;
-                        if a > 1e-6 {
-                            let px = [
-                                f32::from(rgba[si]) / 255.0,
-                                f32::from(rgba[si + 1]) / 255.0,
-                                f32::from(rgba[si + 2]) / 255.0,
-                                a,
-                            ];
-                            let di = (row * (inner_w as usize) + col) * ch;
-                            from_rgba_into(&format, px, &mut vals[di..di + ch]);
+                let iw = inner_w as usize;
+                let ih = inner_h as usize;
+                let ap = apron as usize;
+                let pw = pad_w as usize;
+                'scan: for row in 0..ih {
+                    let row_start = ((row + ap) * pw + ap) * 4;
+                    let slice = &rgba[row_start..row_start + iw * 4];
+                    for px in slice.chunks_exact(4) {
+                        if px[3] != 0 {
                             any = true;
+                            break 'scan;
                         }
                     }
                 }
                 if any {
-                    surface.write_region(tile_rect, &vals);
+                    if format == PixelFormat::RGBA8 {
+                        let _ = surface.try_write_rows_with(tile_rect, |y, x0, dst| {
+                            let row = (y - ty) as usize;
+                            let col = (x0 - tx) as usize;
+                            let src_start = ((row + ap) * pw + (col + ap)) * 4;
+                            let len = dst.len();
+                            if let Some(src) = rgba.get(src_start..src_start + len) {
+                                dst.copy_from_slice(src);
+                            }
+                        });
+                    } else {
+                        let mut vals = vec![0.0_f32; iw * ih * ch];
+                        for row in 0..ih {
+                            let src_y = row + ap;
+                            for col in 0..iw {
+                                let si = (src_y * pw + col + ap) * 4;
+                                let a = f32::from(rgba[si + 3]) / 255.0;
+                                if a > 1e-6 {
+                                    let px = [
+                                        f32::from(rgba[si]) / 255.0,
+                                        f32::from(rgba[si + 1]) / 255.0,
+                                        f32::from(rgba[si + 2]) / 255.0,
+                                        a,
+                                    ];
+                                    let di = (row * iw + col) * ch;
+                                    from_rgba_into(&format, px, &mut vals[di..di + ch]);
+                                }
+                            }
+                        }
+                        surface.write_region(tile_rect, &vals);
+                    }
                 }
                 tx += inner_w;
             }
@@ -1571,6 +1768,9 @@ impl SfxGpuRenderer {
         let total_bytes = u64::from(padded_row) * u64::from(h);
         let need_new = self.readback.as_ref().is_none_or(|(_, sz)| *sz < total_bytes);
         if need_new {
+            if let Some((old, _)) = self.readback.take() {
+                old.destroy();
+            }
             let buf = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("sfx-readback"),
                 size: total_bytes,

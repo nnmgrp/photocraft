@@ -1393,8 +1393,10 @@ fn build_gpen_polygons(geom: &PreparedSfx, le: &SfxLineEffect) -> Vec<Vec<(f64, 
     let seed_base = le.gpen_seed.wrapping_mul(65537);
 
     for (g_i, glyph) in geom.glyphs.iter().enumerate() {
+        let gh = (glyph.warped_bounds[3] - glyph.warped_bounds[1]).abs().max(24.0);
+        let rdp_eps = (gh * 0.008).clamp(1.5, 24.0);
         for (p_i, pl) in glyph.polylines.iter().enumerate() {
-            let edges = split_contour_into_edges(&pl.pts, 1.5, 0.56);
+            let edges = split_contour_into_edges(&pl.pts, rdp_eps, 0.56);
             for (e_i, edge) in edges.iter().enumerate() {
                 let e_seed = seed_base
                     .wrapping_add((g_i as u32).wrapping_mul(1009))
@@ -1459,8 +1461,10 @@ fn build_brush_stroke_polygons(geom: &PreparedSfx, le: &SfxLineEffect) -> Vec<Ve
     let seed_base = le.ink_brush_seed.wrapping_mul(49_157);
 
     for (g_i, glyph) in geom.glyphs.iter().enumerate() {
+        let gh = (glyph.warped_bounds[3] - glyph.warped_bounds[1]).abs().max(24.0);
+        let rdp_eps = (gh * 0.008).clamp(1.6, 24.0);
         for (p_i, pl) in glyph.polylines.iter().enumerate() {
-            let edges = split_contour_into_edges(&pl.pts, 1.6, 0.54);
+            let edges = split_contour_into_edges(&pl.pts, rdp_eps, 0.54);
             for (e_i, edge) in edges.iter().enumerate() {
                 let e_seed = seed_base
                     .wrapping_add((g_i as u32).wrapping_mul(1103))
@@ -1875,7 +1879,8 @@ fn build_shtack_contour_polygons(geom: &PreparedSfx, le: &SfxLineEffect) -> Vec<
             // Normal contour: lightly simplify micro-collinear vertices (curves stay smooth),
             // then split at sharp corners into independent line / arc segments.
             let is_outer = contour_is_outer(pi, &glyph.polylines);
-            let simp = rdp_closed(&pl.pts, 0.75);
+            let rdp_eps = (gh * 0.004).clamp(0.75, 16.0);
+            let simp = rdp_closed(&pl.pts, rdp_eps);
             segments.extend(split_contour_at_corners(&simp, is_outer, &glyph.polylines, gh, outer_only));
         }
 

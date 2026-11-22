@@ -34,8 +34,7 @@ const RGBA_FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const STENCIL_FMT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24PlusStencil8;
 
 /// Maximum single-pass tile dimension for tiled full-res renders (keeps VRAM bounded even on 12K×17K).
-#[cfg(not(target_arch = "wasm32"))]
-const MAX_TILE_DIM: u32 = 2048;
+pub const MAX_SFX_TILE_DIM: u32 = 2048;
 
 /// Smoothed closed glyph contour with cumulative arc-length `pts: [x, y, s_arc]` for GPU JFA `Б1: Seg`.
 #[derive(Clone, Copy, Debug)]
@@ -52,6 +51,8 @@ pub type SfxGpuPolyRing = Vec<(f64, f64)>;
 pub struct SfxGpuScene<'a> {
     pub data: &'a SfxData,
     pub full_bounds: Rect,
+    /// Reference glyph height in document pixels (scales Dry Brush bristles & grain cleanly at 2400 DPI).
+    pub glyph_em_px: f32,
     /// Glyph contours in document space (font winding preserved for NonZero Stencil-then-Cover).
     pub face_contours: &'a [SfxGpuPolyRing],
     /// Stylized outline / Shtack / Spikes / G-Pen / BrushStroke ink polygons (positive winding).
@@ -605,6 +606,7 @@ struct CmdRecorder<'a> {
     accum_is_a: bool,
     region: RegionInfo,
     full_bounds: Rect,
+    auto_scale: f32,
 }
 
 impl<'a> CmdRecorder<'a> {
@@ -743,6 +745,8 @@ impl<'a> CmdRecorder<'a> {
         vec_cuts: &[Vec<(f64, f64)>],
         has_seg_jfa: bool,
     ) {
+        let bristle_scale = (self.auto_scale * (db.bristle_size_pct / 100.0).clamp(0.1, 5.0)).max(0.1);
+        let inv_bs = 1.0 / bristle_scale;
         let mut p = self.region.base_params();
         p.p1[2] = db.dryness_pct / 100.0;
         p.p2[0] = (db.warp_pct / 100.0) * 12.0;
@@ -755,19 +759,20 @@ impl<'a> CmdRecorder<'a> {
             SfxDryBrushEngine::SdfPhysics => {
                 let (sin_a, cos_a) = db.angle_deg.to_radians().sin_cos();
                 p.p1[3] = 0.08 + (db.freq_pct / 100.0) * 0.42;
-                p.p3 = [cos_a, sin_a, 0.0, 0.0];
+                p.p3 = [cos_a, sin_a, inv_bs, 0.0];
                 p.u0[1] = db.seed.wrapping_mul(7_919);
                 self.push_quad(QuadPipe::DryPhysics, src_cov, TexSlot::JfaInt, TexSlot::Dummy, dst_cov, p);
             }
             SfxDryBrushEngine::SdfSeg if has_seg_jfa => {
                 p.p1[3] = 0.09 + (db.freq_pct / 100.0) * 0.42;
+                p.p3 = [0.0, 0.0, inv_bs, 0.0];
                 p.u0[1] = db.seed.wrapping_mul(13_109);
                 self.push_quad(QuadPipe::DrySeg, src_cov, TexSlot::JfaSeg, TexSlot::JfaInt, dst_cov, p);
             }
             SfxDryBrushEngine::SdfSeg => {
                 let (sin_a, cos_a) = db.angle_deg.to_radians().sin_cos();
                 p.p1[3] = 0.08 + (db.freq_pct / 100.0) * 0.42;
-                p.p3 = [cos_a, sin_a, 0.0, 0.0];
+                p.p3 = [cos_a, sin_a, inv_bs, 0.0];
                 p.u0[1] = db.seed.wrapping_mul(7_919);
                 self.push_quad(QuadPipe::DryPhysics, src_cov, TexSlot::JfaInt, TexSlot::Dummy, dst_cov, p);
             }
@@ -785,7 +790,11 @@ impl<'a> CmdRecorder<'a> {
                 }
                 p.p1[3] = 0.12 + (db.freq_pct / 100.0) * 0.45;
                 p.u0[1] = db.seed.wrapping_mul(19_417);
-                p.u0[3] = ((db.lic_length_px * self.region.px_per_doc()).round() as u32).clamp(4, 26) / 2;
+                let lic_target_px = (db.lic_length_px * self.region.px_per_doc()).max(4.0);
+                let steps = (lic_target_px * 0.5).round().clamp(2.0, 13.0) as u32;
+                let stride_px = (lic_target_px / (2.0 * steps as f32)).max(1.15);
+                p.p3 = [0.0, 0.0, inv_bs, stride_px];
+                p.u0[3] = steps;
                 self.push_quad(QuadPipe::DryEtfLic, src_cov, TexSlot::JfaA, TexSlot::JfaInt, dst_cov, p);
             }
             SfxDryBrushEngine::Vector => {
@@ -808,12 +817,14 @@ impl<'a> CmdRecorder<'a> {
             self.push_quad(QuadPipe::Mul, dst_tex, face_slot, TexSlot::Dummy, TexSlot::ScratchB, mp);
             self.cmds.push(GpuCmd::CopyTex { src: TexSlot::ScratchB, dst: dst_tex });
         }
+        let inv_gs = 1.0 / self.auto_scale.max(0.75);
         if spec.mode == SfxShtackFillMode::UkiyoBrush {
             let eff_dry = spec.dryness_pct.max(18.0);
-            self.run_jfa_from_mask(dst_tex, true, 16.0, TexSlot::JfaB);
+            self.run_jfa_from_mask(dst_tex, true, (16.0 * self.auto_scale * self.region.px_per_doc()).clamp(16.0, 128.0), TexSlot::JfaB);
             let mut gp = self.region.base_params();
             gp.p1[2] = (eff_dry / 100.0).clamp(0.0, 1.0);
             gp.p1[3] = (spec.grain_sharpness_pct / 100.0).clamp(0.0, 1.0);
+            gp.p3[2] = inv_gs;
             gp.u0 = [1, spec.seed.wrapping_mul(11_173), 0, 0];
             self.push_quad(QuadPipe::DryGrain, dst_tex, TexSlot::JfaB, TexSlot::Dummy, TexSlot::ScratchB, gp);
             self.cmds.push(GpuCmd::CopyTex { src: TexSlot::ScratchB, dst: dst_tex });
@@ -821,6 +832,7 @@ impl<'a> CmdRecorder<'a> {
             let mut gp = self.region.base_params();
             gp.p1[2] = (spec.dryness_pct / 100.0).clamp(0.0, 1.0);
             gp.p1[3] = (spec.grain_sharpness_pct / 100.0).clamp(0.0, 1.0);
+            gp.p3[2] = inv_gs;
             gp.u0 = [0, spec.seed.wrapping_mul(7_919), 0, 0];
             self.push_quad(QuadPipe::DryGrain, dst_tex, TexSlot::Dummy, TexSlot::Dummy, TexSlot::ScratchB, gp);
             self.cmds.push(GpuCmd::CopyTex { src: TexSlot::ScratchB, dst: dst_tex });
@@ -1207,6 +1219,7 @@ impl SfxGpuRenderer {
             self.targets = Some(WorkTargets::new(device, w, h, self.msaa_samples));
         }
 
+        let auto_scale = (scene.glyph_em_px / 120.0).clamp(0.75, 64.0);
         self.ring.reset();
         self.vbuf.reset();
         let (cmds, accum_is_a) = {
@@ -1217,6 +1230,7 @@ impl SfxGpuRenderer {
                 accum_is_a: true,
                 region,
                 full_bounds: scene.full_bounds,
+                auto_scale,
             };
             record_scene_passes(&mut rec, scene);
             (rec.cmds, rec.accum_is_a)
@@ -1329,7 +1343,7 @@ impl SfxGpuRenderer {
                         })],
                         depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                             view: &t.stencil.view,
-                            depth_ops: None,
+                            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Discard }),
                             stencil_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(0), store: wgpu::StoreOp::Discard }),
                         }),
                         timestamp_writes: None,
@@ -1432,6 +1446,51 @@ impl SfxGpuRenderer {
         }
     }
 
+    /// Recommended seamless tile overlap apron (in document pixels) for `data`.
+    pub fn tile_apron_px(data: &SfxData) -> u32 {
+        max_tile_apron_px(data).min(512)
+    }
+
+    /// Copies the most recently rendered straight-alpha RGBA8 output into a caller-owned
+    /// `MAP_READ | COPY_DST` staging buffer and returns `(padded_bytes_per_row, width, height)`.
+    /// Works on BOTH WebGPU/WebGL2 (`wasm32`) and Native so async non-blocking tiled commits can
+    /// drive `buffer.slice(..).map_async(Read, ...)` without blocking the UI thread.
+    pub fn copy_last_output_to_buffer(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) -> Result<(wgpu::Buffer, u32, u32, u32), Unsupported> {
+        let Some(t) = self.targets.as_ref() else {
+            return Err(Unsupported("missing GPU target".into()));
+        };
+        let [w, h] = self.last_size;
+        if w == 0 || h == 0 {
+            return Err(Unsupported("empty GPU target".into()));
+        }
+        let unpadded_row = w * 4;
+        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let padded_row = unpadded_row.div_ceil(align) * align;
+        let total_bytes = u64::from(padded_row) * u64::from(h);
+        let rb_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("sfx-async-readback"),
+            size: total_bytes,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let src_tex = if self.last_accum_is_a { &t.accum_a.tex } else { &t.accum_b.tex };
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("sfx-async-rb") });
+        enc.copy_texture_to_buffer(
+            src_tex.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &rb_buf,
+                layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(padded_row), rows_per_image: Some(h) },
+            },
+            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
+        queue.submit(Some(enc.finish()));
+        Ok((rb_buf, padded_row, w, h))
+    }
+
     /// Native full-resolution tiled GPU render straight into a sparse [`Surface`].
     /// Handles arbitrarily large lettering (even 8000×5000 px on 12 000 × 17 000 px pages)
     /// with seamless padded aprons for Halo / DropShadow / 3D Extrude / Blur / Stroke.
@@ -1447,8 +1506,8 @@ impl SfxGpuRenderer {
         if full.is_empty() {
             return Ok(Surface::new(format));
         }
-        let apron = max_tile_apron_px(scene.data).min(256) as i32;
-        let max_inner = self.max_dim.min(MAX_TILE_DIM).saturating_sub((apron as u32) * 2).max(256) as i32;
+        let apron = Self::tile_apron_px(scene.data) as i32;
+        let max_inner = self.max_dim.min(MAX_SFX_TILE_DIM).saturating_sub((apron as u32) * 2).max(256) as i32;
 
         let mut surface = Surface::new(format);
         let ch = format.channels();
@@ -1561,7 +1620,6 @@ impl SfxGpuRenderer {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn max_tile_apron_px(data: &SfxData) -> u32 {
     let mut pad = data.line_effect.halo_width_px.max(0.0);
     if data.vector_shadow.enabled {
@@ -1867,6 +1925,7 @@ fn record_scene_passes(rec: &mut CmdRecorder<'_>, scene: &SfxGpuScene<'_>) {
             let mut gp = rec.region.base_params();
             gp.p1[2] = (le.shtack_dryness_pct / 100.0).clamp(0.0, 1.0);
             gp.p1[3] = (le.shtack_grain_sharpness_pct / 100.0).clamp(0.0, 1.0);
+            gp.p3[2] = 1.0 / rec.auto_scale.max(0.75);
             gp.u0 = [0, le.shtack_seed.wrapping_mul(7_919), 0, 0];
             rec.push_quad(QuadPipe::DryGrain, TexSlot::Line, TexSlot::Dummy, TexSlot::Dummy, TexSlot::ScratchA, gp);
             rec.cmds.push(GpuCmd::CopyTex { src: TexSlot::ScratchA, dst: TexSlot::Line });

@@ -112,6 +112,7 @@ fn gpu_stencil_cover_handles_holed_glyph_and_halo() {
     let scene = SfxGpuScene {
         data: &data,
         full_bounds: Rect::from_xywh(32, 32, 192, 192),
+        glyph_em_px: 128.0,
         face_contours: &face,
         line_polygons: &[],
         primary_shtack_polygons: &[],
@@ -222,6 +223,7 @@ fn gpu_dry_brush_all_four_engines_screentone_and_blending_stack() {
         let scene = SfxGpuScene {
             data: &data,
             full_bounds: Rect::from_xywh(20, 20, 230, 230),
+            glyph_em_px: 160.0,
             face_contours: &face,
             line_polygons: &[],
             primary_shtack_polygons: &[],
@@ -275,6 +277,7 @@ fn gpu_tiled_render_large_sfx_is_seamless_and_fast() {
     let scene = SfxGpuScene {
         data: &data,
         full_bounds: Rect::from_xywh(60, 80, 2600, 1100),
+        glyph_em_px: 480.0,
         face_contours: &face,
         line_polygons: &[],
         primary_shtack_polygons: &[],

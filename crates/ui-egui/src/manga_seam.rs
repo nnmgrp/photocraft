@@ -109,9 +109,14 @@ mod native {
         pub sfx_screentone_ui: ScreentoneUi,
         pub sfx_screentone_bound: Option<(BridgeDocId, LayerId, bool)>,
         pub sfx_screentone_pending_full: bool,
-        /// Active SFX layer currently rendered via zero-readback GPU viewport overlay during an
-        /// interactive drag (`gpuPreview: true`); cleared on pointer release (`preview: false`).
-        pub sfx_gpu_preview_layer: Option<(DocId, LayerId)>,
+        /// Live zero-readback GPU SFX draft `(doc_id, layer_id, data)` drawn straight onto the
+        /// canvas during interactive drags or while an async WASM GPU tiled commit is in flight.
+        pub sfx_gpu_live_draft: Option<(DocId, LayerId, SfxData)>,
+        /// Target layer whose raster pixels were already cleared once for the active GPU preview
+        /// session, so subsequent drag frames skip `s.edit` (0 doc revision bumps, 0 12K recomposites).
+        pub sfx_gpu_layer_cleared: Option<(DocId, LayerId)>,
+        /// Non-blocking tiled GPU commit runner (zero CPU freezes on WASM button clicks & slider release).
+        pub sfx_gpu_async_bake: crate::canvas::sfx_gpu_preview::SfxGpuAsyncBake,
     }
 
     /// Canonical order matches [`Group::Manga::tabs`].
@@ -359,40 +364,85 @@ mod native {
             && app.gpu_render_state.as_ref().is_some_and(crate::canvas::sfx_gpu_preview::is_supported)
     }
 
+    fn clear_sfx_layer_once_for_gpu(app: &mut PhotocraftApp, doc_id: DocId, lid: LayerId, data: &SfxData, coalesce: Option<&str>) {
+        if app.manga.sfx_gpu_layer_cleared == Some((doc_id, lid)) {
+            return;
+        }
+        let mut params = json!({
+            "layer": lid.0,
+            "sfx": data,
+            "preview": true,
+            "gpuPreview": true,
+        });
+        if let (Some(c), Some(obj)) = (coalesce, params.as_object_mut()) {
+            obj.insert("coalesce".to_owned(), Value::String(c.to_owned()));
+        }
+        if app.run("sfx.update", params).is_ok() {
+            app.manga.sfx_gpu_layer_cleared = Some((doc_id, lid));
+        }
+    }
+
+    fn dispatch_sfx_update(app: &mut PhotocraftApp, cmd: OutCommand) -> Option<Value> {
+        let is_preview = cmd.params.get("preview").and_then(Value::as_bool).unwrap_or(false);
+        let parsed_sfx = cmd.params.get("sfx").and_then(|v| serde_json::from_value::<SfxData>(v.clone()).ok());
+        let coalesce = cmd.params.get("coalesce").and_then(Value::as_str).map(str::to_owned);
+        let target_info = app.session.active().and_then(|st| {
+            let lid = cmd.params.get("layer").and_then(Value::as_u64).map(LayerId).or(st.active_layer)?;
+            Some((st.doc.id, lid, st.doc.pixel_format(), st.doc.resolution_dpi.max(1.0)))
+        });
+
+        let gpu_ok = sfx_gpu_preview_ready(app)
+            && parsed_sfx.as_ref().is_some_and(photocraft_engine::cmd::manga_cmds::sfx::sfx_gpu_compatible);
+
+        if let (true, Some(sfx), Some((doc_id, lid, fmt, dpi))) = (gpu_ok, parsed_sfx, target_info) {
+            if is_preview {
+                // Zero-CPU, zero-doc-recomposite 60 FPS GPU preview: clear old pixels ONCE, then
+                // stream live SfxData solely into `sfx_gpu_live_draft` without bumping `doc.revision`.
+                app.manga.sfx_gpu_async_bake.cancel();
+                clear_sfx_layer_once_for_gpu(app, doc_id, lid, &sfx, coalesce.as_deref());
+                app.manga.sfx_gpu_live_draft = Some((doc_id, lid, sfx));
+                return Some(json!({ "ok": true, "layer": lid.0 }));
+            }
+
+            // Full commit (`preview: false`): on WASM, keep the live GPU overlay visible and bake
+            // full-res tiles asynchronously on GPU via `map_async` (zero CPU freeze on 12K×17K!).
+            #[cfg(target_arch = "wasm32")]
+            if let Some(rs) = app.gpu_render_state.clone() {
+                clear_sfx_layer_once_for_gpu(app, doc_id, lid, &sfx, coalesce.as_deref());
+                app.manga.sfx_gpu_live_draft = Some((doc_id, lid, sfx.clone()));
+                if app.manga.sfx_gpu_async_bake.start(&rs, doc_id, lid, sfx, fmt, dpi, coalesce) {
+                    return Some(json!({ "ok": true, "layer": lid.0 }));
+                }
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            let _ = (fmt, dpi);
+        }
+
+        // Native full commit (uses the installed native GPU tiled hook!) or CPU fallback.
+        app.manga.sfx_gpu_async_bake.cancel();
+        app.manga.sfx_gpu_live_draft = None;
+        app.manga.sfx_gpu_layer_cleared = None;
+        match app.run(cmd.id, cmd.params) {
+            Ok(v) => Some(v),
+            Err(e) => {
+                app.ui.status = e;
+                app.ui.status_error = true;
+                None
+            }
+        }
+    }
+
     fn dispatch_commands(app: &mut PhotocraftApp, cmds: Vec<OutCommand>) -> Option<Value> {
         let mut last = None;
-        let gpu_ready = sfx_gpu_preview_ready(app);
-        for mut cmd in cmds {
+        for cmd in cmds {
             if cmd.id == "sfx.update" {
-                let is_preview = cmd.params.get("preview").and_then(Value::as_bool).unwrap_or(false);
-                if is_preview && gpu_ready {
-                    let sfx_ok = cmd
-                        .params
-                        .get("sfx")
-                        .and_then(|v| serde_json::from_value::<SfxData>(v.clone()).ok())
-                        .is_some_and(|d| photocraft_engine::cmd::manga_cmds::sfx::sfx_gpu_compatible(&d));
-                    if sfx_ok {
-                        if let Some(obj) = cmd.params.as_object_mut() {
-                            obj.insert("gpuPreview".to_owned(), Value::Bool(true));
-                        }
-                        let target = app.session.active().and_then(|st| {
-                            let lid = cmd
-                                .params
-                                .get("layer")
-                                .and_then(Value::as_u64)
-                                .map(LayerId)
-                                .or(st.active_layer)?;
-                            Some((st.doc.id, lid))
-                        });
-                        app.manga.sfx_gpu_preview_layer = target;
-                    } else {
-                        app.manga.sfx_gpu_preview_layer = None;
-                    }
-                } else if !is_preview {
-                    app.manga.sfx_gpu_preview_layer = None;
-                }
-            } else if matches!(cmd.id, "sfx.bakeToRaster" | "sfx.create" | "sfx.presets.apply") {
-                app.manga.sfx_gpu_preview_layer = None;
+                last = dispatch_sfx_update(app, cmd);
+                continue;
+            }
+            if matches!(cmd.id, "sfx.bakeToRaster" | "sfx.create" | "sfx.presets.apply") {
+                app.manga.sfx_gpu_async_bake.cancel();
+                app.manga.sfx_gpu_live_draft = None;
+                app.manga.sfx_gpu_layer_cleared = None;
             }
             match app.run(cmd.id, cmd.params) {
                 Ok(v) => last = Some(v),
@@ -483,20 +533,15 @@ mod native {
                 app.manga.ui.sfx_panel.draft = sfx.clone();
                 app.manga.ui.sfx_panel.synced_data = Some(sfx.clone());
                 app.manga.sfx_screentone_pending_full = pointer_down;
-                let gpu_prev = pointer_down
-                    && sfx_gpu_preview_ready(app)
-                    && photocraft_engine::cmd::manga_cmds::sfx::sfx_gpu_compatible(&sfx);
-                app.manga.sfx_gpu_preview_layer = gpu_prev.then_some((DocId(doc_id.0), lid));
-                let _ = app.run(
-                    "sfx.update",
-                    json!({ "layer": lid.0, "sfx": sfx, "coalesce": coalesce, "preview": pointer_down, "gpuPreview": gpu_prev }),
+                let _ = dispatch_sfx_update(
+                    app,
+                    OutCommand::new("sfx.update", json!({ "layer": lid.0, "sfx": sfx, "coalesce": coalesce, "preview": pointer_down })),
                 );
             } else if app.manga.sfx_screentone_pending_full && !pointer_down {
                 app.manga.sfx_screentone_pending_full = false;
-                app.manga.sfx_gpu_preview_layer = None;
-                let _ = app.run(
-                    "sfx.update",
-                    json!({ "layer": lid.0, "sfx": sfx, "coalesce": coalesce, "preview": false }),
+                let _ = dispatch_sfx_update(
+                    app,
+                    OutCommand::new("sfx.update", json!({ "layer": lid.0, "sfx": sfx, "coalesce": coalesce, "preview": false })),
                 );
             }
             return;
@@ -997,18 +1042,31 @@ mod native {
 
     fn render_sfx(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         let presets = app.session.manga.sfx_presets.presets().to_vec();
+        let gpu_ready = sfx_gpu_preview_ready(app);
         let target = if let Some(st) = app.session.active() {
             let active_layer = st.active_layer.and_then(|id| st.doc.layer(id));
             let active_is_text = active_text_layer_id(st).is_some()
                 && active_layer.is_some_and(|l| matches!(l.content, LayerContent::Text(_)));
             let active_is_smart = active_layer.is_some_and(|l| matches!(l.content, LayerContent::Smart(_)));
-            let sfx_data = active_layer.and_then(|l| l.sfx.as_deref().cloned());
+            let live_override = app
+                .manga
+                .sfx_gpu_live_draft
+                .as_ref()
+                .filter(|(did, lid, _)| *did == st.doc.id && Some(*lid) == st.active_layer)
+                .map(|(_, _, d)| d.clone());
+            let sfx_data = live_override.or_else(|| active_layer.and_then(|l| l.sfx.as_deref().cloned()));
+            let gpu_active = gpu_ready
+                && sfx_data
+                    .as_ref()
+                    .is_none_or(photocraft_engine::cmd::manga_cmds::sfx::sfx_gpu_compatible);
             photocraft_manga_ui::sfx_panel::SfxTargetInfo {
                 doc_id: Some(BridgeDocId(st.doc.id.0)),
                 layer_id: st.active_layer,
                 data: sfx_data,
                 active_is_text,
                 active_is_smart,
+                doc_dpi: st.doc.resolution_dpi.max(1.0),
+                gpu_active,
                 presets: &presets,
             }
         } else {
@@ -1018,6 +1076,8 @@ mod native {
                 data: None,
                 active_is_text: false,
                 active_is_smart: false,
+                doc_dpi: 72.0,
+                gpu_active: gpu_ready,
                 presets: &presets,
             }
         };
@@ -1647,19 +1707,18 @@ mod native {
             story_links: balloon_story_links(&st.doc, st.active_layer),
         };
         balloon_gizmo::draw(painter, &app.manga.ui.balloon_gizmo, &bview);
-        if let Some((prev_doc, prev_lid)) = app.manga.sfx_gpu_preview_layer
+        if let Some((prev_doc, prev_lid, ref live_sfx)) = app.manga.sfx_gpu_live_draft
             && prev_doc == st.doc.id
             && sfx_gpu_preview_ready(app)
             && let Some(layer) = st.doc.layer(prev_lid)
             && layer.visible
-            && let Some(sfx) = layer.sfx.as_deref()
-            && photocraft_engine::cmd::manga_cmds::sfx::sfx_gpu_compatible(sfx)
+            && photocraft_engine::cmd::manga_cmds::sfx::sfx_gpu_compatible(live_sfx)
         {
             crate::canvas::sfx_gpu_preview::paint(
                 painter,
                 xf.rect,
                 *xf,
-                sfx.clone(),
+                live_sfx.clone(),
                 st.doc.resolution_dpi.max(1.0),
                 layer.opacity,
             );
@@ -1811,49 +1870,74 @@ mod native {
     /// Commits a full-resolution SFX render once the user releases the mouse after dragging a
     /// control in the SFX dock, standard Character dock, or Canvas Bar.
     fn flush_pending_sfx_full_render(app: &mut PhotocraftApp, ctx: &egui::Context) {
+        // 1. Poll any in-flight non-blocking WASM GPU tiled commit first.
+        if let Some(rs) = app.gpu_render_state.clone()
+            && let Some(done) = app.manga.sfx_gpu_async_bake.poll(&rs, ctx)
+        {
+            let _ = photocraft_engine::cmd::manga_cmds::sfx::commit_sfx_gpu_surface(
+                &mut app.session,
+                done.doc_id,
+                done.layer_id,
+                done.data,
+                done.surface,
+                done.coalesce,
+            );
+            if app.manga.sfx_gpu_live_draft.as_ref().is_some_and(|(d, l, _)| *d == done.doc_id && *l == done.layer_id) {
+                app.manga.sfx_gpu_live_draft = None;
+                app.manga.sfx_gpu_layer_cleared = None;
+            }
+            ctx.request_repaint();
+            return;
+        }
+
         let pointer_down = ctx.input(|i| i.pointer.primary_down());
         if app.manga.ui.sfx_panel.pending_full_render && !pointer_down {
             app.manga.ui.sfx_panel.pending_full_render = false;
-            app.manga.sfx_gpu_preview_layer = None;
             if let Some((doc_id, layer_id)) = app.manga.ui.sfx_panel.pending_full_target.take() {
-                let sfx = app
-                    .session
-                    .active()
-                    .filter(|st| st.doc.id.0 == doc_id.0)
-                    .and_then(|st| st.doc.layer(layer_id))
-                    .and_then(|l| l.sfx.as_deref().cloned());
+                let live = app
+                    .manga
+                    .sfx_gpu_live_draft
+                    .as_ref()
+                    .filter(|(d, l, _)| d.0 == doc_id.0 && *l == layer_id)
+                    .map(|(_, _, sfx)| sfx.clone());
+                let sfx = live.or_else(|| {
+                    app.session
+                        .active()
+                        .filter(|st| st.doc.id.0 == doc_id.0)
+                        .and_then(|st| st.doc.layer(layer_id))
+                        .and_then(|l| l.sfx.as_deref().cloned())
+                });
                 if let Some(sfx) = sfx {
                     let coalesce = format!("sfx-panel:{}:{}", doc_id.0, layer_id.0);
-                    let _ = app.run(
-                        "sfx.update",
-                        json!({
-                            "layer": layer_id.0,
-                            "sfx": sfx,
-                            "coalesce": coalesce,
-                            "preview": false,
-                        }),
+                    let _ = dispatch_sfx_update(
+                        app,
+                        OutCommand::new(
+                            "sfx.update",
+                            json!({
+                                "layer": layer_id.0,
+                                "sfx": sfx,
+                                "coalesce": coalesce,
+                                "preview": false,
+                            }),
+                        ),
                     );
                 }
             }
             return;
         }
         // Safety net: if a live GPU preview drag ended abnormally (focus loss / alt-tab / widget
-        // blur without a release event), flush full-res raster pixels so the layer is never empty.
+        // blur without a release event) and no async bake is running, flush full-res commit.
         if !pointer_down
+            && !app.manga.sfx_gpu_async_bake.is_active()
             && !app.manga.ui.sfx_gizmo.has_active_drag()
             && !app.manga.ui.sfx_panel.pending_full_render
             && !app.manga.sfx_screentone_pending_full
-            && let Some((doc_id, layer_id)) = app.manga.sfx_gpu_preview_layer.take()
+            && let Some((doc_id, layer_id, sfx)) = app.manga.sfx_gpu_live_draft.clone()
         {
-            let sfx = app
-                .session
-                .active()
-                .filter(|st| st.doc.id == doc_id)
-                .and_then(|st| st.doc.layer(layer_id))
-                .and_then(|l| l.sfx.as_deref().cloned());
-            if let Some(sfx) = sfx {
-                let coalesce = format!("sfx-panel:{}:{}", doc_id.0, layer_id.0);
-                let _ = app.run(
+            let coalesce = format!("sfx-panel:{}:{}", doc_id.0, layer_id.0);
+            let _ = dispatch_sfx_update(
+                app,
+                OutCommand::new(
                     "sfx.update",
                     json!({
                         "layer": layer_id.0,
@@ -1861,8 +1945,8 @@ mod native {
                         "coalesce": coalesce,
                         "preview": false,
                     }),
-                );
-            }
+                ),
+            );
         }
     }
 

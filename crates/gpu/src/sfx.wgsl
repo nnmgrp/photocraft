@@ -484,9 +484,10 @@ fn fs_dry_physics(inp: QuadOut) -> @location(0) vec4<f32> {
     if base <= 0.02 {
         return vec4<f32>(base, 0.0, 0.0, 1.0);
     }
+    let inv_bs = select(fx.p3.z, 1.0, fx.p3.z <= 1e-6);
     let s = load_clamped(tex_b, p);
-    let sdf_doc = select(0.0, length(s.xy - pf) * fx.p0.z, s.x > -1e6);
-    let dp = pixel_doc_pos(pf);
+    let sdf_doc = select(0.0, length(s.xy - pf) * fx.p0.z * inv_bs, s.x > -1e6);
+    let dp = pixel_doc_pos(pf) * inv_bs;
     let dryness = fx.p1.z;
     let freq = fx.p1.w;
     let warp = fx.p2.x;
@@ -525,10 +526,11 @@ fn fs_dry_seg(inp: QuadOut) -> @location(0) vec4<f32> {
     if base <= 0.02 {
         return vec4<f32>(base, 0.0, 0.0, 1.0);
     }
+    let inv_bs = select(fx.p3.z, 1.0, fx.p3.z <= 1e-6);
     let seg = load_clamped(tex_b, p);
     let s_in = load_clamped(tex_c, p);
-    let sdf_doc = select(0.0, length(s_in.xy - pf) * fx.p0.z, s_in.x > -1e6);
-    let dp = pixel_doc_pos(pf);
+    let sdf_doc = select(0.0, length(s_in.xy - pf) * fx.p0.z * inv_bs, s_in.x > -1e6);
+    let dp = pixel_doc_pos(pf) * inv_bs;
 
     let dryness = fx.p1.z;
     let freq = fx.p1.w;
@@ -542,8 +544,8 @@ fn fs_dry_seg(inp: QuadOut) -> @location(0) vec4<f32> {
     var s_coord = dp.x + dp.y;
     var v_dist = sdf_doc;
     if seg.x > -1e6 {
-        s_coord = seg.z + seg.w;
-        v_dist = length(seg.xy - pf) * fx.p0.z;
+        s_coord = seg.z * inv_bs + seg.w;
+        v_dist = length(seg.xy - pf) * fx.p0.z * inv_bs;
     }
     let w_off = (fbm_2d(s_coord * 0.035, v_dist * 0.035, seed + 17u) - 0.5) * warp;
     let bristle = value_noise_2d(s_coord * 0.024, (v_dist + w_off) * freq, seed);
@@ -591,9 +593,11 @@ fn fs_dry_etf_lic(inp: QuadOut) -> @location(0) vec4<f32> {
     if base <= 0.02 {
         return vec4<f32>(base, 0.0, 0.0, 1.0);
     }
+    let inv_bs = select(fx.p3.z, 1.0, fx.p3.z <= 1e-6);
+    let step_px = max(fx.p3.w, 1.15);
     let s_in = load_clamped(tex_c, p);
-    let sdf_doc = select(0.0, length(s_in.xy - pf) * fx.p0.z, s_in.x > -1e6);
-    let dp = pixel_doc_pos(pf);
+    let sdf_doc = select(0.0, length(s_in.xy - pf) * fx.p0.z * inv_bs, s_in.x > -1e6);
+    let dp = pixel_doc_pos(pf) * inv_bs;
 
     let dryness = fx.p1.z;
     let freq = fx.p1.w;
@@ -616,8 +620,8 @@ fn fs_dry_etf_lic(inp: QuadOut) -> @location(0) vec4<f32> {
             let tv = load_clamped(tex_b, vec2<i32>(round(fp))).xy;
             let tl = length(tv);
             let tang = select(vec2<f32>(1.0, 0.0), tv / tl, tl > 1e-5);
-            fp = fp + tang * dir_sign * 1.15;
-            let ndp = pixel_doc_pos(fp);
+            fp = fp + tang * dir_sign * step_px;
+            let ndp = pixel_doc_pos(fp) * inv_bs;
             sum = sum + value_noise_2d(ndp.x * freq, ndp.y * freq, seed);
             count = count + 1.0;
         }
@@ -649,12 +653,13 @@ fn fs_dry_grain_breakup(inp: QuadOut) -> @location(0) vec4<f32> {
     let dryness = fx.p1.z;
     let sharp = fx.p1.w;
     let seed = fx.u0.y;
-    let dp = pixel_doc_pos(pf);
+    let inv_gs = select(fx.p3.z, 1.0, fx.p3.z <= 1e-6);
+    let dp = pixel_doc_pos(pf) * inv_gs;
 
     if fx.u0.x == 1u {
         // Ukiyo-e Washi kasure (edge-weighted via interior JFA SDF)
         let s_in = load_clamped(tex_b, p);
-        let d_in = select(0.0, length(s_in.xy - pf) * fx.p0.z, s_in.x > -1e6);
+        let d_in = select(0.0, length(s_in.xy - pf) * fx.p0.z * inv_gs, s_in.x > -1e6);
         let edge_weight = pow(1.0 - clamp((d_in - 1.0) / (2.8 + dryness * 5.0), 0.0, 1.0), 0.85);
         let core_skip = clamp((dryness - 0.55) / 0.45, 0.0, 1.0) * 0.45;
         let local_dry = clamp(dryness * (edge_weight * 1.15 + core_skip), 0.0, 1.0);

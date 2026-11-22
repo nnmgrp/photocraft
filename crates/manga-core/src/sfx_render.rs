@@ -62,6 +62,8 @@ pub type SfxPolyRing = Vec<(f64, f64)>;
 #[derive(Clone, Debug)]
 pub struct SfxVectorScene {
     pub full_bounds: Rect,
+    /// Median glyph height in document pixels (scales Dry Brush bristles & grain at 2400 DPI).
+    pub glyph_em_px: f32,
     pub geom: PreparedSfx,
     /// Glyph fill contours (font winding preserved for NonZero Stencil-then-Cover on GPU).
     pub face_contours: Vec<SfxPolyRing>,
@@ -487,7 +489,7 @@ fn to_line_join(j: SfxLineJoin) -> LineJoin {
     }
 }
 
-fn compute_render_bounds(data: &SfxData, geom: &PreparedSfx) -> Rect {
+pub fn compute_render_bounds(data: &SfxData, geom: &PreparedSfx) -> Rect {
     if geom.is_empty() {
         return Rect::EMPTY;
     }
@@ -1960,7 +1962,7 @@ fn build_shtack_stroke_polygons(strokes: &[ShtackStroke], le: &SfxLineEffect, gh
             };
             let tilt = (r2 - 0.5) * half_w * if core { 0.10 } else { 0.55 };
             let bow_amp = (r3 - 0.5) * half_w * if core { 0.18 } else { 0.70 };
-            let jitter_amp = if is_dry { dry * 2.0 } else { 0.35 };
+            let jitter_amp = (if is_dry { dry * 2.0 } else { 0.35 }) * (gh / 120.0).clamp(1.0, 32.0);
 
             let mut samples = Vec::with_capacity(base.len());
             for (i, &p) in base.iter().enumerate() {
@@ -3155,20 +3157,44 @@ fn render_shtack_fill_coverage(geom: &PreparedSfx, raw_base_cov: &[f32], bounds:
 // 6. 4 RUST-READY DRY BRUSH FILL ENGINES (SDF PHYSICS, SEG, ETF+LIC, VECTOR)
 // =============================================================================
 
+fn geom_em_px(geom: &PreparedSfx) -> f32 {
+    if geom.glyphs.is_empty() {
+        return (geom.warped_box[3] - geom.warped_box[1]).max(16.0) as f32;
+    }
+    let mut hs: Vec<f64> = geom.glyphs.iter().map(|g| (g.warped_bounds[3] - g.warped_bounds[1]).max(1.0)).collect();
+    hs.sort_by(|a, b| a.total_cmp(b));
+    hs[hs.len() / 2].max(16.0) as f32
+}
+
+fn dry_bristle_scale(geom: &PreparedSfx, db: &SfxDryBrushSpec) -> f32 {
+    let auto_scale = (geom_em_px(geom) / 120.0).clamp(0.75, 64.0);
+    (auto_scale * (db.bristle_size_pct / 100.0).clamp(0.1, 5.0)).max(0.1)
+}
+
 fn apply_dry_brush_mask(base_cov: &mut [f32], geom: &PreparedSfx, bounds: Rect, w: usize, h: usize, db: &SfxDryBrushSpec, is_binary: bool) {
     if !db.enabled || w == 0 || h == 0 {
         return;
     }
+    let bs = dry_bristle_scale(geom, db);
     match db.engine {
-        SfxDryBrushEngine::SdfPhysics => apply_dry_brush_sdf_physics(base_cov, bounds, w, h, db, is_binary),
+        SfxDryBrushEngine::SdfPhysics => apply_dry_brush_sdf_physics(base_cov, bounds, w, h, db, is_binary, bs),
         SfxDryBrushEngine::SdfSeg => apply_dry_brush_seg(base_cov, geom, bounds, w, h, db, is_binary),
-        SfxDryBrushEngine::SdfEtf => apply_dry_brush_etf_lic(base_cov, bounds, w, h, db, is_binary),
+        SfxDryBrushEngine::SdfEtf => apply_dry_brush_etf_lic(base_cov, bounds, w, h, db, is_binary, bs),
         SfxDryBrushEngine::Vector => apply_dry_brush_vector(base_cov, geom, bounds, db, is_binary),
     }
 }
 
-fn apply_dry_brush_sdf_physics(base_cov: &mut [f32], bounds: Rect, w: usize, h: usize, db: &SfxDryBrushSpec, is_binary: bool) {
+fn apply_dry_brush_sdf_physics(
+    base_cov: &mut [f32],
+    bounds: Rect,
+    w: usize,
+    h: usize,
+    db: &SfxDryBrushSpec,
+    is_binary: bool,
+    bristle_scale: f32,
+) {
     let sdf = compute_mask_sdf(base_cov, w, h);
+    let inv_bs = 1.0 / bristle_scale.max(0.1);
     let ang = db.angle_deg.to_radians();
     let (sin_a, cos_a) = ang.sin_cos();
     let dryness = db.dryness_pct / 100.0;
@@ -3180,19 +3206,19 @@ fn apply_dry_brush_sdf_physics(base_cov: &mut [f32], bounds: Rect, w: usize, h: 
     let seed = db.seed.wrapping_mul(10_007);
 
     for y in 0..h {
-        let py = (bounds.y0 + y as i32) as f32;
+        let py = (bounds.y0 + y as i32) as f32 * inv_bs;
         for x in 0..w {
             let idx = y * w + x;
             if base_cov[idx] <= 0.02 {
                 continue;
             }
-            let px = (bounds.x0 + x as i32) as f32;
+            let px = (bounds.x0 + x as i32) as f32 * inv_bs;
             let u = px * cos_a + py * sin_a;
             let v = -px * sin_a + py * cos_a;
             let w_off = (fbm_2d(u * 0.035, v * 0.035, seed.wrapping_add(11)) - 0.5) * warp;
             let bristle = value_noise_2d(u * 0.025, (v + w_off) * freq, seed);
             let paper = crisp_paper_grain(px, py, seed.wrapping_add(97));
-            let edge_fade = (sdf[idx] / (3.0 + wear * 16.0)).clamp(0.0, 1.0);
+            let edge_fade = ((sdf[idx] * inv_bs) / (3.0 + wear * 16.0)).clamp(0.0, 1.0);
             let ink_score = bristle * (1.0 - grain * 0.35) + paper * (grain * 0.35) + edge_fade * wear * 0.55 - wear * 0.42;
             let thresh = dryness * 0.85;
             let keep = if is_binary || sharp >= 0.99 {
@@ -3493,12 +3519,23 @@ fn junction_cover_at(junctions: &[SegJunction], px: f64, py: f64) -> f32 {
     cover as f32
 }
 
-fn apply_dry_brush_seg(base_cov: &mut [f32], geom: &PreparedSfx, bounds: Rect, w: usize, h: usize, db: &SfxDryBrushSpec, is_binary: bool) {
+fn apply_dry_brush_seg(
+    base_cov: &mut [f32],
+    geom: &PreparedSfx,
+    bounds: Rect,
+    w: usize,
+    h: usize,
+    db: &SfxDryBrushSpec,
+    is_binary: bool,
+) {
+    let bristle_scale = dry_bristle_scale(geom, db);
     let contours = build_seg_contours(geom);
     if contours.is_empty() {
-        apply_dry_brush_sdf_physics(base_cov, bounds, w, h, db, is_binary);
+        apply_dry_brush_sdf_physics(base_cov, bounds, w, h, db, is_binary, bristle_scale);
         return;
     }
+    let inv_bs = 1.0 / bristle_scale.max(0.1);
+    let inv_bs64 = f64::from(inv_bs);
     let sdf = compute_mask_sdf(base_cov, w, h);
     let junctions = build_seg_junctions(&contours, base_cov, &sdf, bounds, w, h);
     let dryness = db.dryness_pct / 100.0;
@@ -3525,8 +3562,8 @@ fn apply_dry_brush_seg(base_cov: &mut [f32], geom: &PreparedSfx, bounds: Rect, w
                 best_d2 = f64::from(sdf[idx]).powi(2);
                 s = px + py;
             }
-            let v = best_d2.sqrt().max(0.0) as f32;
-            let mut bristle = sample_seamless_bristle(s, total, phase, v, warp, freq, seed);
+            let v = (best_d2.sqrt().max(0.0) as f32) * inv_bs;
+            let mut bristle = sample_seamless_bristle(s * inv_bs64, (total * inv_bs64).max(1.0), phase, v, warp, freq, seed);
             if !junctions.is_empty() {
                 let jc = junction_cover_at(&junctions, px, py);
                 if jc > 0.0 {
@@ -3535,8 +3572,8 @@ fn apply_dry_brush_seg(base_cov: &mut [f32], geom: &PreparedSfx, bounds: Rect, w
                     bristle += (1.0 - bristle) * jc * 0.90;
                 }
             }
-            let paper = crisp_paper_grain(px as f32, py as f32, seed.wrapping_add(113));
-            let edge_fade = (sdf[idx] / (3.0 + wear * 15.0)).clamp(0.0, 1.0);
+            let paper = crisp_paper_grain((px as f32) * inv_bs, (py as f32) * inv_bs, seed.wrapping_add(113));
+            let edge_fade = ((sdf[idx] * inv_bs) / (3.0 + wear * 15.0)).clamp(0.0, 1.0);
             let ink_score = bristle * (1.0 - grain * 0.35) + paper * (grain * 0.35) + edge_fade * wear * 0.55 - wear * 0.42;
             let thresh = dryness * 0.85;
             let keep = if is_binary || sharp >= 0.99 {
@@ -3550,8 +3587,17 @@ fn apply_dry_brush_seg(base_cov: &mut [f32], geom: &PreparedSfx, bounds: Rect, w
     }
 }
 
-fn apply_dry_brush_etf_lic(base_cov: &mut [f32], bounds: Rect, w: usize, h: usize, db: &SfxDryBrushSpec, is_binary: bool) {
+fn apply_dry_brush_etf_lic(
+    base_cov: &mut [f32],
+    bounds: Rect,
+    w: usize,
+    h: usize,
+    db: &SfxDryBrushSpec,
+    is_binary: bool,
+    bristle_scale: f32,
+) {
     let n = w * h;
+    let inv_bs = 1.0 / bristle_scale.max(0.1);
     let sdf = compute_mask_sdf(base_cov, w, h);
     let mut tx = vec![0.0_f32; n];
     let mut ty = vec![0.0_f32; n];
@@ -3595,7 +3641,7 @@ fn apply_dry_brush_etf_lic(base_cov: &mut [f32], bounds: Rect, w: usize, h: usiz
 
     // High-frequency bristle noise field for Line Integral Convolution (LIC).
     let seed = db.seed.wrapping_mul(19_417);
-    let freq = 0.12 + (db.freq_pct / 100.0) * 0.45;
+    let freq = (0.12 + (db.freq_pct / 100.0) * 0.45) * inv_bs;
     let mut noise = vec![0.0_f32; n];
     for y in 0..h {
         let py = (bounds.y0 + y as i32) as f32;
@@ -3606,19 +3652,20 @@ fn apply_dry_brush_etf_lic(base_cov: &mut [f32], bounds: Rect, w: usize, h: usiz
     }
 
     let steps = (db.lic_length_px.round() as usize).clamp(4, 26) / 2;
+    let stride = (db.lic_length_px / (2.0 * steps.max(1) as f32)).max(1.15);
     let dryness = db.dryness_pct / 100.0;
     let grain = db.paper_grain_pct / 100.0;
     let wear = db.edge_wear_pct / 100.0;
     let sharp = (db.grain_sharpness_pct / 100.0).clamp(0.0, 1.0);
 
     for y in 0..h {
-        let py = (bounds.y0 + y as i32) as f32;
+        let py = (bounds.y0 + y as i32) as f32 * inv_bs;
         for x in 0..w {
             let idx = y * w + x;
             if base_cov[idx] <= 0.02 {
                 continue;
             }
-            let px = (bounds.x0 + x as i32) as f32;
+            let px = (bounds.x0 + x as i32) as f32 * inv_bs;
             let mut sum = noise[idx];
             let mut count = 1.0_f32;
             for dir_sign in [-1.0_f32, 1.0_f32] {
@@ -3628,8 +3675,8 @@ fn apply_dry_brush_etf_lic(base_cov: &mut [f32], bounds: Rect, w: usize, h: usiz
                     let ix = fx.round().clamp(0.0, (w - 1) as f32) as usize;
                     let iy = fy.round().clamp(0.0, (h - 1) as f32) as usize;
                     let k = iy * w + ix;
-                    fx += tx[k] * dir_sign * 1.15;
-                    fy += ty[k] * dir_sign * 1.15;
+                    fx += tx[k] * dir_sign * stride;
+                    fy += ty[k] * dir_sign * stride;
                     let nx = fx.round().clamp(0.0, (w - 1) as f32) as usize;
                     let ny = fy.round().clamp(0.0, (h - 1) as f32) as usize;
                     sum += noise[ny * w + nx];
@@ -3638,7 +3685,7 @@ fn apply_dry_brush_etf_lic(base_cov: &mut [f32], bounds: Rect, w: usize, h: usiz
             }
             let lic = sum / count;
             let paper = crisp_paper_grain(px, py, seed.wrapping_add(131));
-            let edge_fade = (sdf[idx] / (3.0 + wear * 14.0)).clamp(0.0, 1.0);
+            let edge_fade = ((sdf[idx] * inv_bs) / (3.0 + wear * 14.0)).clamp(0.0, 1.0);
             let ink_score = lic * (1.0 - grain * 0.32) + paper * (grain * 0.32) + edge_fade * wear * 0.55 - wear * 0.42;
             let thresh = dryness * 0.85;
             let keep = if is_binary || sharp >= 0.99 {
@@ -3661,6 +3708,7 @@ fn build_dry_brush_vector_cut_polys(geom: &PreparedSfx, db: &SfxDryBrushSpec) ->
     let tilt_rand = f64::from(db.vec_tilt_random_deg).to_radians();
     let dryness = f64::from(db.dryness_pct) / 100.0;
     let gauss_dots = f64::from(db.vec_gauss_dots_pct) / 100.0;
+    let bs = f64::from(dry_bristle_scale(geom, db));
     let seed_base = db.seed.wrapping_mul(31_337);
 
     for (gi, g) in geom.glyphs.iter().enumerate() {
@@ -3683,7 +3731,9 @@ fn build_dry_brush_vector_cut_polys(geom: &PreparedSfx, db: &SfxDryBrushSpec) ->
             let half_len = diag * (0.38 + 0.28 * f64::from(hash_u32(k_seed.wrapping_add(29))));
             let mid_x = cx + px * off;
             let mid_y = cy + py * off;
-            let half_w = (diag / count as f64 * 0.32 * dryness * (0.65 + 0.7 * f64::from(hash_u32(k_seed.wrapping_add(47))))).clamp(0.45, 5.5);
+            let user_size = f64::from((db.bristle_size_pct / 100.0).clamp(0.1, 5.0));
+            let half_w = (diag / count as f64 * 0.32 * dryness * user_size * (0.65 + 0.7 * f64::from(hash_u32(k_seed.wrapping_add(47)))))
+                .clamp(0.45 * bs, (5.5 * bs).max(diag * 0.16));
 
             let p0 = (mid_x - ca * half_len, mid_y - sa * half_len);
             let p1 = (mid_x + ca * half_len, mid_y + sa * half_len);
@@ -3704,7 +3754,7 @@ fn build_dry_brush_vector_cut_polys(geom: &PreparedSfx, db: &SfxDryBrushSpec) ->
                 let d_seed = g_seed.wrapping_add((d as u32).wrapping_mul(131)).wrapping_add(999);
                 let gx = cx + f64::from(box_muller_gaussian(d_seed, d_seed.wrapping_add(7))) * gw * 0.28;
                 let gy = cy + f64::from(box_muller_gaussian(d_seed.wrapping_add(19), d_seed.wrapping_add(31))) * gh * 0.28;
-                let rad = (0.75 + f64::from(hash_u32(d_seed.wrapping_add(53))) * 1.8 * dryness).clamp(0.6, 3.2);
+                let rad = ((0.75 + f64::from(hash_u32(d_seed.wrapping_add(53))) * 1.8 * dryness) * bs).clamp(0.6 * bs, 3.2 * bs);
                 cut_polys.push(vec![
                     (gx - rad, gy),
                     (gx, gy - rad),
@@ -4608,10 +4658,12 @@ fn data_uses_seg_dry_brush(data: &SfxData) -> bool {
 /// 12 000 × 17 000 px canvases), ready to feed into `photocraft_gpu::SfxGpuRenderer`.
 pub fn extract_sfx_vector_scene(data: &SfxData, engine: &mut TextEngine, dpi: f32) -> SfxVectorScene {
     let geom = build_sfx_geometry(data, engine, dpi);
+    let glyph_em_px = geom_em_px(&geom);
     let full_bounds = compute_render_bounds(data, &geom);
     if full_bounds.is_empty() {
         return SfxVectorScene {
             full_bounds: Rect::EMPTY,
+            glyph_em_px,
             geom,
             face_contours: Vec::new(),
             line_polygons: Vec::new(),
@@ -4680,6 +4732,7 @@ pub fn extract_sfx_vector_scene(data: &SfxData, engine: &mut TextEngine, dpi: f3
 
     SfxVectorScene {
         full_bounds,
+        glyph_em_px,
         geom,
         face_contours,
         line_polygons,
@@ -4689,6 +4742,235 @@ pub fn extract_sfx_vector_scene(data: &SfxData, engine: &mut TextEngine, dpi: f3
         seg_contours,
         primary_dry_vector_cuts,
         effect_dry_vector_cuts,
+    }
+}
+
+fn hash_serialize<T: serde::Serialize>(v: &T) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    if let Ok(bytes) = serde_json::to_vec(v) {
+        bytes.hash(&mut h);
+    }
+    h.finish()
+}
+
+fn sfx_geom_sig(data: &SfxData, dpi: f32) -> u64 {
+    let text_part = (
+        &data.text,
+        data.origin,
+        &data.font_family,
+        &data.font_style,
+        &data.postscript_name,
+        data.weight,
+        data.italic,
+        data.size_pt.to_bits(),
+        data.tracking.to_bits(),
+        data.leading_scale.to_bits(),
+        data.vertical,
+    );
+    let warp_part = (
+        data.warp_mode,
+        &data.free_transform,
+        &data.mesh,
+        &data.spline,
+        &data.per_glyph,
+        &data.liquify_strokes,
+        dpi.to_bits(),
+    );
+    hash_serialize(&(text_part, warp_part))
+}
+
+fn sfx_line_vec_sig(le: &SfxLineEffect) -> u64 {
+    let base_part = (
+        le.style,
+        le.line_width_px.to_bits(),
+        le.spike_shape,
+        le.spike_length_px.to_bits(),
+        le.spike_size_px.to_bits(),
+        le.spike_count,
+        le.spike_random_pct.to_bits(),
+        le.spike_seed,
+    );
+    let pen_part = (
+        le.gpen_contrast_pct.to_bits(),
+        le.gpen_angle_deg.to_bits(),
+        le.gpen_pinch_pct.to_bits(),
+        le.gpen_overshoot_px.to_bits(),
+        le.gpen_overshoot_count_pct.to_bits(),
+        le.gpen_overshoot_random_pct.to_bits(),
+        le.gpen_seed,
+    );
+    let brush_part = (
+        le.ink_brush_roughness_pct.to_bits(),
+        le.ink_brush_dropout_pct.to_bits(),
+        le.ink_brush_pressure_pct.to_bits(),
+        le.ink_brush_overshoot_px.to_bits(),
+        le.ink_brush_overshoot_count_pct.to_bits(),
+        le.ink_brush_overshoot_random_pct.to_bits(),
+        le.ink_brush_seed,
+    );
+    let shtack_part = (
+        le.shtack_variant,
+        le.shtack_bristles,
+        le.shtack_split_pct.to_bits(),
+        le.shtack_overshoot_px.to_bits(),
+        le.shtack_overshoot_mode,
+        le.shtack_thickness_px.to_bits(),
+        le.shtack_seed,
+        // DryPencil uses dryness for contour jitter_amp; SaiPenSketch does not.
+        if le.shtack_variant == SfxShtackVariant::DryPencil { le.shtack_dryness_pct.to_bits() } else { 0 },
+    );
+    hash_serialize(&(base_part, pen_part, brush_part, shtack_part))
+}
+
+fn fill_vector_only_sig(fill: &SfxFillSource) -> u64 {
+    match fill {
+        SfxFillSource::ShtackHatch { spec } => hash_serialize(&(
+            1u8,
+            spec.mode,
+            spec.flow_overshoot,
+            spec.angle_deg.to_bits(),
+            spec.cross_hatch,
+            spec.cross_angle_deg.to_bits(),
+            spec.density_pct.to_bits(),
+            spec.thickness_pct.to_bits(),
+            spec.roughness_pct.to_bits(),
+            spec.overshoot_pct.to_bits(),
+            spec.seed,
+            &spec.flow_overrides,
+        )),
+        SfxFillSource::DryBrush { spec, .. } if spec.engine == SfxDryBrushEngine::Vector => hash_serialize(&(2u8, spec)),
+        _ => 0,
+    }
+}
+
+fn sfx_fill_vec_sig(data: &SfxData) -> u64 {
+    let prim_vec = if data.dry_brush.enabled && data.dry_brush.engine == SfxDryBrushEngine::Vector {
+        hash_serialize(&data.dry_brush)
+    } else {
+        0
+    };
+    let eff_sigs: Vec<(usize, u64)> = data
+        .blending
+        .effects
+        .iter()
+        .enumerate()
+        .filter_map(|(i, fx)| {
+            if !fx.enabled() {
+                return None;
+            }
+            let f = match fx {
+                SfxBlendEffect::FillOverlay { fill, .. } | SfxBlendEffect::Stroke { fill, .. } => fill,
+                _ => return None,
+            };
+            let s = fill_vector_only_sig(f);
+            (s != 0).then_some((i, s))
+        })
+        .collect();
+    hash_serialize(&(
+        fill_vector_only_sig(&data.fill),
+        data.blending.secondary_fill.as_ref().map_or(0, fill_vector_only_sig),
+        prim_vec,
+        eff_sigs,
+    ))
+}
+
+/// Incremental multi-level vector cache for 60 FPS GPU SFX previews on 12K×17K documents.
+///
+/// Dragging pixel-FX sliders (Dry Brush `А/Б1/Б2`, Color, Gradient, Screentone, Halo, Shadow,
+/// Blending Stroke/Opacity/BlendMode) hits the cache with **0.00 ms CPU vector work**.
+/// Dragging outline sliders skips text shaping & Seg contour extraction and only rebuilds the
+/// outline ribbon polygons.
+#[derive(Default)]
+pub struct SfxVectorCache {
+    geom_sig: u64,
+    line_sig: u64,
+    fill_vec_sig: u64,
+    has_seg: bool,
+    scene: Option<SfxVectorScene>,
+}
+
+impl SfxVectorCache {
+    pub fn get_or_update(&mut self, data: &SfxData, engine: &mut TextEngine, dpi: f32) -> &SfxVectorScene {
+        let g_sig = sfx_geom_sig(data, dpi);
+        let l_sig = sfx_line_vec_sig(&data.line_effect);
+        let f_sig = sfx_fill_vec_sig(data);
+        let need_seg = data_uses_seg_dry_brush(data);
+
+        if self.scene.is_none() || self.geom_sig != g_sig {
+            self.geom_sig = g_sig;
+            self.line_sig = l_sig;
+            self.fill_vec_sig = f_sig;
+            self.has_seg = need_seg;
+            return self.scene.insert(extract_sfx_vector_scene(data, engine, dpi));
+        }
+
+        let sc = self.scene.get_or_insert_with(|| extract_sfx_vector_scene(data, engine, dpi));
+        sc.full_bounds = compute_render_bounds(data, &sc.geom);
+        if sc.full_bounds.is_empty() {
+            return sc;
+        }
+        if self.line_sig != l_sig {
+            sc.line_polygons = build_line_effect_polygons(&sc.geom, &data.line_effect);
+            self.line_sig = l_sig;
+        }
+        if self.fill_vec_sig != f_sig {
+            sc.primary_shtack_polygons = match &data.fill {
+                SfxFillSource::ShtackHatch { spec } => build_shtack_fill_polygons(&sc.geom, spec),
+                _ => Vec::new(),
+            };
+            sc.secondary_shtack_polygons = match &data.blending.secondary_fill {
+                Some(SfxFillSource::ShtackHatch { spec }) => build_shtack_fill_polygons(&sc.geom, spec),
+                _ => Vec::new(),
+            };
+            sc.effect_shtack_polygons.clear();
+            sc.effect_dry_vector_cuts.clear();
+            for (idx, fx) in data.blending.effects.iter().enumerate() {
+                if !fx.enabled() {
+                    continue;
+                }
+                let fill_opt = match fx {
+                    SfxBlendEffect::FillOverlay { fill, .. } | SfxBlendEffect::Stroke { fill, .. } => Some(fill),
+                    _ => None,
+                };
+                if let Some(fill) = fill_opt {
+                    match fill {
+                        SfxFillSource::ShtackHatch { spec } => {
+                            sc.effect_shtack_polygons.push((idx, build_shtack_fill_polygons(&sc.geom, spec)));
+                        }
+                        SfxFillSource::DryBrush { spec, .. } if spec.engine == SfxDryBrushEngine::Vector => {
+                            sc.effect_dry_vector_cuts.push((idx, build_dry_brush_vector_cut_polys(&sc.geom, spec)));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            sc.primary_dry_vector_cuts = if let SfxFillSource::DryBrush { spec, .. } = &data.fill
+                && spec.engine == SfxDryBrushEngine::Vector
+            {
+                build_dry_brush_vector_cut_polys(&sc.geom, spec)
+            } else if data.dry_brush.enabled && data.dry_brush.engine == SfxDryBrushEngine::Vector {
+                build_dry_brush_vector_cut_polys(&sc.geom, &data.dry_brush)
+            } else {
+                Vec::new()
+            };
+            self.fill_vec_sig = f_sig;
+        }
+        if need_seg && !self.has_seg {
+            sc.seg_contours = build_seg_contours(&sc.geom)
+                .into_iter()
+                .map(|c| {
+                    let total_len = *c.cum.last().unwrap_or(&0.0) as f32;
+                    let pts = c.pts.iter().zip(c.cum.iter()).map(|(&(x, y), &s)| [x as f32, y as f32, s as f32]).collect();
+                    SfxSegContourData { pts, total_len, phase: c.phase as f32 }
+                })
+                .collect();
+            self.has_seg = true;
+        } else if !need_seg && self.has_seg {
+            sc.seg_contours.clear();
+            self.has_seg = false;
+        }
+        sc
     }
 }
 
@@ -5653,14 +5935,14 @@ mod tests {
         };
         let box2 = Rect::from_xywh(0, 0, 64, 64);
         let mut cov = vec![0.9_f32; 64 * 64];
-        apply_dry_brush_sdf_physics(&mut cov, box2, 64, 64, &db, false);
+        apply_dry_brush_sdf_physics(&mut cov, box2, 64, 64, &db, false, 1.0);
         let z = cov.iter().filter(|&&v| v == 0.0).count();
         let i = cov.iter().filter(|&&v| v > 0.5).count();
         assert!(z > 0 && i > 0, "100% sharp dry brush: true 0.0 gaps required (zero={z}, ink={i})");
 
         db.grain_sharpness_pct = 0.0;
         let mut cov_soft = vec![0.9_f32; 64 * 64];
-        apply_dry_brush_sdf_physics(&mut cov_soft, box2, 64, 64, &db, false);
+        apply_dry_brush_sdf_physics(&mut cov_soft, box2, 64, 64, &db, false, 1.0);
         assert!(cov_soft.iter().any(|&v| v > 0.0 && v < 0.9), "0% sharpness must keep a soft ramp");
     }
 

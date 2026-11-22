@@ -65,7 +65,7 @@ pub use camera_raw::{CAMERA_RAW_SHADER, CameraRawDevelop};
 pub use camera_raw_tone::{CAMERA_RAW_FILTERS_SHADER, CAMERA_RAW_TONE_SHADER};
 pub use health::{DeviceHealth, Fault};
 pub use plan::{Kernel, Plan, Role, Unsupported, plan};
-pub use sfx::{SFX_SHADER, SfxGpuRenderer, SfxGpuScene, SfxGpuSegContour};
+pub use sfx::{MAX_SFX_TILE_DIM, SFX_SHADER, SfxGpuRenderer, SfxGpuScene, SfxGpuSegContour};
 pub use timing::{GpuTimer, GpuTiming};
 
 /// GPU compositor. Create once per device; call [`Compositor::render`] per refresh.

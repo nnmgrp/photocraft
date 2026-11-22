@@ -94,6 +94,10 @@ fn default_65() -> f32 {
     65.0
 }
 
+fn default_100() -> f32 {
+    100.0
+}
+
 fn default_2() -> f32 {
     2.0
 }
@@ -523,6 +527,10 @@ pub struct SfxDryBrushSpec {
     /// Paper-grain / bristle threshold sharpness (`0..=100%`). 100% produces true binary gaps.
     #[serde(default = "default_65")]
     pub grain_sharpness_pct: f32,
+    /// Relative bristle / grain scale (`10..=500%`, default `100%`). Automatically multiplied by
+    /// glyph height so 2400-DPI / 12K×17K lettering keeps bold, organic dry-brush strokes.
+    #[serde(default = "default_100")]
+    pub bristle_size_pct: f32,
 }
 
 impl Default for SfxDryBrushSpec {
@@ -544,6 +552,7 @@ impl Default for SfxDryBrushSpec {
             vec_tilt_random_deg: 3.0,
             vec_gauss_dots_pct: 40.0,
             grain_sharpness_pct: 65.0,
+            bristle_size_pct: 100.0,
         }
     }
 }
@@ -563,6 +572,7 @@ impl SfxDryBrushSpec {
         self.vec_tilt_random_deg = finite_f32(self.vec_tilt_random_deg, 3.0).clamp(0.0, 10.0);
         self.vec_gauss_dots_pct = finite_f32(self.vec_gauss_dots_pct, 40.0).clamp(0.0, 100.0);
         self.grain_sharpness_pct = finite_f32(self.grain_sharpness_pct, 65.0).clamp(0.0, 100.0);
+        self.bristle_size_pct = finite_f32(self.bristle_size_pct, 100.0).clamp(10.0, 500.0);
     }
 }
 

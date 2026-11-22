@@ -77,6 +77,10 @@ pub struct SfxTargetInfo<'a> {
     pub data: Option<SfxData>,
     pub active_is_text: bool,
     pub active_is_smart: bool,
+    /// Active document DPI (scales pixel-based outline & effect sliders accurately up to 2400 DPI).
+    pub doc_dpi: f32,
+    /// True when the hardware `wgpu` SFX pipeline is active for live preview / commits.
+    pub gpu_active: bool,
     pub presets: &'a [SfxPreset],
 }
 
@@ -87,6 +91,8 @@ pub struct SfxPanelState {
     pub bound_target: Option<(BridgeDocId, LayerId)>,
     pub synced_data: Option<SfxData>,
     pub preset_name: String,
+    /// Cached active document DPI for 2400-DPI-aware slider ranges.
+    pub doc_dpi: f32,
     /// True while a slider/colour drag is in progress: the next committed (non-preview) render
     /// is deferred until the pointer is released. Transient only — `SfxPanelState` has no serde
     /// derives and is never persisted, so this field is intentionally not part of any saved state.
@@ -172,10 +178,12 @@ fn enum_from_id<T: serde::de::DeserializeOwned>(s: &str) -> Option<T> {
     serde_json::from_value(Value::String(s.to_owned())).ok()
 }
 
-/// Pixel-effect slider ranges follow the lettering size: a 600-DPI / 12303×17499 page creates
-/// large SFX (hundreds of points), so fixed 14–64 px maxima would be unusably small.
+/// Pixel-effect slider ranges follow the rendered lettering height (`size_pt * dpi / 72`):
+/// a 2400-DPI / 12 000 × 17 000 px manga page has large pixel glyphs even at 54 pt, so fixed
+/// 14–64 px maxima would be unusably thin.
 fn ui_scale(st: &SfxPanelState) -> f32 {
-    (st.draft.size_pt / 54.0).clamp(1.0, 256.0)
+    let dpi_factor = (if st.doc_dpi > 1.0 { st.doc_dpi } else { 72.0 }) / 72.0;
+    ((st.draft.size_pt * dpi_factor) / 54.0).clamp(1.0, 256.0)
 }
 
 fn section_card(ui: &mut Ui, t: Tokens, add_contents: impl FnOnce(&mut Ui)) {
@@ -405,6 +413,7 @@ fn preset_title_color(preset: &SfxPreset, t: Tokens) -> Color32 {
 /// Renders the SFX authoring dock panel and emits deferred engine commands.
 pub fn panel(ui: &mut Ui, st: &mut SfxPanelState, gizmo: &mut SfxGizmoState, target: &SfxTargetInfo<'_>) -> SfxPanelOutput {
     let mut out = SfxPanelOutput::default();
+    st.doc_dpi = if target.doc_dpi > 1.0 { target.doc_dpi } else { 72.0 };
     st.sync_from_host(target);
     let t = Tokens::get(ui.ctx());
     let before = st.draft.clone();
@@ -475,6 +484,13 @@ fn draw_header_and_tabs(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens, target: 
                 "Draft (New)".to_owned()
             };
             ui.label(RichText::new(status).color(TEXT_SKY).monospace().size(10.5));
+            let (badge_txt, badge_col, badge_tip) = if target.gpu_active {
+                ("⚡ GPU", TEXT_EMERALD, "Аппаратное ускорение wgpu/WGSL активно (60 FPS превью + GPU-коммит)")
+            } else {
+                ("CPU", TEXT_AMBER, "Программный рендер CPU (GPU недоступен или активен несовместимый режим)")
+            };
+            ui.label(RichText::new(badge_txt).color(badge_col).monospace().strong().size(9.5))
+                .on_hover_text(badge_tip);
         });
     });
 
@@ -1069,6 +1085,7 @@ fn draw_dry_brush_editor(ui: &mut Ui, db: &mut SfxDryBrushSpec, scale: f32, t: T
     });
 
     slider_row_f32(ui, t, "Сухость (Порог):", &mut db.dryness_pct, 10.0..=85.0, "%");
+    slider_row_f32(ui, t, "Размер щетины:", &mut db.bristle_size_pct, 10.0..=500.0, "%");
 
     match db.engine {
         SfxDryBrushEngine::SdfPhysics | SfxDryBrushEngine::SdfSeg | SfxDryBrushEngine::SdfEtf => {
@@ -2036,6 +2053,8 @@ mod tests {
             data: Some(SfxData::default()),
             active_is_text: false,
             active_is_smart: false,
+            doc_dpi: 72.0,
+            gpu_active: false,
             presets: &presets,
         };
         let ctx = egui::Context::default();
@@ -2059,6 +2078,8 @@ mod tests {
             data: Some(d1),
             active_is_text: false,
             active_is_smart: false,
+            doc_dpi: 72.0,
+            gpu_active: false,
             presets: &presets,
         };
         st.sync_from_host(&t1);
@@ -2099,6 +2120,8 @@ mod tests {
                     data: Some(data),
                     active_is_text: false,
                     active_is_smart: false,
+                    doc_dpi: 72.0,
+                    gpu_active: false,
                     presets: &presets,
                 };
                 let mut out = ctx.run_ui(input.clone(), |ui| {

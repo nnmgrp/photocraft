@@ -522,6 +522,40 @@ pub fn set_sfx_gpu_renderer_hook(hook: Option<SfxGpuRenderHook>) {
     }
 }
 
+/// Commits an externally GPU-rendered SFX [`Surface`] straight into `layer_id` with full undo
+/// coalescing and zero CPU rasterization (used by non-blocking GPU tiled commits on WASM/Web).
+pub fn commit_sfx_gpu_surface(
+    s: &mut Session,
+    doc_id: photocraft_doc::DocId,
+    layer_id: LayerId,
+    mut data: SfxData,
+    surface: Surface,
+    coalesce: Option<String>,
+) -> Result<()> {
+    if s.active().is_none_or(|st| st.doc.id != doc_id) {
+        return Ok(());
+    }
+    data.validate();
+    let prev = s.coalesce_request.take();
+    s.coalesce_request = coalesce;
+    let res = s.edit("Update SFX", |doc, _| {
+        check_layer_unlocked(doc, layer_id)?;
+        let l = doc.layer_mut(layer_id).ok_or(EngineError::NoLayer(layer_id))?;
+        if l.sfx.is_none() {
+            return Ok(());
+        }
+        if l.name.starts_with("SFX:") || l.name == "SFX Layer" {
+            l.name = auto_layer_name(&data);
+        }
+        l.sfx = Some(Arc::new(data.clone()));
+        l.blend = BlendMode::Normal;
+        l.content = LayerContent::Raster(surface.clone());
+        Ok(())
+    });
+    s.coalesce_request = prev;
+    res
+}
+
 fn auto_layer_name(data: &SfxData) -> String {
     let clean: String = data.text.chars().filter(|c| !c.is_control()).take(20).collect();
     let trimmed = clean.trim();

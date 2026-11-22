@@ -2314,7 +2314,16 @@ mod tests {
             tool_is_balloon: false,
         };
         let linework_host = LineworkHostContext { vector_brush_presets: &[], selected_stroke_width: None, active_curve_sync: None };
-        let sfx_target = SfxTargetInfo { doc_id: None, layer_id: None, data: None, active_is_text: false, active_is_smart: false, presets: &presets };
+        let sfx_target = SfxTargetInfo {
+            doc_id: None,
+            layer_id: None,
+            data: None,
+            active_is_text: false,
+            active_is_smart: false,
+            doc_dpi: 72.0,
+            gpu_active: false,
+            presets: &presets,
+        };
 
         let ctx = egui::Context::default();
         let input = egui::RawInput {

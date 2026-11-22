@@ -81,6 +81,15 @@ pub fn start() {
                 (None, bridge, Vec::new())
             }
         };
+        let (recovery_db, recovery, recovered_entries, recovery_handed_out) = match crate::web_autosave::load().await {
+            Ok(loaded) => (Some(loaded.db), loaded.bridge, loaded.entries, loaded.handed_out),
+            Err(e) => {
+                log::warn!("photocraft-web: crash-recovery storage unavailable: {e}");
+                let bridge = crate::autosave_bridge::AutosaveBridge::default();
+                bridge.mark_unavailable(e);
+                (None, bridge, Vec::new(), Arc::new(AtomicBool::new(false)))
+            }
+        };
         let pen_target = canvas.clone();
         let runner = eframe::WebRunner::new();
         // After the runner's own panic handler, so the message is kept and the runner's handler
@@ -102,7 +111,17 @@ pub fn start() {
                     let (session, warnings) = crate::preset_bridge::session(presets.clone());
                     preset_warnings.extend(warnings);
                     let drag = listen_drag(&pen_target);
-                    let mut app = PhotocraftApp::new(session, services(inbox.clone(), place_inbox.clone(), drag_pos_service(pen_target.clone(), drag)));
+                    let mut app = PhotocraftApp::new(
+                        session,
+                        services(
+                            inbox.clone(),
+                            place_inbox.clone(),
+                            drag_pos_service(pen_target.clone(), drag),
+                            recovery.clone(),
+                            recovered_entries,
+                            recovery_handed_out,
+                        ),
+                    );
                     if !preset_warnings.is_empty() {
                         photocraft_ui_egui::notices::post(&mut app, i18n::t("Some brush presets could not be loaded"), preset_warnings, true, None);
                     }
@@ -116,7 +135,7 @@ pub fn start() {
                     }
                     let unsaved = Arc::new(AtomicBool::new(false));
                     guard_unload(unsaved.clone());
-                    Ok(Box::new(WebShell { app, inbox, place_inbox, unsaved, served, database, presets, ui_language: "" }))
+                    Ok(Box::new(WebShell { app, inbox, place_inbox, unsaved, served, database, presets, recovery_db, recovery, ui_language: "" }))
                 }),
             )
             .await;
@@ -351,11 +370,40 @@ struct WebShell {
     served: Served,
     database: Option<web_sys::IdbDatabase>,
     presets: crate::preset_bridge::Bridge,
+    recovery_db: Option<web_sys::IdbDatabase>,
+    recovery: crate::autosave_bridge::AutosaveBridge,
     /// The interface language whose served script font was last asked for.
     ui_language: &'static str,
 }
 
 impl WebShell {
+    fn pump_autosave(&mut self, ctx: &egui::Context) {
+        let Some(db) = self.recovery_db.clone() else { return };
+        let Some(work) = self.recovery.next_work() else { return };
+        let recovery = self.recovery.clone();
+        let wake = ctx.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            match work {
+                crate::autosave_bridge::WorkItem::Write(plan) => {
+                    let (doc_id, revision) = (plan.doc_id, plan.revision);
+                    let result = crate::web_autosave::write_atomic(&db, &plan).await;
+                    if let Err(e) = &result {
+                        log::error!("Could not write browser crash-recovery snapshot: {e}");
+                    }
+                    drop(plan);
+                    recovery.finish_write(doc_id, revision, result);
+                }
+                crate::autosave_bridge::WorkItem::Delete(plan) => {
+                    if let Err(e) = crate::web_autosave::delete_entry(&db, &plan).await {
+                        log::warn!("Could not delete browser crash-recovery entry {}: {e}", plan.entry_key);
+                    }
+                    recovery.finish_delete();
+                }
+            }
+            wake.request_repaint();
+        });
+    }
+
     fn save_presets(&mut self, ctx: &egui::Context) {
         if let Some(db) = self.database.clone()
             && let Some(batch) = self.presets.begin()
@@ -466,6 +514,7 @@ impl eframe::App for WebShell {
         self.serve_fonts(ctx);
         self.app.logic_frame(ctx, frame);
         self.save_presets(ctx);
+        self.pump_autosave(ctx);
         self.app.finish_type_reset_logic(ctx);
     }
 
@@ -495,11 +544,24 @@ impl eframe::App for WebShell {
         }
         self.app.ui_frame(ui, frame);
         self.save_presets(ui.ctx());
+        self.pump_autosave(ui.ctx());
         self.app.finish_type_reset_pass(ui.ctx());
     }
 }
 
-fn services(inbox: Inbox, place_inbox: PlaceInbox, cursor_pos: photocraft_ui_egui::CursorPosFn) -> Services {
+fn services(
+    inbox: Inbox,
+    place_inbox: PlaceInbox,
+    cursor_pos: photocraft_ui_egui::CursorPosFn,
+    recovery: crate::autosave_bridge::AutosaveBridge,
+    mut recovered_entries: Vec<photocraft_ui_egui::Recoverable>,
+    recovery_handed_out: Arc<AtomicBool>,
+) -> Services {
+    let autosave_bridge = recovery.clone();
+    let results_bridge = recovery.clone();
+    let flush_bridge = recovery.clone();
+    let discard_bridge = recovery.clone();
+    let adopt_bridge = recovery;
     Services {
         screen_pick: screen_color_service(),
         import: Some(Box::new(|name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions| {
@@ -557,6 +619,17 @@ fn services(inbox: Inbox, place_inbox: PlaceInbox, cursor_pos: photocraft_ui_egu
         // Preferences live in the browser's localStorage.
         load_prefs: Some(Box::new(|| local_storage()?.get_item(PREFS_KEY).ok().flatten())),
         save_prefs: Some(Box::new(|text: &str| local_storage().ok_or("no localStorage")?.set_item(PREFS_KEY, text).map_err(|e| format!("{e:?}")))),
+        autosave: Some(Box::new(move |doc: &Arc<Document>, revision: u64, path: Option<&str>| {
+            autosave_bridge.enqueue(doc.clone(), revision, path.map(str::to_owned))
+        })),
+        autosave_results: Some(Box::new(move || results_bridge.take_completed())),
+        flush_autosaves: Some(Box::new(move || flush_bridge.take_completed())),
+        discard_autosave: Some(Box::new(move |doc_id: u64| discard_bridge.discard(doc_id))),
+        recover: Some(Box::new(move || {
+            recovery_handed_out.store(true, Ordering::Relaxed);
+            std::mem::take(&mut recovered_entries)
+        })),
+        adopt_autosave: Some(Box::new(move |doc_id: u64, key: &str| adopt_bridge.adopt(doc_id, key))),
         load_gpu_memo: None,
         save_gpu_memo: None,
         shader_compiler: None,

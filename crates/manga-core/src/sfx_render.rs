@@ -521,15 +521,16 @@ fn compute_render_bounds(data: &SfxData, geom: &PreparedSfx) -> Rect {
             SfxBlendEffect::OuterGlow { spread_px, blur_px, .. } => {
                 stroke_pad += f64::from((*spread_px).max(0.0)) + f64::from((*blur_px).max(0.0)) * 2.5;
             }
-            SfxBlendEffect::DropShadow { angle_deg, distance_px, blur_px, .. } => {
+            SfxBlendEffect::DropShadow { angle_deg, distance_px, extrude_depth_px, blur_px, .. } => {
                 let rad = f64::from(*angle_deg).to_radians();
-                let dx = rad.cos() * f64::from((*distance_px).max(0.0));
-                let dy = rad.sin() * f64::from((*distance_px).max(0.0));
+                let reach = f64::from((*distance_px).max(0.0)).max(f64::from((*extrude_depth_px).max(0.0)));
+                let dx = rad.cos() * reach;
+                let dy = rad.sin() * reach;
                 let b = f64::from((*blur_px).max(0.0)) * 2.5;
-                min_dx = min_dx.min(dx - b);
-                max_dx = max_dx.max(dx + b);
-                min_dy = min_dy.min(dy - b);
-                max_dy = max_dy.max(dy + b);
+                min_dx = min_dx.min(dx - b).min(-b);
+                max_dx = max_dx.max(dx + b).max(b);
+                min_dy = min_dy.min(dy - b).min(-b);
+                max_dy = max_dy.max(dy + b).max(b);
             }
             SfxBlendEffect::Bevel { .. } | SfxBlendEffect::InnerShadow { .. } | SfxBlendEffect::InnerGlow { .. } => {}
         }
@@ -1085,9 +1086,13 @@ fn proxy_scaled_data(data: &SfxData, scale: f64) -> SfxData {
                 *width_px = px(*width_px);
                 scale_fill_px(fill);
             }
-            SfxBlendEffect::InnerShadow { distance_px, blur_px, .. }
-            | SfxBlendEffect::DropShadow { distance_px, blur_px, .. } => {
+            SfxBlendEffect::InnerShadow { distance_px, blur_px, .. } => {
                 *distance_px = px(*distance_px);
+                *blur_px = px(*blur_px);
+            }
+            SfxBlendEffect::DropShadow { distance_px, extrude_depth_px, blur_px, .. } => {
+                *distance_px = px(*distance_px);
+                *extrude_depth_px = px(*extrude_depth_px);
                 *blur_px = px(*blur_px);
             }
             SfxBlendEffect::InnerGlow { width_px, .. } => *width_px = px(*width_px),
@@ -4236,14 +4241,30 @@ fn render_blend_effects_behind(
             continue;
         }
         match fx {
-            SfxBlendEffect::DropShadow { angle_deg, distance_px, blur_px, color, blend, opacity, .. } => {
+            SfxBlendEffect::DropShadow { angle_deg, distance_px, extrude_depth_px, blur_px, color, blend, opacity, .. } => {
                 if *opacity <= 1e-4 {
                     continue;
                 }
                 let rad = angle_deg.to_radians();
-                let shifted = shift_coverage(union_cov, w, h, rad.cos() * *distance_px, rad.sin() * *distance_px);
-                let scov = if *blur_px > 0.1 { blur_coverage(&shifted, w, h, *blur_px) } else { shifted };
-                composite_solid_blend(dst, &scov, color_rgba(*color), *opacity, *blend);
+                let (sin_a, cos_a) = rad.sin_cos();
+                let rgba = color_rgba(*color);
+                if *extrude_depth_px > 0.2 {
+                    let steps = (extrude_depth_px.ceil() as usize).clamp(2, 48);
+                    let mut ecov = vec![0.0_f32; w * h];
+                    for st in 1..=steps {
+                        let d = *extrude_depth_px * (st as f32 / steps as f32);
+                        let s = shift_coverage(union_cov, w, h, cos_a * d, sin_a * d);
+                        for (e, &v) in ecov.iter_mut().zip(s.iter()) {
+                            *e = e.max(v);
+                        }
+                    }
+                    composite_solid_blend(dst, &ecov, rgba, *opacity, *blend);
+                }
+                if *distance_px > 0.2 || *blur_px > 0.1 {
+                    let shifted = shift_coverage(union_cov, w, h, cos_a * *distance_px, sin_a * *distance_px);
+                    let scov = if *blur_px > 0.1 { blur_coverage(&shifted, w, h, *blur_px) } else { shifted };
+                    composite_solid_blend(dst, &scov, rgba, *opacity, *blend);
+                }
             }
             SfxBlendEffect::OuterGlow { spread_px, blur_px, color, blend, opacity, .. } => {
                 if *opacity <= 1e-4 || (*spread_px <= 0.05 && *blur_px <= 0.05) {
@@ -5865,6 +5886,7 @@ mod tests {
             },
             SfxBlendEffect::FillOverlay {
                 enabled: true,
+                is_pattern: true,
                 fill: SfxFillSource::DryBrush {
                     color: Color::BLACK,
                     spec: SfxDryBrushSpec { enabled: true, dryness_pct: 45.0, ..SfxDryBrushSpec::default() },
@@ -5893,6 +5915,7 @@ mod tests {
                 enabled: true,
                 angle_deg: 45.0,
                 distance_px: 14.0,
+                extrude_depth_px: 6.0,
                 blur_px: 4.0,
                 color: Color::BLACK,
                 blend: SfxChannelBlend::Multiply,

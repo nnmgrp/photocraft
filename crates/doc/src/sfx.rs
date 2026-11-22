@@ -1084,6 +1084,9 @@ pub enum SfxBlendEffect {
     FillOverlay {
         #[serde(default = "default_true")]
         enabled: bool,
+        /// `false` = «2-я заливка (быстрый микс)», `true` = «Наложение узора / Dry / Tone».
+        #[serde(default)]
+        is_pattern: bool,
         #[serde(default)]
         fill: SfxFillSource,
         #[serde(default)]
@@ -1106,7 +1109,7 @@ pub enum SfxBlendEffect {
         #[serde(default = "default_0_75")]
         opacity: f32,
     },
-    /// Тень — stackable drop shadow (blur=0 gives crisp manga cut shadow).
+    /// Направление тени / 3D — stackable drop shadow + optional 3D extrude along the shadow ray.
     DropShadow {
         #[serde(default = "default_true")]
         enabled: bool,
@@ -1114,6 +1117,8 @@ pub enum SfxBlendEffect {
         angle_deg: f32,
         #[serde(default = "default_8")]
         distance_px: f32,
+        #[serde(default)]
+        extrude_depth_px: f32,
         #[serde(default)]
         blur_px: f32,
         #[serde(default = "default_black")]
@@ -1211,9 +1216,10 @@ impl SfxBlendEffect {
                 *color = finite_color(*color);
                 *opacity = finite_f32(*opacity, 0.75).clamp(0.0, 1.0);
             }
-            Self::DropShadow { angle_deg, distance_px, blur_px, color, opacity, .. } => {
+            Self::DropShadow { angle_deg, distance_px, extrude_depth_px, blur_px, color, opacity, .. } => {
                 *angle_deg = finite_f32(*angle_deg, 120.0).clamp(-180.0, 180.0);
-                *distance_px = finite_f32(*distance_px, 8.0).clamp(0.0, 256.0);
+                *distance_px = finite_f32(*distance_px, 8.0).clamp(0.0, MAX_SFX_EFFECT_PX);
+                *extrude_depth_px = finite_f32(*extrude_depth_px, 0.0).clamp(0.0, MAX_SFX_EFFECT_PX);
                 *blur_px = finite_f32(*blur_px, 0.0).clamp(0.0, 64.0);
                 *color = finite_color(*color);
                 *opacity = finite_f32(*opacity, 0.75).clamp(0.0, 1.0);
@@ -2228,6 +2234,7 @@ mod tests {
                         enabled: true,
                         angle_deg: 135.0,
                         distance_px: 12.0,
+                        extrude_depth_px: 8.0,
                         blur_px: 0.0,
                         color: Color::BLACK,
                         blend: SfxChannelBlend::Multiply,
@@ -2235,6 +2242,7 @@ mod tests {
                     },
                     SfxBlendEffect::FillOverlay {
                         enabled: true,
+                        is_pattern: true,
                         fill: SfxFillSource::DryBrush { color: Color::BLACK, spec: SfxDryBrushSpec::default() },
                         blend: SfxChannelBlend::SoftLight,
                         opacity: 0.8,

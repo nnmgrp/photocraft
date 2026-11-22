@@ -543,6 +543,78 @@ fn action_command(action: &'static str, st: &ScreentoneUi) -> crate::OutCommand 
     crate::OutCommand::new(action, params(st))
 }
 
+/// Metadata for the explicit SFX header banner when the Screentone (Gentonik) dock is
+/// live-editing an active SFX layer's `SfxFillSource::Screentone` fill.
+pub struct SfxScreentoneBanner<'a> {
+    pub layer_name: &'a str,
+    pub is_secondary: bool,
+}
+
+/// Renders the Screentone (Gentonik) dock bound directly to an active SFX layer's screentone fill.
+///
+/// The host supplies an isolated [`ScreentoneUi`] instance so global screentone settings and
+/// regular procedural screentone layers are never overwritten. Returns `true` when `st.spec`
+/// changed on this frame.
+pub fn panel_for_sfx(ui: &mut egui::Ui, st: &mut ScreentoneUi, banner: &SfxScreentoneBanner<'_>) -> bool {
+    ui.style_mut().interaction.selectable_labels = false;
+    let before = st.spec.clone();
+    egui::ScrollArea::vertical().id_salt("comic_screentone_sfx_scroll").auto_shrink([false, false]).show(ui, |ui| {
+        let t = Tokens::get(ui.ctx());
+        let accent = egui::Color32::from_rgb(2, 132, 199);
+        egui::Frame::group(ui.style())
+            .fill(egui::Color32::from_rgba_unmultiplied(2, 132, 199, 28))
+            .stroke(egui::Stroke::new(1.0, accent))
+            .corner_radius(t.radius_sm)
+            .inner_margin(egui::Margin::symmetric(8, 6))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.label(
+                    egui::RichText::new(format!("⚡ Gentonik → SFX: {}", banner.layer_name))
+                        .strong()
+                        .size(11.5)
+                        .color(egui::Color32::from_rgb(125, 211, 252)),
+                );
+                let slot = if banner.is_secondary { "2-я заливка (Blending)" } else { "Основная заливка (Fill)" };
+                ui.label(
+                    egui::RichText::new(format!("{slot} • глобальный Screentone не затрагивается"))
+                        .size(10.0)
+                        .color(t.text_dim),
+                );
+            });
+        ui.add_space(6.0);
+        // SFX screentone fills always evaluate as a pattern sheet clipped to the glyph mask.
+        st.spec.mode = ScreentoneMode::Sheet;
+        st.spec.use_source_luminance = false;
+        draw_core_grid(ui, st, t);
+        ui.add_space(4.0);
+        draw_satellites(ui, st, t);
+        draw_distortion(ui, st, t);
+        draw_gradient(ui, st, t);
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Синхронизация с SFX в реальном времени").size(10.0).color(t.text_dim));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.small_button("Сбросить").clicked() {
+                    st.spec = ScreentoneSpec {
+                        mode: ScreentoneMode::Sheet,
+                        use_source_luminance: false,
+                        dot_size: 3.0,
+                        spacing_x: 5.0,
+                        spacing_y: 5.0,
+                        density: 0.65,
+                        angle: 45.0,
+                        ..ScreentoneSpec::default()
+                    };
+                    st.preset.clear();
+                }
+            });
+        });
+    });
+    st.spec.mode = ScreentoneMode::Sheet;
+    st.spec.use_source_luminance = false;
+    st.spec != before
+}
+
 /// Draws the tab body; the dock's own scrolling wraps it in both the native and shared docks.
 ///
 /// No document is touched here: the host receives the returned commands and drives the gizmo
@@ -696,5 +768,21 @@ mod tests {
         out.textures_delta.clear();
         let with_doc = with_doc.unwrap();
         assert!(!with_doc.detach_gizmo);
+    }
+
+    #[test]
+    fn panel_for_sfx_renders_banner_and_keeps_sheet_mode() {
+        let mut st = ScreentoneUi::default();
+        let banner = super::SfxScreentoneBanner { layer_name: "SFX: BAM!", is_secondary: false };
+        let ctx = egui::Context::default();
+        let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(360.0, 900.0))), ..Default::default() };
+        let mut changed = false;
+        let mut out = ctx.run_ui(input, |ui| {
+            changed = egui::CentralPanel::default().show(ui, |ui| super::panel_for_sfx(ui, &mut st, &banner)).inner;
+        });
+        out.textures_delta.clear();
+        assert_eq!(st.spec.mode, photocraft_algo::ScreentoneMode::Sheet);
+        assert!(!st.spec.use_source_luminance);
+        let _ = changed;
     }
 }

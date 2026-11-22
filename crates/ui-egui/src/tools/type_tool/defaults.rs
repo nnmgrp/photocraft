@@ -257,7 +257,8 @@ pub(super) fn sfx_styles_at(app: &PhotocraftApp) -> Option<(photocraft_doc::text
     c.color = match &sfx.fill {
         photocraft_doc::sfx::SfxFillSource::Solid { color } => *color,
         photocraft_doc::sfx::SfxFillSource::Gradient { start, .. } => *start,
-        photocraft_doc::sfx::SfxFillSource::Screentone { .. } => sfx.line_effect.line_color,
+        photocraft_doc::sfx::SfxFillSource::ShtackHatch { spec } => spec.color,
+        photocraft_doc::sfx::SfxFillSource::None | photocraft_doc::sfx::SfxFillSource::Screentone { .. } => sfx.line_effect.line_color,
     };
     Some((c, photocraft_doc::text::ParagraphStyle::default()))
 }
@@ -322,7 +323,10 @@ fn apply_sfx(app: &mut PhotocraftApp, ctx: &egui::Context, layer_id: u64, mut sf
         match &mut sfx.fill {
             photocraft_doc::sfx::SfxFillSource::Solid { color } => *color = c.color,
             photocraft_doc::sfx::SfxFillSource::Gradient { start, .. } => *start = c.color,
-            photocraft_doc::sfx::SfxFillSource::Screentone { .. } => sfx.line_effect.line_color = c.color,
+            photocraft_doc::sfx::SfxFillSource::ShtackHatch { spec } => spec.color = c.color,
+            photocraft_doc::sfx::SfxFillSource::None | photocraft_doc::sfx::SfxFillSource::Screentone { .. } => {
+                sfx.line_effect.line_color = c.color;
+            }
         }
         touched = true;
     }

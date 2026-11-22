@@ -6,6 +6,7 @@ pub mod balloon_fit;
 pub mod comic_screentone;
 pub mod sfx_geom;
 pub mod sfx_render;
+mod sfx_stroke_flow;
 pub mod snow_hyphenation;
 pub mod snow_knuth_plass;
 pub mod snow_typesetter;

@@ -79,12 +79,12 @@ impl SfxPresetLibrary {
         vec![
             SfxPreset {
                 name: "⚡ SHTACK (SAI Pen)".to_owned(),
-                description: "Режим 1: перо SAI — длинные иглы и чистые заострения".to_owned(),
+                description: "Режим 1: перо SAI — полый скетч-контур с иглами".to_owned(),
                 font_family: "Impact".to_owned(),
                 weight: 800,
                 size_pt: 64.0,
                 tracking: 4.0,
-                fill: SfxFillSource::Solid { color: ink },
+                fill: SfxFillSource::None,
                 line_effect: SfxLineEffect {
                     style: SfxLineStyle::Shtack,
                     halo_width_px: 8.0,
@@ -106,12 +106,12 @@ impl SfxPresetLibrary {
             },
             SfxPreset {
                 name: "⚡ SHTACK (Dry Pencil)".to_owned(),
-                description: "Режим 2: сухой карандаш — короткие иглы и зерно бумаги".to_owned(),
+                description: "Режим 2: сухой карандаш — полый контур и зерно".to_owned(),
                 font_family: "Impact".to_owned(),
                 weight: 800,
                 size_pt: 64.0,
                 tracking: 4.0,
-                fill: SfxFillSource::Solid { color: ink },
+                fill: SfxFillSource::None,
                 line_effect: SfxLineEffect {
                     style: SfxLineStyle::Shtack,
                     halo_width_px: 6.0,
@@ -125,6 +125,88 @@ impl SfxPresetLibrary {
                     shtack_thickness_px: 1.8,
                     shtack_dryness_pct: 36.0,
                     shtack_grain_sharpness_pct: 75.0,
+                    ..SfxLineEffect::default()
+                },
+                dry_brush: SfxDryBrushSpec::default(),
+                vector_shadow: SfxVectorShadow::default(),
+                ..SfxPreset::default()
+            },
+            SfxPreset {
+                name: "⚡ Штриховка Shtack".to_owned(),
+                description: "Чистая штриховая заливка внутри букв (без контура)".to_owned(),
+                font_family: "Impact".to_owned(),
+                weight: 800,
+                size_pt: 64.0,
+                tracking: 4.0,
+                fill: SfxFillSource::ShtackHatch { spec: photocraft_doc::sfx::SfxShtackFillSpec::default() },
+                line_effect: SfxLineEffect {
+                    style: SfxLineStyle::Clean,
+                    halo_width_px: 8.0,
+                    halo_color: Color::WHITE,
+                    line_width_px: 0.0,
+                    line_color: ink,
+                    ..SfxLineEffect::default()
+                },
+                dry_brush: SfxDryBrushSpec::default(),
+                vector_shadow: SfxVectorShadow::default(),
+                ..SfxPreset::default()
+            },
+            SfxPreset {
+                name: "⚡ SAI Вдоль штриха".to_owned(),
+                description: "Пучок перьевых полос вдоль стволов букв с иглами (SAI)".to_owned(),
+                font_family: "Impact".to_owned(),
+                weight: 800,
+                size_pt: 64.0,
+                tracking: 4.0,
+                fill: SfxFillSource::ShtackHatch {
+                    spec: photocraft_doc::sfx::SfxShtackFillSpec {
+                        mode: photocraft_doc::sfx::SfxShtackFillMode::StrokeFlow,
+                        flow_overshoot: photocraft_doc::sfx::SfxShtackFlowOvershoot::OuterJunctions,
+                        density_pct: 58.0,
+                        thickness_pct: 1.5,
+                        roughness_pct: 48.0,
+                        overshoot_pct: 20.0,
+                        dryness_pct: 0.0,
+                        ..photocraft_doc::sfx::SfxShtackFillSpec::default()
+                    },
+                },
+                line_effect: SfxLineEffect {
+                    style: SfxLineStyle::Clean,
+                    halo_width_px: 8.0,
+                    halo_color: Color::WHITE,
+                    line_width_px: 0.0,
+                    line_color: ink,
+                    ..SfxLineEffect::default()
+                },
+                dry_brush: SfxDryBrushSpec::default(),
+                vector_shadow: SfxVectorShadow::default(),
+                ..SfxPreset::default()
+            },
+            SfxPreset {
+                name: "🖌 Ukiyo-e Кисть".to_owned(),
+                description: "Мокрая японская тушь с нажимом и ворсинками касурэ".to_owned(),
+                font_family: "Impact".to_owned(),
+                weight: 800,
+                size_pt: 64.0,
+                tracking: 4.0,
+                fill: SfxFillSource::ShtackHatch {
+                    spec: photocraft_doc::sfx::SfxShtackFillSpec {
+                        mode: photocraft_doc::sfx::SfxShtackFillMode::UkiyoBrush,
+                        density_pct: 68.0,
+                        thickness_pct: 1.6,
+                        roughness_pct: 55.0,
+                        overshoot_pct: 14.0,
+                        dryness_pct: 34.0,
+                        grain_sharpness_pct: 78.0,
+                        ..photocraft_doc::sfx::SfxShtackFillSpec::default()
+                    },
+                },
+                line_effect: SfxLineEffect {
+                    style: SfxLineStyle::Clean,
+                    halo_width_px: 8.0,
+                    halo_color: Color::WHITE,
+                    line_width_px: 0.0,
+                    line_color: ink,
                     ..SfxLineEffect::default()
                 },
                 dry_brush: SfxDryBrushSpec::default(),
@@ -507,9 +589,10 @@ fn sfx_update(s: &mut Session, p: &Value) -> Result<Value> {
         let parsed = crate::vector_cmds::params::color(col_val).ok_or_else(|| sfx_bad(CMD, "invalid `color`"))?;
         let mut d = existing;
         match &mut d.fill {
+            SfxFillSource::None | SfxFillSource::Screentone { .. } => d.line_effect.line_color = parsed,
             SfxFillSource::Solid { color } => *color = parsed,
             SfxFillSource::Gradient { start, .. } => *start = parsed,
-            SfxFillSource::Screentone { .. } => d.line_effect.line_color = parsed,
+            SfxFillSource::ShtackHatch { spec } => spec.color = parsed,
         }
         d
     } else {

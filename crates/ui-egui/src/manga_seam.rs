@@ -48,7 +48,9 @@ mod native {
     use std::sync::Arc;
 
     use photocraft_color::PixelFormat;
-    use photocraft_doc::sfx::{MAX_SFX_SIZE_PT, SfxData, SfxWarpMode, reset_sfx_warps_for_new_layer, scale_new_sfx_for_document};
+    use photocraft_doc::sfx::{
+        MAX_SFX_SIZE_PT, SfxData, SfxFillSource, SfxWarpMode, reset_sfx_warps_for_new_layer, scale_new_sfx_for_document,
+    };
     use photocraft_doc::vector::{BalloonLineStyle, BalloonTextFitMode, LiveBalloon, LiveBalloonBody, LiveBalloonGroup};
     use photocraft_doc::{DocId, Document, Fill, Layer, LayerContent, LayerId, LiveShape, ShapeLayer};
     use photocraft_engine::DocState;
@@ -67,7 +69,7 @@ mod native {
     };
     use photocraft_manga_ui::comic_sai_panel::{self, LineworkHostContext, PressureTargetMode, SaiCurveSync};
     use photocraft_manga_ui::comic_screentone_gizmo::{self, GizmoView, PreviewInput};
-    use photocraft_manga_ui::comic_screentone_panel::{self, ScreentoneTargetInfo};
+    use photocraft_manga_ui::comic_screentone_panel::{self, ScreentoneTargetInfo, ScreentoneUi, SfxScreentoneBanner};
     use photocraft_manga_ui::layer_search::{self, SearchActivation, SearchDoc};
     use photocraft_manga_ui::snow_clean;
     use photocraft_manga_ui::snow_fx_scrub::{self, FxDragTarget, FxHudState};
@@ -102,6 +104,11 @@ mod native {
         pub typesetter_paste_on_click_was_enabled: bool,
         /// Active `Tool::Sfx` drag-to-create box (document coordinates).
         pub sfx_create_drag: Option<SfxCreateDrag>,
+        /// Isolated Gentonik (Screentone) panel state used ONLY when live-editing an SFX layer's
+        /// screentone fill, so global `ui.screentone_ui` settings are never overwritten.
+        pub sfx_screentone_ui: ScreentoneUi,
+        pub sfx_screentone_bound: Option<(BridgeDocId, LayerId, bool)>,
+        pub sfx_screentone_pending_full: bool,
     }
 
     /// Canonical order matches [`Group::Manga::tabs`].
@@ -372,7 +379,62 @@ mod native {
         app.session.manga.vector_brushes.presets().iter().map(|p| (p.id.clone(), p.name.clone())).collect()
     }
 
+    /// Active SFX layer whose primary or secondary fill uses `SfxFillSource::Screentone`.
+    fn active_sfx_screentone(app: &PhotocraftApp) -> Option<(BridgeDocId, LayerId, String, SfxData, photocraft_algo::ScreentoneSpec, bool)> {
+        let st = app.session.active()?;
+        let lid = st.active_layer?;
+        let layer = st.doc.layer(lid)?;
+        let sfx = layer.sfx.as_deref()?;
+        if let SfxFillSource::Screentone { spec, .. } = &sfx.fill {
+            return Some((BridgeDocId(st.doc.id.0), lid, layer.name.clone(), sfx.clone(), spec.clone(), false));
+        }
+        if let Some(SfxFillSource::Screentone { spec, .. }) = &sfx.blending.secondary_fill {
+            return Some((BridgeDocId(st.doc.id.0), lid, layer.name.clone(), sfx.clone(), spec.clone(), true));
+        }
+        None
+    }
+
+    fn apply_sfx_screentone_spec(sfx: &mut SfxData, spec: photocraft_algo::ScreentoneSpec, is_secondary: bool) {
+        let slot = if is_secondary { sfx.blending.secondary_fill.as_mut() } else { Some(&mut sfx.fill) };
+        if let Some(SfxFillSource::Screentone { spec: dst, .. }) = slot {
+            *dst = spec;
+        }
+        sfx.validate();
+    }
+
     fn render_screentone(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+        if let Some((doc_id, lid, layer_name, mut sfx, live_spec, is_secondary)) = active_sfx_screentone(app) {
+            let key = (doc_id, lid, is_secondary);
+            if app.manga.sfx_screentone_bound != Some(key) || app.manga.sfx_screentone_ui.spec != live_spec {
+                app.manga.sfx_screentone_ui.spec = live_spec;
+                app.manga.sfx_screentone_ui.spec.mode = photocraft_algo::ScreentoneMode::Sheet;
+                app.manga.sfx_screentone_ui.spec.use_source_luminance = false;
+                app.manga.sfx_screentone_bound = Some(key);
+            }
+            let banner = SfxScreentoneBanner { layer_name: &layer_name, is_secondary };
+            let changed = comic_screentone_panel::panel_for_sfx(ui, &mut app.manga.sfx_screentone_ui, &banner);
+            let pointer_down = ui.ctx().input(|i| i.pointer.primary_down());
+            let coalesce = format!("sfx-gentonik:{}:{}", doc_id.0, lid.0);
+            if changed {
+                apply_sfx_screentone_spec(&mut sfx, app.manga.sfx_screentone_ui.spec.clone(), is_secondary);
+                app.manga.ui.sfx_panel.draft = sfx.clone();
+                app.manga.ui.sfx_panel.synced_data = Some(sfx.clone());
+                app.manga.sfx_screentone_pending_full = pointer_down;
+                let _ = app.run(
+                    "sfx.update",
+                    json!({ "layer": lid.0, "sfx": sfx, "coalesce": coalesce, "preview": pointer_down }),
+                );
+            } else if app.manga.sfx_screentone_pending_full && !pointer_down {
+                app.manga.sfx_screentone_pending_full = false;
+                let _ = app.run(
+                    "sfx.update",
+                    json!({ "layer": lid.0, "sfx": sfx, "coalesce": coalesce, "preview": false }),
+                );
+            }
+            return;
+        }
+        app.manga.sfx_screentone_bound = None;
+        app.manga.sfx_screentone_pending_full = false;
         let target = active_screentone_info(app);
         app.manga.ui.screentone_gizmo.sync_active_layer(&mut app.manga.ui.screentone_ui, target.as_ref());
         let out = comic_screentone_panel::panel(ui, &mut app.manga.ui.screentone_ui, target.as_ref());
@@ -3645,6 +3707,48 @@ mod native {
             h.get_by_label("По точкам (Alt)").click();
             h.run_steps(2);
             assert_eq!(h.state().manga.ui.sfx_panel.draft.warp_mode, SfxWarpMode::PerGlyph);
+        }
+
+        /// Live-editing an SFX layer's screentone fill through the Gentonik dock keeps the global
+        /// `screentone_ui` settings untouched and supports both primary and secondary fills.
+        #[test]
+        fn manga_sfx_gentonik_link_isolates_global_screentone_settings() {
+            use photocraft_algo::{PatternType, ScreentoneSpec};
+
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
+            app.run("file.new", json!({ "width": 256, "height": 256 })).unwrap();
+            app.manga.ui.screentone_ui.spec.dot_size = 11.5;
+            app.manga.ui.screentone_ui.spec.pattern_type = PatternType::Crosshatch;
+
+            let sfx = SfxData {
+                text: "TONE".into(),
+                fill: SfxFillSource::Screentone {
+                    spec: ScreentoneSpec { pattern_type: PatternType::Dots, dot_size: 4.0, spacing_x: 7.0, spacing_y: 7.0, ..Default::default() },
+                    opacity: 1.0,
+                },
+                ..SfxData::default()
+            };
+            app.run("sfx.create", json!({ "sfx": sfx })).unwrap();
+
+            let (_, _, _, mut live_sfx, spec, is_sec) = active_sfx_screentone(&app).expect("active SFX screentone detected");
+            assert!(!is_sec);
+            assert_eq!(spec.pattern_type, PatternType::Dots);
+
+            // Editing the SFX spec must leave global Gentonik settings completely untouched.
+            let mut next_spec = spec;
+            next_spec.pattern_type = PatternType::Lines;
+            next_spec.dot_size = 6.0;
+            apply_sfx_screentone_spec(&mut live_sfx, next_spec, false);
+            assert!(matches!(live_sfx.fill, SfxFillSource::Screentone { ref spec, .. } if spec.pattern_type == PatternType::Lines));
+            assert_eq!(app.manga.ui.screentone_ui.spec.dot_size, 11.5);
+            assert_eq!(app.manga.ui.screentone_ui.spec.pattern_type, PatternType::Crosshatch);
+
+            // Secondary fill Screentone is also detected when primary fill is Solid.
+            let mut sec_sfx = SfxData { fill: SfxFillSource::Solid { color: photocraft_doc::Color::WHITE }, ..SfxData::default() };
+            sec_sfx.blending.secondary_fill = Some(SfxFillSource::Screentone { spec: ScreentoneSpec::default(), opacity: 0.8 });
+            app.run("sfx.create", json!({ "sfx": sec_sfx })).unwrap();
+            let (_, _, _, _, _, is_sec2) = active_sfx_screentone(&app).expect("secondary SFX screentone detected");
+            assert!(is_sec2);
         }
 
         /// Every `Group::Manga` tab (and the `photocraft-manga-ui` panels behind them) renders for

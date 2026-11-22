@@ -7,8 +7,9 @@
 use egui::{Color32, RichText, Stroke, Ui, vec2};
 use photocraft_algo::{DotShape, PatternType};
 use photocraft_doc::sfx::{
-    MAX_SFX_SPLINE_POINTS, ScreentoneSpec, SfxData, SfxDistress, SfxDryBrushEngine, SfxFillSource, SfxFreeTransform, SfxGlyphTransform, SfxLineJoin,
-    SfxLineStyle, SfxMeshInterpolation, SfxPreset, SfxShtackOvershootMode, SfxShtackVariant, SfxSpikeShape, SfxStylePass, SfxWarpMode,
+    MAX_SFX_SPLINE_POINTS, ScreentoneSpec, SfxBlending, SfxChannelBlend, SfxData, SfxDistress, SfxDryBrushEngine, SfxFillSource, SfxFreeTransform,
+    SfxGlyphTransform, SfxLineJoin, SfxLineStyle, SfxMeshInterpolation, SfxPreset, SfxShtackFillMode, SfxShtackFillSpec, SfxShtackFlowOvershoot,
+    SfxShtackOvershootMode, SfxShtackVariant, SfxSpikeShape, SfxStylePass, SfxWarpMode,
 };
 use photocraft_doc::{Color, LayerId};
 use serde_json::{Value, json};
@@ -20,6 +21,7 @@ use crate::{BridgeDocId, OutCommand};
 const SCREENTONE_PATTERNS: [&str; 4] = ["dots", "lines", "crosshatch", "noise"];
 const SCREENTONE_SHAPES: [&str; 4] = ["circle", "square", "diamond", "hexagon"];
 const GLYPH_TOOL_KEY: &str = "photocraft-manga-ui-sfx-glyph-tool";
+const FLOW_NODES_KEY: &str = "photocraft-manga-ui-sfx-flow-nodes";
 
 const ACCENT_SKY: Color32 = Color32::from_rgb(2, 132, 199);
 const ACCENT_AMBER: Color32 = Color32::from_rgb(217, 119, 6);
@@ -49,10 +51,20 @@ impl SfxGlyphTool {
     }
 }
 
+/// Whether per-endpoint SAI needle gizmo dots are shown on the canvas (UI-only, default `true`).
+pub fn flow_nodes_visible(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<bool>(egui::Id::unique(FLOW_NODES_KEY))).unwrap_or(true)
+}
+
+pub fn set_flow_nodes_visible(ctx: &egui::Context, visible: bool) {
+    ctx.data_mut(|d| d.insert_temp(egui::Id::unique(FLOW_NODES_KEY), visible));
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum DockTab {
     #[default]
     Sfx,
+    Blending,
     Color,
 }
 
@@ -297,7 +309,8 @@ fn face_color_mut(fill: &mut SfxFillSource) -> Option<&mut Color> {
     match fill {
         SfxFillSource::Solid { color } => Some(color),
         SfxFillSource::Gradient { start, .. } => Some(start),
-        SfxFillSource::Screentone { .. } => None,
+        SfxFillSource::ShtackHatch { spec } => Some(&mut spec.color),
+        SfxFillSource::None | SfxFillSource::Screentone { .. } => None,
     }
 }
 
@@ -305,7 +318,8 @@ fn face_color_copy(fill: &SfxFillSource) -> Color {
     match fill {
         SfxFillSource::Solid { color } => *color,
         SfxFillSource::Gradient { start, .. } => *start,
-        SfxFillSource::Screentone { .. } => Color::rgb(15.0 / 255.0, 23.0 / 255.0, 42.0 / 255.0),
+        SfxFillSource::ShtackHatch { spec } => spec.color,
+        SfxFillSource::None | SfxFillSource::Screentone { .. } => Color::rgb(15.0 / 255.0, 23.0 / 255.0, 42.0 / 255.0),
     }
 }
 
@@ -324,7 +338,7 @@ fn line_style_badge(draft: &SfxData) -> &'static str {
 }
 
 fn fill_style_badge(draft: &SfxData) -> &'static str {
-    if draft.dry_brush.enabled {
+    if draft.dry_brush.enabled && !matches!(draft.fill, SfxFillSource::None | SfxFillSource::ShtackHatch { .. }) {
         match draft.dry_brush.engine {
             SfxDryBrushEngine::SdfPhysics => "Dry: А SDF",
             SfxDryBrushEngine::SdfSeg => "Dry: Б1 Seg",
@@ -332,10 +346,16 @@ fn fill_style_badge(draft: &SfxData) -> &'static str {
             SfxDryBrushEngine::Vector => "Dry: Вектор",
         }
     } else {
-        match draft.fill {
+        match &draft.fill {
+            SfxFillSource::None => "Полый (None)",
             SfxFillSource::Solid { .. } => "Solid",
             SfxFillSource::Gradient { .. } => "Gradient",
             SfxFillSource::Screentone { .. } => "Screentone",
+            SfxFillSource::ShtackHatch { spec } => match spec.mode {
+                SfxShtackFillMode::Hatch => "Shtack Hatch",
+                SfxShtackFillMode::StrokeFlow => "Shtack SAI",
+                SfxShtackFillMode::UkiyoBrush => "Ukiyo-e Кисть",
+            },
         }
     }
 }
@@ -346,6 +366,9 @@ fn preset_title_color(preset: &SfxPreset, t: Tokens) -> Color32 {
     }
     if matches!(preset.fill, SfxFillSource::Screentone { .. }) {
         return TEXT_ROSE;
+    }
+    if matches!(preset.fill, SfxFillSource::ShtackHatch { .. }) {
+        return TEXT_AMBER;
     }
     match preset.line_effect.style {
         SfxLineStyle::Shtack => TEXT_AMBER,
@@ -370,6 +393,7 @@ pub fn panel(ui: &mut Ui, st: &mut SfxPanelState, gizmo: &mut SfxGizmoState, tar
         ui.spacing_mut().item_spacing.y = 6.0;
         match st.active_tab {
             DockTab::Sfx => draw_sfx_tab(ui, st, gizmo, t, target, &mut out),
+            DockTab::Blending => draw_blending_tab(ui, st, t, &mut out),
             DockTab::Color => draw_color_tab(ui, st, t),
         }
         crate::widgets::hairline(ui);
@@ -455,11 +479,15 @@ fn draw_header_and_tabs(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens, target: 
     });
 
     ui.add_space(2.0);
-    ui.columns(2, |cols| {
+    let blend_label = if st.draft.blending.is_default() { "Blending" } else { "Blending ●" };
+    ui.columns(3, |cols| {
         if seg_button(&mut cols[0], st.active_tab == DockTab::Sfx, ACCENT_SKY, "SFX ●", t).clicked() {
             st.active_tab = DockTab::Sfx;
         }
-        if seg_button(&mut cols[1], st.active_tab == DockTab::Color, ACCENT_SKY, "Color", t).clicked() {
+        if seg_button(&mut cols[1], st.active_tab == DockTab::Blending, ACCENT_SKY, blend_label, t).clicked() {
+            st.active_tab = DockTab::Blending;
+        }
+        if seg_button(&mut cols[2], st.active_tab == DockTab::Color, ACCENT_SKY, "Color", t).clicked() {
             st.active_tab = DockTab::Color;
         }
     });
@@ -469,7 +497,7 @@ fn draw_sfx_tab(ui: &mut Ui, st: &mut SfxPanelState, gizmo: &mut SfxGizmoState, 
     draw_presets_card(ui, st, t, target, out);
     draw_gizmo_card(ui, st, gizmo, t);
     draw_line_effect_card(ui, st, t);
-    draw_fill_card(ui, st, t);
+    draw_fill_card(ui, st, t, out);
     draw_vector_shadow_card(ui, st, t);
     draw_advanced_fx_collapsible(ui, st, t);
 }
@@ -867,59 +895,188 @@ fn draw_line_effect_card(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens) {
                 if le.shtack_variant == SfxShtackVariant::DryPencil {
                     slider_row_f32(ui, t, "Чёткость зерна:", &mut le.shtack_grain_sharpness_pct, 0.0..=100.0, "%");
                 }
-                ui.checkbox(&mut le.shtack_fill_interior, "Заливать внутри буквы (Fill)");
+                ui.label(RichText::new("Внутренность буквы настраивается отдельно в секции «Заливка» (Полый / Solid / Shtack Fill).").size(9.5).color(t.text_dim));
             }
         }
     });
 }
 
-fn draw_fill_card(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens) {
+fn default_sfx_screentone() -> SfxFillSource {
+    SfxFillSource::Screentone {
+        spec: ScreentoneSpec {
+            pattern_type: PatternType::Dots,
+            dot_size: 3.0,
+            spacing_x: 5.0,
+            spacing_y: 5.0,
+            density: 0.65,
+            angle: 45.0,
+            ..Default::default()
+        },
+        opacity: 1.0,
+    }
+}
+
+fn draw_shtack_fill_editor(ui: &mut Ui, spec: &mut SfxShtackFillSpec, t: Tokens) {
+    color_swatch(ui, "Цвет штрихов:", &mut spec.color);
+    row_with_reroll(ui, 22.0, &mut spec.seed, "Новый Seed Shtack Fill", |ui| {
+        ui.columns(3, |cols| {
+            if seg_button(&mut cols[0], spec.mode == SfxShtackFillMode::Hatch, ACCENT_SKY, "Штриховка", t).clicked() {
+                spec.mode = SfxShtackFillMode::Hatch;
+                if spec.overshoot_pct > 25.0 {
+                    spec.overshoot_pct = 25.0;
+                }
+            }
+            if seg_button(&mut cols[1], spec.mode == SfxShtackFillMode::StrokeFlow, ACCENT_AMBER, "⚡ SAI", t).clicked() {
+                if spec.mode != SfxShtackFillMode::StrokeFlow && spec.overshoot_pct <= 5.0 {
+                    spec.overshoot_pct = 18.0;
+                }
+                spec.mode = SfxShtackFillMode::StrokeFlow;
+            }
+            if seg_button(&mut cols[2], spec.mode == SfxShtackFillMode::UkiyoBrush, ACCENT_SKY, "🖌 Ukiyo-e", t).clicked() {
+                if spec.mode != SfxShtackFillMode::UkiyoBrush {
+                    spec.overshoot_pct = spec.overshoot_pct.clamp(6.0, 22.0);
+                    if spec.dryness_pct < 15.0 {
+                        spec.dryness_pct = 32.0;
+                    }
+                }
+                spec.mode = SfxShtackFillMode::UkiyoBrush;
+            }
+        });
+    });
+    match spec.mode {
+        SfxShtackFillMode::Hatch => {
+            slider_row_f32(ui, t, "Угол штрихов:", &mut spec.angle_deg, -90.0..=90.0, "°");
+            ui.checkbox(&mut spec.cross_hatch, "Перекрёстная штриховка (Cross-hatch)");
+            if spec.cross_hatch {
+                slider_row_f32(ui, t, "Угол перекрёста:", &mut spec.cross_angle_deg, 15.0..=90.0, "°");
+            }
+            slider_row_f32(ui, t, "Плотность:", &mut spec.density_pct, 10.0..=100.0, "%");
+            slider_row_f32_1dp(ui, t, "Толщина штриха:", &mut spec.thickness_pct, 0.4..=5.0, "%");
+            slider_row_f32(ui, t, "Разброс / Живость:", &mut spec.roughness_pct, 0.0..=100.0, "%");
+            slider_row_f32(ui, t, "Вылет за край:", &mut spec.overshoot_pct, 0.0..=25.0, "%");
+        }
+        SfxShtackFillMode::StrokeFlow => {
+            ui.horizontal(|ui| {
+                dim_label(ui, t, "Вылет:");
+                ui.columns(3, |cols| {
+                    if seg_button(&mut cols[0], spec.flow_overshoot == SfxShtackFlowOvershoot::FreeEnds, ACCENT_AMBER, "Края", t).clicked() {
+                        spec.flow_overshoot = SfxShtackFlowOvershoot::FreeEnds;
+                    }
+                    if seg_button(&mut cols[1], spec.flow_overshoot == SfxShtackFlowOvershoot::OuterJunctions, ACCENT_AMBER, "Стыки", t).clicked() {
+                        spec.flow_overshoot = SfxShtackFlowOvershoot::OuterJunctions;
+                    }
+                    if seg_button(&mut cols[2], spec.flow_overshoot == SfxShtackFlowOvershoot::All, ACCENT_AMBER, "Все", t).clicked() {
+                        spec.flow_overshoot = SfxShtackFlowOvershoot::All;
+                    }
+                });
+            });
+            ui.add_space(2.0);
+            let show_nodes = flow_nodes_visible(ui.ctx());
+            ui.horizontal(|ui| {
+                let lbl = if show_nodes { "🎯 Узлы вылетов (ВКЛ)" } else { "🎯 Узлы вылетов (ВЫКЛ)" };
+                let resp = seg_button(ui, show_nodes, ACCENT_AMBER, lbl, t)
+                    .on_hover_text("Показывает точки по сторонам сочленений на холсте: клик включает/выключает иглу именно в этом узле");
+                if resp.clicked() {
+                    set_flow_nodes_visible(ui.ctx(), !show_nodes);
+                }
+                if !spec.flow_overrides.is_empty() {
+                    let reset_lbl = format!("Сброс ({})", spec.flow_overrides.len());
+                    if ui
+                        .small_button(RichText::new(reset_lbl).color(TEXT_ROSE))
+                        .on_hover_text("Сбросить все ручные правки узлов на холсте")
+                        .clicked()
+                    {
+                        spec.flow_overrides.clear();
+                    }
+                }
+            });
+            slider_row_f32(ui, t, "Полос / Плотность:", &mut spec.density_pct, 10.0..=100.0, "%");
+            slider_row_f32_1dp(ui, t, "Толщина пера:", &mut spec.thickness_pct, 0.4..=5.0, "%");
+            slider_row_f32(ui, t, "Живость / Разброс:", &mut spec.roughness_pct, 0.0..=100.0, "%");
+            slider_row_f32(ui, t, "Вылет игл (SAI):", &mut spec.overshoot_pct, 0.0..=45.0, "%");
+        }
+        SfxShtackFillMode::UkiyoBrush => {
+            slider_row_f32(ui, t, "Нажим туши:", &mut spec.density_pct, 10.0..=100.0, "%");
+            slider_row_f32_1dp(ui, t, "Толщина кисти:", &mut spec.thickness_pct, 0.4..=5.0, "%");
+            slider_row_f32(ui, t, "Ворсинки (Касурэ):", &mut spec.roughness_pct, 0.0..=100.0, "%");
+            slider_row_f32(ui, t, "Хвост мазка:", &mut spec.overshoot_pct, 0.0..=35.0, "%");
+        }
+    }
+    slider_row_f32(ui, t, "Сухость / Зерно:", &mut spec.dryness_pct, 0.0..=100.0, "%");
+    if spec.dryness_pct > 0.5 || spec.mode == SfxShtackFillMode::UkiyoBrush {
+        slider_row_f32(ui, t, "Чёткость зерна:", &mut spec.grain_sharpness_pct, 0.0..=100.0, "%");
+    }
+}
+
+fn draw_open_gentonik_button(ui: &mut Ui, out: &mut SfxPanelOutput) {
+    if ui
+        .add(
+            egui::Button::new(RichText::new("⚙ Открыть в Gentonik (Screentone)").size(10.5).color(TEXT_CYAN))
+                .min_size(vec2(ui.available_width(), 22.0)),
+        )
+        .on_hover_text("Доработка паттерна (12 типов, сателлиты, дисторсия, градиент) в доке Screentone в реальном времени")
+        .clicked()
+    {
+        out.commands.push(OutCommand::new("window.panel.activate", json!({ "panel": "screentone" })));
+    }
+}
+
+fn draw_fill_card(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens, out: &mut SfxPanelOutput) {
     let scale = ui_scale(st);
     section_card(ui, t, |ui| {
         let badge = fill_style_badge(&st.draft);
         section_header(ui, t, "ЗАЛИВКА (FILL)", badge, TEXT_SKY);
         ui.add_space(3.0);
 
-        let is_dry = st.draft.dry_brush.enabled;
-        let is_tone = !is_dry && matches!(st.draft.fill, SfxFillSource::Screentone { .. });
-        let is_solid = !is_dry && !is_tone;
+        let is_none = matches!(st.draft.fill, SfxFillSource::None);
+        let is_hatch = matches!(st.draft.fill, SfxFillSource::ShtackHatch { .. });
+        let is_dry = !is_none && !is_hatch && st.draft.dry_brush.enabled;
+        let is_tone = !is_none && !is_hatch && !is_dry && matches!(st.draft.fill, SfxFillSource::Screentone { .. });
+        let is_solid = !is_none && !is_hatch && !is_dry && !is_tone;
 
         ui.columns(3, |cols| {
-            if seg_button(&mut cols[0], is_solid, ACCENT_SKY, "Solid", t).clicked() {
+            if seg_button(&mut cols[0], is_none, ACCENT_SKY, "Полый", t).clicked() {
+                st.draft.dry_brush.enabled = false;
+                st.draft.fill = SfxFillSource::None;
+            }
+            if seg_button(&mut cols[1], is_solid, ACCENT_SKY, "Solid", t).clicked() {
                 let c = face_color_copy(&st.draft.fill);
                 st.draft.dry_brush.enabled = false;
                 if !matches!(st.draft.fill, SfxFillSource::Solid { .. } | SfxFillSource::Gradient { .. }) {
                     st.draft.fill = SfxFillSource::Solid { color: c };
                 }
             }
-            if seg_button(&mut cols[1], is_dry, ACCENT_SKY, "Dry Brush", t).clicked() {
+            if seg_button(&mut cols[2], is_dry, ACCENT_SKY, "Dry Brush", t).clicked() {
                 let c = face_color_copy(&st.draft.fill);
                 st.draft.dry_brush.enabled = true;
-                if matches!(st.draft.fill, SfxFillSource::Screentone { .. }) {
+                if matches!(st.draft.fill, SfxFillSource::None | SfxFillSource::Screentone { .. } | SfxFillSource::ShtackHatch { .. }) {
                     st.draft.fill = SfxFillSource::Solid { color: c };
                 }
             }
-            if seg_button(&mut cols[2], is_tone, ACCENT_SKY, "Screentone", t).clicked() {
+        });
+        ui.add_space(2.0);
+        ui.columns(2, |cols| {
+            if seg_button(&mut cols[0], is_tone, ACCENT_SKY, "Screentone", t).clicked() {
                 st.draft.dry_brush.enabled = false;
                 if !matches!(st.draft.fill, SfxFillSource::Screentone { .. }) {
-                    st.draft.fill = SfxFillSource::Screentone {
-                        spec: ScreentoneSpec {
-                            pattern_type: PatternType::Dots,
-                            dot_size: 3.0,
-                            spacing_x: 5.0,
-                            spacing_y: 5.0,
-                            density: 0.65,
-                            angle: 45.0,
-                            ..Default::default()
-                        },
-                        opacity: 1.0,
-                    };
+                    st.draft.fill = default_sfx_screentone();
+                }
+            }
+            if seg_button(&mut cols[1], is_hatch, ACCENT_SKY, "⚡ Shtack Fill", t).clicked() {
+                let c = face_color_copy(&st.draft.fill);
+                st.draft.dry_brush.enabled = false;
+                if !matches!(st.draft.fill, SfxFillSource::ShtackHatch { .. }) {
+                    st.draft.fill = SfxFillSource::ShtackHatch { spec: SfxShtackFillSpec { color: c, ..SfxShtackFillSpec::default() } };
                 }
             }
         });
 
         ui.add_space(4.0);
-        if st.draft.dry_brush.enabled {
+        if is_none {
+            ui.label(RichText::new("Внутренность букв прозрачна — отображаются только обводка и ореол.").size(10.0).color(t.text_dim));
+        } else if let SfxFillSource::ShtackHatch { spec } = &mut st.draft.fill {
+            draw_shtack_fill_editor(ui, spec, t);
+        } else if st.draft.dry_brush.enabled {
             let db = &mut st.draft.dry_brush;
             row_with_reroll(ui, 48.0, &mut db.seed, "Новый Seed щетины", |ui| {
                 ui.columns(2, |cols| {
@@ -981,12 +1138,14 @@ fn draw_fill_card(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens) {
                 spec.spacing_x = spacing;
                 spec.spacing_y = spacing;
             }
-            egui::CollapsingHeader::new(RichText::new("Параметры скринтона").size(10.0).color(t.text_dim))
+            egui::CollapsingHeader::new(RichText::new("Быстрые параметры скринтона").size(10.0).color(t.text_dim))
                 .id_salt("sfx-tone-details")
                 .default_open(false)
                 .show(ui, |ui| {
                     draw_screentone_grid(ui, "sfx-base-tone", spec, opacity, t);
                 });
+            ui.add_space(2.0);
+            draw_open_gentonik_button(ui, out);
         } else if let Some(col) = face_color_mut(&mut st.draft.fill) {
             color_swatch(ui, "Цвет заливки:", col);
         }
@@ -1031,6 +1190,139 @@ fn draw_advanced_fx_collapsible(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens) 
             crate::widgets::hairline(ui);
             draw_styles_stack(ui, st, t);
         });
+}
+
+const BLEND_MODES: [(SfxChannelBlend, &str); 8] = [
+    (SfxChannelBlend::Normal, "Normal"),
+    (SfxChannelBlend::Multiply, "Multiply"),
+    (SfxChannelBlend::Screen, "Screen"),
+    (SfxChannelBlend::Overlay, "Overlay"),
+    (SfxChannelBlend::Darken, "Darken"),
+    (SfxChannelBlend::Lighten, "Lighten"),
+    (SfxChannelBlend::Difference, "Difference"),
+    (SfxChannelBlend::Knockout, "Knockout (Вырез)"),
+];
+
+fn draw_blend_channel_controls(ui: &mut Ui, id_salt: &str, title: &str, blend: &mut SfxChannelBlend, opacity: &mut f32, t: Tokens) {
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(title).strong().size(10.5).color(t.text));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let mut cur = enum_id(blend);
+            let opts: Vec<(String, &str)> = BLEND_MODES.iter().map(|(m, lbl)| (enum_id(m), *lbl)).collect();
+            if crate::widgets::dropdown_literal(ui, id_salt, &mut cur, &opts, 118.0)
+                && let Some(parsed) = enum_from_id::<SfxChannelBlend>(&cur)
+            {
+                *blend = parsed;
+            }
+        });
+    });
+    let mut op_pct = *opacity * 100.0;
+    if slider_row_f32(ui, t, "Непрозрачность:", &mut op_pct, 0.0..=100.0, "%") {
+        *opacity = (op_pct / 100.0).clamp(0.0, 1.0);
+    }
+}
+
+fn draw_blending_tab(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens, out: &mut SfxPanelOutput) {
+    let bl = &mut st.draft.blending;
+    section_card(ui, t, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("ПОРЯДОК И КАНАЛЫ").strong().size(10.5).color(t.text));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.small_button("Сбросить").clicked() {
+                    *bl = SfxBlending::default();
+                }
+            });
+        });
+        ui.add_space(3.0);
+        ui.columns(2, |cols| {
+            if seg_button(&mut cols[0], !bl.line_behind_fill, ACCENT_SKY, "Лайн поверх заливки", t).clicked() {
+                bl.line_behind_fill = false;
+            }
+            if seg_button(&mut cols[1], bl.line_behind_fill, ACCENT_SKY, "Лайн под заливкой", t).clicked() {
+                bl.line_behind_fill = true;
+            }
+        });
+        ui.add_space(4.0);
+        crate::widgets::hairline(ui);
+        draw_blend_channel_controls(ui, "sfx-bl-fill", "Основная заливка (Fill 1)", &mut bl.fill_blend, &mut bl.fill_opacity, t);
+        crate::widgets::hairline(ui);
+        draw_blend_channel_controls(ui, "sfx-bl-line", "Лайн / Обводка (Line)", &mut bl.line_blend, &mut bl.line_opacity, t);
+        crate::widgets::hairline(ui);
+        draw_blend_channel_controls(ui, "sfx-bl-halo", "Ореол (Halo)", &mut bl.halo_blend, &mut bl.halo_opacity, t);
+    });
+
+    section_card(ui, t, |ui| {
+        let badge = match &bl.secondary_fill {
+            None | Some(SfxFillSource::None) => "Выкл",
+            Some(SfxFillSource::Solid { .. }) => "Solid",
+            Some(SfxFillSource::Gradient { .. }) => "Gradient",
+            Some(SfxFillSource::Screentone { .. }) => "Screentone",
+            Some(SfxFillSource::ShtackHatch { .. }) => "Shtack Fill",
+        };
+        section_header(ui, t, "2-Я ЗАЛИВКА (МИКС СТИЛЕЙ)", badge, TEXT_AMBER);
+        ui.add_space(3.0);
+
+        let is_off = bl.secondary_fill.is_none();
+        let is_solid = matches!(bl.secondary_fill, Some(SfxFillSource::Solid { .. }));
+        let is_grad = matches!(bl.secondary_fill, Some(SfxFillSource::Gradient { .. }));
+        let is_tone = matches!(bl.secondary_fill, Some(SfxFillSource::Screentone { .. }));
+        let is_hatch = matches!(bl.secondary_fill, Some(SfxFillSource::ShtackHatch { .. }));
+
+        ui.columns(3, |cols| {
+            if seg_button(&mut cols[0], is_off, ACCENT_AMBER, "Выкл", t).clicked() {
+                bl.secondary_fill = None;
+            }
+            if seg_button(&mut cols[1], is_solid, ACCENT_AMBER, "Solid", t).clicked() {
+                bl.secondary_fill = Some(SfxFillSource::Solid { color: Color::BLACK });
+            }
+            if seg_button(&mut cols[2], is_grad, ACCENT_AMBER, "Gradient", t).clicked() {
+                bl.secondary_fill = Some(SfxFillSource::Gradient { start: Color::BLACK, end: Color::WHITE, angle_deg: 90.0 });
+            }
+        });
+        ui.add_space(2.0);
+        ui.columns(2, |cols| {
+            if seg_button(&mut cols[0], is_tone, ACCENT_AMBER, "Screentone", t).clicked() {
+                bl.secondary_fill = Some(default_sfx_screentone());
+            }
+            if seg_button(&mut cols[1], is_hatch, ACCENT_AMBER, "⚡ Shtack Fill", t).clicked() {
+                bl.secondary_fill = Some(SfxFillSource::ShtackHatch { spec: SfxShtackFillSpec::default() });
+            }
+        });
+
+        if let Some(sec) = &mut bl.secondary_fill {
+            ui.add_space(4.0);
+            draw_blend_channel_controls(ui, "sfx-bl-sec", "Смешивание 2-й заливки", &mut bl.secondary_blend, &mut bl.secondary_opacity, t);
+            crate::widgets::hairline(ui);
+            match sec {
+                SfxFillSource::None => {}
+                SfxFillSource::Solid { color } => {
+                    color_swatch(ui, "Цвет 2-й заливки:", color);
+                }
+                SfxFillSource::Gradient { start, end, angle_deg } => {
+                    ui.horizontal(|ui| {
+                        color_swatch(ui, "A:", start);
+                        color_swatch(ui, "B:", end);
+                        crate::widgets::value_field(ui, angle_deg, 0.0..=360.0, "°", 54.0);
+                    });
+                }
+                SfxFillSource::Screentone { spec, opacity } => {
+                    draw_screentone_grid(ui, "sfx-sec-tone", spec, opacity, t);
+                    ui.add_space(2.0);
+                    draw_open_gentonik_button(ui, out);
+                }
+                SfxFillSource::ShtackHatch { spec } => {
+                    draw_shtack_fill_editor(ui, spec, t);
+                }
+            }
+        } else {
+            ui.add_space(3.0);
+            ui.label(
+                RichText::new("Позволяет наложить вторую заливку поверх основной — например, Shtack Fill или Screentone поверх Solid (включая вырез Knockout).")
+                    .size(9.5)
+                    .color(t.text_dim),
+            );
+        }
+    });
 }
 
 fn draw_color_tab(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens) {
@@ -1103,25 +1395,34 @@ fn draw_screentone_grid(ui: &mut Ui, id_salt: &str, spec: &mut ScreentoneSpec, o
 
 fn draw_fill_source_editor(ui: &mut Ui, id_salt: &str, fill: &mut SfxFillSource, t: Tokens) {
     let kind_idx = match fill {
-        SfxFillSource::Solid { .. } => 0u8,
-        SfxFillSource::Gradient { .. } => 1u8,
-        SfxFillSource::Screentone { .. } => 2u8,
+        SfxFillSource::None => 0u8,
+        SfxFillSource::Solid { .. } => 1u8,
+        SfxFillSource::Gradient { .. } => 2u8,
+        SfxFillSource::Screentone { .. } => 3u8,
+        SfxFillSource::ShtackHatch { .. } => 4u8,
     };
     let mut picked = kind_idx;
-    ui.horizontal(|ui| {
-        ui.selectable_value(&mut picked, 0, "Solid");
-        ui.selectable_value(&mut picked, 1, "Gradient");
-        ui.selectable_value(&mut picked, 2, "Screentone");
+    ui.horizontal_wrapped(|ui| {
+        ui.selectable_value(&mut picked, 0, "None");
+        ui.selectable_value(&mut picked, 1, "Solid");
+        ui.selectable_value(&mut picked, 2, "Gradient");
+        ui.selectable_value(&mut picked, 3, "Screentone");
+        ui.selectable_value(&mut picked, 4, "Shtack Fill");
     });
     if picked != kind_idx {
         *fill = match picked {
-            0 => SfxFillSource::Solid { color: Color::BLACK },
-            1 => SfxFillSource::Gradient { start: Color::BLACK, end: Color::WHITE, angle_deg: 90.0 },
-            _ => SfxFillSource::Screentone { spec: ScreentoneSpec::default(), opacity: 1.0 },
+            0 => SfxFillSource::None,
+            1 => SfxFillSource::Solid { color: Color::BLACK },
+            2 => SfxFillSource::Gradient { start: Color::BLACK, end: Color::WHITE, angle_deg: 90.0 },
+            3 => default_sfx_screentone(),
+            _ => SfxFillSource::ShtackHatch { spec: SfxShtackFillSpec::default() },
         };
     }
 
     match fill {
+        SfxFillSource::None => {
+            ui.label(RichText::new("Без заливки (полый)").size(10.0).color(t.text_dim));
+        }
         SfxFillSource::Solid { color } => {
             color_swatch(ui, "Цвет заливки:", color);
         }
@@ -1134,6 +1435,9 @@ fn draw_fill_source_editor(ui: &mut Ui, id_salt: &str, fill: &mut SfxFillSource,
         }
         SfxFillSource::Screentone { spec, opacity } => {
             draw_screentone_grid(ui, id_salt, spec, opacity, t);
+        }
+        SfxFillSource::ShtackHatch { spec } => {
+            draw_shtack_fill_editor(ui, spec, t);
         }
     }
 }
@@ -1414,7 +1718,7 @@ mod tests {
         let ctx = egui::Context::default();
         let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(320.0, 900.0))), ..Default::default() };
 
-        for tab in [DockTab::Sfx, DockTab::Color] {
+        for tab in [DockTab::Sfx, DockTab::Blending, DockTab::Color] {
             st.active_tab = tab;
             for style in [
                 SfxLineStyle::Clean,
@@ -1426,8 +1730,14 @@ mod tests {
             ] {
                 let mut data = SfxData::default();
                 data.line_effect.style = style;
-                data.dry_brush.enabled = true;
-                data.dry_brush.engine = SfxDryBrushEngine::Vector;
+                if tab == DockTab::Blending {
+                    data.blending.secondary_fill = Some(SfxFillSource::ShtackHatch { spec: SfxShtackFillSpec::default() });
+                } else if style == SfxLineStyle::Shtack {
+                    data.fill = SfxFillSource::ShtackHatch { spec: SfxShtackFillSpec::default() };
+                } else {
+                    data.dry_brush.enabled = true;
+                    data.dry_brush.engine = SfxDryBrushEngine::Vector;
+                }
                 let target = SfxTargetInfo {
                     doc_id: Some(BridgeDocId(1)),
                     layer_id: Some(LayerId(3)),

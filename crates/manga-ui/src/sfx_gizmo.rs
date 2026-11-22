@@ -8,22 +8,23 @@
 //! All document mutations are emitted as `OutCommand` (`"sfx.update"` with `"coalesce"`) so dragging
 //! collapses into a single history step and `Escape` restores the pre-drag snapshot cleanly.
 
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use egui::{Color32, CursorIcon, Pos2, Rect, Stroke, pos2, vec2};
 use photocraft_doc::sfx::{
-    MAX_SFX_EFFECT_PX, MAX_SFX_LIQUIFY_STROKES, MAX_SFX_SIZE_PT, MAX_SFX_SPLINE_POINTS, SfxData, SfxFreeTransform, SfxGlyphTransform,
-    SfxLiquifyBrush, SfxMeshLattice, SfxWarpMode,
+    MAX_SFX_EFFECT_PX, MAX_SFX_LIQUIFY_STROKES, MAX_SFX_SIZE_PT, MAX_SFX_SPLINE_POINTS, SfxData, SfxFillSource, SfxFreeTransform, SfxGlyphTransform,
+    SfxLiquifyBrush, SfxMeshLattice, SfxShtackFillMode, SfxShtackFillSpec, SfxWarpMode,
 };
 use photocraft_doc::{Document, LayerId};
 use photocraft_manga_core::sfx_geom::{
     PreparedSfx, apply_free_transform_point, apply_homography, build_sfx_geometry, eval_mesh_uv, free_transform_homography,
     invert_free_transform_point, mesh_node_doc_pos, move_mesh_node_linked, sample_catmull_rom, spline_control_doc_pos,
 };
+use photocraft_manga_core::sfx_render::{SfxFlowNeedleHandle, extract_sfx_flow_handles};
 use photocraft_text::TextEngine;
 use serde_json::json;
 
-use crate::sfx_panel::SfxGlyphTool;
+use crate::sfx_panel::{SfxGlyphTool, flow_nodes_visible};
 use crate::theme::Tokens;
 use crate::view::{CanvasToolEvent, CanvasViewXform};
 use crate::{BridgeDocId, OutCommand};
@@ -62,6 +63,13 @@ struct CachedSfxGeom {
     data: SfxData,
     dpi_bits: u32,
     geom: PreparedSfx,
+}
+
+#[derive(Clone, Debug)]
+struct CachedFlowHandles {
+    data: SfxData,
+    dpi_bits: u32,
+    handles: Vec<SfxFlowNeedleHandle>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -135,8 +143,10 @@ pub struct SfxGizmoState {
     pub last_cursor_doc: Option<[f64; 2]>,
     drag: Option<ActiveDrag>,
     cached: std::sync::Mutex<Option<CachedSfxGeom>>,
+    cached_flow: std::sync::Mutex<Option<CachedFlowHandles>>,
     bound_target: Option<(BridgeDocId, LayerId)>,
     glyph_tool_code: AtomicU8,
+    show_flow_nodes: AtomicBool,
 }
 
 impl Default for SfxGizmoState {
@@ -149,8 +159,10 @@ impl Default for SfxGizmoState {
             last_cursor_doc: None,
             drag: None,
             cached: std::sync::Mutex::new(None),
+            cached_flow: std::sync::Mutex::new(None),
             bound_target: None,
             glyph_tool_code: AtomicU8::new(0),
+            show_flow_nodes: AtomicBool::new(true),
         }
     }
 }
@@ -166,6 +178,32 @@ impl SfxGizmoState {
 
     pub fn set_glyph_tool(&self, tool: SfxGlyphTool) {
         self.glyph_tool_code.store(glyph_tool_to_u8(tool), Ordering::Relaxed);
+    }
+
+    pub fn show_flow_nodes(&self) -> bool {
+        self.show_flow_nodes.load(Ordering::Relaxed)
+    }
+
+    pub fn set_show_flow_nodes(&self, visible: bool) {
+        self.show_flow_nodes.store(visible, Ordering::Relaxed);
+    }
+
+    /// Computes or returns cached `StrokeFlow` per-endpoint needle gizmo handles.
+    pub fn ensure_flow_handles(&self, data: &SfxData, dpi: f32, geom: &PreparedSfx) -> Vec<SfxFlowNeedleHandle> {
+        if !self.show_flow_nodes() {
+            return Vec::new();
+        }
+        let Some(spec) = active_stroke_flow_spec(data) else {
+            return Vec::new();
+        };
+        let dpi_bits = dpi.clamp(1.0, 1200.0).to_bits();
+        let mut guard = self.cached_flow.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(c) = guard.as_ref().filter(|c| c.dpi_bits == dpi_bits && &c.data == data) {
+            return c.handles.clone();
+        }
+        let handles = extract_sfx_flow_handles(geom, spec);
+        *guard = Some(CachedFlowHandles { data: data.clone(), dpi_bits, handles: handles.clone() });
+        handles
     }
 
     /// Computes or returns the cached `PreparedSfx` geometry using `engine`.
@@ -267,6 +305,66 @@ fn shadow_center_and_knob_doc(data: &SfxData, rb: [f64; 4]) -> ([f64; 2], [f64; 
     let vis_dist = f64::from(data.vector_shadow.distance_px).max(26.0);
     let knob = [center[0] + rad.cos() * vis_dist, center[1] + rad.sin() * vis_dist];
     (center, knob)
+}
+
+fn active_stroke_flow_spec(data: &SfxData) -> Option<&SfxShtackFillSpec> {
+    if let SfxFillSource::ShtackHatch { spec } = &data.fill
+        && spec.mode == SfxShtackFillMode::StrokeFlow
+    {
+        return Some(spec);
+    }
+    if let Some(SfxFillSource::ShtackHatch { spec }) = &data.blending.secondary_fill
+        && spec.mode == SfxShtackFillMode::StrokeFlow
+    {
+        return Some(spec);
+    }
+    None
+}
+
+fn active_stroke_flow_spec_mut(data: &mut SfxData) -> Option<&mut SfxShtackFillSpec> {
+    if let SfxFillSource::ShtackHatch { spec } = &mut data.fill
+        && spec.mode == SfxShtackFillMode::StrokeFlow
+    {
+        return Some(spec);
+    }
+    if let Some(SfxFillSource::ShtackHatch { spec }) = &mut data.blending.secondary_fill
+        && spec.mode == SfxShtackFillMode::StrokeFlow
+    {
+        return Some(spec);
+    }
+    None
+}
+
+/// Projects a flow needle handle to screen space, offsetting the clickable knob 12 screen px
+/// along its outgoing ray so multiple rays at one corner never overlap.
+fn flow_handle_screen(h: &SfxFlowNeedleHandle, xf: &CanvasViewXform) -> (Pos2, Pos2, egui::Vec2) {
+    let end_scr = xf.to_screen(h.end_doc[0] as f32, h.end_doc[1] as f32);
+    let probe_scr = xf.to_screen((h.end_doc[0] + h.dir[0] * 10.0) as f32, (h.end_doc[1] + h.dir[1] * 10.0) as f32);
+    let mut dir_scr = probe_scr - end_scr;
+    let len = dir_scr.length();
+    if len > 1e-3 {
+        dir_scr /= len;
+    } else {
+        dir_scr = vec2(0.0, -1.0);
+    }
+    let knob_scr = end_scr + dir_scr * 12.0;
+    (end_scr, knob_scr, dir_scr)
+}
+
+fn hit_flow_needle_handle(handles: &[SfxFlowNeedleHandle], xf: &CanvasViewXform, at_doc: [f64; 2]) -> Option<usize> {
+    if handles.is_empty() {
+        return None;
+    }
+    let p_scr = xf.to_screen(at_doc[0] as f32, at_doc[1] as f32);
+    let mut best: Option<(f32, usize)> = None;
+    for (idx, h) in handles.iter().enumerate() {
+        let (_, knob_scr, _) = flow_handle_screen(h, xf);
+        let d = knob_scr.distance(p_scr);
+        if d <= HANDLE_HIT_PX && best.is_none_or(|(bd, _)| d < bd) {
+            best = Some((d, idx));
+        }
+    }
+    best.map(|(_, idx)| idx)
 }
 
 fn hit_shadow_knob(data: &SfxData, rb: [f64; 4], xf: &CanvasViewXform, at_doc: [f64; 2]) -> bool {
@@ -1168,6 +1266,25 @@ pub fn pointer(gizmo: &mut SfxGizmoState, view: &SfxView<'_>, ev: CanvasToolEven
                 return out;
             }
 
+            // 1B. Per-endpoint SAI needle toggle handles (`🎯 Узлы вылетов`).
+            if matches!(sfx.warp_mode, SfxWarpMode::Resize | SfxWarpMode::FreeTransform | SfxWarpMode::PerGlyph) {
+                let flow_handles = gizmo.ensure_flow_handles(&sfx, dpi, &geom);
+                if let Some(h_idx) = hit_flow_needle_handle(&flow_handles, xf, [x, y]) {
+                    let h = flow_handles[h_idx];
+                    if let Some(spec) = active_stroke_flow_spec_mut(&mut sfx) {
+                        spec.toggle_flow_override(h.glyph_index, h.uv, [h.dir[0] as f32, h.dir[1] as f32], h.default_enabled);
+                        sfx.validate();
+                        out.commands.push(OutCommand::new(
+                            "sfx.update",
+                            json!({ "layer": layer_id.0, "sfx": sfx, "preview": false }),
+                        ));
+                        out.updated_sfx = Some(sfx);
+                        out.handled = true;
+                        return out;
+                    }
+                }
+            }
+
             let mode = match sfx.warp_mode {
                 SfxWarpMode::Resize => {
                     if let Some(h) = hit_free_transform(&sfx, rb, geom.world_corners, xf, [x, y]) {
@@ -1458,8 +1575,14 @@ pub fn hover_cursor(gizmo: &SfxGizmoState, view: &SfxView<'_>, cursor_scr: Pos2)
     let rb = geom.rest_box;
     let xf = &view.view_xform;
 
-    if matches!(sfx.warp_mode, SfxWarpMode::Resize | SfxWarpMode::FreeTransform | SfxWarpMode::PerGlyph) && hit_shadow_knob(&sfx, rb, xf, at_doc) {
-        return Some(CursorIcon::Grab);
+    if matches!(sfx.warp_mode, SfxWarpMode::Resize | SfxWarpMode::FreeTransform | SfxWarpMode::PerGlyph) {
+        if hit_shadow_knob(&sfx, rb, xf, at_doc) {
+            return Some(CursorIcon::Grab);
+        }
+        let flow_handles = gizmo.ensure_flow_handles(&sfx, dpi, &geom);
+        if hit_flow_needle_handle(&flow_handles, xf, at_doc).is_some() {
+            return Some(CursorIcon::PointingHand);
+        }
     }
 
     match sfx.warp_mode {
@@ -1490,8 +1613,9 @@ pub fn draw(painter: &egui::Painter, gizmo: &SfxGizmoState, view: &SfxView<'_>) 
     if !is_active_on_canvas(gizmo, view) {
         return;
     }
-    // Sync active Per-Glyph sub-tool from panel's egui context temp storage.
+    // Sync active Per-Glyph sub-tool & flow-node gizmo toggle from panel's egui context temp storage.
     gizmo.set_glyph_tool(SfxGlyphTool::get(painter.ctx()));
+    gizmo.set_show_flow_nodes(flow_nodes_visible(painter.ctx()));
 
     let Some((_, sfx_ref)) = active_sfx_target(view) else { return };
     let sfx = sfx_ref.clone();
@@ -1505,9 +1629,14 @@ pub fn draw(painter: &egui::Painter, gizmo: &SfxGizmoState, view: &SfxView<'_>) 
     let tokens = Tokens::get(painter.ctx());
     let accent = tokens.accent;
     let xf = &view.view_xform;
+    let hover_scr = painter.ctx().input(|i| i.pointer.hover_pos());
 
     match sfx.warp_mode {
-        SfxWarpMode::Resize | SfxWarpMode::FreeTransform => draw_free_style_gizmo(painter, &sfx, rb, geom.world_corners, xf, accent),
+        SfxWarpMode::Resize | SfxWarpMode::FreeTransform => {
+            draw_free_style_gizmo(painter, &sfx, rb, geom.world_corners, xf, accent);
+            let flow_handles = gizmo.ensure_flow_handles(&sfx, dpi, &geom);
+            draw_flow_needle_handles(painter, &flow_handles, xf, hover_scr);
+        }
         SfxWarpMode::PerGlyph => {
             let fill_handle = Color32::WHITE;
             let tool = gizmo.current_glyph_tool();
@@ -1550,6 +1679,8 @@ pub fn draw(painter: &egui::Painter, gizmo: &SfxGizmoState, view: &SfxView<'_>) 
             if sfx.vector_shadow.enabled {
                 draw_vector_shadow_ray(painter, &sfx, rb, xf);
             }
+            let flow_handles = gizmo.ensure_flow_handles(&sfx, dpi, &geom);
+            draw_flow_needle_handles(painter, &flow_handles, xf, hover_scr);
         }
         SfxWarpMode::MeshLattice => {
             draw_mesh_lattice(painter, &sfx, rb, xf, &gizmo.selected_nodes, accent);
@@ -1642,6 +1773,58 @@ fn draw_vector_shadow_ray(painter: &egui::Painter, data: &SfxData, rb: [f64; 4],
     painter.circle_filled(c_scr, 3.0, COLOR_SUN);
     painter.circle_filled(k_scr, 6.0, COLOR_SUN);
     painter.circle_stroke(k_scr, 6.0, Stroke::new(1.4, Color32::from_rgb(120, 53, 15)));
+}
+
+/// Draws per-endpoint clickable SAI needle dots offset cleanly on each side of every junction.
+/// Filled amber dots = needle ON; hollow slate rings = needle OFF; cyan outer halo = manual override.
+fn draw_flow_needle_handles(painter: &egui::Painter, handles: &[SfxFlowNeedleHandle], xf: &CanvasViewXform, hover_scr: Option<Pos2>) {
+    if handles.is_empty() {
+        return;
+    }
+    let hovered_idx = hover_scr.and_then(|hs| {
+        handles
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, h)| {
+                let (_, knob, _) = flow_handle_screen(h, xf);
+                let d = knob.distance(hs);
+                (d <= HANDLE_HIT_PX).then_some((d, idx))
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, idx)| idx)
+    });
+
+    for (idx, h) in handles.iter().enumerate() {
+        let (end_scr, knob_scr, dir_scr) = flow_handle_screen(h, xf);
+        let is_hovered = hovered_idx == Some(idx);
+
+        if h.enabled {
+            let ray_col = if is_hovered { COLOR_SUN } else { COLOR_AMBER.gamma_multiply(0.85) };
+            let tip_len = if is_hovered { 16.0 } else { 7.0 };
+            painter.line_segment([end_scr, knob_scr + dir_scr * tip_len], Stroke::new(1.4, ray_col));
+            painter.circle_filled(knob_scr, if is_hovered { 5.4 } else { 4.4 }, COLOR_AMBER);
+            painter.circle_stroke(knob_scr, if is_hovered { 5.4 } else { 4.4 }, Stroke::new(1.3, Color32::WHITE));
+            if h.overridden {
+                painter.circle_stroke(knob_scr, 6.6, Stroke::new(1.3, COLOR_CYAN));
+            }
+        } else {
+            let stem_col = Color32::from_rgba_unmultiplied(148, 163, 184, if is_hovered { 210 } else { 110 });
+            painter.line_segment([end_scr, knob_scr], Stroke::new(1.1, stem_col));
+            let fill = Color32::from_rgba_unmultiplied(15, 23, 42, if is_hovered { 210 } else { 150 });
+            let rim = if h.overridden {
+                Color32::from_rgb(251, 113, 133)
+            } else if is_hovered {
+                COLOR_AMBER
+            } else {
+                Color32::from_rgba_unmultiplied(148, 163, 184, 210)
+            };
+            painter.circle_filled(knob_scr, if is_hovered { 5.0 } else { 3.9 }, fill);
+            painter.circle_stroke(knob_scr, if is_hovered { 5.0 } else { 3.9 }, Stroke::new(1.3, rim));
+        }
+        if is_hovered {
+            painter.circle_stroke(knob_scr, 7.8, Stroke::new(1.4, Color32::WHITE.gamma_multiply(0.9)));
+        }
+    }
 }
 
 fn draw_mesh_lattice(painter: &egui::Painter, data: &SfxData, rb: [f64; 4], xf: &CanvasViewXform, selected: &[(usize, usize)], accent: Color32) {
@@ -2086,5 +2269,50 @@ mod tests {
             let u = moved.updated_sfx.expect("rotate-zone update");
             assert!(u.free_transform.rotation_deg.abs() > 30.0, "rotation must change in {warp_mode:?}: {}", u.free_transform.rotation_deg);
         }
+    }
+
+    #[test]
+    fn flow_needle_gizmo_click_toggles_override_and_restores_cleanly() {
+        let sfx = SfxData {
+            text: "B".to_owned(),
+            size_pt: 200.0,
+            origin: [120.0, 120.0],
+            fill: SfxFillSource::ShtackHatch {
+                spec: SfxShtackFillSpec {
+                    mode: SfxShtackFillMode::StrokeFlow,
+                    overshoot_pct: 22.0,
+                    ..SfxShtackFillSpec::default()
+                },
+            },
+            ..SfxData::default()
+        };
+        let (doc, id) = sfx_doc(sfx.clone());
+        let mut gizmo = SfxGizmoState::default();
+        let geom = gizmo.ensure_geom(&sfx, 72.0);
+        let handles = gizmo.ensure_flow_handles(&sfx, 72.0, &geom);
+        assert!(!handles.is_empty(), "StrokeFlow B must expose clickable needle handles");
+        let target = handles.iter().find(|h| h.enabled).copied().expect("at least one enabled needle on B");
+
+        let view = view_for(&doc, id);
+        let (_, knob_scr, _) = flow_handle_screen(&target, &view.view_xform);
+        let knob_doc = view.view_xform.to_doc(knob_scr);
+
+        assert_eq!(hover_cursor(&gizmo, &view, knob_scr), Some(CursorIcon::PointingHand));
+        let click1 = pointer(&mut gizmo, &view, CanvasToolEvent::Down { x: knob_doc[0], y: knob_doc[1], pressure: 1.0 }, Modifiers::NONE);
+        assert!(click1.handled, "clicking a flow needle handle must be handled");
+        assert!(!gizmo.has_active_drag(), "flow handle click must toggle immediately without starting a drag");
+        let u1 = click1.updated_sfx.expect("updated sfx after first toggle");
+        let SfxFillSource::ShtackHatch { spec: s1 } = &u1.fill else { panic!("expected ShtackHatch") };
+        assert_eq!(s1.flow_overrides.len(), 1);
+        assert!(!s1.flow_overrides[0].enabled, "clicking an enabled needle must disable it");
+
+        // Second click on the same handle must revert to default and clear flow_overrides.
+        let (doc2, id2) = sfx_doc(u1.clone());
+        let view2 = view_for(&doc2, id2);
+        let click2 = pointer(&mut gizmo, &view2, CanvasToolEvent::Down { x: knob_doc[0], y: knob_doc[1], pressure: 1.0 }, Modifiers::NONE);
+        assert!(click2.handled);
+        let u2 = click2.updated_sfx.expect("updated sfx after second toggle");
+        let SfxFillSource::ShtackHatch { spec: s2 } = &u2.fill else { panic!("expected ShtackHatch") };
+        assert!(s2.flow_overrides.is_empty(), "toggling back to default must clear the override entry");
     }
 }

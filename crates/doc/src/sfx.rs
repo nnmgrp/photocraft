@@ -647,10 +647,219 @@ impl SfxSplineArc {
     }
 }
 
-/// Fill paint for either the base SFX face or an extruded / bordered style pass.
+fn default_62() -> f32 {
+    62.0
+}
+
+fn default_1_3() -> f32 {
+    1.3
+}
+
+fn default_18() -> f32 {
+    18.0
+}
+
+fn default_70() -> f32 {
+    70.0
+}
+
+/// Geometric stroke strategy for [`SfxFillSource::ShtackHatch`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SfxShtackFillMode {
+    /// Analytic parallel / cross-hatch scanline strokes across the glyph interior.
+    #[default]
+    Hatch,
+    /// PaintTool SAI-style multi-pass tapered pen strokes flowing along each glyph's
+    /// smoothed medial-axis strokes, with rich overlapping core and sharp needle overshoots.
+    StrokeFlow,
+    /// Wet Japanese Sumi-e / Ukiyo-e calligraphy brush along smoothed glyph centerlines:
+    /// juicy pressure-modulated ink core + split dry bristles (`kasure`) at edges and tails.
+    UkiyoBrush,
+}
+
+/// Which stroke ends may shoot razor needles in [`SfxShtackFillMode::StrokeFlow`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SfxShtackFlowOvershoot {
+    /// Only genuine free stroke tips shoot needles; all T/L-junctions stay clean.
+    FreeEnds,
+    /// Free tips plus exterior T/L-junction exits shoot needles; short bridges & counters stay clean.
+    #[default]
+    OuterJunctions,
+    /// Every stroke end shoots needles (raw chaotic sketch).
+    All,
+}
+
+/// Maximum per-endpoint overshoot overrides stored in one [`SfxShtackFillSpec`].
+pub const MAX_SFX_FLOW_OVERRIDES: usize = 256;
+
+/// Per-endpoint overshoot override edited interactively on the canvas via the SFX Gizmo.
+///
+/// Keyed by `(glyph_index, normalized_uv, outgoing_dir)` so overrides survive moving,
+/// resizing, and recolouring the SFX layer without drifting.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SfxFlowEndOverride {
+    /// Index of the glyph in the SFX layout.
+    pub glyph_index: u16,
+    /// Endpoint position normalized to the glyph's warped bounding box (`[0..1, 0..1]`).
+    pub uv: [f32; 2],
+    /// Unit outgoing shoot direction `[dx, dy]` (disambiguates multiple rays at one corner).
+    pub dir: [f32; 2],
+    /// `true` forces a needle ON at this endpoint; `false` forces it OFF.
+    pub enabled: bool,
+}
+
+/// Parameters for an independent interior Shtack fill (`SfxFillSource::ShtackHatch`),
+/// completely decoupled from `SfxLineEffect` (works cleanly with `Clean 0px` outline or mixed
+/// on top of Solid / Screentone via [`SfxBlending`]).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SfxShtackFillSpec {
+    #[serde(default = "default_ink")]
+    pub color: Color,
+    /// Fill strategy (`Hatch` scanlines, `StrokeFlow` SAI pen, or `UkiyoBrush` wet sumi-e).
+    #[serde(default)]
+    pub mode: SfxShtackFillMode,
+    /// Overshoot scope for `StrokeFlow` (`FreeEnds`, `OuterJunctions`, or `All`).
+    #[serde(default)]
+    pub flow_overshoot: SfxShtackFlowOvershoot,
+    /// Per-endpoint needle ON/OFF overrides edited via the canvas Gizmo (`StrokeFlow` mode).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub flow_overrides: Vec<SfxFlowEndOverride>,
+    /// Primary hatch angle in degrees (`-90..=90`, used in `Hatch` mode).
+    #[serde(default = "default_neg35")]
+    pub angle_deg: f32,
+    /// Adds a second crossing hatch pass at `angle_deg + cross_angle_deg` (`Hatch` mode).
+    #[serde(default)]
+    pub cross_hatch: bool,
+    /// Relative angle of the crossing hatch pass (`15..=90` degrees, `Hatch` mode).
+    #[serde(default = "default_65")]
+    pub cross_angle_deg: f32,
+    /// Stroke / stripe density (`10..=100%`, proportional to glyph height / local stem width).
+    #[serde(default = "default_62")]
+    pub density_pct: f32,
+    /// Single stroke width as a PERCENT of glyph height (`0.4..=5.0%`).
+    #[serde(default = "default_1_3")]
+    pub thickness_pct: f32,
+    /// Hand-drawn tilt / bow / spacing roughness (`0..=100%`).
+    #[serde(default = "default_45")]
+    pub roughness_pct: f32,
+    /// How far stroke tips may protrude beyond the letter silhouette as a PERCENT of `gh` (`0..=45%`).
+    /// At `0%` strokes are strictly clipped to the glyph interior.
+    #[serde(default = "default_4")]
+    pub overshoot_pct: f32,
+    /// Paper-grain dry breakup (`0..=100%`).
+    #[serde(default = "default_18")]
+    pub dryness_pct: f32,
+    /// Paper-grain sharpness (`0..=100%`).
+    #[serde(default = "default_70")]
+    pub grain_sharpness_pct: f32,
+    #[serde(default = "default_seed_one")]
+    pub seed: u32,
+}
+
+impl Default for SfxShtackFillSpec {
+    fn default() -> Self {
+        Self {
+            color: default_ink(),
+            mode: SfxShtackFillMode::Hatch,
+            flow_overshoot: SfxShtackFlowOvershoot::OuterJunctions,
+            flow_overrides: Vec::new(),
+            angle_deg: -35.0,
+            cross_hatch: false,
+            cross_angle_deg: 65.0,
+            density_pct: 62.0,
+            thickness_pct: 1.3,
+            roughness_pct: 45.0,
+            overshoot_pct: 4.0,
+            dryness_pct: 18.0,
+            grain_sharpness_pct: 70.0,
+            seed: 1,
+        }
+    }
+}
+
+impl SfxShtackFillSpec {
+    pub fn validate(&mut self) {
+        self.color = finite_color(self.color);
+        self.angle_deg = finite_f32(self.angle_deg, -35.0).clamp(-90.0, 90.0);
+        self.cross_angle_deg = finite_f32(self.cross_angle_deg, 65.0).clamp(15.0, 90.0);
+        self.density_pct = finite_f32(self.density_pct, 62.0).clamp(10.0, 100.0);
+        self.thickness_pct = finite_f32(self.thickness_pct, 1.3).clamp(0.4, 5.0);
+        self.roughness_pct = finite_f32(self.roughness_pct, 45.0).clamp(0.0, 100.0);
+        self.overshoot_pct = finite_f32(self.overshoot_pct, 4.0).clamp(0.0, 45.0);
+        self.dryness_pct = finite_f32(self.dryness_pct, 18.0).clamp(0.0, 100.0);
+        self.grain_sharpness_pct = finite_f32(self.grain_sharpness_pct, 70.0).clamp(0.0, 100.0);
+        self.flow_overrides.retain_mut(|ov| {
+            if !ov.uv[0].is_finite() || !ov.uv[1].is_finite() || !ov.dir[0].is_finite() || !ov.dir[1].is_finite() {
+                return false;
+            }
+            let len = ov.dir[0].hypot(ov.dir[1]);
+            if len < 1e-4 {
+                return false;
+            }
+            ov.uv[0] = ov.uv[0].clamp(-0.5, 1.5);
+            ov.uv[1] = ov.uv[1].clamp(-0.5, 1.5);
+            ov.dir[0] /= len;
+            ov.dir[1] /= len;
+            true
+        });
+        if self.flow_overrides.len() > MAX_SFX_FLOW_OVERRIDES {
+            self.flow_overrides.truncate(MAX_SFX_FLOW_OVERRIDES);
+        }
+    }
+
+    /// Finds the closest matching per-endpoint override for `(glyph_index, uv, dir)`.
+    pub fn find_flow_override_idx(&self, glyph_index: u16, uv: [f32; 2], dir: [f32; 2]) -> Option<usize> {
+        let dl = dir[0].hypot(dir[1]).max(1e-6);
+        let (ux, uy) = (dir[0] / dl, dir[1] / dl);
+        let mut best: Option<(f32, usize)> = None;
+        for (idx, ov) in self.flow_overrides.iter().enumerate() {
+            if ov.glyph_index != glyph_index {
+                continue;
+            }
+            let du = ov.uv[0] - uv[0];
+            let dv = ov.uv[1] - uv[1];
+            let dist = du.hypot(dv);
+            let dot = ov.dir[0] * ux + ov.dir[1] * uy;
+            if dist <= 0.14 && dot >= 0.65 && best.is_none_or(|(bd, _)| dist < bd) {
+                best = Some((dist, idx));
+            }
+        }
+        best.map(|(_, idx)| idx)
+    }
+
+    /// Toggles one stroke endpoint's needle state relative to `default_enabled`.
+    /// Toggling back to `default_enabled` removes the override cleanly.
+    pub fn toggle_flow_override(&mut self, glyph_index: u16, uv: [f32; 2], dir: [f32; 2], default_enabled: bool) {
+        let dl = dir[0].hypot(dir[1]).max(1e-6);
+        let ndir = [dir[0] / dl, dir[1] / dl];
+        if let Some(idx) = self.find_flow_override_idx(glyph_index, uv, ndir) {
+            let next_enabled = !self.flow_overrides[idx].enabled;
+            if next_enabled == default_enabled {
+                self.flow_overrides.remove(idx);
+            } else {
+                self.flow_overrides[idx].enabled = next_enabled;
+            }
+        } else if self.flow_overrides.len() < MAX_SFX_FLOW_OVERRIDES {
+            self.flow_overrides.push(SfxFlowEndOverride {
+                glyph_index,
+                uv,
+                dir: ndir,
+                enabled: !default_enabled,
+            });
+        }
+    }
+}
+
+/// Fill paint for either the base SFX face, a secondary blended fill, or a style pass.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum SfxFillSource {
+    /// Transparent / hollow glyph interior (only outline & halo render).
+    None,
     Solid {
         #[serde(default = "default_black")]
         color: Color,
@@ -669,6 +878,11 @@ pub enum SfxFillSource {
         #[serde(default = "default_one_f32")]
         opacity: f32,
     },
+    /// Independent interior Shtack hatching fill (does not require Shtack outline).
+    ShtackHatch {
+        #[serde(default)]
+        spec: SfxShtackFillSpec,
+    },
 }
 
 impl Default for SfxFillSource {
@@ -680,6 +894,7 @@ impl Default for SfxFillSource {
 impl SfxFillSource {
     pub fn validate(&mut self) {
         match self {
+            Self::None => {}
             Self::Solid { color } => *color = finite_color(*color),
             Self::Gradient { start, end, angle_deg } => {
                 *start = finite_color(*start);
@@ -695,7 +910,83 @@ impl SfxFillSource {
                 spec.line_width = finite_f32(spec.line_width, 1.5).clamp(0.2, 128.0);
                 *opacity = finite_f32(*opacity, 1.0).clamp(0.0, 1.0);
             }
+            Self::ShtackHatch { spec } => spec.validate(),
         }
+    }
+}
+
+/// Per-channel blend mode inside an SFX layer (`Blending` dock tab).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SfxChannelBlend {
+    #[default]
+    Normal,
+    Multiply,
+    Screen,
+    Overlay,
+    Darken,
+    Lighten,
+    Difference,
+    /// Cuts alpha out of the accumulated SFX pixels below (masking / stencil punch-out).
+    Knockout,
+}
+
+/// Independent channel mixing & ordering (`Fill 1`, optional `Fill 2`, `Line`, `Halo`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SfxBlending {
+    pub fill_blend: SfxChannelBlend,
+    #[serde(default = "default_one_f32")]
+    pub fill_opacity: f32,
+    /// Optional second fill composited on top of the primary fill (e.g. `ShtackHatch` over `Screentone`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secondary_fill: Option<SfxFillSource>,
+    pub secondary_blend: SfxChannelBlend,
+    #[serde(default = "default_one_f32")]
+    pub secondary_opacity: f32,
+    pub line_blend: SfxChannelBlend,
+    #[serde(default = "default_one_f32")]
+    pub line_opacity: f32,
+    /// When `true`, the stylized outline renders behind the fill channels instead of on top.
+    pub line_behind_fill: bool,
+    pub halo_blend: SfxChannelBlend,
+    #[serde(default = "default_one_f32")]
+    pub halo_opacity: f32,
+}
+
+impl Default for SfxBlending {
+    fn default() -> Self {
+        Self {
+            fill_blend: SfxChannelBlend::Normal,
+            fill_opacity: 1.0,
+            secondary_fill: None,
+            secondary_blend: SfxChannelBlend::Normal,
+            secondary_opacity: 1.0,
+            line_blend: SfxChannelBlend::Normal,
+            line_opacity: 1.0,
+            line_behind_fill: false,
+            halo_blend: SfxChannelBlend::Normal,
+            halo_opacity: 1.0,
+        }
+    }
+}
+
+impl SfxBlending {
+    pub fn validate(&mut self) {
+        self.fill_opacity = finite_f32(self.fill_opacity, 1.0).clamp(0.0, 1.0);
+        if let Some(sec) = &mut self.secondary_fill {
+            sec.validate();
+            if matches!(sec, SfxFillSource::None) {
+                self.secondary_fill = None;
+            }
+        }
+        self.secondary_opacity = finite_f32(self.secondary_opacity, 1.0).clamp(0.0, 1.0);
+        self.line_opacity = finite_f32(self.line_opacity, 1.0).clamp(0.0, 1.0);
+        self.halo_opacity = finite_f32(self.halo_opacity, 1.0).clamp(0.0, 1.0);
+    }
+
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
     }
 }
 
@@ -1089,6 +1380,8 @@ pub struct SfxData {
     pub liquify_strokes: Vec<SfxLiquifyBrush>,
     pub fill: SfxFillSource,
     #[serde(default)]
+    pub blending: SfxBlending,
+    #[serde(default)]
     pub line_effect: SfxLineEffect,
     #[serde(default)]
     pub dry_brush: SfxDryBrushSpec,
@@ -1121,6 +1414,7 @@ impl Default for SfxData {
             mesh: SfxMeshLattice::default(),
             liquify_strokes: Vec::new(),
             fill: SfxFillSource::Solid { color: default_ink() },
+            blending: SfxBlending::default(),
             line_effect: SfxLineEffect {
                 style: SfxLineStyle::Clean,
                 halo_width_px: 10.0,
@@ -1176,6 +1470,7 @@ impl SfxData {
             s.validate();
         }
         self.fill.validate();
+        self.blending.validate();
         self.line_effect.validate();
         self.dry_brush.validate();
         self.vector_shadow.validate();
@@ -1206,6 +1501,7 @@ impl SfxData {
             leading_scale: self.leading_scale,
             vertical: self.vertical,
             fill: self.fill.clone(),
+            blending: self.blending.clone(),
             line_effect: self.line_effect,
             dry_brush: self.dry_brush,
             vector_shadow: self.vector_shadow,
@@ -1228,6 +1524,7 @@ impl SfxData {
         }
         self.tracking = preset.tracking;
         self.fill = preset.fill.clone();
+        self.blending = preset.blending.clone();
         // A 450 pt SFX applying a 64 pt preset would otherwise blow a 10 px halo up to 70+ px
         // (past `dilate_coverage_approx`'s 64 px cap) and render as a gray fog. Grow sub-linearly
         // and cap during preset application; the manual halo slider stays free up to
@@ -1335,6 +1632,8 @@ pub struct SfxPreset {
     pub vertical: bool,
     pub fill: SfxFillSource,
     #[serde(default)]
+    pub blending: SfxBlending,
+    #[serde(default)]
     pub line_effect: SfxLineEffect,
     #[serde(default)]
     pub dry_brush: SfxDryBrushSpec,
@@ -1364,6 +1663,7 @@ impl SfxPreset {
         self.tracking = finite_f32(self.tracking, 0.0).clamp(-500.0, 2000.0);
         self.leading_scale = finite_f32(self.leading_scale, 1.05).clamp(0.4, 4.0);
         self.fill.validate();
+        self.blending.validate();
         self.line_effect.validate();
         self.dry_brush.validate();
         self.vector_shadow.validate();
@@ -1595,5 +1895,70 @@ mod tests {
         data.validate();
         assert_eq!(data.line_effect.shtack_grain_sharpness_pct, 100.0);
         assert_eq!(data.dry_brush.grain_sharpness_pct, 65.0);
+    }
+
+    #[test]
+    fn shtack_fill_none_and_blending_roundtrip_and_validate() {
+        let mut data = SfxData {
+            fill: SfxFillSource::ShtackHatch {
+                spec: SfxShtackFillSpec {
+                    angle_deg: 200.0,
+                    density_pct: 999.0,
+                    thickness_pct: 0.0,
+                    overshoot_pct: f32::NAN,
+                    cross_hatch: true,
+                    ..SfxShtackFillSpec::default()
+                },
+            },
+            blending: SfxBlending {
+                fill_blend: SfxChannelBlend::Multiply,
+                fill_opacity: 1.5,
+                secondary_fill: Some(SfxFillSource::None),
+                secondary_blend: SfxChannelBlend::Knockout,
+                secondary_opacity: -0.2,
+                line_blend: SfxChannelBlend::Screen,
+                line_opacity: f32::NAN,
+                line_behind_fill: true,
+                halo_blend: SfxChannelBlend::Normal,
+                halo_opacity: 0.75,
+            },
+            ..SfxData::default()
+        };
+        data.validate();
+        let SfxFillSource::ShtackHatch { spec } = &data.fill else {
+            panic!("expected ShtackHatch fill");
+        };
+        assert_eq!(spec.angle_deg, 90.0);
+        assert_eq!(spec.density_pct, 100.0);
+        assert_eq!(spec.thickness_pct, 0.4);
+        assert_eq!(spec.overshoot_pct, 4.0);
+        assert_eq!(data.blending.fill_opacity, 1.0);
+        assert!(data.blending.secondary_fill.is_none(), "None secondary fill normalizes to Option::None");
+        assert_eq!(data.blending.secondary_opacity, 0.0);
+        assert_eq!(data.blending.line_opacity, 1.0);
+        assert!(data.blending.line_behind_fill);
+
+        data.blending.secondary_fill = Some(SfxFillSource::ShtackHatch {
+            spec: SfxShtackFillSpec {
+                mode: SfxShtackFillMode::StrokeFlow,
+                overshoot_pct: 90.0,
+                ..SfxShtackFillSpec::default()
+            },
+        });
+        data.validate();
+        let Some(SfxFillSource::ShtackHatch { spec: sec_spec }) = &data.blending.secondary_fill else {
+            panic!("expected ShtackHatch secondary fill");
+        };
+        assert_eq!(sec_spec.mode, SfxShtackFillMode::StrokeFlow);
+        assert_eq!(sec_spec.overshoot_pct, 45.0);
+        let json = serde_json::to_string(&data).unwrap();
+        let parsed: SfxData = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.fill, data.fill);
+        assert_eq!(parsed.blending, data.blending);
+
+        let hollow = SfxData { fill: SfxFillSource::None, ..SfxData::default() };
+        let hj = serde_json::to_string(&hollow).unwrap();
+        let hp: SfxData = serde_json::from_str(&hj).unwrap();
+        assert_eq!(hp.fill, SfxFillSource::None);
     }
 }

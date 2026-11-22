@@ -156,6 +156,12 @@ pub(super) struct ViewGpu {
     pub(super) frame_data: [f32; VIEW_FLOATS],
 }
 
+impl Drop for ViewGpu {
+    fn drop(&mut self) {
+        self.buffer.destroy();
+    }
+}
+
 pub(super) struct DocTextures {
     pub(super) size: [u32; 2],
     pub(super) format: wgpu::TextureFormat,
@@ -172,6 +178,15 @@ pub(super) struct Tile {
     /// A viewport page ([`GpuCanvas::upload_page`]): its id and reduction factor (document
     /// pixels per texel); `None` for a tile of a whole-document texture set.
     pub(super) page: Option<(u64, u32)>,
+}
+
+impl Drop for Tile {
+    fn drop(&mut self) {
+        // Immediately release VRAM in WebGPU/Dawn instead of waiting for JS GC when pages or
+        // document texture sets are evicted.
+        self.texture.destroy();
+        self._uniform.destroy();
+    }
 }
 
 fn uniform_entry(binding: u32, size: u64, vis: wgpu::ShaderStages, dynamic: bool) -> wgpu::BindGroupLayoutEntry {

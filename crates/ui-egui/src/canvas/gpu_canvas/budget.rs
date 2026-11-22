@@ -52,13 +52,28 @@ pub const REFRESH_DEFERRED: &str = "deferred";
 /// synchronous composite takes a fraction of a second even with many layers.
 pub const DEFER_PX: u64 = 1 << 22;
 
+/// GPU bytes one document's display texture set may take on `wasm32` before switching to
+/// screen-space ViewCulling (`viewport_pages`). Normal manga pages (up to ~4000×6000 px ≈ 128 MB)
+/// stay on a single whole-document texture set, while 12 000 × 17 000 px (204 MP ≈ 1.09 GB)
+/// automatically switches to 512×512 viewport pages (~6–12 MB VRAM) instead of blowing the browser
+/// WebGPU IPC / WASM32 memory budget.
+pub const WASM_CANVAS_BUDGET: u64 = 256 << 20;
+
 /// GPU bytes one document's display texture set (every tile and mip level) may take: a quarter
 /// of physical memory (`ram`; 16 GB assumed when unknown) and at most [`vram_share`] of a
-/// discrete GPU's own memory (`vram`), at least [`MIN_GPU_BUDGET`]. The set covers the whole
-/// canvas at full resolution, so its size follows the declared canvas, not the layer pixels; a
-/// larger canvas is drawn on the (reduced) CPU canvas instead (#2934).
-pub fn canvas_budget(ram: Option<u64>, vram: Option<u64>) -> u64 {
+/// discrete GPU's own memory (`vram`), at least [`MIN_GPU_BUDGET`]. On `wasm32`, capped at
+/// [`WASM_CANVAS_BUDGET`] so large canvases engage `viewport_pages` ViewCulling.
+pub fn canvas_budget_for_target(ram: Option<u64>, vram: Option<u64>, wasm: bool) -> u64 {
+    if wasm {
+        return WASM_CANVAS_BUDGET;
+    }
     (ram.unwrap_or(16 << 30) / 4).min(vram.map_or(u64::MAX, vram_share)).max(MIN_GPU_BUDGET)
+}
+
+/// GPU bytes one document's display texture set (every tile and mip level) may take on the
+/// current target (see [`canvas_budget_for_target`]).
+pub fn canvas_budget(ram: Option<u64>, vram: Option<u64>) -> u64 {
+    canvas_budget_for_target(ram, vram, cfg!(target_arch = "wasm32"))
 }
 
 /// GPU bytes of a display texture set for a `size` canvas in `tile`-sided tiles of `bpp` bytes
@@ -243,4 +258,34 @@ pub(super) fn drm_video_memory(drm: &std::path::Path, vendor: u32, device: u32) 
 #[cfg(not(any(target_os = "linux", windows)))]
 fn detect_video_memory(_vendor: u32, _device: u32) -> Option<u64> {
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::canvas::gpu_canvas::DEFAULT_TILE;
+
+    #[test]
+    fn wasm_canvas_budget_routes_12k_to_viewport_pages_and_keeps_normal_pages_whole() {
+        let wasm_budget = canvas_budget_for_target(None, None, true);
+        assert_eq!(wasm_budget, WASM_CANVAS_BUDGET);
+
+        // Normal 4000x6000 manga page (~128 MB with mips) fits the whole-document texture set.
+        let normal_bytes = canvas_texture_bytes([4_000, 6_000], DEFAULT_TILE, 4);
+        assert!(
+            normal_bytes <= wasm_budget,
+            "4000x6000 ({normal_bytes} B) should fit wasm budget ({wasm_budget} B)"
+        );
+
+        // Giant 12000x17000 (2400 DPI, ~1.09 GB with mips) exceeds wasm budget -> ViewCulling!
+        let giant_bytes = canvas_texture_bytes([12_000, 17_000], DEFAULT_TILE, 4);
+        assert!(
+            giant_bytes > wasm_budget,
+            "12000x17000 ({giant_bytes} B) must exceed wasm budget ({wasm_budget} B) to activate viewport_pages"
+        );
+
+        // Native budget with unknown RAM/VRAM retains desktop behavior (4 GB).
+        let native_budget = canvas_budget_for_target(None, None, false);
+        assert_eq!(native_budget, 4 << 30);
+    }
 }

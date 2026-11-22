@@ -30,9 +30,16 @@ pub(crate) const PAGE_SIDE: u32 = 512;
 const MAX_PAGES: usize = 256;
 /// Pages rendering at once, over all views and documents.
 const MAX_JOBS: usize = 2;
+/// Synchronous pages rendered per frame on `wasm32` so 12K×17K zooms/edits stay responsive
+/// without stalling the single browser UI thread or oversizing WebGPU IPC bursts.
+#[cfg(target_arch = "wasm32")]
+const WASM_PAGES_PER_FRAME: usize = 4;
 /// Pages uploaded per frame, and the texel bytes they may take: staging stays bounded however
 /// many pages finish at once.
+#[cfg(not(target_arch = "wasm32"))]
 const UPLOADS_PER_FRAME: usize = 2;
+#[cfg(target_arch = "wasm32")]
+const UPLOADS_PER_FRAME: usize = WASM_PAGES_PER_FRAME;
 const UPLOAD_BYTES_PER_FRAME: u64 = 32 << 20;
 /// The coarsest reduction (document pixels per texel).
 const MAX_FACTOR: u32 = 1 << 16;
@@ -213,6 +220,9 @@ pub(crate) struct Stream {
     /// and the pages it wanted, so one window's frame doesn't cancel, drop or evict the pages
     /// another window still shows.
     views: HashMap<u64, (u64, Vec<PageId>)>,
+    /// True when the per-frame spawn cap stopped before all wanted pages were queued (keeps
+    /// `busy()` true on `wasm32` after synchronous pages are drained in the same frame).
+    has_pending_work: bool,
     pub stats: Stats,
 }
 
@@ -232,6 +242,7 @@ impl Default for Stream {
             synced: Vec::new(),
             health: (0, 0),
             views: HashMap::new(),
+            has_pending_work: false,
             stats: Stats::default(),
         }
     }
@@ -333,17 +344,7 @@ impl Stream {
         self.views.values().any(|(at, pages)| *at != self.clock && *at + VIEW_TTL >= self.clock && pages.contains(page))
     }
 
-    /// Take finished work, cancel work for pages not `wanted`, and start work for wanted pages
-    /// that are missing, dirty or still a quick preview (`faithful`: the document has a quick
-    /// preview at reductions), as `spawn(page, epoch, exact, cancel, region)` allows: `region`, the
-    /// part of a held page to render again ([`Page::partial`]), or the whole page.
-    pub fn update(&mut self, wanted: &[PageId], faithful: bool, mut spawn: impl FnMut(PageId, u64, bool, Arc<AtomicBool>, Option<DRect>) -> bool) {
-        self.clock += 1;
-        let clock = self.clock;
-        self.views.retain(|_, (at, _)| *at + VIEW_TTL >= clock);
-        // What any window shows: work and results for another window's pages are kept.
-        let want: HashSet<PageId> =
-            wanted.iter().copied().chain(self.views.values().filter(|(at, _)| *at != clock).flat_map(|(_, pages)| pages.iter().copied())).collect();
+    fn drain_rx(&mut self, want: &HashSet<PageId>) {
         while let Ok(d) = self.rx.try_recv() {
             let Some(i) = self.jobs.iter().position(|j| j.page == d.page && j.epoch == d.epoch) else { continue };
             // Cancelled work ends in an interruption, not a failure: the page is asked for again.
@@ -368,6 +369,21 @@ impl Stream {
                 }
             }
         }
+    }
+
+    /// Take finished work, cancel work for pages not `wanted`, and start work for wanted pages
+    /// that are missing, dirty or still a quick preview (`faithful`: the document has a quick
+    /// preview at reductions), as `spawn(page, epoch, exact, cancel, region)` allows: `region`, the
+    /// part of a held page to render again ([`Page::partial`]), or the whole page.
+    pub fn update(&mut self, wanted: &[PageId], faithful: bool, mut spawn: impl FnMut(PageId, u64, bool, Arc<AtomicBool>, Option<DRect>) -> bool) {
+        self.clock += 1;
+        self.has_pending_work = false;
+        let clock = self.clock;
+        self.views.retain(|_, (at, _)| *at + VIEW_TTL >= clock);
+        // What any window shows: work and results for another window's pages are kept.
+        let want: HashSet<PageId> =
+            wanted.iter().copied().chain(self.views.values().filter(|(at, _)| *at != clock).flat_map(|(_, pages)| pages.iter().copied())).collect();
+        self.drain_rx(&want);
         for j in &self.jobs {
             if !want.contains(&j.page) && !j.cancel.swap(true, Ordering::Relaxed) {
                 self.stats.cancelled += 1;
@@ -381,11 +397,12 @@ impl Stream {
         }
         let current = |s: &Self, p: &PageId| s.pages.get(p).is_some_and(|q| !q.dirty) || s.ready.iter().any(|d| d.page == *p);
         let all_shown = wanted.iter().all(|p| current(self, p));
+        #[cfg(target_arch = "wasm32")]
+        let job_cap = WASM_PAGES_PER_FRAME;
+        #[cfg(not(target_arch = "wasm32"))]
+        let job_cap = MAX_JOBS;
+
         for p in wanted {
-            let live = self.jobs.iter().filter(|j| !j.cancel.load(Ordering::Relaxed)).count();
-            if live >= MAX_JOBS {
-                break;
-            }
             let epoch = self.epoch(*p);
             if self.jobs.iter().any(|j| j.page == *p && j.epoch == epoch) || self.failed.contains(&(*p, epoch)) {
                 continue;
@@ -396,13 +413,25 @@ impl Stream {
             if have.is_some_and(|e| e || !exact) {
                 continue;
             }
+            let live = self.jobs.iter().filter(|j| !j.cancel.load(Ordering::Relaxed)).count();
+            if live >= job_cap {
+                self.has_pending_work = true;
+                break;
+            }
             let region = self.pages.get(p).filter(|q| q.dirty).and_then(|q| q.partial);
             let cancel = Arc::new(AtomicBool::new(false));
             if !spawn(*p, epoch, exact || region.is_some(), cancel.clone(), region) {
+                self.has_pending_work = true;
                 break;
             }
             self.jobs.push(Job { page: *p, epoch, cancel });
         }
+        // On `wasm32`, `spawn` completes synchronously into `self.rx`. Draining immediately hands
+        // freshly rendered pages to `take_uploads` in the SAME frame (no 1-frame stale ghost when
+        // clearing or committing an SFX layer under the live GPU overlay).
+        #[cfg(target_arch = "wasm32")]
+        self.drain_rx(&want);
+
         self.stats.wanted = wanted.len();
         self.stats.ready = wanted.iter().filter(|p| self.pages.contains_key(p)).count();
         self.stats.jobs = self.jobs.len();
@@ -425,7 +454,7 @@ impl Stream {
 
     /// Whether work is outstanding (the view repaints until it is done).
     pub fn busy(&self) -> bool {
-        !self.jobs.is_empty() || !self.ready.is_empty()
+        !self.jobs.is_empty() || !self.ready.is_empty() || self.has_pending_work
     }
 
     /// The finished pages to upload this frame: at most [`UPLOADS_PER_FRAME`], and

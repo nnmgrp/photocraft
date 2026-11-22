@@ -62,6 +62,33 @@ pub(super) fn catch_gpu_errors<T>(device: &wgpu::Device, f: impl FnOnce() -> T) 
     (out, error)
 }
 
+/// Maximum bytes passed to a single `queue.write_texture` call so browser WebGPU IPC
+/// (`WebGPUChild` shared memory) never rejects large uploads with `InvalidStateError`.
+#[cfg(target_arch = "wasm32")]
+const MAX_WRITE_TEXTURE_BYTES: u64 = 8 << 20;
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_WRITE_TEXTURE_BYTES: u64 = 64 << 20;
+
+/// Partitions `0..height` into contiguous `(row_offset, strip_height)` horizontal strips such
+/// that each strip's slice spans at most `max_bytes` (always at least 1 row).
+pub(super) fn write_texture_strips(height: u32, stride_bytes: u64, max_bytes: u64) -> Vec<(u32, u32)> {
+    if height == 0 {
+        return Vec::new();
+    }
+    let rows_per_strip = match max_bytes.checked_div(stride_bytes) {
+        None => height,
+        Some(cap) => u32::try_from(cap.max(1)).unwrap_or(u32::MAX).min(height),
+    };
+    let mut out = Vec::with_capacity(height.div_ceil(rows_per_strip) as usize);
+    let mut y = 0u32;
+    while y < height {
+        let h = (height - y).min(rows_per_strip);
+        out.push((y, h));
+        y += h;
+    }
+    out
+}
+
 impl DocTextures {
     /// The texture set for a `size` canvas, or `None` (nothing created) when it doesn't fit
     /// the canvas budget or the GPU's memory. A set the GPU can't hold (a 3 GP canvas is 16 GB
@@ -130,9 +157,11 @@ impl DocTextures {
     }
 
     /// Write `size` pixels at document `origin` from `texels` (in the texture format, row stride
-    /// `stride` pixels) into every overlapping tile's level 0.
+    /// `stride` pixels) into every overlapping tile's level 0, sliced into bounded horizontal
+    /// strips so each `queue.write_texture` call stays within [`MAX_WRITE_TEXTURE_BYTES`].
     pub(super) fn write(&self, queue: &wgpu::Queue, origin: [u32; 2], size: [u32; 2], stride: u32, texels: &[u8]) {
         let bpp = texel_bytes(self.format);
+        let stride_bytes = u64::from(stride) * bpp;
         let (x0, y0, x1, y1) = (origin[0], origin[1], origin[0] + size[0], origin[1] + size[1]);
         for t in &self.tiles {
             let [tx, ty, tw, th] = t.rect;
@@ -140,18 +169,32 @@ impl DocTextures {
             if ix0 >= ix1 || iy0 >= iy1 {
                 continue;
             }
-            let offset = ((iy0 - y0) as u64 * stride as u64 + (ix0 - x0) as u64) * bpp;
-            queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &t.texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d { x: ix0 - tx, y: iy0 - ty, z: 0 },
-                    aspect: wgpu::TextureAspect::All,
-                },
-                texels,
-                wgpu::TexelCopyBufferLayout { offset, bytes_per_row: Some(stride * bpp as u32), rows_per_image: Some(iy1 - iy0) },
-                wgpu::Extent3d { width: ix1 - ix0, height: iy1 - iy0, depth_or_array_layers: 1 },
-            );
+            let copy_w = ix1 - ix0;
+            let copy_h = iy1 - iy0;
+            let row_copy_bytes = u64::from(copy_w) * bpp;
+            let col_start = u64::from(ix0 - x0) * bpp;
+            for (sy, sh) in write_texture_strips(copy_h, stride_bytes, MAX_WRITE_TEXTURE_BYTES) {
+                let first_row = u64::from(iy0 + sy - y0);
+                let last_row = first_row + u64::from(sh - 1);
+                let slice_start = (first_row * stride_bytes + col_start) as usize;
+                let slice_end = (last_row * stride_bytes + col_start + row_copy_bytes) as usize;
+                let Some(strip) = texels.get(slice_start..slice_end) else { continue };
+                queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &t.texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d { x: ix0 - tx, y: iy0 + sy - ty, z: 0 },
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    strip,
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: (sh > 1).then_some(stride * bpp as u32),
+                        rows_per_image: Some(sh),
+                    },
+                    wgpu::Extent3d { width: copy_w, height: sh, depth_or_array_layers: 1 },
+                );
+            }
         }
     }
 
@@ -229,5 +272,44 @@ impl DocTextures {
             }
         }
         queue.submit([encoder.finish()]);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn write_texture_strips_partitions_height_within_byte_cap() {
+        // 8192 px wide RGBA8 (32 KiB/row) × 8192 px tall (256 MiB total) capped at 8 MiB/strip.
+        let stride_bytes = 8192u64 * 4;
+        let max_bytes = 8u64 << 20;
+        let strips = write_texture_strips(8192, stride_bytes, max_bytes);
+        assert_eq!(strips.len(), 32, "256 MiB / 8 MiB = 32 strips");
+        let mut covered = 0u32;
+        for (sy, sh) in &strips {
+            assert_eq!(*sy, covered, "strips must be contiguous with no gaps or overlaps");
+            assert!(*sh >= 1);
+            assert!(u64::from(*sh) * stride_bytes <= max_bytes, "strip must stay within byte cap");
+            covered += *sh;
+        }
+        assert_eq!(covered, 8192);
+
+        // Odd remainder height: 1000 rows at 48 KiB/row (~48 MiB) capped at 8 MiB -> 6 full + 1 tail.
+        let odd_stride = 12_000u64 * 4;
+        let odd_strips = write_texture_strips(1000, odd_stride, max_bytes);
+        assert!(odd_strips.len() >= 6);
+        let mut y = 0u32;
+        for (sy, sh) in &odd_strips {
+            assert_eq!(*sy, y);
+            assert!(u64::from(*sh) * odd_stride <= max_bytes);
+            y += *sh;
+        }
+        assert_eq!(y, 1000);
+
+        // Edge case: a single row larger than max_bytes still yields 1-row strips (never stalls).
+        let huge_row = write_texture_strips(3, 16 << 20, 8 << 20);
+        assert_eq!(huge_row, vec![(0, 1), (1, 1), (2, 1)]);
+        assert!(write_texture_strips(0, stride_bytes, max_bytes).is_empty());
     }
 }

@@ -35,16 +35,25 @@ pub struct ScrubOutcome {
     pub is_scrubbing: bool,
 }
 
+/// In-progress `Tool::Sfx` drag-to-create rectangle in document coordinates.
+#[derive(Clone, Copy, Debug)]
+pub struct SfxCreateDrag {
+    pub start_doc: [f64; 2],
+    pub cur_doc: [f64; 2],
+    pub shift: bool,
+}
+
 mod native {
     use std::collections::HashMap;
     use std::sync::Arc;
 
     use photocraft_color::PixelFormat;
-    use photocraft_doc::sfx::{reset_sfx_warps_for_new_layer, scale_new_sfx_for_document};
+    use photocraft_doc::sfx::{MAX_SFX_SIZE_PT, SfxData, SfxWarpMode, reset_sfx_warps_for_new_layer, scale_new_sfx_for_document};
     use photocraft_doc::vector::{BalloonLineStyle, BalloonTextFitMode, LiveBalloon, LiveBalloonBody, LiveBalloonGroup};
     use photocraft_doc::{DocId, Document, Fill, Layer, LayerContent, LayerId, LiveShape, ShapeLayer};
     use photocraft_engine::DocState;
     use photocraft_engine::cmd::manga_cmds::typesetter_adapter;
+    use photocraft_manga_core::sfx_geom::build_sfx_geometry;
     use photocraft_manga_core::snow_knuth_plass::{bind_orphan_prepositions, knuth_plass_bubble_wrap_ext, knuth_plass_split_overflow, measure_token_width};
     use photocraft_manga_core::snow_typesetter::{
         TextStylePreset, TplImportReport, TypesetterState, contour_variants, detect_bubble_chambers, detect_speech_bubble_bounds_in_surface,
@@ -81,7 +90,7 @@ mod native {
     use crate::notices;
     use crate::state::{Panels, Tool};
 
-    use super::{SaiCurveParams, ScrubOutcome};
+    use super::{SaiCurveParams, ScrubOutcome, SfxCreateDrag};
 
     /// Suitcase manga state held on [`PhotocraftApp`].
     #[derive(Default)]
@@ -91,6 +100,8 @@ mod native {
         pub typesetter_text_shape_source: Option<u64>,
         pub typesetter_paste_fingerprint: Option<u64>,
         pub typesetter_paste_on_click_was_enabled: bool,
+        /// Active `Tool::Sfx` drag-to-create box (document coordinates).
+        pub sfx_create_drag: Option<SfxCreateDrag>,
     }
 
     /// Canonical order matches [`Group::Manga::tabs`].
@@ -1179,7 +1190,14 @@ mod native {
         let doc = st.doc.clone();
         let active_layer = st.active_layer;
         let tool_is_sfx = app.active_tool() == Tool::Sfx;
+        if !tool_is_sfx {
+            app.manga.sfx_create_drag = None;
+        }
         let panel_open = is_panel_active(app, "sfx");
+        let press_pt = match ev {
+            ToolEvent::Down { x, y, .. } => Some([x, y]),
+            _ => None,
+        };
         let out = {
             let view = sfx_view_from(&doc, active_layer, tool_is_sfx, panel_open, xf);
             app.manga.ui.sfx_gizmo.sync_target(&view);
@@ -1190,16 +1208,29 @@ mod native {
             app.manga.ui.sfx_panel.synced_data = Some(updated);
         }
         dispatch_commands(app, out.commands);
-        out.handled
+        if out.handled {
+            return true;
+        }
+        // A press that missed every SFX gizmo handle arms a drag-to-create box instead of
+        // instantly creating a layer on pointer-down (the layer is created on release).
+        if let Some(pt) = press_pt.filter(|_| tool_is_sfx) {
+            return sfx_canvas_down(app, pt, mods);
+        }
+        false
     }
 
     /// Cancels an active SFX canvas drag on Escape, returning true when consumed.
     pub fn sfx_escape_key(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
-        if !app.manga.ui.sfx_gizmo.has_active_drag() {
+        let has_create_drag = app.manga.sfx_create_drag.is_some();
+        if !app.manga.ui.sfx_gizmo.has_active_drag() && !has_create_drag {
             return false;
         }
         if !ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             return false;
+        }
+        app.manga.sfx_create_drag = None;
+        if !app.manga.ui.sfx_gizmo.has_active_drag() {
+            return true;
         }
         sfx_escape(app, ctx);
         true
@@ -1207,10 +1238,14 @@ mod native {
 
     /// Cancels any active SFX gizmo drag if Escape was pressed this frame.
     pub fn sfx_escape(app: &mut PhotocraftApp, ctx: &egui::Context) {
-        if !app.session.seam_flags().canvas_gizmos || !app.manga.ui.sfx_gizmo.has_active_drag() {
+        if !app.session.seam_flags().canvas_gizmos {
             return;
         }
         if !ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            return;
+        }
+        app.manga.sfx_create_drag = None;
+        if !app.manga.ui.sfx_gizmo.has_active_drag() {
             return;
         }
         let Some(xf) = ViewXform::active(app) else { return };
@@ -1246,30 +1281,146 @@ mod native {
         }
     }
 
-    /// Creates a new SFX layer (or switches selection) when pressing on canvas with `Tool::Sfx`.
-    pub fn sfx_canvas_press(app: &mut PhotocraftApp, doc_pt: [f64; 2]) {
+    fn sfx_hit_layer(app: &PhotocraftApp, doc_pt: [f64; 2]) -> Option<LayerId> {
         let px = doc_pt[0].round() as i32;
         let py = doc_pt[1].round() as i32;
-        if let Some(st) = app.session.active()
-            && let Some(hit_id) = st.doc.layers.iter().rev().find(|l| l.visible && l.sfx.is_some() && layer_contains_pt(l, px, py)).map(|l| l.id)
-        {
-            if st.active_layer != Some(hit_id) {
-                let _ = app.run("layer.select", json!({ "layer": hit_id.0 }));
-            }
-            return;
-        }
+        let st = app.session.active()?;
+        st.doc
+            .layers
+            .iter()
+            .rev()
+            .find(|l| l.visible && l.sfx.is_some() && layer_contains_pt(l, px, py))
+            .map(|l| l.id)
+    }
+
+    /// Captures a fresh SFX draft from the panel, clearing stale per-instance warps and scaling
+    /// unbound tool defaults to the document (already-synced drafts carry scaled values).
+    fn new_sfx_from_draft(app: &PhotocraftApp) -> Option<SfxData> {
         let mut sfx = app.manga.ui.sfx_panel.draft.clone();
-        sfx.origin = doc_pt;
-        // A panel draft can still hold the warps of the previously selected layer. A new layer
-        // starts with clean geometry; only its style/text settings carry over.
         reset_sfx_warps_for_new_layer(&mut sfx);
-        // Scale fresh (unbound) tool defaults to the document so a 600-DPI page is not lettered
-        // with microscopic type. An already-synced draft carries scaled values from its layer.
+        sfx.warp_mode = SfxWarpMode::Resize;
         if app.manga.ui.sfx_panel.bound_target.is_none()
             && let Some(st) = app.session.active()
         {
             scale_new_sfx_for_document(&mut sfx, st.doc.size.width, st.doc.size.height);
         }
+        Some(sfx)
+    }
+
+    fn sfx_doc_dpi(app: &PhotocraftApp) -> f32 {
+        app.session.active().map_or(72.0, |st| st.doc.resolution_dpi.max(1.0))
+    }
+
+    /// Sizes and positions a fresh SFX so its natural layout fills `rect` (`[x0,y0,x1,y1]`).
+    ///
+    /// Without `stretch_to_box` the word keeps its aspect ratio and is centered inside the box;
+    /// with it, `free_transform.scale_x/scale_y` stretch the word to the exact box aspect.
+    pub fn fit_sfx_to_rect(sfx: &mut SfxData, rect: [f64; 4], dpi: f32, stretch_to_box: bool) {
+        let bw = (rect[2] - rect[0]).max(1.0);
+        let bh = (rect[3] - rect[1]).max(1.0);
+        reset_sfx_warps_for_new_layer(sfx);
+        sfx.warp_mode = SfxWarpMode::Resize;
+        sfx.free_transform.scale_x = 1.0;
+        sfx.free_transform.scale_y = 1.0;
+        sfx.size_pt = 100.0;
+        sfx.origin = [0.0, 0.0];
+        sfx.validate();
+
+        let natural = build_sfx_geometry(sfx, &mut text_engine(), dpi);
+        let nat_w = (natural.rest_box[2] - natural.rest_box[0]).max(1.0);
+        let nat_h = (natural.rest_box[3] - natural.rest_box[1]).max(1.0);
+        let ratio = (bw / nat_w).min(bh / nat_h);
+        sfx.size_pt = (100.0 * ratio).clamp(8.0, f64::from(MAX_SFX_SIZE_PT)) as f32;
+        sfx.validate();
+
+        // Re-measure at the fitted size: font metrics are not perfectly linear in size_pt.
+        let fitted = build_sfx_geometry(sfx, &mut text_engine(), dpi);
+        let fit_w = (fitted.rest_box[2] - fitted.rest_box[0]).max(1.0);
+        let fit_h = (fitted.rest_box[3] - fitted.rest_box[1]).max(1.0);
+        if stretch_to_box {
+            sfx.free_transform.scale_x = (bw / fit_w).clamp(0.05, 32.0);
+            sfx.free_transform.scale_y = (bh / fit_h).clamp(0.05, 32.0);
+        }
+        let fit_cx = (fitted.rest_box[0] + fitted.rest_box[2]) * 0.5;
+        let fit_cy = (fitted.rest_box[1] + fitted.rest_box[3]) * 0.5;
+        sfx.origin = [rect[0] + bw * 0.5 - fit_cx, rect[1] + bh * 0.5 - fit_cy];
+        sfx.validate();
+    }
+
+    fn text_engine() -> std::sync::MutexGuard<'static, photocraft_text::TextEngine> {
+        match photocraft_text::shared().lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+
+    /// `Tool::Sfx` press: select a hit layer, otherwise arm a drag-to-create box. Returns whether
+    /// the press was consumed by an existing layer.
+    pub fn sfx_canvas_down(app: &mut PhotocraftApp, doc_pt: [f64; 2], mods: egui::Modifiers) -> bool {
+        if let Some(hit) = sfx_hit_layer(app, doc_pt) {
+            if app.session.active().is_some_and(|st| st.active_layer != Some(hit)) {
+                let _ = app.run("layer.select", json!({ "layer": hit.0 }));
+            }
+            app.manga.sfx_create_drag = None;
+            return true;
+        }
+        app.manga.sfx_create_drag = Some(SfxCreateDrag { start_doc: doc_pt, cur_doc: doc_pt, shift: mods.shift });
+        false
+    }
+
+    pub fn sfx_create_move(app: &mut PhotocraftApp, doc_pt: [f64; 2], mods: egui::Modifiers) {
+        if let Some(drag) = app.manga.sfx_create_drag.as_mut() {
+            drag.cur_doc = doc_pt;
+            drag.shift = mods.shift;
+        }
+    }
+
+    fn sfx_create_from_rect(app: &mut PhotocraftApp, rect: [f64; 4], stretch: bool) {
+        let Some(mut sfx) = new_sfx_from_draft(app) else { return };
+        fit_sfx_to_rect(&mut sfx, rect, sfx_doc_dpi(app), stretch);
+        let _ = app.run("sfx.create", json!({ "sfx": sfx }));
+    }
+
+    /// Finishes a `Tool::Sfx` drag: a plain click fits to the active selection (or creates at the
+    /// press point), a dragged box fits the SFX to the rectangle (Shift stretches to its aspect).
+    pub fn sfx_create_finish(app: &mut PhotocraftApp, doc_pt: [f64; 2], mods: egui::Modifiers) {
+        let Some(drag) = app.manga.sfx_create_drag.take() else { return };
+        let stretch = drag.shift || mods.shift;
+        let x0 = drag.start_doc[0].min(doc_pt[0]);
+        let x1 = drag.start_doc[0].max(doc_pt[0]);
+        let y0 = drag.start_doc[1].min(doc_pt[1]);
+        let y1 = drag.start_doc[1].max(doc_pt[1]);
+        let (bw, bh) = (x1 - x0, y1 - y0);
+        let zoom = f64::from(ViewXform::active(app).map_or(1.0, |xf| xf.zoom.max(0.05)));
+        let screen_span = bw.max(bh) * zoom;
+
+        if screen_span < 8.0 || bw < 8.0 || bh < 8.0 {
+            let sel_bounds = app
+                .session
+                .active()
+                .and_then(|st| st.doc.selection.as_ref())
+                .map(|s| s.content_bounds())
+                .filter(|b| !b.is_empty());
+            if let Some(b) = sel_bounds {
+                sfx_create_from_rect(app, [b.x0 as f64, b.y0 as f64, b.x1 as f64, b.y1 as f64], false);
+            } else {
+                sfx_canvas_press(app, drag.start_doc);
+            }
+            return;
+        }
+        sfx_create_from_rect(app, [x0, y0, x1, y1], stretch);
+    }
+
+    /// Creates a new SFX layer (or switches selection) when pressing on canvas with `Tool::Sfx`.
+    pub fn sfx_canvas_press(app: &mut PhotocraftApp, doc_pt: [f64; 2]) {
+        if let Some(hit) = sfx_hit_layer(app, doc_pt) {
+            if app.session.active().is_some_and(|st| st.active_layer != Some(hit)) {
+                let _ = app.run("layer.select", json!({ "layer": hit.0 }));
+            }
+            return;
+        }
+        let Some(mut sfx) = new_sfx_from_draft(app) else { return };
+        sfx.origin = doc_pt;
         sfx.validate();
         let _ = app.run("sfx.create", json!({ "sfx": sfx }));
     }
@@ -1287,9 +1438,10 @@ mod native {
         let prev = active_mode;
         ui.label("SFX Mode:");
         for (mode, label) in [
-            (SfxWarpMode::FreeTransform, "Transform"),
-            (SfxWarpMode::PerGlyph, "Per-Glyph"),
-            (SfxWarpMode::MeshLattice, "Mesh"),
+            (SfxWarpMode::Resize, "Resize"),
+            (SfxWarpMode::FreeTransform, "FT 4-Corner + Дуга"),
+            (SfxWarpMode::PerGlyph, "По точкам (Alt)"),
+            (SfxWarpMode::MeshLattice, "Mesh Grid"),
             (SfxWarpMode::LiquifyField, "Liquify"),
         ] {
             ui.selectable_value(&mut active_mode, mode, label);
@@ -1367,6 +1519,37 @@ mod native {
         balloon_gizmo::draw(painter, &app.manga.ui.balloon_gizmo, &bview);
         let sfx_v = sfx_view_from(&st.doc, st.active_layer, app.active_tool() == Tool::Sfx, is_panel_active(app, "sfx"), xf);
         photocraft_manga_ui::sfx_gizmo::draw(painter, &app.manga.ui.sfx_gizmo, &sfx_v);
+        if let Some(drag) = app.manga.sfx_create_drag {
+            draw_sfx_create_marquee(painter, xf, drag);
+        }
+    }
+
+    /// Crisp dashed selection box + `W × H px` badge for an in-progress `Tool::Sfx` drag.
+    fn draw_sfx_create_marquee(painter: &egui::Painter, xf: &ViewXform, drag: SfxCreateDrag) {
+        let a = xf.to_screen(drag.start_doc[0] as f32, drag.start_doc[1] as f32);
+        let b = xf.to_screen(drag.cur_doc[0] as f32, drag.cur_doc[1] as f32);
+        let r = egui::Rect::from_two_pos(a, b);
+        if r.width() < 4.0 || r.height() < 4.0 {
+            return;
+        }
+        let t = manga_theme::Tokens::get(painter.ctx());
+        let stroke = egui::Stroke::new(1.0, t.accent);
+        let dash = |p0: egui::Pos2, p1: egui::Pos2| {
+            let len = p0.distance(p1);
+            let steps = (len / 10.0).floor() as usize;
+            for i in 0..steps {
+                let s = p0 + (p1 - p0) * ((i as f32 * 10.0) / len.max(1.0));
+                let e = p0 + (p1 - p0) * ((i as f32 * 10.0 + 6.0) / len.max(1.0));
+                painter.line_segment([s, e], stroke);
+            }
+        };
+        dash(r.left_top(), r.right_top());
+        dash(r.right_top(), r.right_bottom());
+        dash(r.right_bottom(), r.left_bottom());
+        dash(r.left_bottom(), r.left_top());
+        let zoom = f64::from(xf.zoom.max(0.05));
+        let label = format!("{} × {} px", ((r.width() as f64) / zoom).round() as i32, ((r.height() as f64) / zoom).round() as i32);
+        painter.text(r.left_top() - egui::vec2(0.0, 4.0), egui::Align2::LEFT_BOTTOM, label, egui::FontId::proportional(11.0), t.text);
     }
 
     /// Removes a hovered balloon tail on Delete/Backspace when the Balloon tool is active.
@@ -3350,6 +3533,97 @@ mod native {
             assert!(data.mesh.is_identity(), "mesh offsets must be reset");
         }
 
+        /// A dragged rectangle fits the SFX size to the box, keeps the default warp mode and
+        /// centers the word inside the drawn box.
+        #[test]
+        fn manga_sfx_drag_to_create_fits_size_pt_to_box() {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
+            app.run("file.new", json!({ "width": 256, "height": 256 })).unwrap();
+            app.manga.ui.sfx_panel.draft.text = "BAM".into();
+            app.manga.ui.sfx_panel.draft.validate();
+
+            let start = [20.0_f64, 24.0];
+            let end = [180.0_f64, 124.0];
+            assert!(!sfx_canvas_down(&mut app, start, egui::Modifiers::NONE));
+            sfx_create_move(&mut app, end, egui::Modifiers::NONE);
+            sfx_create_finish(&mut app, end, egui::Modifiers::NONE);
+            assert!(app.manga.sfx_create_drag.is_none(), "finishing clears the drag state");
+
+            let st = app.session.active().unwrap();
+            let sfx = st.doc.layers.iter().filter_map(|l| l.sfx.as_deref()).next().expect("dragged SFX layer");
+            assert_eq!(sfx.warp_mode, SfxWarpMode::Resize);
+            assert!(sfx.origin[0] >= start[0] - 1.0 && sfx.origin[1] >= start[1] - 1.0, "word must sit in the drawn box");
+            assert!(sfx.size_pt > 10.0 && sfx.size_pt < 400.0, "size_pt must be fitted, got {}", sfx.size_pt);
+
+            let geom = build_sfx_geometry(sfx, &mut text_engine(), st.doc.resolution_dpi.max(1.0));
+            let cx = (geom.rest_box[0] + geom.rest_box[2]) * 0.5;
+            let cy = (geom.rest_box[1] + geom.rest_box[3]) * 0.5;
+            assert!((cx - (start[0] + end[0]) * 0.5).abs() < 4.0, "word must be centered in the box: {cx}");
+            assert!((cy - (start[1] + end[1]) * 0.5).abs() < 4.0, "word must be centered in the box: {cy}");
+            assert!((geom.rest_box[2] - geom.rest_box[0]) <= end[0] - start[0] + 4.0);
+            assert!((geom.rest_box[3] - geom.rest_box[1]) <= end[1] - start[1] + 4.0);
+        }
+
+        /// With Shift the fitted SFX is stretched to the exact box aspect through `free_transform`.
+        #[test]
+        fn manga_sfx_drag_to_create_shift_stretches_to_box_aspect() {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
+            app.run("file.new", json!({ "width": 256, "height": 256 })).unwrap();
+            app.manga.ui.sfx_panel.draft.text = "BAM".into();
+            let size_before = app.manga.ui.sfx_panel.draft.size_pt;
+
+            // Very wide, shallow box (~8.6:1) so Shift stretching must widen scale_x/scale_y well past 1.5x.
+            let start = [8.0_f64, 16.0];
+            let end = [248.0_f64, 44.0];
+            assert!(!sfx_canvas_down(&mut app, start, egui::Modifiers::SHIFT));
+            sfx_create_move(&mut app, end, egui::Modifiers::SHIFT);
+            sfx_create_finish(&mut app, end, egui::Modifiers::SHIFT);
+
+            let st = app.session.active().unwrap();
+            let sfx = st.doc.layers.iter().filter_map(|l| l.sfx.as_deref()).next().expect("stretched SFX layer");
+            assert!(
+                (sfx.free_transform.scale_x - 1.0).abs() > 0.05 || (sfx.free_transform.scale_y - 1.0).abs() > 0.05,
+                "expected non-unit scale, got ({}, {})",
+                sfx.free_transform.scale_x,
+                sfx.free_transform.scale_y
+            );
+            assert!(
+                sfx.free_transform.scale_x / sfx.free_transform.scale_y > 1.5,
+                "box is much wider than tall: ({}, {})",
+                sfx.free_transform.scale_x,
+                sfx.free_transform.scale_y
+            );
+            assert!(sfx.size_pt != size_before, "size_pt is still fitted to the box");
+            assert_eq!(sfx.warp_mode, SfxWarpMode::Resize);
+        }
+
+        /// A plain click with a non-empty selection fits the new SFX to that selection rectangle.
+        #[test]
+        fn manga_sfx_plain_click_with_selection_fits_selection_bounds() {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
+            app.run("file.new", json!({ "width": 256, "height": 256 })).unwrap();
+            let sel = [40.0_f64, 60.0, 200.0, 140.0];
+            app.run(
+                "select.rect",
+                json!({ "x": sel[0], "y": sel[1], "width": sel[2] - sel[0], "height": sel[3] - sel[1] }),
+            )
+            .unwrap();
+
+            let click = [10.0_f64, 10.0];
+            assert!(!sfx_canvas_down(&mut app, click, egui::Modifiers::NONE));
+            sfx_create_finish(&mut app, click, egui::Modifiers::NONE);
+
+            let st = app.session.active().unwrap();
+            let sfx = st.doc.layers.iter().filter_map(|l| l.sfx.as_deref()).next().expect("selection-fitted SFX layer");
+            let geom = build_sfx_geometry(sfx, &mut text_engine(), st.doc.resolution_dpi.max(1.0));
+            let cx = (geom.rest_box[0] + geom.rest_box[2]) * 0.5;
+            let cy = (geom.rest_box[1] + geom.rest_box[3]) * 0.5;
+            assert!((cx - (sel[0] + sel[2]) * 0.5).abs() < 4.0, "SFX must center in the selection: {cx}");
+            assert!((cy - (sel[1] + sel[3]) * 0.5).abs() < 4.0, "SFX must center in the selection: {cy}");
+            assert!(geom.rest_box[2] - geom.rest_box[0] <= sel[2] - sel[0] + 4.0);
+            assert!(geom.rest_box[3] - geom.rest_box[1] <= sel[3] - sel[1] + 4.0);
+        }
+
         /// The top Options Bar renders its mode selector and switching a mode updates the SFX draft.
         #[test]
         fn manga_sfx_options_bar_renders_and_switches_mode() {
@@ -3368,7 +3642,7 @@ mod native {
             PhotocraftApp::setup_context(&h.ctx, Default::default());
             h.run_steps(2);
             assert!(h.query_by_label("SFX Mode:").is_some(), "the mode selector is labelled");
-            h.get_by_label("Per-Glyph").click();
+            h.get_by_label("По точкам (Alt)").click();
             h.run_steps(2);
             assert_eq!(h.state().manga.ui.sfx_panel.draft.warp_mode, SfxWarpMode::PerGlyph);
         }

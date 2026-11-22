@@ -90,6 +90,14 @@ fn default_seed_one() -> u32 {
     1
 }
 
+fn default_65() -> f32 {
+    65.0
+}
+
+fn default_2() -> f32 {
+    2.0
+}
+
 fn default_55() -> f32 {
     55.0
 }
@@ -207,7 +215,9 @@ fn finite_color(c: Color) -> Color {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SfxWarpMode {
+    /// Simple proportional resize of the bounding box (`size_pt` / `origin` / edge scale).
     #[default]
+    Resize,
     FreeTransform,
     PerGlyph,
     MeshLattice,
@@ -273,6 +283,18 @@ pub enum SfxShtackVariant {
     /// Legacy documents used the name `ribbon`, which is kept as a serde alias.
     #[serde(alias = "ribbon")]
     DryPencil,
+}
+
+/// Where [`SfxLineStyle::Shtack`] corner needles (overshoot) are allowed to protrude.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SfxShtackOvershootMode {
+    /// Only convex corners on the outer glyph silhouette shoot needles; inner counters
+    /// and concave junctions stay clean so strokes never slice through letterforms.
+    #[default]
+    OuterOnly,
+    /// Every corner segment shoots needles (raw chaotic sketch).
+    All,
 }
 
 /// 4 Rust-ready Dry Brush fill engines from the SFX mockup.
@@ -362,12 +384,20 @@ pub struct SfxLineEffect {
     pub shtack_split_pct: f32,
     #[serde(default = "default_20")]
     pub shtack_overshoot_px: f32,
-    #[serde(default = "default_14")]
+    /// Restricts Shtack needle overshoots to outer convex corners (`OuterOnly`) or allows all (`All`).
+    #[serde(default)]
+    pub shtack_overshoot_mode: SfxShtackOvershootMode,
+    /// Thickness of a Shtack sketch pass, as a PERCENT of glyph height (`gh`) in `0.5..=8.0`.
+    /// The legacy serde name is kept for document compatibility; the value is no longer a pixel length.
+    #[serde(default = "default_2")]
     pub shtack_thickness_px: f32,
     #[serde(default = "default_26")]
     pub shtack_dryness_pct: f32,
     #[serde(default = "default_seed_one")]
     pub shtack_seed: u32,
+    /// Dry Pencil grain sharpness (`0..=100%`). At 100% paper tooth punches clean `0.0` gaps.
+    #[serde(default = "default_65")]
+    pub shtack_grain_sharpness_pct: f32,
     /// `false` (default) = hollow sketch contour: `ЗАЛИВКА (FILL)` colours the Shtack strokes
     /// themselves and the letter interior stays transparent. `true` = fill the letter interior
     /// with `ЗАЛИВКА (FILL)` and draw the Shtack strokes on top in `line_color`.
@@ -408,9 +438,11 @@ impl Default for SfxLineEffect {
             shtack_bristles: 5,
             shtack_split_pct: 78.0,
             shtack_overshoot_px: 20.0,
-            shtack_thickness_px: 14.0,
+            shtack_overshoot_mode: SfxShtackOvershootMode::OuterOnly,
+            shtack_thickness_px: 2.0,
             shtack_dryness_pct: 26.0,
             shtack_seed: 1,
+            shtack_grain_sharpness_pct: 65.0,
             shtack_fill_interior: false,
         }
     }
@@ -448,8 +480,10 @@ impl SfxLineEffect {
         self.shtack_split_pct = finite_f32(self.shtack_split_pct, 78.0).clamp(0.0, 100.0);
         // Needle overshoot is now a PERCENT of the glyph height (0..=60%), not a pixel length.
         self.shtack_overshoot_px = finite_f32(self.shtack_overshoot_px, 20.0).clamp(0.0, 60.0);
-        self.shtack_thickness_px = finite_f32(self.shtack_thickness_px, 14.0).clamp(6.0, MAX_SFX_EFFECT_PX);
+        // Percentage of glyph height: never a document-pixel length, never double-scaled.
+        self.shtack_thickness_px = finite_f32(self.shtack_thickness_px, 2.0).clamp(0.5, 8.0);
         self.shtack_dryness_pct = finite_f32(self.shtack_dryness_pct, 26.0).clamp(0.0, 100.0);
+        self.shtack_grain_sharpness_pct = finite_f32(self.shtack_grain_sharpness_pct, 65.0).clamp(0.0, 100.0);
     }
 }
 
@@ -486,6 +520,9 @@ pub struct SfxDryBrushSpec {
     pub vec_tilt_random_deg: f32,
     #[serde(default = "default_40")]
     pub vec_gauss_dots_pct: f32,
+    /// Paper-grain / bristle threshold sharpness (`0..=100%`). 100% produces true binary gaps.
+    #[serde(default = "default_65")]
+    pub grain_sharpness_pct: f32,
 }
 
 impl Default for SfxDryBrushSpec {
@@ -506,6 +543,7 @@ impl Default for SfxDryBrushSpec {
             vec_mutual_tilt_deg: 4.0,
             vec_tilt_random_deg: 3.0,
             vec_gauss_dots_pct: 40.0,
+            grain_sharpness_pct: 65.0,
         }
     }
 }
@@ -524,6 +562,7 @@ impl SfxDryBrushSpec {
         self.vec_mutual_tilt_deg = finite_f32(self.vec_mutual_tilt_deg, 4.0).clamp(-10.0, 10.0);
         self.vec_tilt_random_deg = finite_f32(self.vec_tilt_random_deg, 3.0).clamp(0.0, 10.0);
         self.vec_gauss_dots_pct = finite_f32(self.vec_gauss_dots_pct, 40.0).clamp(0.0, 100.0);
+        self.grain_sharpness_pct = finite_f32(self.grain_sharpness_pct, 65.0).clamp(0.0, 100.0);
     }
 }
 
@@ -1075,7 +1114,7 @@ impl Default for SfxData {
             tracking: 0.0,
             leading_scale: 1.05,
             vertical: false,
-            warp_mode: SfxWarpMode::FreeTransform,
+            warp_mode: SfxWarpMode::Resize,
             free_transform: SfxFreeTransform::default(),
             spline: SfxSplineArc::default(),
             per_glyph: Vec::new(),
@@ -1189,6 +1228,11 @@ impl SfxData {
         }
         self.tracking = preset.tracking;
         self.fill = preset.fill.clone();
+        // A 450 pt SFX applying a 64 pt preset would otherwise blow a 10 px halo up to 70+ px
+        // (past `dilate_coverage_approx`'s 64 px cap) and render as a gray fog. Grow sub-linearly
+        // and cap during preset application; the manual halo slider stays free up to
+        // `MAX_SFX_EFFECT_PX`.
+        let preset_halo = finite_f32(preset.line_effect.halo_width_px, 0.0).max(0.0);
         self.line_effect = preset.line_effect;
         self.dry_brush = preset.dry_brush;
         self.vector_shadow = preset.vector_shadow;
@@ -1197,6 +1241,9 @@ impl SfxData {
         if (scale - 1.0).abs() > 1e-4 {
             scale_sfx_pixel_effects(self, scale);
         }
+        // Apply the sub-linear halo / sanity cap AFTER the generic pixel scaling so it cannot be
+        // re-scaled by `scale_sfx_pixel_effects` on large documents.
+        self.line_effect.halo_width_px = (f64::from(preset_halo) * scale.powf(0.7)).clamp(0.0, 64.0) as f32;
         self.validate();
     }
 }
@@ -1214,8 +1261,8 @@ fn scale_sfx_pixel_effects(data: &mut SfxData, scale: f64) {
     data.line_effect.spike_size_px = scaled(data.line_effect.spike_size_px).max(2.0);
     data.line_effect.gpen_overshoot_px = scaled(data.line_effect.gpen_overshoot_px);
     data.line_effect.ink_brush_overshoot_px = scaled(data.line_effect.ink_brush_overshoot_px);
-    // `shtack_overshoot_px` is a percentage of glyph height, so it must NOT be scaled here.
-    data.line_effect.shtack_thickness_px = scaled(data.line_effect.shtack_thickness_px).max(6.0);
+    // `shtack_overshoot_px` and `shtack_thickness_px` are percentages of glyph height, so they
+    // must NEVER be scaled here (large documents / presets used to double-scale them).
     data.dry_brush.lic_length_px = scaled(data.dry_brush.lic_length_px).max(4.0);
     data.vector_shadow.distance_px = scaled(data.vector_shadow.distance_px);
     data.vector_shadow.extrude_depth_px = scaled(data.vector_shadow.extrude_depth_px);
@@ -1478,8 +1525,75 @@ mod tests {
         assert_eq!(data.font_family, "Anime Ace", "applying a style preset must keep the chosen font");
         assert!(data.vertical, "applying a style preset must keep vertical orientation");
         assert_eq!(data.line_effect.style, SfxLineStyle::Shtack);
-        assert!((data.line_effect.halo_width_px - 40.0).abs() < 1e-3, "halo scales 4x with 256/64 size");
+        let expected_halo = (10.0_f64 * 4.0_f64.powf(0.7)).min(64.0) as f32;
+        assert!((data.line_effect.halo_width_px - expected_halo).abs() < 1e-3, "halo must grow sub-linearly on preset apply");
+        assert!(data.line_effect.halo_width_px <= 64.0);
         assert!((data.vector_shadow.distance_px - 48.0).abs() < 1e-3, "shadow distance scales 4x");
         assert!((data.line_effect.shtack_overshoot_px - 20.0).abs() < 1e-3, "needle overshoot % must NOT double-scale");
+    }
+
+    #[test]
+    fn shtack_thickness_is_a_glyph_height_percentage_never_a_pixel_length() {
+        let mut data = SfxData::default();
+        assert_eq!(data.line_effect.shtack_thickness_px, 2.0);
+        assert_eq!(data.warp_mode, SfxWarpMode::Resize, "Resize is the default on-canvas mode");
+
+        // New-document scaling and presets must leave the percentage untouched.
+        let mut large = data.clone();
+        scale_new_sfx_for_document(&mut large, 12_303, 17_499);
+        assert_eq!(large.line_effect.shtack_thickness_px, 2.0);
+        assert_eq!(large.line_effect.shtack_overshoot_px, 20.0);
+
+        let preset = SfxPreset {
+            size_pt: 64.0,
+            line_effect: SfxLineEffect { shtack_thickness_px: 2.0, halo_width_px: 10.0, ..SfxLineEffect::default() },
+            ..SfxPreset::default()
+        };
+        let mut big = SfxData { size_pt: 450.0, ..SfxData::default() };
+        big.apply_preset(&preset);
+        assert_eq!(big.line_effect.shtack_thickness_px, 2.0, "preset must not double-scale thickness %");
+        assert!(big.line_effect.halo_width_px <= 64.0, "preset halo must stay within the sane cap");
+
+        // Validation clamps hostile values into the supported 0.5..=8.0 range.
+        data.line_effect.shtack_thickness_px = 999.0;
+        data.validate();
+        assert_eq!(data.line_effect.shtack_thickness_px, 8.0);
+        data.line_effect.shtack_thickness_px = f32::NAN;
+        data.validate();
+        assert_eq!(data.line_effect.shtack_thickness_px, 2.0);
+        data.line_effect.shtack_thickness_px = 0.0;
+        data.validate();
+        assert_eq!(data.line_effect.shtack_thickness_px, 0.5);
+    }
+
+    #[test]
+    fn apply_preset_bounds_halo_width_on_large_documents() {
+        let preset = SfxPreset { size_pt: 64.0, line_effect: SfxLineEffect { halo_width_px: 10.0, ..SfxLineEffect::default() }, ..SfxPreset::default() };
+        let mut data = SfxData { size_pt: 450.0, ..SfxData::default() };
+        data.apply_preset(&preset);
+        let naive = 10.0_f64 * (450.0 / 64.0);
+        assert!(naive > 64.0, "the old linear scaling really did exceed the dilation cap");
+        assert!(data.line_effect.halo_width_px <= 64.0);
+        assert!(data.line_effect.halo_width_px > 10.0);
+
+        // A manual slider value up to MAX_SFX_EFFECT_PX is still accepted untouched.
+        let mut manual = SfxData::default();
+        manual.line_effect.halo_width_px = 512.0;
+        manual.validate();
+        assert_eq!(manual.line_effect.halo_width_px, 512.0);
+    }
+
+    #[test]
+    fn grain_sharpness_fields_deserialize_from_legacy_and_validate() {
+        let legacy: SfxData = serde_json::from_str(r#"{"text":"BOOM"}"#).unwrap();
+        assert_eq!(legacy.line_effect.shtack_grain_sharpness_pct, 65.0);
+        assert_eq!(legacy.dry_brush.grain_sharpness_pct, 65.0);
+
+        let mut data = SfxData::default();
+        data.line_effect.shtack_grain_sharpness_pct = 500.0;
+        data.dry_brush.grain_sharpness_pct = f32::NAN;
+        data.validate();
+        assert_eq!(data.line_effect.shtack_grain_sharpness_pct, 100.0);
+        assert_eq!(data.dry_brush.grain_sharpness_pct, 65.0);
     }
 }

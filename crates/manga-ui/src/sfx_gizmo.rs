@@ -12,8 +12,8 @@ use std::sync::atomic::{AtomicU8, Ordering};
 
 use egui::{Color32, CursorIcon, Pos2, Rect, Stroke, pos2, vec2};
 use photocraft_doc::sfx::{
-    MAX_SFX_EFFECT_PX, MAX_SFX_LIQUIFY_STROKES, MAX_SFX_SPLINE_POINTS, SfxData, SfxFreeTransform, SfxGlyphTransform, SfxLiquifyBrush,
-    SfxMeshLattice, SfxWarpMode,
+    MAX_SFX_EFFECT_PX, MAX_SFX_LIQUIFY_STROKES, MAX_SFX_SIZE_PT, MAX_SFX_SPLINE_POINTS, SfxData, SfxFreeTransform, SfxGlyphTransform,
+    SfxLiquifyBrush, SfxMeshLattice, SfxWarpMode,
 };
 use photocraft_doc::{Document, LayerId};
 use photocraft_manga_core::sfx_geom::{
@@ -357,6 +357,21 @@ fn point_in_quad(quad: [[f64; 2]; 4], p: [f64; 2]) -> bool {
     inside
 }
 
+/// Photoshop/CSP-style rotate annulus just outside each bounding-box corner.
+///
+/// Real corner/edge handles and the rotation stem are tested first, so this only
+/// catches the empty ring surrounding a corner. Returning `Rotate` reuses the
+/// existing rotation drag logic in both `Resize` and `FreeTransform` modes.
+fn hit_corner_rotate_zone(world_corners: [[f64; 2]; 4], xf: &CanvasViewXform, p_scr: Pos2) -> bool {
+    let lo = HANDLE_HIT_PX;
+    let hi = HANDLE_HIT_PX + 14.0;
+    world_corners.iter().any(|&wc| {
+        let c = xf.to_screen(wc[0] as f32, wc[1] as f32);
+        let d = c.distance(p_scr);
+        d >= lo && d <= hi
+    })
+}
+
 fn hit_free_transform(data: &SfxData, rb: [f64; 4], world_corners: [[f64; 2]; 4], xf: &CanvasViewXform, at_doc: [f64; 2]) -> Option<FreeHandle> {
     let p_scr = xf.to_screen(at_doc[0] as f32, at_doc[1] as f32);
     let stem_doc = rotate_stem_doc(&data.free_transform, rb, xf);
@@ -370,6 +385,9 @@ fn hit_free_transform(data: &SfxData, rb: [f64; 4], world_corners: [[f64; 2]; 4]
         if s.distance(p_scr) <= HANDLE_HIT_PX {
             return Some(kind);
         }
+    }
+    if hit_corner_rotate_zone(world_corners, xf, p_scr) {
+        return Some(FreeHandle::Rotate);
     }
     if point_in_quad(world_corners, at_doc)
         || invert_free_transform_point(&data.free_transform, rb, at_doc).is_some_and(|rest_pt| point_in_rect(rb, rest_pt))
@@ -591,13 +609,39 @@ fn clamp_perspective(rb: [f64; 4], base: SfxFreeTransform, candidate: (f64, f64)
     (origin.0 + (candidate.0 - origin.0) * lo, origin.1 + (candidate.1 - origin.1) * lo)
 }
 
-fn apply_free_drag(drag: &ActiveDrag, at_doc: [f64; 2], mods: egui::Modifiers, next: &mut SfxData) {
+/// Non-affine `FT 4-Corner` drag using a frozen pre-corner inverse (zero feedback drift / NaN).
+/// Shared by `FreeTransform` corner drags and `Resize` + `Ctrl`.
+fn apply_corner_warp_drag(drag: &ActiveDrag, c_idx: usize, at_doc: [f64; 2], mods: egui::Modifiers, next: &mut SfxData) {
     let rb = drag.rest_box;
-    let w = (rb[2] - rb[0]).max(1.0);
-    let h = (rb[3] - rb[1]).max(1.0);
-    let center = [(rb[0] + rb[2]) * 0.5, (rb[1] + rb[3]) * 0.5];
-    let DragMode::Free(handle) = drag.mode else { return };
+    let ft_no_corners = SfxFreeTransform { corners: [[0.0; 2]; 4], ..drag.initial_sfx.free_transform };
+    let p0 = invert_free_transform_point(&ft_no_corners, rb, drag.start_doc).unwrap_or(drag.start_doc);
+    let p1 = invert_free_transform_point(&ft_no_corners, rb, at_doc).unwrap_or(at_doc);
+    let dp = [p1[0] - p0[0], p1[1] - p0[1]];
+    let base = drag.initial_sfx.free_transform.corners;
+    let mut candidate = base;
+    candidate[c_idx][0] = base[c_idx][0] + dp[0];
+    candidate[c_idx][1] = base[c_idx][1] + dp[1];
+    if mods.shift {
+        // Symmetric trapezoid perspective on paired top/bottom corner.
+        let pair = match c_idx {
+            0 => 1,
+            1 => 0,
+            2 => 3,
+            _ => 2,
+        };
+        candidate[pair][0] = base[pair][0] - dp[0];
+        candidate[pair][1] = base[pair][1] + dp[1];
+    }
+    // Dragging past an opposite edge used to flip/invert the homography (mirrored or
+    // vanished lettering). Keep the quad strictly convex and positively oriented.
+    next.free_transform.corners = clamp_corner_deltas(rb, base, candidate);
+}
 
+/// Body move and rotation are identical in `Resize` and `FreeTransform`; returns
+/// `true` when this handle was one of those two.
+fn apply_move_rotate_drag(drag: &ActiveDrag, handle: FreeHandle, at_doc: [f64; 2], mods: egui::Modifiers, next: &mut SfxData) -> bool {
+    let rb = drag.rest_box;
+    let center = [(rb[0] + rb[2]) * 0.5, (rb[1] + rb[3]) * 0.5];
     match handle {
         FreeHandle::Body => {
             let mut dx = at_doc[0] - drag.start_doc[0];
@@ -610,6 +654,7 @@ fn apply_free_drag(drag: &ActiveDrag, at_doc: [f64; 2], mods: egui::Modifiers, n
                 }
             }
             next.origin = [drag.initial_sfx.origin[0] + dx, drag.initial_sfx.origin[1] + dy];
+            true
         }
         FreeHandle::Rotate => {
             let a0 = (drag.start_doc[1] - center[1]).atan2(drag.start_doc[0] - center[0]);
@@ -619,32 +664,174 @@ fn apply_free_drag(drag: &ActiveDrag, at_doc: [f64; 2], mods: egui::Modifiers, n
                 deg = (deg / 15.0).round() * 15.0;
             }
             next.free_transform.rotation_deg = deg;
+            true
         }
-        FreeHandle::Corner(c_idx) if c_idx < 4 && !mods.ctrl => {
-            // Non-affine 4-Corner FT drag using frozen pre-corner inverse (zero feedback drift / NaN).
-            let ft_no_corners = SfxFreeTransform { corners: [[0.0; 2]; 4], ..drag.initial_sfx.free_transform };
-            let p0 = invert_free_transform_point(&ft_no_corners, rb, drag.start_doc).unwrap_or(drag.start_doc);
-            let p1 = invert_free_transform_point(&ft_no_corners, rb, at_doc).unwrap_or(at_doc);
-            let dp = [p1[0] - p0[0], p1[1] - p0[1]];
-            let base = drag.initial_sfx.free_transform.corners;
-            let mut candidate = base;
-            candidate[c_idx][0] = base[c_idx][0] + dp[0];
-            candidate[c_idx][1] = base[c_idx][1] + dp[1];
-            if mods.shift {
-                // Symmetric trapezoid perspective on paired top/bottom corner.
-                let pair = match c_idx {
-                    0 => 1,
-                    1 => 0,
-                    2 => 3,
-                    _ => 2,
-                };
-                candidate[pair][0] = base[pair][0] - dp[0];
-                candidate[pair][1] = base[pair][1] + dp[1];
+        _ => false,
+    }
+}
+
+fn safe_ratio(num: f64, den: f64) -> Option<f64> {
+    if !num.is_finite() || !den.is_finite() || den.abs() < 1e-6 {
+        return None;
+    }
+    let r = num / den;
+    (r.is_finite() && r > 0.0).then_some(r)
+}
+
+/// Component-wise scale ratio from `v0` (initial anchor→corner) to `v1` (current),
+/// using the more decisive axis and clamping to minimum if dragged past the anchor.
+fn dominant_ratio(v1: [f64; 2], v0: [f64; 2]) -> f64 {
+    match (safe_ratio(v1[0], v0[0]), safe_ratio(v1[1], v0[1])) {
+        (Some(a), Some(b)) => {
+            if a.abs() >= b.abs() { a } else { b }
+        }
+        (Some(a), None) => a,
+        (None, Some(b)) => b,
+        (None, None) => {
+            if v0[0].abs() < 1e-6 && v0[1].abs() < 1e-6 {
+                1.0
+            } else {
+                0.05
             }
-            // Dragging past an opposite edge used to flip/invert the homography (mirrored or
-            // vanished lettering). Keep the quad strictly convex and positively oriented.
-            next.free_transform.corners = clamp_corner_deltas(rb, base, candidate);
         }
+    }
+}
+
+/// Rest-box offset of the corner opposite `c_idx` (TL=0, TR=1, BR=2, BL=3).
+fn opposite_corner_offset(c_idx: usize, w: f64, h: f64) -> [f64; 2] {
+    match c_idx {
+        0 => [w, h],
+        1 => [0.0, h],
+        2 => [0.0, 0.0],
+        _ => [w, 0.0],
+    }
+}
+
+/// Plain / `Alt` corner resize: scale real `size_pt` and move `origin` so the
+/// opposite corner (or the box center with `Alt`) stays pinned on canvas, even
+/// when the SFX has non-zero glyph bearings, rotation, scale, or hits size clamps.
+fn resize_corner_size_drag(drag: &ActiveDrag, c_idx: usize, at_doc: [f64; 2], alt: bool, w: f64, h: f64, next: &mut SfxData) {
+    let rb = drag.rest_box;
+    let ft0 = &drag.initial_sfx.free_transform;
+    let q0 = to_pre_ft(ft0, rb, drag.start_doc);
+    let q1 = to_pre_ft(ft0, rb, at_doc);
+    let c_rb = [(rb[0] + rb[2]) * 0.5, (rb[1] + rb[3]) * 0.5];
+    let ra = opposite_corner_offset(c_idx, w, h);
+    let opp_rb = [rb[0] + ra[0], rb[1] + ra[1]];
+    let pivot_rb = if alt { c_rb } else { opp_rb };
+    let ratio = dominant_ratio([q1[0] - pivot_rb[0], q1[1] - pivot_rb[1]], [q0[0] - pivot_rb[0], q0[1] - pivot_rb[1]]).clamp(0.05, 2500.0);
+    let init_size = f64::from(drag.initial_sfx.size_pt).max(1e-3);
+    next.size_pt = (init_size * ratio).clamp(4.0, f64::from(MAX_SFX_SIZE_PT)) as f32;
+    // Use the post-clamp effective ratio so hitting min/max size_pt never slides the layer.
+    let eff_ratio = f64::from(next.size_pt) / init_size;
+    let new_c_rb = if alt {
+        c_rb
+    } else {
+        let opp_world = apply_free_transform_point(ft0, rb, opp_rb);
+        [
+            c_rb[0] + (1.0 - eff_ratio) * (opp_world[0] - c_rb[0]),
+            c_rb[1] + (1.0 - eff_ratio) * (opp_world[1] - c_rb[1]),
+        ]
+    };
+    let d_orig = [c_rb[0] - drag.initial_sfx.origin[0], c_rb[1] - drag.initial_sfx.origin[1]];
+    next.origin = [new_c_rb[0] - d_orig[0] * eff_ratio, new_c_rb[1] - d_orig[1] * eff_ratio];
+}
+
+/// `Shift` corner resize: non-proportional stretch via `free_transform.scale_*`,
+/// anchored at the opposite corner (or the center with `Alt`).
+fn resize_corner_scale_drag(drag: &ActiveDrag, c_idx: usize, at_doc: [f64; 2], alt: bool, w: f64, h: f64, next: &mut SfxData) {
+    let rb = drag.rest_box;
+    let center = [(rb[0] + rb[2]) * 0.5, (rb[1] + rb[3]) * 0.5];
+    let (s, c) = (-drag.initial_sfx.free_transform.rotation_deg).to_radians().sin_cos();
+    let rot = |p: [f64; 2]| -> [f64; 2] {
+        let rx = p[0] - center[0];
+        let ry = p[1] - center[1];
+        [rx * c - ry * s, rx * s + ry * c]
+    };
+    let p0 = rot(drag.start_doc);
+    let p1 = rot(at_doc);
+    let d = [p1[0] - p0[0], p1[1] - p0[1]];
+    let (sx_sign, sy_sign) = edge_delta_signs(FreeHandle::Corner(c_idx));
+    let ft0 = drag.initial_sfx.free_transform;
+    let dx = if alt { w * 0.5 } else { w };
+    let dy = if alt { h * 0.5 } else { h };
+    let sx = (ft0.scale_x + sx_sign * d[0] / dx).clamp(0.05, 16.0);
+    let sy = (ft0.scale_y + sy_sign * d[1] / dy).clamp(0.05, 16.0);
+    next.free_transform.scale_x = sx;
+    next.free_transform.scale_y = sy;
+    if !alt {
+        // Compute origin shift from post-clamp scale deltas so clamping never slides the opposite corner.
+        let lx = sx_sign * (w * 0.5) * (sx - ft0.scale_x);
+        let ly = sy_sign * (h * 0.5) * (sy - ft0.scale_y);
+        let (rs, rc) = ft0.rotation_deg.to_radians().sin_cos();
+        next.origin = [
+            drag.initial_sfx.origin[0] + lx * rc - ly * rs,
+            drag.initial_sfx.origin[1] + lx * rs + ly * rc,
+        ];
+    }
+}
+
+/// Edge midpoint resize: stretch one axis via `scale_x` / `scale_y`, anchored at
+/// the opposite edge (or the center with `Alt`). `size_pt` is never touched.
+fn resize_edge_drag(drag: &ActiveDrag, kind: FreeHandle, at_doc: [f64; 2], alt: bool, w: f64, h: f64, next: &mut SfxData) {
+    let rb = drag.rest_box;
+    let center = [(rb[0] + rb[2]) * 0.5, (rb[1] + rb[3]) * 0.5];
+    let (s, c) = (-drag.initial_sfx.free_transform.rotation_deg).to_radians().sin_cos();
+    let rot = |p: [f64; 2]| -> [f64; 2] {
+        let rx = p[0] - center[0];
+        let ry = p[1] - center[1];
+        [rx * c - ry * s, rx * s + ry * c]
+    };
+    let p0 = rot(drag.start_doc);
+    let p1 = rot(at_doc);
+    let d = [p1[0] - p0[0], p1[1] - p0[1]];
+    let (sx_sign, sy_sign) = edge_delta_signs(kind);
+    let ft0 = drag.initial_sfx.free_transform;
+    let dx = if alt { w * 0.5 } else { w };
+    let dy = if alt { h * 0.5 } else { h };
+    let sx = (ft0.scale_x + sx_sign * d[0] / dx).clamp(0.05, 16.0);
+    let sy = (ft0.scale_y + sy_sign * d[1] / dy).clamp(0.05, 16.0);
+    next.free_transform.scale_x = sx;
+    next.free_transform.scale_y = sy;
+    if !alt {
+        let lx = sx_sign * (w * 0.5) * (sx - ft0.scale_x);
+        let ly = sy_sign * (h * 0.5) * (sy - ft0.scale_y);
+        let (rs, rc) = ft0.rotation_deg.to_radians().sin_cos();
+        next.origin = [
+            drag.initial_sfx.origin[0] + lx * rc - ly * rs,
+            drag.initial_sfx.origin[1] + lx * rs + ly * rc,
+        ];
+    }
+}
+
+fn apply_resize_drag(drag: &ActiveDrag, handle: FreeHandle, at_doc: [f64; 2], mods: egui::Modifiers, next: &mut SfxData) {
+    if apply_move_rotate_drag(drag, handle, at_doc, mods, next) {
+        return;
+    }
+    let rb = drag.rest_box;
+    let w = (rb[2] - rb[0]).max(1.0);
+    let h = (rb[3] - rb[1]).max(1.0);
+    match handle {
+        FreeHandle::Corner(c) if c < 4 && mods.ctrl => apply_corner_warp_drag(drag, c, at_doc, mods, next),
+        FreeHandle::Corner(c) if c < 4 && mods.shift => resize_corner_scale_drag(drag, c, at_doc, mods.alt, w, h, next),
+        FreeHandle::Corner(c) if c < 4 => resize_corner_size_drag(drag, c, at_doc, mods.alt, w, h, next),
+        FreeHandle::Top | FreeHandle::Right | FreeHandle::Bottom | FreeHandle::Left => resize_edge_drag(drag, handle, at_doc, mods.alt, w, h, next),
+        FreeHandle::Corner(_) | FreeHandle::Rotate | FreeHandle::Body => {}
+    }
+}
+
+/// Original `FreeTransform` / other-mode drag semantics, kept byte-for-byte.
+fn apply_legacy_free_drag(drag: &ActiveDrag, handle: FreeHandle, at_doc: [f64; 2], mods: egui::Modifiers, next: &mut SfxData) {
+    let rb = drag.rest_box;
+    let w = (rb[2] - rb[0]).max(1.0);
+    let h = (rb[3] - rb[1]).max(1.0);
+    let center = [(rb[0] + rb[2]) * 0.5, (rb[1] + rb[3]) * 0.5];
+    if apply_move_rotate_drag(drag, handle, at_doc, mods, next) {
+        return;
+    }
+
+    match handle {
+        FreeHandle::Corner(c_idx) if c_idx < 4 && !mods.ctrl => apply_corner_warp_drag(drag, c_idx, at_doc, mods, next),
         edge_or_ctrl_corner => {
             let (s, c) = (-drag.initial_sfx.free_transform.rotation_deg).to_radians().sin_cos();
             let rot = |p: [f64; 2]| -> [f64; 2] {
@@ -707,6 +894,15 @@ fn apply_free_drag(drag: &ActiveDrag, at_doc: [f64; 2], mods: egui::Modifiers, n
                 next.free_transform.scale_y = sy;
             }
         }
+    }
+}
+
+fn apply_free_drag(drag: &ActiveDrag, at_doc: [f64; 2], mods: egui::Modifiers, next: &mut SfxData) {
+    let DragMode::Free(handle) = drag.mode else { return };
+    if drag.initial_sfx.warp_mode == SfxWarpMode::Resize {
+        apply_resize_drag(drag, handle, at_doc, mods, next);
+    } else {
+        apply_legacy_free_drag(drag, handle, at_doc, mods, next);
     }
     next.validate();
 }
@@ -942,7 +1138,10 @@ pub fn pointer(gizmo: &mut SfxGizmoState, view: &SfxView<'_>, ev: CanvasToolEven
             let doc_id = view.doc_id.unwrap_or(BridgeDocId(0));
             let dpi = doc_dpi(view);
             let geom = gizmo.ensure_geom(&sfx, dpi);
-            if geom.rest_box[2] <= geom.rest_box[0] && geom.rest_box[3] <= geom.rest_box[1] && sfx.warp_mode != SfxWarpMode::FreeTransform {
+            if geom.rest_box[2] <= geom.rest_box[0]
+                && geom.rest_box[3] <= geom.rest_box[1]
+                && !matches!(sfx.warp_mode, SfxWarpMode::FreeTransform | SfxWarpMode::Resize)
+            {
                 return out;
             }
             let rb = geom.rest_box;
@@ -950,8 +1149,10 @@ pub fn pointer(gizmo: &mut SfxGizmoState, view: &SfxView<'_>, ev: CanvasToolEven
             let (_, init_inv_h) = free_transform_homography(&sfx.free_transform, rb);
             let coalesce = format!("sfx-gizmo:{}:{}:{:?}", doc_id.0, layer_id.0, sfx.warp_mode);
 
-            // 1. Vector `☀ Shadow` knob has top hit priority in FreeTransform / PerGlyph.
-            if matches!(sfx.warp_mode, SfxWarpMode::FreeTransform | SfxWarpMode::PerGlyph) && hit_shadow_knob(&sfx, rb, xf, [x, y]) {
+            // 1. Vector `☀ Shadow` knob has top hit priority in Resize / FreeTransform / PerGlyph.
+            if matches!(sfx.warp_mode, SfxWarpMode::Resize | SfxWarpMode::FreeTransform | SfxWarpMode::PerGlyph)
+                && hit_shadow_knob(&sfx, rb, xf, [x, y])
+            {
                 gizmo.drag = Some(ActiveDrag {
                     doc_id,
                     layer_id,
@@ -968,6 +1169,13 @@ pub fn pointer(gizmo: &mut SfxGizmoState, view: &SfxView<'_>, ev: CanvasToolEven
             }
 
             let mode = match sfx.warp_mode {
+                SfxWarpMode::Resize => {
+                    if let Some(h) = hit_free_transform(&sfx, rb, geom.world_corners, xf, [x, y]) {
+                        DragMode::Free(h)
+                    } else {
+                        return out;
+                    }
+                }
                 SfxWarpMode::FreeTransform => {
                     if let Some(sp_idx) = hit_spline_point(&sfx, rb, xf, [x, y]) {
                         if mods.alt && sfx.spline.points.len() > 2 {
@@ -1203,6 +1411,31 @@ pub fn cancel_drag(gizmo: &mut SfxGizmoState, view: &SfxView<'_>) -> SfxGizmoOut
     out
 }
 
+/// Hover feedback over the shared `Resize` / `FreeTransform` frame gizmo.
+fn free_style_hover_cursor(data: &SfxData, rb: [f64; 4], world_corners: [[f64; 2]; 4], xf: &CanvasViewXform, at_doc: [f64; 2]) -> Option<CursorIcon> {
+    let allow_spline = data.warp_mode == SfxWarpMode::FreeTransform;
+    if allow_spline && hit_spline_point(data, rb, xf, at_doc).is_some() {
+        return Some(CursorIcon::Grab);
+    }
+    if let Some(h) = hit_free_transform(data, rb, world_corners, xf, at_doc) {
+        if allow_spline && h == FreeHandle::Body && hit_spline_curve(data, rb, xf, at_doc).is_some() {
+            return Some(CursorIcon::Crosshair);
+        }
+        return Some(match h {
+            FreeHandle::Body => CursorIcon::Move,
+            FreeHandle::Rotate => CursorIcon::Alias,
+            FreeHandle::Top | FreeHandle::Bottom => CursorIcon::ResizeVertical,
+            FreeHandle::Left | FreeHandle::Right => CursorIcon::ResizeHorizontal,
+            FreeHandle::Corner(0) | FreeHandle::Corner(2) => CursorIcon::ResizeNwSe,
+            FreeHandle::Corner(_) => CursorIcon::ResizeNeSw,
+        });
+    }
+    if allow_spline && hit_spline_curve(data, rb, xf, at_doc).is_some() {
+        return Some(CursorIcon::Crosshair);
+    }
+    None
+}
+
 /// Returns hover cursor feedback over SFX handles, arc points, shadow knob, or brush circle.
 pub fn hover_cursor(gizmo: &SfxGizmoState, view: &SfxView<'_>, cursor_scr: Pos2) -> Option<CursorIcon> {
     if !is_active_on_canvas(gizmo, view) {
@@ -1225,33 +1458,13 @@ pub fn hover_cursor(gizmo: &SfxGizmoState, view: &SfxView<'_>, cursor_scr: Pos2)
     let rb = geom.rest_box;
     let xf = &view.view_xform;
 
-    if matches!(sfx.warp_mode, SfxWarpMode::FreeTransform | SfxWarpMode::PerGlyph) && hit_shadow_knob(&sfx, rb, xf, at_doc) {
+    if matches!(sfx.warp_mode, SfxWarpMode::Resize | SfxWarpMode::FreeTransform | SfxWarpMode::PerGlyph) && hit_shadow_knob(&sfx, rb, xf, at_doc) {
         return Some(CursorIcon::Grab);
     }
 
     match sfx.warp_mode {
-        SfxWarpMode::FreeTransform => {
-            if hit_spline_point(&sfx, rb, xf, at_doc).is_some() {
-                return Some(CursorIcon::Grab);
-            }
-            if let Some(h) = hit_free_transform(&sfx, rb, geom.world_corners, xf, at_doc) {
-                if h == FreeHandle::Body && hit_spline_curve(&sfx, rb, xf, at_doc).is_some() {
-                    return Some(CursorIcon::Crosshair);
-                }
-                return Some(match h {
-                    FreeHandle::Body => CursorIcon::Move,
-                    FreeHandle::Rotate => CursorIcon::Alias,
-                    FreeHandle::Top | FreeHandle::Bottom => CursorIcon::ResizeVertical,
-                    FreeHandle::Left | FreeHandle::Right => CursorIcon::ResizeHorizontal,
-                    FreeHandle::Corner(0) | FreeHandle::Corner(2) => CursorIcon::ResizeNwSe,
-                    FreeHandle::Corner(_) => CursorIcon::ResizeNeSw,
-                });
-            }
-            if hit_spline_curve(&sfx, rb, xf, at_doc).is_some() {
-                return Some(CursorIcon::Crosshair);
-            }
-            None
-        }
+        SfxWarpMode::Resize => free_style_hover_cursor(&sfx, rb, geom.world_corners, xf, at_doc),
+        SfxWarpMode::FreeTransform => free_style_hover_cursor(&sfx, rb, geom.world_corners, xf, at_doc),
         SfxWarpMode::PerGlyph => match hit_glyph(&geom, gizmo.selected_glyph, gizmo.current_glyph_tool(), xf, at_doc)? {
             GlyphHandle::Body(_) => Some(CursorIcon::Move),
             GlyphHandle::Rotate(_) => Some(CursorIcon::Alias),
@@ -1291,47 +1504,12 @@ pub fn draw(painter: &egui::Painter, gizmo: &SfxGizmoState, view: &SfxView<'_>) 
 
     let tokens = Tokens::get(painter.ctx());
     let accent = tokens.accent;
-    let line_stroke = Stroke::new(1.5, accent);
-    let fill_handle = Color32::WHITE;
     let xf = &view.view_xform;
 
     match sfx.warp_mode {
-        SfxWarpMode::FreeTransform => {
-            let scr: [Pos2; 4] = [
-                xf.to_screen(geom.world_corners[0][0] as f32, geom.world_corners[0][1] as f32),
-                xf.to_screen(geom.world_corners[1][0] as f32, geom.world_corners[1][1] as f32),
-                xf.to_screen(geom.world_corners[2][0] as f32, geom.world_corners[2][1] as f32),
-                xf.to_screen(geom.world_corners[3][0] as f32, geom.world_corners[3][1] as f32),
-            ];
-            for i in 0..4 {
-                painter.line_segment([scr[i], scr[(i + 1) % 4]], line_stroke);
-            }
-            let top_mid = apply_free_transform_point(&sfx.free_transform, rb, [(rb[0] + rb[2]) * 0.5, rb[1]]);
-            let top_mid_scr = xf.to_screen(top_mid[0] as f32, top_mid[1] as f32);
-            let stem_doc = rotate_stem_doc(&sfx.free_transform, rb, xf);
-            let stem_scr = xf.to_screen(stem_doc[0] as f32, stem_doc[1] as f32);
-            painter.line_segment([top_mid_scr, stem_scr], line_stroke);
-            painter.circle_filled(stem_scr, 4.8, fill_handle);
-            painter.circle_stroke(stem_scr, 4.8, line_stroke);
-
-            for (pt, kind) in rest_box_points(rb) {
-                let wp = apply_free_transform_point(&sfx.free_transform, rb, pt);
-                let sp = xf.to_screen(wp[0] as f32, wp[1] as f32);
-                let is_corner = matches!(kind, FreeHandle::Corner(_));
-                let sz = if is_corner { 8.0 } else { 6.0 };
-                let r = Rect::from_center_size(sp, vec2(sz, sz));
-                painter.rect_filled(r, 1.5, fill_handle);
-                painter.rect_stroke(r, 1.5, line_stroke, egui::StrokeKind::Outside);
-            }
-
-            if sfx.spline.show_arc && !sfx.spline.points.is_empty() {
-                draw_spline_arc(painter, &sfx, rb, xf);
-            }
-            if sfx.vector_shadow.enabled {
-                draw_vector_shadow_ray(painter, &sfx, rb, xf);
-            }
-        }
+        SfxWarpMode::Resize | SfxWarpMode::FreeTransform => draw_free_style_gizmo(painter, &sfx, rb, geom.world_corners, xf, accent),
         SfxWarpMode::PerGlyph => {
+            let fill_handle = Color32::WHITE;
             let tool = gizmo.current_glyph_tool();
             for g in &geom.glyphs {
                 let is_sel = gizmo.selected_glyph == Some(g.glyph_index);
@@ -1399,6 +1577,39 @@ pub fn draw(painter: &egui::Painter, gizmo: &SfxGizmoState, view: &SfxView<'_>) 
                 painter.circle_stroke(c_scr, r_scr, Stroke::new(1.4, accent));
             }
         }
+    }
+}
+
+/// Shared `Resize` / `FreeTransform` frame: bounding box, 4 corner handles,
+/// 4 edge midpoints, rotation stem, optional arc spline and shadow ray.
+fn draw_free_style_gizmo(painter: &egui::Painter, data: &SfxData, rb: [f64; 4], world_corners: [[f64; 2]; 4], xf: &CanvasViewXform, accent: Color32) {
+    let line_stroke = Stroke::new(1.5, accent);
+    let fill_handle = Color32::WHITE;
+    let scr: [Pos2; 4] = std::array::from_fn(|i| xf.to_screen(world_corners[i][0] as f32, world_corners[i][1] as f32));
+    for i in 0..4 {
+        painter.line_segment([scr[i], scr[(i + 1) % 4]], line_stroke);
+    }
+    let top_mid = apply_free_transform_point(&data.free_transform, rb, [(rb[0] + rb[2]) * 0.5, rb[1]]);
+    let top_mid_scr = xf.to_screen(top_mid[0] as f32, top_mid[1] as f32);
+    let stem_doc = rotate_stem_doc(&data.free_transform, rb, xf);
+    let stem_scr = xf.to_screen(stem_doc[0] as f32, stem_doc[1] as f32);
+    painter.line_segment([top_mid_scr, stem_scr], line_stroke);
+    painter.circle_filled(stem_scr, 4.8, fill_handle);
+    painter.circle_stroke(stem_scr, 4.8, line_stroke);
+
+    for (pt, kind) in rest_box_points(rb) {
+        let wp = apply_free_transform_point(&data.free_transform, rb, pt);
+        let sp = xf.to_screen(wp[0] as f32, wp[1] as f32);
+        let sz = if matches!(kind, FreeHandle::Corner(_)) { 8.0 } else { 6.0 };
+        let r = Rect::from_center_size(sp, vec2(sz, sz));
+        painter.rect_filled(r, 1.5, fill_handle);
+        painter.rect_stroke(r, 1.5, line_stroke, egui::StrokeKind::Outside);
+    }
+    if data.spline.show_arc && !data.spline.points.is_empty() {
+        draw_spline_arc(painter, data, rb, xf);
+    }
+    if data.vector_shadow.enabled {
+        draw_vector_shadow_ray(painter, data, rb, xf);
     }
 }
 
@@ -1568,7 +1779,7 @@ mod tests {
 
     #[test]
     fn free_transform_4_corner_drag_and_shift_trapezoid() {
-        let sfx = SfxData { origin: [100.0, 100.0], ..SfxData::default() };
+        let sfx = SfxData { origin: [100.0, 100.0], warp_mode: SfxWarpMode::FreeTransform, ..SfxData::default() };
         let (doc, id) = sfx_doc(sfx.clone());
         let mut gizmo = SfxGizmoState::default();
         let geom = gizmo.ensure_geom(&sfx, 72.0).clone();
@@ -1587,7 +1798,12 @@ mod tests {
 
     #[test]
     fn free_corner_drag_past_opposite_edge_keeps_quad_convex() {
-        let sfx = SfxData { text: "BAM".to_owned(), origin: [100.0, 100.0], ..SfxData::default() };
+        let sfx = SfxData {
+            text: "BAM".to_owned(),
+            origin: [100.0, 100.0],
+            warp_mode: SfxWarpMode::FreeTransform,
+            ..SfxData::default()
+        };
         let (doc, id) = sfx_doc(sfx.clone());
         let mut gizmo = SfxGizmoState::default();
         let geom = gizmo.ensure_geom(&sfx, 72.0).clone();
@@ -1635,7 +1851,7 @@ mod tests {
 
     #[test]
     fn spline_control_point_drag_updates_arc_cleanly() {
-        let mut sfx = SfxData { origin: [100.0, 100.0], ..SfxData::default() };
+        let mut sfx = SfxData { origin: [100.0, 100.0], warp_mode: SfxWarpMode::FreeTransform, ..SfxData::default() };
         sfx.spline.points = vec![[-100.0, 0.0], [0.0, -20.0], [100.0, 0.0]];
         let (doc, id) = sfx_doc(sfx.clone());
         let mut gizmo = SfxGizmoState::default();
@@ -1747,5 +1963,128 @@ mod tests {
         let u = moved.updated_sfx.unwrap();
         assert_eq!(u.liquify_strokes.len(), 1);
         assert!((u.liquify_strokes[0].delta_px[0] - 15.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn resize_mode_corner_drag_scales_size_pt_and_pins_opposite_corner() {
+        let sfx = SfxData { origin: [100.0, 100.0], warp_mode: SfxWarpMode::Resize, ..SfxData::default() };
+        let (doc, id) = sfx_doc(sfx.clone());
+        let mut gizmo = SfxGizmoState::default();
+        let geom = gizmo.ensure_geom(&sfx, 72.0);
+        let tl = geom.world_corners[0];
+        let br = geom.world_corners[2];
+        let view = view_for(&doc, id);
+
+        assert!(pointer(&mut gizmo, &view, CanvasToolEvent::Down { x: tl[0], y: tl[1], pressure: 1.0 }, Modifiers::NONE).handled);
+        let moved = pointer(&mut gizmo, &view, CanvasToolEvent::Move { x: tl[0] - 24.0, y: tl[1] - 24.0, pressure: 1.0 }, Modifiers::NONE);
+        let u = moved.updated_sfx.expect("resize corner update");
+        assert!(u.size_pt > sfx.size_pt, "size_pt must grow: {} -> {}", sfx.size_pt, u.size_pt);
+        assert!((u.free_transform.scale_x - 1.0).abs() < 1e-6);
+        assert!((u.free_transform.scale_y - 1.0).abs() < 1e-6);
+
+        let new_geom = gizmo.ensure_geom(&u, 72.0);
+        let new_br = new_geom.world_corners[2];
+        assert!((new_br[0] - br[0]).abs() < 1.5, "BR x drifted: {} vs {}", new_br[0], br[0]);
+        assert!((new_br[1] - br[1]).abs() < 1.5, "BR y drifted: {} vs {}", new_br[1], br[1]);
+    }
+
+    #[test]
+    fn resize_mode_alt_corner_drag_anchors_center() {
+        let sfx = SfxData { origin: [100.0, 100.0], warp_mode: SfxWarpMode::Resize, ..SfxData::default() };
+        let (doc, id) = sfx_doc(sfx.clone());
+        let mut gizmo = SfxGizmoState::default();
+        let geom = gizmo.ensure_geom(&sfx, 72.0);
+        let rb = geom.rest_box;
+        let center = [(rb[0] + rb[2]) * 0.5, (rb[1] + rb[3]) * 0.5];
+        let tl = geom.world_corners[0];
+        let view = view_for(&doc, id);
+        let alt = Modifiers { alt: true, ..Modifiers::NONE };
+
+        assert!(pointer(&mut gizmo, &view, CanvasToolEvent::Down { x: tl[0], y: tl[1], pressure: 1.0 }, Modifiers::NONE).handled);
+        let moved = pointer(&mut gizmo, &view, CanvasToolEvent::Move { x: tl[0] - 30.0, y: tl[1] - 30.0, pressure: 1.0 }, alt);
+        let u = moved.updated_sfx.expect("alt resize corner update");
+        assert!((u.size_pt - sfx.size_pt).abs() > 0.5, "size_pt must change");
+
+        let new_rb = gizmo.ensure_geom(&u, 72.0).rest_box;
+        let new_center = [(new_rb[0] + new_rb[2]) * 0.5, (new_rb[1] + new_rb[3]) * 0.5];
+        assert!((new_center[0] - center[0]).abs() < 1.5, "center x drifted: {} vs {}", new_center[0], center[0]);
+        assert!((new_center[1] - center[1]).abs() < 1.5, "center y drifted: {} vs {}", new_center[1], center[1]);
+    }
+
+    #[test]
+    fn resize_mode_shift_corner_drag_stretches_scale_only() {
+        let sfx = SfxData { origin: [100.0, 100.0], warp_mode: SfxWarpMode::Resize, ..SfxData::default() };
+        let (doc, id) = sfx_doc(sfx.clone());
+        let mut gizmo = SfxGizmoState::default();
+        let geom = gizmo.ensure_geom(&sfx, 72.0);
+        let tl = geom.world_corners[0];
+        let view = view_for(&doc, id);
+
+        assert!(pointer(&mut gizmo, &view, CanvasToolEvent::Down { x: tl[0], y: tl[1], pressure: 1.0 }, Modifiers::NONE).handled);
+        let moved = pointer(&mut gizmo, &view, CanvasToolEvent::Move { x: tl[0] - 20.0, y: tl[1] - 20.0, pressure: 1.0 }, Modifiers::SHIFT);
+        let u = moved.updated_sfx.expect("shift resize corner update");
+        assert!((u.size_pt - sfx.size_pt).abs() < 1e-6, "size_pt must stay fixed under Shift");
+        assert!((u.free_transform.scale_x - u.free_transform.scale_y).abs() > 1e-3, "stretch must be non-proportional");
+        assert!(u.free_transform.scale_x.is_finite() && u.free_transform.scale_x > 0.0);
+        assert!(u.free_transform.scale_y.is_finite() && u.free_transform.scale_y > 0.0);
+    }
+
+    #[test]
+    fn resize_mode_ctrl_corner_drag_warps_four_corners() {
+        let sfx = SfxData { origin: [100.0, 100.0], warp_mode: SfxWarpMode::Resize, ..SfxData::default() };
+        let (doc, id) = sfx_doc(sfx.clone());
+        let mut gizmo = SfxGizmoState::default();
+        let geom = gizmo.ensure_geom(&sfx, 72.0);
+        let rb = geom.rest_box;
+        let tl = geom.world_corners[0];
+        let view = view_for(&doc, id);
+
+        assert!(pointer(&mut gizmo, &view, CanvasToolEvent::Down { x: tl[0], y: tl[1], pressure: 1.0 }, Modifiers::NONE).handled);
+        let moved = pointer(&mut gizmo, &view, CanvasToolEvent::Move { x: tl[0] + 18.0, y: tl[1] - 12.0, pressure: 1.0 }, Modifiers::CTRL);
+        let u = moved.updated_sfx.expect("ctrl resize corner update");
+        assert!((u.size_pt - sfx.size_pt).abs() < 1e-6, "size_pt must stay fixed under Ctrl");
+        assert!(u.free_transform.corners[0][0].abs() > 1.0, "TL corner must be warped: {:?}", u.free_transform.corners[0]);
+        let quad = quad_from_deltas(rb, &u.free_transform.corners);
+        assert!(quad_is_convex_positive(&quad, rb), "warped quad must stay convex: {:?}", u.free_transform.corners);
+    }
+
+    #[test]
+    fn resize_mode_edge_mid_drag_stretches_one_axis() {
+        let sfx = SfxData { origin: [100.0, 100.0], warp_mode: SfxWarpMode::Resize, ..SfxData::default() };
+        let (doc, id) = sfx_doc(sfx.clone());
+        let mut gizmo = SfxGizmoState::default();
+        let geom = gizmo.ensure_geom(&sfx, 72.0);
+        let rb = geom.rest_box;
+        let top_mid = [(rb[0] + rb[2]) * 0.5, rb[1]];
+        let view = view_for(&doc, id);
+
+        assert!(pointer(&mut gizmo, &view, CanvasToolEvent::Down { x: top_mid[0], y: top_mid[1], pressure: 1.0 }, Modifiers::NONE).handled);
+        let moved = pointer(&mut gizmo, &view, CanvasToolEvent::Move { x: top_mid[0], y: top_mid[1] - 20.0, pressure: 1.0 }, Modifiers::NONE);
+        let u = moved.updated_sfx.expect("resize edge update");
+        assert!(u.free_transform.scale_y > 1.0, "stretching top edge up must raise scale_y");
+        assert!((u.free_transform.scale_x - 1.0).abs() < 1e-6, "scale_x must stay untouched");
+        assert!((u.size_pt - sfx.size_pt).abs() < 1e-6);
+    }
+
+    #[test]
+    fn outside_corner_rotate_zone_rotates_in_both_modes() {
+        for warp_mode in [SfxWarpMode::Resize, SfxWarpMode::FreeTransform] {
+            let sfx = SfxData { origin: [100.0, 100.0], warp_mode, ..SfxData::default() };
+            let (doc, id) = sfx_doc(sfx.clone());
+            let mut gizmo = SfxGizmoState::default();
+            let geom = gizmo.ensure_geom(&sfx, 72.0);
+            let rb = geom.rest_box;
+            let center = [(rb[0] + rb[2]) * 0.5, (rb[1] + rb[3]) * 0.5];
+            let br = geom.world_corners[2];
+            let offset = f64::from(HANDLE_HIT_PX + 6.0);
+            let outside = [br[0] + offset, br[1] + offset];
+            let view = view_for(&doc, id);
+
+            let down = pointer(&mut gizmo, &view, CanvasToolEvent::Down { x: outside[0], y: outside[1], pressure: 1.0 }, Modifiers::NONE);
+            assert!(down.handled, "outside-corner rotate zone must hit in {warp_mode:?}");
+            let moved = pointer(&mut gizmo, &view, CanvasToolEvent::Move { x: center[0], y: center[1] - 60.0, pressure: 1.0 }, Modifiers::NONE);
+            let u = moved.updated_sfx.expect("rotate-zone update");
+            assert!(u.free_transform.rotation_deg.abs() > 30.0, "rotation must change in {warp_mode:?}: {}", u.free_transform.rotation_deg);
+        }
     }
 }

@@ -16,8 +16,8 @@ use std::sync::Mutex;
 use photocraft_algo::comic_screentone::{ScreentoneMode, render_screentone_to_surface};
 use photocraft_color::PixelFormat;
 use photocraft_doc::sfx::{
-    SfxData, SfxDryBrushEngine, SfxDryBrushSpec, SfxFillSource, SfxLineEffect, SfxLineJoin, SfxLineStyle, SfxShtackVariant, SfxSpikeShape,
-    SfxStylePass,
+    SfxData, SfxDryBrushEngine, SfxDryBrushSpec, SfxFillSource, SfxLineEffect, SfxLineJoin, SfxLineStyle, SfxShtackOvershootMode,
+    SfxShtackVariant, SfxSpikeShape, SfxStylePass,
 };
 use photocraft_doc::{FillRule, LineCap, LineJoin, PathOp};
 use photocraft_geom::Rect;
@@ -27,6 +27,9 @@ use photocraft_vector::{Polyline, Rasterizer, StrokeStyle, stroke_polygons};
 use web_time::Instant;
 
 use crate::sfx_geom::{PreparedSfx, build_sfx_geometry};
+
+/// A closed ink polygon in document space.
+type InkPolygon = Vec<(f64, f64)>;
 
 const MAX_RENDER_EXTENT: i32 = 8192;
 const MAX_RENDER_PIXELS: usize = 16 * 1024 * 1024;
@@ -110,6 +113,23 @@ fn value_noise_2d(x: f32, y: f32, seed: u32) -> f32 {
 
 fn fbm_2d(x: f32, y: f32, seed: u32) -> f32 {
     value_noise_2d(x, y, seed) * 0.65 + value_noise_2d(x * 2.03 + 17.1, y * 2.03 - 9.4, seed.wrapping_add(101)) * 0.35
+}
+
+/// Crisp paper tooth: a 1px micro-grid plus a per-pixel hash speckle over a medium fiber.
+/// Unlike a single smooth octave this has hard, pixel-scale intensity steps, so at high
+/// sharpness the dry-brush threshold punches clean holes instead of a soft gray haze.
+fn crisp_paper_grain(x: f32, y: f32, seed: u32) -> f32 {
+    let micro = value_noise_2d(x * 1.15, y * 1.15, seed);
+    let ix = x.round() as i32;
+    let iy = y.round() as i32;
+    let speckle = hash_u32(
+        (ix as u32)
+            .wrapping_mul(1_662_606_333)
+            .wrapping_add((iy as u32).wrapping_mul(84_348_833))
+            .wrapping_add(seed),
+    );
+    let fiber = value_noise_2d(x * 0.45, y * 0.45, seed.wrapping_add(0x9E37));
+    (micro * 0.55 + speckle * 0.25 + fiber * 0.20).clamp(0.0, 1.0)
 }
 
 fn edt_1d(f: &[f32], d: &mut [f32], v: &mut [usize], z: &mut [f32], n: usize) {
@@ -318,33 +338,66 @@ fn split_contour_into_edges(raw_pts: &[(f64, f64)], rdp_eps: f64, corner_turn_ra
 }
 
 /// Builds a closed anti-aliased tapered ribbon polygon from a sequence of `(x, y, half_width)` samples.
+/// The emitted ring always has POSITIVE winding and never folds back on itself in a tight bend.
 fn ribbon_polygon_from_samples(samples: &[(f64, f64, f64)]) -> Option<Vec<(f64, f64)>> {
     let n = samples.len();
     if n < 2 {
         return None;
     }
-    let mut left = Vec::with_capacity(n);
-    let mut right = Vec::with_capacity(n);
+    let mut left: Vec<(f64, f64)> = Vec::with_capacity(n);
+    let mut right: Vec<(f64, f64)> = Vec::with_capacity(n);
+    let mut kept: Vec<usize> = Vec::with_capacity(n);
     for i in 0..n {
         let prev = samples[i.saturating_sub(1)];
         let next = samples[(i + 1).min(n - 1)];
         let tx = next.0 - prev.0;
         let ty = next.1 - prev.1;
         let len = tx.hypot(ty);
-        if len < 1e-6 {
+        if len < 1e-6 || !len.is_finite() {
             continue;
         }
         let nx = -ty / len;
         let ny = tx / len;
         let hw = samples[i].2.max(0.15);
-        left.push((samples[i].0 + nx * hw, samples[i].1 + ny * hw));
-        right.push((samples[i].0 - nx * hw, samples[i].1 - ny * hw));
+        let lp = (samples[i].0 + nx * hw, samples[i].1 + ny * hw);
+        let rp = (samples[i].0 - nx * hw, samples[i].1 - ny * hw);
+        if !lp.0.is_finite() || !lp.1.is_finite() || !rp.0.is_finite() || !rp.1.is_finite() {
+            continue;
+        }
+        left.push(lp);
+        right.push(rp);
+        kept.push(i);
     }
     if left.len() < 2 {
         return None;
     }
-    left.extend(right.into_iter().rev());
-    Some(left)
+    // In a concave cusp (e.g. the middle of `B`) half_w can exceed the local radius of
+    // curvature and a side boundary moves BACKWARDS against the spine. Clamp such a point
+    // onto its predecessor so the ribbon never forms an inverted, self-intersecting loop.
+    for i in 1..left.len() {
+        let s0 = samples[kept[i - 1]];
+        let s1 = samples[kept[i]];
+        let sx = s1.0 - s0.0;
+        let sy = s1.1 - s0.1;
+        let dlx = left[i].0 - left[i - 1].0;
+        let dly = left[i].1 - left[i - 1].1;
+        if dlx * sx + dly * sy < 0.0 {
+            left[i] = left[i - 1];
+        }
+        let drx = right[i].0 - right[i - 1].0;
+        let dry = right[i].1 - right[i - 1].1;
+        if drx * sx + dry * sy < 0.0 {
+            right[i] = right[i - 1];
+        }
+    }
+    let mut ring = left;
+    ring.extend(right.into_iter().rev());
+    // `left + right.rev()` is CW for a CCW spine; unify winding so NonZero combine never
+    // treats overlapping sketch passes as opposing rings.
+    if signed_area(&ring) < 0.0 {
+        ring.reverse();
+    }
+    Some(ring)
 }
 
 /// Builds a sharp razor triangle / tapered bristle polygon from `base` along `dir` (`length`, `half_w`).
@@ -414,7 +467,10 @@ fn compute_render_bounds(data: &SfxData, geom: &PreparedSfx) -> Rect {
             let gh = (geom.warped_box[3] - geom.warped_box[1]).abs().max(24.0);
             let ratio = f64::from(le.shtack_overshoot_px).clamp(0.0, 60.0) / 100.0;
             let needle = gh * ratio * if le.shtack_variant == SfxShtackVariant::DryPencil { 0.48 } else { 1.0 };
-            needle * 1.6 + f64::from(le.shtack_thickness_px) * (gh / 160.0).clamp(0.65, 4.0) + 6.0
+            // Thickness is a percentage of glyph height: the FULL stroke width is gh * pct/100,
+            // with half that on each side of the spine plus the taper/whisker lateral offsets.
+            let thickness_pct = f64::from(le.shtack_thickness_px).clamp(0.5, 8.0);
+            needle * 1.6 + gh * (thickness_pct / 100.0) + 6.0
         }
     };
 
@@ -492,8 +548,21 @@ fn rasterize_polygon_list(polys: &[Vec<(f64, f64)>], bounds: Rect) -> Vec<f32> {
     if polys.is_empty() || n == 0 {
         return vec![0.0_f32; n];
     }
+    // Stroke/ink polygons are all SOLID ink, never holes. A CW font `solid_core` combined
+    // with a CCW tapered ribbon under NonZero cancels to 0 and punches a white star into
+    // compact dots. Normalize every ring to positive winding before combining so overlaps
+    // always accumulate ink instead of erasing each other. (Glyph fills keep their real
+    // counter-winding in `fill_rasterizer_from_polys`; do not normalize there.)
+    let mut normalized: Vec<Vec<(f64, f64)>> = Vec::with_capacity(polys.len());
+    for poly in polys {
+        let mut p = poly.clone();
+        if signed_area(&p) < 0.0 {
+            p.reverse();
+        }
+        normalized.push(p);
+    }
     let mut r = Rasterizer::new(false);
-    r.add_component(polys, PathOp::Combine, FillRule::NonZero);
+    r.add_component(&normalized, PathOp::Combine, FillRule::NonZero);
     r.render(bounds)
 }
 
@@ -819,9 +888,9 @@ fn proxy_scaled_data(data: &SfxData, scale: f64) -> SfxData {
         le.spike_size_px = px(le.spike_size_px);
         le.gpen_overshoot_px = px(le.gpen_overshoot_px);
         le.ink_brush_overshoot_px = px(le.ink_brush_overshoot_px);
-        // `shtack_overshoot_px` is a percentage of glyph height: the proxy geometry already
-        // scales the height, so scaling the percentage here would shrink needles twice.
-        // `shtack_thickness_px` is likewise proportional to glyph height via `size_scale`.
+        // `shtack_overshoot_px` and `shtack_thickness_px` are PERCENTAGES of the glyph height.
+        // The proxy geometry already scales that height, so scaling either percentage here
+        // would shrink the needles (and the stroke weight) a second time.
 
     }
     out.dry_brush.lic_length_px = px(out.dry_brush.lic_length_px);
@@ -1264,11 +1333,92 @@ fn resample_polyline(pts: &[(f64, f64)], count: usize) -> Vec<(f64, f64)> {
     out
 }
 
-/// Extends a stroke past both ends along its end tangents (razor needles). `max_needle` is the
-/// per-glyph proportional ceiling; each end gets `max_needle * (0.75 + 0.55 * r)` so a single
-/// stroke shoots needles of different lengths without ever leaving the render bounds.
-fn extend_stroke_ends(pts: &mut Vec<(f64, f64)>, max_needle: f64, seed: u32) {
-    if pts.len() < 2 || max_needle <= 0.05 {
+/// One open stroke segment for Shtack, tagged with whether its start/end may shoot razor needles.
+struct ShtackStroke {
+    pts: Vec<(f64, f64)>,
+    ext_start: bool,
+    ext_end: bool,
+}
+
+/// Odd-even ray-cast test against a single closed ring.
+fn point_in_ring(pt: (f64, f64), ring: &[(f64, f64)]) -> bool {
+    let n = ring.len();
+    if n < 3 {
+        return false;
+    }
+    let mut inside = false;
+    let (px, py) = pt;
+    let mut j = n - 1;
+    for i in 0..n {
+        let (xi, yi) = ring[i];
+        let (xj, yj) = ring[j];
+        let crosses = (yi > py) != (yj > py);
+        if crosses {
+            let x_int = (xj - xi) * (py - yi) / (yj - yi) + xi;
+            if px < x_int {
+                inside = !inside;
+            }
+        }
+        j = i;
+    }
+    inside
+}
+
+/// True when `pt` lies inside the filled body of a glyph (odd-even across all glyph contours).
+fn point_in_glyph(pt: (f64, f64), polylines: &[Polyline]) -> bool {
+    let mut inside = false;
+    for pl in polylines {
+        if point_in_ring(pt, &pl.pts) {
+            inside = !inside;
+        }
+    }
+    inside
+}
+
+/// Determines whether contour `idx` is an outer silhouette (`true`) or an inner counter/hole (`false`),
+/// invariant to TrueType vs CFF winding order.
+fn contour_is_outer(idx: usize, polylines: &[Polyline]) -> bool {
+    let Some(&probe) = polylines[idx].pts.first() else {
+        return true;
+    };
+    let mut depth = 0usize;
+    for (other, pl) in polylines.iter().enumerate() {
+        if other != idx && point_in_ring(probe, &pl.pts) {
+            depth += 1;
+        }
+    }
+    depth.is_multiple_of(2)
+}
+
+/// Checks if shooting a needle from `end_pt` along unit direction `dir` goes cleanly OUTSIDE the glyph.
+fn needle_protrudes_outside(end_pt: (f64, f64), dir: (f64, f64), polylines: &[Polyline], gh: f64) -> bool {
+    let len = dir.0.hypot(dir.1);
+    if len < 1e-6 {
+        return false;
+    }
+    let (ux, uy) = (dir.0 / len, dir.1 / len);
+    for frac in [0.035, 0.085] {
+        let d = (gh * frac).max(3.0);
+        let probe = (end_pt.0 + ux * d, end_pt.1 + uy * d);
+        if point_in_glyph(probe, polylines) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Extends a stroke past enabled ends along its end tangents (razor needles). Ends disabled by
+/// `OuterOnly` get only a tiny `seal_px` closure (~half stroke width) so corners meet cleanly
+/// with zero gap and zero interior overshoot.
+fn extend_stroke_ends_masked(
+    pts: &mut Vec<(f64, f64)>,
+    max_needle: f64,
+    seal_px: f64,
+    seed: u32,
+    ext_start: bool,
+    ext_end: bool,
+) {
+    if pts.len() < 2 {
         return;
     }
     let first = pts[0];
@@ -1281,28 +1431,39 @@ fn extend_stroke_ends(pts: &mut Vec<(f64, f64)>, max_needle: f64, seed: u32) {
     let l1 = d1.0.hypot(d1.1).max(1e-6);
     let r0 = f64::from(hash_u32(seed));
     let r1 = f64::from(hash_u32(seed.wrapping_add(0x51ED)));
-    let o0 = max_needle * (0.75 + 0.55 * r0);
-    let o1 = max_needle * (0.75 + 0.55 * r1);
-    let head = (first.0 + d0.0 / l0 * o0, first.1 + d0.1 / l0 * o0);
-    let tail = (last.0 + d1.0 / l1 * o1, last.1 + d1.1 / l1 * o1);
-    if head.0.is_finite() && head.1.is_finite() && tail.0.is_finite() && tail.1.is_finite() {
-        pts.insert(0, head);
-        pts.push(tail);
+    let o0 = if ext_start { max_needle * (0.75 + 0.55 * r0) } else { seal_px };
+    let o1 = if ext_end { max_needle * (0.75 + 0.55 * r1) } else { seal_px };
+    if o0 > 0.05 {
+        let head = (first.0 + d0.0 / l0 * o0, first.1 + d0.1 / l0 * o0);
+        if head.0.is_finite() && head.1.is_finite() {
+            pts.insert(0, head);
+        }
+    }
+    if o1 > 0.05 {
+        let tail = (last.0 + d1.0 / l1 * o1, last.1 + d1.1 / l1 * o1);
+        if tail.0.is_finite() && tail.1.is_finite() {
+            pts.push(tail);
+        }
     }
 }
 
-/// Splits a simplified closed contour into independent open stroke segments. Sharp corners
-/// (incoming/outgoing edge turn > ~36°, i.e. `cos_turn < 0.809`) become split points so
-/// intersecting strokes both pierce the corner. Smooth closed loops with fewer than two corners
-/// (`O`, `0`, oval counters) are cut into two half-loop arcs (top->bottom and bottom->top) so
-/// the pen still produces natural entry/exit tapered overlaps.
-fn split_contour_at_corners(simp: &[(f64, f64)]) -> Vec<Vec<(f64, f64)>> {
+/// Splits a simplified closed contour into independent open stroke segments and tags each end
+/// according to `outer_only`: in `OuterOnly` mode only convex outer-silhouette corners whose
+/// tangent exits into empty space may shoot needles; inner counters and concave bends stay clean.
+fn split_contour_at_corners(
+    simp: &[(f64, f64)],
+    is_outer: bool,
+    polylines: &[Polyline],
+    gh: f64,
+    outer_only: bool,
+) -> Vec<ShtackStroke> {
     const COS_CORNER: f64 = 0.809;
     let n = simp.len();
     if n < 3 {
         return Vec::new();
     }
-    let mut corners: Vec<usize> = Vec::new();
+    let area_sign = signed_area(simp).signum();
+    let mut corners: Vec<(usize, bool)> = Vec::new();
     for i in 0..n {
         let prev = simp[(i + n - 1) % n];
         let cur = simp[i];
@@ -1314,14 +1475,17 @@ fn split_contour_at_corners(simp: &[(f64, f64)]) -> Vec<Vec<(f64, f64)>> {
         if l1 > 1e-4 && l2 > 1e-4 {
             let cos_turn = ((v1.0 * v2.0 + v1.1 * v2.1) / (l1 * l2)).clamp(-1.0, 1.0);
             if cos_turn < COS_CORNER {
-                corners.push(i);
+                let cross = v1.0 * v2.1 - v1.1 * v2.0;
+                let is_convex = area_sign * cross > 0.0;
+                corners.push((i, is_convex));
             }
         }
     }
     if corners.len() >= 2 {
         let mut edges = Vec::with_capacity(corners.len());
         for k in 0..corners.len() {
-            let (start, end) = (corners[k], corners[(k + 1) % corners.len()]);
+            let (start, start_convex) = corners[k];
+            let (end, end_convex) = corners[(k + 1) % corners.len()];
             let mut edge = Vec::new();
             let mut idx = start;
             for _ in 0..=n {
@@ -1332,7 +1496,20 @@ fn split_contour_at_corners(simp: &[(f64, f64)]) -> Vec<Vec<(f64, f64)>> {
                 idx = (idx + 1) % n;
             }
             if edge.len() >= 2 {
-                edges.push(edge);
+                let (ext_start, ext_end) = if !outer_only {
+                    (true, true)
+                } else if !is_outer {
+                    (false, false)
+                } else {
+                    let s_dir = (edge[0].0 - edge[1].0, edge[0].1 - edge[1].1);
+                    let m = edge.len();
+                    let e_dir = (edge[m - 1].0 - edge[m - 2].0, edge[m - 1].1 - edge[m - 2].1);
+                    (
+                        start_convex && needle_protrudes_outside(edge[0], s_dir, polylines, gh),
+                        end_convex && needle_protrudes_outside(edge[m - 1], e_dir, polylines, gh),
+                    )
+                };
+                edges.push(ShtackStroke { pts: edge, ext_start, ext_end });
             }
         }
         if !edges.is_empty() {
@@ -1364,46 +1541,77 @@ fn split_contour_at_corners(simp: &[(f64, f64)]) -> Vec<Vec<(f64, f64)>> {
         }
         out
     };
+    let smooth_ext = !outer_only || is_outer;
     let mut arcs = Vec::with_capacity(2);
     for (a, b) in [(i_top, i_bot), (i_bot, i_top)] {
         let arc = walk(a, b);
         if arc.len() >= 2 {
-            arcs.push(arc);
+            arcs.push(ShtackStroke { pts: arc, ext_start: smooth_ext, ext_end: smooth_ext });
         }
     }
     arcs
 }
 
-/// Principal-axis unit vector of a point set via PCA, used for compact dot sketch strokes.
-fn principal_axis(pts: &[(f64, f64)]) -> (f64, f64) {
-    let n = pts.len().max(1) as f64;
-    let mx = pts.iter().map(|p| p.0).sum::<f64>() / n;
-    let my = pts.iter().map(|p| p.1).sum::<f64>() / n;
-    let (mut sxx, mut sxy, mut syy) = (0.0_f64, 0.0_f64, 0.0_f64);
-    for &(x, y) in pts {
-        let dx = x - mx;
-        let dy = y - my;
-        sxx += dx * dx;
-        sxy += dx * dy;
-        syy += dy * dy;
+/// Compact contours (the dot of `!`/`?`, `i` dots) trace two contour-following half-arcs scaled
+/// to `c_span`. In hollow Shtack mode (`!shtack_fill_interior`) dots with readable size stay
+/// hollow sketch rings matching the rest of the lettering; tiny dots or filled mode keep a solid core.
+fn compact_dot_segments_and_core(
+    pl: &Polyline,
+    le: &SfxLineEffect,
+    c_span: f64,
+    perimeter: f64,
+    outer_only: bool,
+) -> (Option<InkPolygon>, Vec<ShtackStroke>) {
+    let keep_solid_core = le.shtack_fill_interior || c_span < 10.0;
+    let core = keep_solid_core.then(|| {
+        let mut c = pl.pts.clone();
+        if signed_area(&c) < 0.0 {
+            c.reverse();
+        }
+        c
+    });
+    let n_trace = (perimeter / 2.5).round().clamp(10.0, 24.0) as usize;
+    let outline = resample_polyline(&pl.pts, n_trace);
+    let mut traces = Vec::new();
+    if outline.len() >= 4 {
+        let half = outline.len() / 2;
+        let jitter_amp = (c_span * 0.035).clamp(0.2, 1.4);
+        for (pass, range) in [(0usize, 0..=half), (1usize, half..=(outline.len() - 1))] {
+            let mut trace: Vec<(f64, f64)> = outline[range].to_vec();
+            if pass == 1
+                && let Some(&first) = outline.first()
+            {
+                trace.push(first);
+            }
+            let seed = le.shtack_seed.wrapping_add((pass as u32).wrapping_mul(977));
+            for (i, pt) in trace.iter_mut().enumerate() {
+                let jx = (f64::from(hash_u32(seed.wrapping_add((i as u32).wrapping_mul(7)))) - 0.5) * jitter_amp;
+                let jy = (f64::from(hash_u32(seed.wrapping_add((i as u32).wrapping_mul(13)).wrapping_add(31))) - 0.5) * jitter_amp;
+                pt.0 += jx;
+                pt.1 += jy;
+            }
+            if trace.len() >= 2 {
+                traces.push(ShtackStroke { pts: trace, ext_start: !outer_only, ext_end: !outer_only });
+            }
+        }
     }
-    let theta = 0.5 * (2.0 * sxy).atan2(sxx - syy);
-    (theta.cos(), theta.sin())
+    (core, traces)
 }
 
 /// Builds the complete Shtack polygon set DIRECTLY from the exact vector glyph contours.
-/// Returns ready-to-rasterize polygons: solid cores for compact contours (dots / bars) plus
+/// Returns ready-to-rasterize polygons: optional solid cores for filled/micro dots plus
 /// every tapered sketch pass. No raster grid, no skeleton thinning, no lost punctuation.
 fn build_shtack_contour_polygons(geom: &PreparedSfx, le: &SfxLineEffect) -> Vec<Vec<(f64, f64)>> {
+    let outer_only = le.shtack_overshoot_mode == SfxShtackOvershootMode::OuterOnly;
     let mut polys: Vec<Vec<(f64, f64)>> = Vec::new();
     for glyph in &geom.glyphs {
         // Letter height in document pixels; every proportional decision uses it.
         let gh = (glyph.warped_bounds[3] - glyph.warped_bounds[1]).abs().max(24.0);
-        let mut segments: Vec<Vec<(f64, f64)>> = Vec::new();
-        let mut compact_segments: Vec<Vec<(f64, f64)>> = Vec::new();
+        let mut segments: Vec<ShtackStroke> = Vec::new();
+        let mut compact_segments: Vec<ShtackStroke> = Vec::new();
         let mut solid_cores: Vec<Vec<(f64, f64)>> = Vec::new();
 
-        for pl in &glyph.polylines {
+        for (pi, pl) in glyph.polylines.iter().enumerate() {
             if pl.pts.len() < 3 {
                 continue;
             }
@@ -1423,42 +1631,32 @@ fn build_shtack_contour_polygons(geom: &PreparedSfx, le: &SfxLineEffect) -> Vec<
             }
             let c_span = (x1 - x0).max(y1 - y0);
 
-            // Compact closed contour: the bar and dot of `!` are separate contours in this
-            // vector outline, so they can never be lost to raster-grid downsampling.
+            // Compact closed contour (`!`, `?`, `i` dots): hollow sketch ring when hollow mode is active.
             if c_span <= gh * 0.26 || perimeter < gh * 0.75 {
-                solid_cores.push(pl.pts.clone());
-                let (ux, uy) = principal_axis(&pl.pts);
-                let (cx, cy) = ((x0 + x1) * 0.5, (y0 + y1) * 0.5);
-                let len = c_span.max(2.0);
-                // 2-3 short tapered sketch strokes across the principal axis and diagonals.
-                compact_segments.push(vec![
-                    (cx - ux * len * 0.48, cy - uy * len * 0.48),
-                    (cx + ux * len * 0.48, cy + uy * len * 0.48),
-                ]);
-                let (dx, dy) = (ux * 0.62 - uy * 0.78, uy * 0.62 + ux * 0.78);
-                compact_segments.push(vec![
-                    (cx - dx * len * 0.36, cy - dy * len * 0.36),
-                    (cx + dx * len * 0.36, cy + dy * len * 0.36),
-                ]);
-                let (ex, ey) = (ux * 0.62 + uy * 0.78, uy * 0.62 - ux * 0.78);
-                compact_segments.push(vec![
-                    (cx - ex * len * 0.30, cy - ey * len * 0.30),
-                    (cx + ex * len * 0.30, cy + ey * len * 0.30),
-                ]);
+                let (core, traces) = compact_dot_segments_and_core(pl, le, c_span, perimeter, outer_only);
+                if let Some(c) = core {
+                    solid_cores.push(c);
+                }
+                compact_segments.extend(traces);
                 continue;
             }
 
             // Normal contour: lightly simplify micro-collinear vertices (curves stay smooth),
             // then split at sharp corners into independent line / arc segments.
+            let is_outer = contour_is_outer(pi, &glyph.polylines);
             let simp = rdp_closed(&pl.pts, 0.75);
-            segments.extend(split_contour_at_corners(&simp));
+            segments.extend(split_contour_at_corners(&simp, is_outer, &glyph.polylines, gh, outer_only));
         }
 
         polys.extend(build_shtack_stroke_polygons(&segments, le, gh));
         if !compact_segments.is_empty() {
             let mut dot_le = *le;
             dot_le.shtack_bristles = 3;
-            dot_le.shtack_thickness_px = (f64::from(le.shtack_thickness_px) * 0.6).max(4.0) as f32;
+            // Scale overshoot, spread and nib proportionally for compact punctuation so dots
+            // never shoot full-letter needles or scatter wide whiskers.
+            dot_le.shtack_overshoot_px = (le.shtack_overshoot_px * 0.25).min(8.0);
+            dot_le.shtack_split_pct = le.shtack_split_pct * 0.45;
+            dot_le.shtack_thickness_px = (f64::from(le.shtack_thickness_px) * 0.75).clamp(0.5, 8.0) as f32;
             polys.extend(build_shtack_stroke_polygons(&compact_segments, &dot_le, gh));
         }
         polys.extend(solid_cores);
@@ -1469,9 +1667,11 @@ fn build_shtack_contour_polygons(geom: &PreparedSfx, le: &SfxLineEffect) -> Vec<
 /// Builds 3..=6 independent variable-width tapered sketch passes per segment. Core passes keep
 /// a dense body with long razor tapers; whiskers are visibly thinner and offset by a guaranteed
 /// lateral air gap, then tilted and bowed so they diverge organically from the core stroke.
-fn build_shtack_stroke_polygons(strokes: &[Vec<(f64, f64)>], le: &SfxLineEffect, gh: f64) -> Vec<Vec<(f64, f64)>> {
-    let size_scale = (gh / 160.0).clamp(0.65, 4.0);
-    let half_w = (f64::from(le.shtack_thickness_px).max(4.0) * size_scale) * 0.38;
+fn build_shtack_stroke_polygons(strokes: &[ShtackStroke], le: &SfxLineEffect, gh: f64) -> Vec<Vec<(f64, f64)>> {
+    // Thickness is a PERCENTAGE of glyph height, not a document-pixel length. Compute it once,
+    // directly from gh: no `size_scale`, no double scaling on large lettering or proxies.
+    let thickness_pct = f64::from(le.shtack_thickness_px).clamp(0.5, 8.0);
+    let half_w = (gh * (thickness_pct / 100.0) * 0.5).max(0.75);
     let bristles = usize::from(le.shtack_bristles.clamp(3, 6));
     let split = (f64::from(le.shtack_split_pct) / 100.0).clamp(0.0, 1.0);
     let dry = (f64::from(le.shtack_dryness_pct) / 100.0).clamp(0.0, 1.0);
@@ -1481,7 +1681,8 @@ fn build_shtack_stroke_polygons(strokes: &[Vec<(f64, f64)>], le: &SfxLineEffect,
     let seed_base = le.shtack_seed.wrapping_mul(12_347);
     let mut polys = Vec::new();
 
-    for (si, stroke) in strokes.iter().enumerate() {
+    for (si, st) in strokes.iter().enumerate() {
+        let stroke = &st.pts;
         if stroke.len() < 2 {
             continue;
         }
@@ -1504,14 +1705,21 @@ fn build_shtack_stroke_polygons(strokes: &[Vec<(f64, f64)>], le: &SfxLineEffect,
 
             let mut extended = stroke.clone();
             let pass_needle = if core { max_needle } else { max_needle * (0.45 + r3 * 0.9) };
-            extend_stroke_ends(&mut extended, pass_needle, p_seed);
+            let seal_px = if core { (half_w * 0.85).min(seg_len * 0.2) } else { 0.0 };
+            extend_stroke_ends_masked(&mut extended, pass_needle, seal_px, p_seed, st.ext_start, st.ext_end);
             let base = resample_polyline(&extended, samples_n);
             if base.len() < 2 {
                 continue;
             }
 
-            // Base passes are dense; whiskers are visibly thinner.
-            let width = half_w * if core { 0.78 + 0.18 * r0 } else { 0.24 + 0.18 * r0 };
+            // Base passes are dense; whiskers are visibly thinner. A core body is never
+            // sub-pixel even at 0.5% thickness: it stays >= 0.65 half-width so the ink is
+            // continuous instead of a broken line of isolated speckles.
+            let width = if core {
+                (half_w * (0.78 + 0.18 * r0)).max(0.65)
+            } else {
+                half_w * (0.24 + 0.18 * r0)
+            };
             let side = if k >= 2 && (k - 2) % 2 == 0 { 1.0 } else { -1.0 };
             let rank = (k.saturating_sub(2) / 2) as f64;
             let base_off = if core {
@@ -1535,9 +1743,16 @@ fn build_shtack_stroke_polygons(strokes: &[Vec<(f64, f64)>], le: &SfxLineEffect,
                 let tl = tx.hypot(ty).max(1e-6);
                 let nx = -ty / tl;
                 let ny = tx / tl;
-                // Smooth 0 -> full -> 0 taper: razor needle tips at both ends.
-                let taper = (PI * t).sin().max(0.0).powf(0.55);
-                let hw = (taper * width).max(0.12);
+                // Smooth 0 -> full -> 0 taper: razor needle tips at both ends. Core passes
+                // hold a flat full-width body and taper only over the outer 15% at each end,
+                // so minimum-thickness strokes render as crisp, unbroken ink.
+                let tip_taper = (PI * t).sin().max(0.0).powf(0.55);
+                let taper = if core {
+                    tip_taper.max((t / 0.15).min((1.0 - t) / 0.15).clamp(0.0, 1.0))
+                } else {
+                    tip_taper
+                };
+                let hw = (taper * width).max(0.15);
                 let jitter = if jitter_amp > 0.01 {
                     (f64::from(value_noise_1d(t as f32 * 42.0 + (k as f32) * 3.7, p_seed)) - 0.5) * 2.0 * jitter_amp
                 } else {
@@ -1565,6 +1780,7 @@ fn apply_shtack_dry_breakup(cov: &mut [f32], w: usize, h: usize, le: &SfxLineEff
     // Fast 1-pass 4-neighbourhood edge estimate. The old code ran a full 2-pass Felzenszwalb
     // EDT over EVERY pixel just to find coverage within ~2 px of the stroke boundary; this
     // local check is ~100x faster and skips all empty pixels entirely.
+    let sharp = (f64::from(le.shtack_grain_sharpness_pct) / 100.0).clamp(0.0, 1.0);
     let src = cov.to_vec();
     let seed = le.shtack_seed.wrapping_mul(7_919);
     for (i, c) in cov.iter_mut().enumerate() {
@@ -1582,11 +1798,23 @@ fn apply_shtack_dry_breakup(cov: &mut [f32], w: usize, h: usize, le: &SfxLineEff
         let edge = f64::from((cv * min_nb).clamp(0.0, 1.0));
         let x = px as f32;
         let y = py as f32;
-        let grain = fbm_2d(x * 0.55, y * 0.55, seed) as f64;
+        // Crisp tooth + a directional dry streak: grain can now fully sever the ink.
+        // `ink_score` is higher in the stroke core (`+0.26 * edge`) so paper tooth eats into
+        // stroke boundaries first and then speckles through the interior as dryness rises.
+        let grain = f64::from(crisp_paper_grain(x, y, seed));
         let streak = f64::from(value_noise_2d(x * 0.12, y * 0.85, seed.wrapping_add(31)));
-        let noise = (grain * 0.7 + streak * 0.3).clamp(0.0, 1.0);
-        let density = 1.0 - dryness * (0.30 + 0.85 * (1.0 - edge)) * noise;
-        *c = (*c as f64 * density.clamp(0.08, 1.0)).clamp(0.0, 1.0) as f32;
+        let noise = (grain * 0.72 + streak * 0.28).clamp(0.0, 1.0);
+        let ink_score = (1.0 - noise) + 0.26 * edge;
+        let thresh = dryness * 0.92;
+        // No 0.08 safety floor: at 100% sharpness dry gaps reach EXACTLY 0.0. Below that,
+        // a steepness ramp transitions smoothly from soft graphite to razor-crisp paper tooth.
+        let keep = if sharp >= 0.99 {
+            if ink_score >= thresh { 1.0 } else { 0.0 }
+        } else {
+            let slope = 2.5 + sharp * sharp * 55.0;
+            ((ink_score - thresh) * slope + 0.5).clamp(0.0, 1.0)
+        };
+        *c = (*c as f64 * keep).clamp(0.0, 1.0) as f32;
     }
 }
 
@@ -1615,6 +1843,7 @@ fn apply_dry_brush_sdf_physics(base_cov: &mut [f32], bounds: Rect, w: usize, h: 
     let warp = (db.warp_pct / 100.0) * 14.0;
     let grain = db.paper_grain_pct / 100.0;
     let wear = db.edge_wear_pct / 100.0;
+    let sharp = (db.grain_sharpness_pct / 100.0).clamp(0.0, 1.0);
     let seed = db.seed.wrapping_mul(10_007);
 
     for y in 0..h {
@@ -1629,86 +1858,359 @@ fn apply_dry_brush_sdf_physics(base_cov: &mut [f32], bounds: Rect, w: usize, h: 
             let v = -px * sin_a + py * cos_a;
             let w_off = (fbm_2d(u * 0.035, v * 0.035, seed.wrapping_add(11)) - 0.5) * warp;
             let bristle = value_noise_2d(u * 0.025, (v + w_off) * freq, seed);
-            let paper = value_noise_2d(px * 0.35, py * 0.35, seed.wrapping_add(97));
+            let paper = crisp_paper_grain(px, py, seed.wrapping_add(97));
             let edge_fade = (sdf[idx] / (3.0 + wear * 16.0)).clamp(0.0, 1.0);
             let ink_score = bristle * (1.0 - grain * 0.35) + paper * (grain * 0.35) + edge_fade * wear * 0.55 - wear * 0.42;
             let thresh = dryness * 0.85;
-            let keep = if is_binary {
+            let keep = if is_binary || sharp >= 0.99 {
                 if ink_score >= thresh { 1.0 } else { 0.0 }
             } else {
-                ((ink_score - thresh) * 6.5 + 0.5).clamp(0.0, 1.0)
+                let slope = 5.5 + sharp * sharp * 70.0;
+                ((ink_score - thresh) * slope + 0.5).clamp(0.0, 1.0)
             };
             base_cov[idx] *= keep;
         }
     }
 }
 
-fn apply_dry_brush_seg(base_cov: &mut [f32], geom: &PreparedSfx, bounds: Rect, w: usize, h: usize, db: &SfxDryBrushSpec, is_binary: bool) {
-    // Collect long contour segments to establish local stroke tangents without vortices.
-    let mut segs: Vec<(f32, f32, f32, f32, f32, f32)> = Vec::new();
-    for pl in &geom.polylines {
-        let simp = rdp_closed(&pl.pts, 2.0);
-        let n = simp.len();
-        for i in 0..n {
-            let a = simp[i];
-            let b = simp[(i + 1) % n];
+/// A smoothed glyph contour with cumulative arc length and chunk AABBs for fast curvilinear Seg lookup.
+struct SegContour {
+    pts: Vec<(f64, f64)>,
+    cum: Vec<f64>,
+    aabb: [f64; 4],
+    chunks: Vec<(usize, usize, [f64; 4])>,
+    phase: f64,
+}
+
+fn build_seg_chunks(pts: &[(f64, f64)]) -> Vec<(usize, usize, [f64; 4])> {
+    const CHUNK_SEGS: usize = 8;
+    let n_segs = pts.len().saturating_sub(1);
+    let mut chunks = Vec::with_capacity(n_segs.div_ceil(CHUNK_SEGS));
+    let mut start = 0;
+    while start < n_segs {
+        let end = (start + CHUNK_SEGS).min(n_segs);
+        let mut bb = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+        for &(x, y) in &pts[start..=end] {
+            bb[0] = bb[0].min(x);
+            bb[1] = bb[1].min(y);
+            bb[2] = bb[2].max(x);
+            bb[3] = bb[3].max(y);
+        }
+        chunks.push((start, end, bb));
+        start = end;
+    }
+    chunks
+}
+
+fn build_seg_contours(geom: &PreparedSfx) -> Vec<SegContour> {
+    let mut contours = Vec::new();
+    for (gi, pl) in geom.polylines.iter().enumerate() {
+        // Keep the smooth source contour; only duplicate and sub-half-pixel edges are dropped.
+        let mut pts: Vec<(f64, f64)> = Vec::with_capacity(pl.pts.len() + 1);
+        for &p in &pl.pts {
+            if !p.0.is_finite() || !p.1.is_finite() {
+                continue;
+            }
+            if let Some(&q) = pts.last()
+                && (p.0 - q.0).hypot(p.1 - q.1) < 0.5
+            {
+                continue;
+            }
+            pts.push(p);
+        }
+        if pts.len() < 2 {
+            continue;
+        }
+        if let (Some(&first), Some(&last)) = (pts.first(), pts.last())
+            && (first.0 - last.0).hypot(first.1 - last.1) >= 0.5
+        {
+            pts.push(first);
+        }
+        let mut cum = vec![0.0_f64; pts.len()];
+        for i in 1..pts.len() {
+            cum[i] = cum[i - 1] + (pts[i].0 - pts[i - 1].0).hypot(pts[i].1 - pts[i - 1].1);
+        }
+        let total = cum[pts.len() - 1];
+        if !total.is_finite() || total < 0.5 {
+            continue;
+        }
+        let mut aabb = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+        for &(x, y) in &pts {
+            aabb[0] = aabb[0].min(x);
+            aabb[1] = aabb[1].min(y);
+            aabb[2] = aabb[2].max(x);
+            aabb[3] = aabb[3].max(y);
+        }
+        let chunks = build_seg_chunks(&pts);
+        contours.push(SegContour { pts, cum, aabb, chunks, phase: (gi as f64) * 37.0 });
+    }
+    contours
+}
+
+fn seg_aabb_dist2(aabb: [f64; 4], px: f64, py: f64) -> f64 {
+    let dx = (aabb[0] - px).max(0.0).max(px - aabb[2]);
+    let dy = (aabb[1] - py).max(0.0).max(py - aabb[3]);
+    dx * dx + dy * dy
+}
+
+/// Closest point on one smooth contour as `(arc length, squared distance)`.
+fn closest_on_seg_contour(c: &SegContour, px: f64, py: f64, best_d2: f64) -> Option<(f64, f64)> {
+    let mut best = best_d2;
+    let mut best_s = 0.0_f64;
+    let mut found = false;
+    for &(start, end, bb) in &c.chunks {
+        if seg_aabb_dist2(bb, px, py) > best {
+            continue;
+        }
+        for i in start..end {
+            let a = c.pts[i];
+            let b = c.pts[i + 1];
             let dx = b.0 - a.0;
             let dy = b.1 - a.1;
-            let len = dx.hypot(dy);
-            if len >= 6.0 {
-                segs.push((a.0 as f32, a.1 as f32, b.0 as f32, b.1 as f32, (dx / len) as f32, (dy / len) as f32));
+            let l2 = dx * dx + dy * dy;
+            if l2 < 1e-9 {
+                continue;
+            }
+            let t = (((px - a.0) * dx + (py - a.1) * dy) / l2).clamp(0.0, 1.0);
+            let cx = a.0 + dx * t - px;
+            let cy = a.1 + dy * t - py;
+            let d2 = cx * cx + cy * cy;
+            if d2 < best {
+                best = d2;
+                best_s = c.cum[i] + t * (c.cum[i + 1] - c.cum[i]);
+                found = true;
             }
         }
     }
-    if segs.is_empty() {
+    if found { Some((best_s, best)) } else { None }
+}
+
+/// Evaluates the closest smooth contour point across all contours, seeding `best_d2` with the
+/// previous pixel's winning contour so AABB pruning rejects distant contours immediately.
+/// Returns `(arc_len, contour_total_len, contour_phase, best_d2)`.
+fn closest_curvilinear_sd(contours: &[SegContour], px: f64, py: f64, hint: &mut usize) -> (f64, f64, f64, f64) {
+    let mut best_d2 = f64::INFINITY;
+    let mut s = 0.0_f64;
+    let mut total = 0.0_f64;
+    let mut phase = 0.0_f64;
+    let h = (*hint).min(contours.len().saturating_sub(1));
+    if let Some((cs, d2)) = closest_on_seg_contour(&contours[h], px, py, best_d2) {
+        best_d2 = d2;
+        s = cs;
+        total = *contours[h].cum.last().unwrap_or(&0.0);
+        phase = contours[h].phase;
+    }
+    for (ci, c) in contours.iter().enumerate() {
+        if ci == h || seg_aabb_dist2(c.aabb, px, py) > best_d2 {
+            continue;
+        }
+        if let Some((cs, d2)) = closest_on_seg_contour(c, px, py, best_d2) {
+            best_d2 = d2;
+            s = cs;
+            total = *c.cum.last().unwrap_or(&0.0);
+            phase = c.phase;
+            *hint = ci;
+        }
+    }
+    (s, total, phase, best_d2)
+}
+
+/// Evaluates bristle + warp noise periodically along a closed contour of perimeter `total`
+/// so the `s = 0 ↔ total` loop seam on round glyphs (`O`, `0`, `B`) is completely invisible.
+fn sample_seamless_bristle(s: f64, total: f64, phase: f64, v: f32, warp: f32, freq: f32, seed: u32) -> f32 {
+    let eval = |u_arc: f64| -> f32 {
+        let u = (u_arc + phase) as f32;
+        let w_off = (fbm_2d(u * 0.035, v * 0.035, seed.wrapping_add(17)) - 0.5) * warp;
+        value_noise_2d(u * 0.024, (v + w_off) * freq, seed)
+    };
+    let fade = (total * 0.2).clamp(0.0, 36.0);
+    if fade > 1.0 && s > total - fade {
+        let t = ((s - (total - fade)) / fade).clamp(0.0, 1.0) as f32;
+        let w = t * t * (3.0 - 2.0 * t);
+        eval(s) * (1.0 - w) + eval(s - total) * w
+    } else {
+        eval(s)
+    }
+}
+
+/// A concave exterior cusp or inner-counter corner whose distance-field fan curves into the glyph body
+/// (the source of "plastic-wrap" U-loops at T-junctions such as the crossbar of `B`).
+struct SegJunction {
+    x: f64,
+    y: f64,
+    dir_x: f64,
+    dir_y: f64,
+    radius: f64,
+}
+
+fn sample_grid_at(buf: &[f32], bounds: Rect, w: usize, h: usize, wx: f64, wy: f64) -> f32 {
+    let gx = (wx.round() as i32) - bounds.x0;
+    let gy = (wy.round() as i32) - bounds.y0;
+    if gx < 0 || gy < 0 || gx >= w as i32 || gy >= h as i32 {
+        return 0.0;
+    }
+    buf[(gy as usize) * w + (gx as usize)]
+}
+
+/// Walks along a closed contour's vertex list by approximately `target_arc` pixels in `step` (`-1` or `+1`).
+fn walk_contour_offset(c: &SegContour, start: usize, step: isize, target_arc: f64) -> (f64, f64) {
+    let m = c.pts.len().saturating_sub(1);
+    if m < 2 {
+        return c.pts[start.min(c.pts.len() - 1)];
+    }
+    let mut cur = start % m;
+    let mut acc = 0.0_f64;
+    for _ in 0..m {
+        let next = ((cur as isize + step).rem_euclid(m as isize)) as usize;
+        let seg = (c.pts[next].0 - c.pts[cur].0).hypot(c.pts[next].1 - c.pts[cur].1);
+        acc += seg;
+        cur = next;
+        if acc >= target_arc {
+            break;
+        }
+    }
+    c.pts[cur]
+}
+
+/// Detects inner-counter corners and concave exterior cusps where distance isolines fan into ink.
+fn build_seg_junctions(contours: &[SegContour], base_cov: &[f32], sdf: &[f32], bounds: Rect, w: usize, h: usize) -> Vec<SegJunction> {
+    let mut raw: Vec<(f64, SegJunction)> = Vec::new();
+    for c in contours {
+        let m = c.pts.len().saturating_sub(1);
+        if m < 4 {
+            continue;
+        }
+        let total = *c.cum.last().unwrap_or(&0.0);
+        let probe_arc = (total * 0.03).clamp(4.0, 9.0);
+        for i in 0..m {
+            let p = c.pts[i];
+            let p_back = walk_contour_offset(c, i, -1, probe_arc);
+            let p_fwd = walk_contour_offset(c, i, 1, probe_arc);
+            let v1 = (p.0 - p_back.0, p.1 - p_back.1);
+            let v2 = (p_fwd.0 - p.0, p_fwd.1 - p.1);
+            let l1 = v1.0.hypot(v1.1);
+            let l2 = v2.0.hypot(v2.1);
+            if l1 < 1e-4 || l2 < 1e-4 {
+                continue;
+            }
+            let (u1x, u1y) = (v1.0 / l1, v1.1 / l1);
+            let (u2x, u2y) = (v2.0 / l2, v2.1 / l2);
+            let cos_turn = (u1x * u2x + u1y * u2y).clamp(-1.0, 1.0);
+            if cos_turn >= 0.78 {
+                continue;
+            }
+            let (bx, by) = (u2x - u1x, u2y - u1y);
+            let bl = bx.hypot(by);
+            if bl < 1e-4 {
+                continue;
+            }
+            let (bx, by) = (bx / bl, by / bl);
+            // Distance-field fan into glyph ink happens iff `+b` lies in empty space and `-b` in ink.
+            let empty_side = sample_grid_at(base_cov, bounds, w, h, p.0 + bx * 4.0, p.1 + by * 4.0);
+            let ink_side = sample_grid_at(base_cov, bounds, w, h, p.0 - bx * 4.0, p.1 - by * 4.0);
+            if empty_side >= 0.35 || ink_side <= 0.5 {
+                continue;
+            }
+            let (dx, dy) = (-bx, -by);
+            let mut max_sdf = 6.0_f64;
+            for step in 1..=20 {
+                let d = f64::from(step) * 2.0;
+                let cv = sample_grid_at(base_cov, bounds, w, h, p.0 + dx * d, p.1 + dy * d);
+                if cv < 0.3 {
+                    break;
+                }
+                let sv = f64::from(sample_grid_at(sdf, bounds, w, h, p.0 + dx * d, p.1 + dy * d));
+                max_sdf = max_sdf.max(sv);
+            }
+            let radius = (max_sdf * 1.75).clamp(10.0, 44.0);
+            raw.push((cos_turn, SegJunction { x: p.0, y: p.1, dir_x: dx, dir_y: dy, radius }));
+        }
+    }
+    // Keep only the sharpest corner within each ~10px cluster.
+    raw.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut kept: Vec<SegJunction> = Vec::new();
+    for (_, cand) in raw {
+        let dup = kept.iter().any(|k| (k.x - cand.x).hypot(k.y - cand.y) < 10.0);
+        if !dup {
+            kept.push(cand);
+        }
+    }
+    kept
+}
+
+/// Smooth `0..=1` mask covering the plastic-wrap distance-field fan around glyph junctions.
+fn junction_cover_at(junctions: &[SegJunction], px: f64, py: f64) -> f32 {
+    let mut cover = 0.0_f64;
+    for j in junctions {
+        let dx = px - j.x;
+        let dy = py - j.y;
+        let d2 = dx * dx + dy * dy;
+        let r2 = j.radius * j.radius;
+        if d2 >= r2 {
+            continue;
+        }
+        let proj = dx * j.dir_x + dy * j.dir_y;
+        if proj < -j.radius * 0.28 {
+            continue;
+        }
+        let t = (1.0 - d2.sqrt() / j.radius).clamp(0.0, 1.0);
+        let w = t * t * (3.0 - 2.0 * t);
+        cover = cover.max(w);
+    }
+    cover as f32
+}
+
+fn apply_dry_brush_seg(base_cov: &mut [f32], geom: &PreparedSfx, bounds: Rect, w: usize, h: usize, db: &SfxDryBrushSpec, is_binary: bool) {
+    let contours = build_seg_contours(geom);
+    if contours.is_empty() {
         apply_dry_brush_sdf_physics(base_cov, bounds, w, h, db, is_binary);
         return;
     }
-
     let sdf = compute_mask_sdf(base_cov, w, h);
+    let junctions = build_seg_junctions(&contours, base_cov, &sdf, bounds, w, h);
     let dryness = db.dryness_pct / 100.0;
     let freq = 0.09 + (db.freq_pct / 100.0) * 0.42;
     let warp = (db.warp_pct / 100.0) * 12.0;
     let grain = db.paper_grain_pct / 100.0;
     let wear = db.edge_wear_pct / 100.0;
+    let sharp = (db.grain_sharpness_pct / 100.0).clamp(0.0, 1.0);
     let seed = db.seed.wrapping_mul(13_109);
+    let mut hint = 0usize;
 
     for y in 0..h {
-        let py = (bounds.y0 + y as i32) as f32;
+        let py = (bounds.y0 + y as i32) as f64;
         for x in 0..w {
             let idx = y * w + x;
             if base_cov[idx] <= 0.02 {
                 continue;
             }
-            let px = (bounds.x0 + x as i32) as f32;
-            let mut best_d2 = f32::INFINITY;
-            let (mut tx, mut ty) = (1.0_f32, 0.0_f32);
-            for &(ax, ay, bx, by, stx, sty) in &segs {
-                let abx = bx - ax;
-                let aby = by - ay;
-                let l2 = (abx * abx + aby * aby).max(1e-6);
-                let t = (((px - ax) * abx + (py - ay) * aby) / l2).clamp(0.0, 1.0);
-                let cx = ax + abx * t - px;
-                let cy = ay + aby * t - py;
-                let d2 = cx * cx + cy * cy;
-                if d2 < best_d2 {
-                    best_d2 = d2;
-                    tx = stx;
-                    ty = sty;
+            let px = (bounds.x0 + x as i32) as f64;
+            // Curvilinear coordinates: arc length s runs ALONG the smoothed outline, and v
+            // is the exact continuous distance to it. No chord snapping => no faceting.
+            let (mut s, total, phase, mut best_d2) = closest_curvilinear_sd(&contours, px, py, &mut hint);
+            if !best_d2.is_finite() {
+                best_d2 = f64::from(sdf[idx]).powi(2);
+                s = px + py;
+            }
+            let v = best_d2.sqrt().max(0.0) as f32;
+            let mut bristle = sample_seamless_bristle(s, total, phase, v, warp, freq, seed);
+            if !junctions.is_empty() {
+                let jc = junction_cover_at(&junctions, px, py);
+                if jc > 0.0 {
+                    // Cover the plastic-wrap distance-field fan at T-junctions & concave cusps
+                    // with ink while keeping paper grain natural.
+                    bristle += (1.0 - bristle) * jc * 0.90;
                 }
             }
-            let u = px * tx + py * ty;
-            let v = -px * ty + py * tx;
-            let w_off = (fbm_2d(u * 0.035, v * 0.035, seed.wrapping_add(17)) - 0.5) * warp;
-            let bristle = value_noise_2d(u * 0.024, (v + w_off) * freq, seed);
-            let paper = value_noise_2d(px * 0.35, py * 0.35, seed.wrapping_add(113));
+            let paper = crisp_paper_grain(px as f32, py as f32, seed.wrapping_add(113));
             let edge_fade = (sdf[idx] / (3.0 + wear * 15.0)).clamp(0.0, 1.0);
             let ink_score = bristle * (1.0 - grain * 0.35) + paper * (grain * 0.35) + edge_fade * wear * 0.55 - wear * 0.42;
             let thresh = dryness * 0.85;
-            let keep = if is_binary {
+            let keep = if is_binary || sharp >= 0.99 {
                 if ink_score >= thresh { 1.0 } else { 0.0 }
             } else {
-                ((ink_score - thresh) * 6.5 + 0.5).clamp(0.0, 1.0)
+                let slope = 5.5 + sharp * sharp * 70.0;
+                ((ink_score - thresh) * slope + 0.5).clamp(0.0, 1.0)
             };
             base_cov[idx] *= keep;
         }
@@ -1774,6 +2276,7 @@ fn apply_dry_brush_etf_lic(base_cov: &mut [f32], bounds: Rect, w: usize, h: usiz
     let dryness = db.dryness_pct / 100.0;
     let grain = db.paper_grain_pct / 100.0;
     let wear = db.edge_wear_pct / 100.0;
+    let sharp = (db.grain_sharpness_pct / 100.0).clamp(0.0, 1.0);
 
     for y in 0..h {
         let py = (bounds.y0 + y as i32) as f32;
@@ -1801,14 +2304,15 @@ fn apply_dry_brush_etf_lic(base_cov: &mut [f32], bounds: Rect, w: usize, h: usiz
                 }
             }
             let lic = sum / count;
-            let paper = value_noise_2d(px * 0.35, py * 0.35, seed.wrapping_add(131));
+            let paper = crisp_paper_grain(px, py, seed.wrapping_add(131));
             let edge_fade = (sdf[idx] / (3.0 + wear * 14.0)).clamp(0.0, 1.0);
             let ink_score = lic * (1.0 - grain * 0.32) + paper * (grain * 0.32) + edge_fade * wear * 0.55 - wear * 0.42;
             let thresh = dryness * 0.85;
-            let keep = if is_binary {
+            let keep = if is_binary || sharp >= 0.99 {
                 if ink_score >= thresh { 1.0 } else { 0.0 }
             } else {
-                ((ink_score - thresh) * 7.0 + 0.5).clamp(0.0, 1.0)
+                let slope = 5.5 + sharp * sharp * 70.0;
+                ((ink_score - thresh) * slope + 0.5).clamp(0.0, 1.0)
             };
             base_cov[idx] *= keep;
         }
@@ -2150,8 +2654,11 @@ fn sfx_stage_key(data: &SfxData, dpi: f32, preview: bool) -> Vec<u8> {
     k.push("shtack_bristles", &le.shtack_bristles);
     k.push("shtack_split_pct", &le.shtack_split_pct.to_bits());
     k.push("shtack_overshoot_px", &le.shtack_overshoot_px.to_bits());
+    k.push("shtack_overshoot_mode", &format!("{:?}", le.shtack_overshoot_mode));
     k.push("shtack_thickness_px", &le.shtack_thickness_px.to_bits());
     k.push("shtack_dryness_pct", &le.shtack_dryness_pct.to_bits());
+    // Dry Pencil breakup happens in the cached stroke stage, so sharpness invalidates it.
+    k.push("shtack_grain_sharpness_pct", &le.shtack_grain_sharpness_pct.to_bits());
     k.push("shtack_seed", &le.shtack_seed);
     k.push("shtack_fill_interior", &le.shtack_fill_interior);
     k.finish()
@@ -2791,7 +3298,7 @@ mod tests {
         data.line_effect.shtack_variant = variant;
         data.line_effect.shtack_bristles = 5;
         data.line_effect.shtack_overshoot_px = 20.0;
-        data.line_effect.shtack_thickness_px = 14.0;
+        data.line_effect.shtack_thickness_px = 2.0; // percentage of glyph height (not pixels)
         data.line_effect.halo_width_px = halo;
         data.line_effect.shtack_fill_interior = fill_interior;
         let out = render_sfx_with_options(&data, &mut engine, PixelFormat::RGBA8, 72.0, preview);
@@ -2950,5 +3457,291 @@ mod tests {
             big_preview.halo_ms,
             big_cached.cache_hit
         );
+    }
+
+    // --- Task 1.3 / 2 / 3: percentage thickness, winding, curvilinear dry brush, sharpness ---
+
+    /// Thickness is now a PERCENTAGE of glyph height. At the validated minimums (0.5%, 1.5%)
+    /// the core nib must stay >= 0.65 half-width, so the exclamation mark renders continuous ink.
+    #[test]
+    fn shtack_min_percent_thickness_keeps_continuous_ink() {
+        let mut engine = TextEngine::new();
+        let mut counts = Vec::new();
+        for pct in [0.5_f32, 1.5_f32] {
+            let mut data = SfxData {
+                text: "!".to_owned(),
+                size_pt: 220.0,
+                origin: [60.0, 60.0],
+                ..SfxData::default()
+            };
+            data.line_effect.style = SfxLineStyle::Shtack;
+            data.line_effect.halo_width_px = 0.0;
+            data.line_effect.shtack_dryness_pct = 0.0;
+            data.line_effect.shtack_overshoot_px = 0.0;
+            data.line_effect.shtack_thickness_px = pct;
+            let out = render_sfx(&data, &mut engine, PixelFormat::RGBA8, 72.0);
+            let bounds = out.bounds();
+            let glyph = out.geom().glyphs.first().map(|g| g.warped_bounds).unwrap_or([0.0; 4]);
+            let SfxRenderOutput::Single { surface, .. } = out else {
+                panic!("expected Single output at {pct}% thickness");
+            };
+            let (dark, _, finite) = shtack_ink_stats(&surface, bounds);
+            assert!(finite && dark > 0, "{pct}%: no finite dark ink");
+            // Dot region (lower 30% of `!`) must contain continuous ring ink.
+            let x0 = (glyph[0].floor() as i32 - 4).max(bounds.x0);
+            let x1 = (glyph[2].ceil() as i32 + 4).min(bounds.x1);
+            let y0 = (glyph[1] + (glyph[3] - glyph[1]) * 0.72).floor() as i32;
+            let y1 = (glyph[3].ceil() as i32 + 4).min(bounds.y1);
+            let mut dot_dark = 0usize;
+            for yy in y0.max(bounds.y0)..y1 {
+                for xx in x0..x1 {
+                    if surface.sample_channel(xx, yy, 3) > 0.5 && surface.sample_channel(xx, yy, 0) < 0.5 {
+                        dot_dark += 1;
+                    }
+                }
+            }
+            assert!(dot_dark >= 60, "{pct}%: exclamation dot ring must keep continuous ink, got {dot_dark}");
+            // No giant blobs: the ink must remain a small fraction of the glyph box.
+            let area = ((glyph[2] - glyph[0]) * (glyph[3] - glyph[1])).max(1.0);
+            assert!((dark as f64) < area * 0.6, "{pct}%: stroke became a giant blob ({dark} px)");
+            counts.push(dark);
+        }
+        assert!(counts[1] >= counts[0], "1.5% must not be lighter than 0.5%: {counts:?}");
+    }
+
+    /// Regression for the white star cut into compact dots when filled, and hollow ring parity
+    /// when `shtack_fill_interior == false`.
+    #[test]
+    fn shtack_exclamation_dot_center_has_no_winding_hole() {
+        for variant in [SfxShtackVariant::SaiPenSketch, SfxShtackVariant::DryPencil] {
+            let mut engine = TextEngine::new();
+            // 1. Filled interior: center of the `!` dot must be solid dark with zero winding hole.
+            let mut data = SfxData {
+                text: "!".to_owned(),
+                size_pt: 220.0,
+                origin: [60.0, 60.0],
+                ..SfxData::default()
+            };
+            data.line_effect.style = SfxLineStyle::Shtack;
+            data.line_effect.shtack_variant = variant;
+            data.line_effect.halo_width_px = 8.0;
+            data.line_effect.shtack_dryness_pct = 0.0;
+            data.line_effect.shtack_fill_interior = true;
+            let out = render_sfx(&data, &mut engine, PixelFormat::RGBA8, 72.0);
+            let glyph = out.geom().glyphs.first().map(|g| g.warped_bounds).unwrap_or([0.0; 4]);
+            let SfxRenderOutput::Single { surface, .. } = out else {
+                panic!("expected Single output for {variant:?}");
+            };
+            let cx = ((glyph[0] + glyph[2]) * 0.5).round() as i32;
+            let cy = (glyph[1] + (glyph[3] - glyph[1]) * 0.86).round() as i32;
+            let mut dark = 0usize;
+            for yy in (cy - 2)..=(cy + 2) {
+                for xx in (cx - 2)..=(cx + 2) {
+                    if surface.sample_channel(xx, yy, 3) > 0.5 && surface.sample_channel(xx, yy, 0) < 0.5 {
+                        dark += 1;
+                    }
+                }
+            }
+            assert!(dark >= 20, "{variant:?}: filled dot center must be solid, got {dark}/25 dark pixels");
+
+            // 2. Hollow mode: the dot stays a hollow sketch ring matching the hollow lettering.
+            let mut hollow = data;
+            hollow.line_effect.halo_width_px = 0.0;
+            hollow.line_effect.shtack_fill_interior = false;
+            let out_h = render_sfx(&hollow, &mut engine, PixelFormat::RGBA8, 72.0);
+            let SfxRenderOutput::Single { surface: surf_h, .. } = out_h else {
+                panic!("expected Single output for hollow {variant:?}");
+            };
+            assert!(
+                surf_h.sample_channel(cx, cy, 3) < 0.25,
+                "{variant:?}: hollow dot center should stay open, got alpha={}",
+                surf_h.sample_channel(cx, cy, 3)
+            );
+        }
+    }
+
+    /// `OuterOnly` suppresses interior/concave corner needles while `All` emits them everywhere.
+    #[test]
+    fn shtack_overshoot_mode_outer_only_keeps_interior_clean() {
+        let mut engine = TextEngine::new();
+        let mut outer = SfxData {
+            text: "BAM!".to_owned(),
+            size_pt: 220.0,
+            origin: [60.0, 60.0],
+            ..SfxData::default()
+        };
+        outer.line_effect.style = SfxLineStyle::Shtack;
+        outer.line_effect.halo_width_px = 0.0;
+        outer.line_effect.shtack_dryness_pct = 0.0;
+        outer.line_effect.shtack_overshoot_px = 24.0;
+        outer.line_effect.shtack_overshoot_mode = SfxShtackOvershootMode::OuterOnly;
+
+        let mut all = outer.clone();
+        all.line_effect.shtack_overshoot_mode = SfxShtackOvershootMode::All;
+
+        assert_ne!(sfx_stage_key(&outer, 72.0, false), sfx_stage_key(&all, 72.0, false));
+
+        let out_outer = render_sfx(&outer, &mut engine, PixelFormat::RGBA8, 72.0);
+        let out_all = render_sfx(&all, &mut engine, PixelFormat::RGBA8, 72.0);
+        let b_outer = out_outer.bounds();
+        let b_all = out_all.bounds();
+        let (SfxRenderOutput::Single { surface: s_outer, .. }, SfxRenderOutput::Single { surface: s_all, .. }) = (out_outer, out_all) else {
+            panic!("expected Single outputs");
+        };
+        let (dark_outer, _, fin_o) = shtack_ink_stats(&s_outer, b_outer);
+        let (dark_all, _, fin_a) = shtack_ink_stats(&s_all, b_all);
+        assert!(fin_o && fin_a && dark_outer > 0);
+        assert!(
+            dark_outer < dark_all,
+            "OuterOnly must omit interior counter/concave needles: outer={dark_outer} vs all={dark_all}"
+        );
+    }
+
+    /// Dry Brush Seg detects junctions on `B` (crossbar / cusp) and zero junctions on smooth `O`.
+    #[test]
+    fn dry_seg_junction_cover_targets_b_and_leaves_o_untouched() {
+        let mut engine = TextEngine::new();
+        for (txt, expect_junctions) in [("B", true), ("O", false)] {
+            let mut data = SfxData {
+                text: txt.to_owned(),
+                size_pt: 240.0,
+                origin: [40.0, 40.0],
+                ..SfxData::default()
+            };
+            data.line_effect.halo_width_px = 0.0;
+            let geom = build_sfx_geometry(&data, &mut engine, 72.0);
+            let bounds = compute_render_bounds(&data, &geom);
+            let (w, h) = (bounds.width() as usize, bounds.height() as usize);
+            let cov = fill_rasterizer_from_polys(&geom.polylines, [0.0, 0.0]).render(bounds);
+            let sdf = compute_mask_sdf(&cov, w, h);
+            let contours = build_seg_contours(&geom);
+            let juncs = build_seg_junctions(&contours, &cov, &sdf, bounds, w, h);
+            if expect_junctions {
+                assert!(!juncs.is_empty(), "glyph '{txt}' must detect T-junction / cusp corners");
+            } else {
+                assert!(juncs.is_empty(), "smooth glyph '{txt}' should have 0 junctions, got {}", juncs.len());
+            }
+        }
+    }
+
+    /// The Seg engine must sample a smooth round contour in continuous arc length instead of
+    /// snapping to RDP chords (which produced blocky Voronoi seams on `O` / `B`).
+    #[test]
+    fn dry_seg_curvilinear_sampling_is_continuous_on_round_glyphs() {
+        let mut geom = PreparedSfx::default();
+        let (ccx, ccy, radius, n) = (200.0_f64, 200.0_f64, 90.0_f64, 96usize);
+        let mut pts = Vec::with_capacity(n + 1);
+        for i in 0..n {
+            let a = std::f64::consts::TAU * i as f64 / n as f64;
+            pts.push((ccx + radius * a.cos(), ccy + radius * a.sin()));
+        }
+        pts.push(pts[0]);
+        geom.polylines.push(Polyline { pts, knot: Vec::new(), closed: true });
+        let contours = build_seg_contours(&geom);
+        assert_eq!(contours.len(), 1);
+        let cum = &contours[0].cum;
+        let total = cum[cum.len() - 1];
+        let mut last_s: Option<f64> = None;
+        let mut max_step = 0.0_f64;
+        for i in 0..n {
+            let a = std::f64::consts::TAU * i as f64 / n as f64;
+            let px = ccx + radius * a.cos();
+            let py = ccy + radius * a.sin();
+            let (s, d2) = closest_on_seg_contour(&contours[0], px, py, f64::INFINITY).unwrap_or((f64::NAN, f64::NAN));
+            assert!(s.is_finite() && d2.is_finite(), "non-finite curvilinear sample at {i}");
+            assert!(d2.sqrt() < 0.01, "a probe on the contour must map to ~0 distance");
+            if let Some(prev) = last_s {
+                let jump = (s - prev).abs();
+                max_step = max_step.max(jump.min((total - jump).abs())); // unwrap the seam
+            }
+            last_s = Some(s);
+        }
+        let ideal = total / n as f64;
+        assert!(max_step < ideal * 1.5, "chord jump {max_step} exceeds smooth step {ideal}");
+
+        // Full-render smoke: Dry: Seg on a round glyph stays finite and keeps ink.
+        let mut engine = TextEngine::new();
+        let mut data = SfxData {
+            text: "O".to_owned(),
+            size_pt: 180.0,
+            origin: [60.0, 60.0],
+            ..SfxData::default()
+        };
+        data.line_effect.halo_width_px = 0.0;
+        data.dry_brush.enabled = true;
+        data.dry_brush.engine = SfxDryBrushEngine::SdfSeg;
+        data.dry_brush.dryness_pct = 60.0;
+        let out = render_sfx(&data, &mut engine, PixelFormat::RGBA8, 72.0);
+        let bounds = out.bounds();
+        let SfxRenderOutput::Single { surface, .. } = out else {
+            panic!("expected Single output for Seg dry brush");
+        };
+        let (dark, _, finite) = shtack_ink_stats(&surface, bounds);
+        assert!(finite && dark > 0, "Seg dry brush on 'O' must stay finite and keep ink");
+    }
+
+    /// `grain_sharpness_pct == 100` must remove the old 0.08 density floor and punch exact 0.0
+    /// gaps in both the Dry Pencil (Shtack) path and the dry-brush engines.
+    #[test]
+    fn sharpness_100_punches_exact_zero_gaps() {
+        let mut engine = TextEngine::new();
+        let mut data = SfxData {
+            text: "BAM!".to_owned(),
+            size_pt: 180.0,
+            origin: [60.0, 60.0],
+            ..SfxData::default()
+        };
+        data.line_effect.style = SfxLineStyle::Shtack;
+        data.line_effect.shtack_variant = SfxShtackVariant::DryPencil;
+        data.line_effect.halo_width_px = 0.0;
+        data.line_effect.shtack_dryness_pct = 100.0;
+        data.line_effect.shtack_grain_sharpness_pct = 100.0;
+        let out = render_sfx(&data, &mut engine, PixelFormat::RGBA8, 72.0);
+        let glyph = out.geom().glyphs.last().map(|g| g.warped_bounds).unwrap_or([0.0; 4]);
+        let bounds = out.bounds();
+        let SfxRenderOutput::Single { surface, .. } = out else {
+            panic!("expected Single output for Dry Pencil");
+        };
+        let x0 = glyph[0].floor() as i32;
+        let x1 = glyph[2].ceil() as i32;
+        let y0 = (glyph[1] + (glyph[3] - glyph[1]) * 0.72).floor() as i32;
+        let y1 = glyph[3].ceil() as i32;
+        let (mut zero, mut ink) = (0usize, 0usize);
+        for y in y0.max(bounds.y0)..y1.min(bounds.y1) {
+            for x in x0.max(bounds.x0)..x1.min(bounds.x1) {
+                let a = surface.sample_channel(x, y, 3);
+                if a == 0.0 {
+                    zero += 1;
+                }
+                if a > 0.5 {
+                    ink += 1;
+                }
+            }
+        }
+        assert!(zero > 0 && ink > 0, "100% sharp DryPencil: true 0.0 gaps required (zero={zero}, ink={ink})");
+        // Sharpness participates in the cached stroke key, so a change invalidates coverage.
+        let mut other = data.clone();
+        other.line_effect.shtack_grain_sharpness_pct = 50.0;
+        assert_ne!(sfx_stage_key(&data, 72.0, false), sfx_stage_key(&other, 72.0, false));
+
+        let mut db = SfxDryBrushSpec {
+            enabled: true,
+            engine: SfxDryBrushEngine::SdfPhysics,
+            dryness_pct: 55.0,
+            paper_grain_pct: 100.0,
+            grain_sharpness_pct: 100.0,
+            ..SfxDryBrushSpec::default()
+        };
+        let box2 = Rect::from_xywh(0, 0, 64, 64);
+        let mut cov = vec![0.9_f32; 64 * 64];
+        apply_dry_brush_sdf_physics(&mut cov, box2, 64, 64, &db, false);
+        let z = cov.iter().filter(|&&v| v == 0.0).count();
+        let i = cov.iter().filter(|&&v| v > 0.5).count();
+        assert!(z > 0 && i > 0, "100% sharp dry brush: true 0.0 gaps required (zero={z}, ink={i})");
+
+        db.grain_sharpness_pct = 0.0;
+        let mut cov_soft = vec![0.9_f32; 64 * 64];
+        apply_dry_brush_sdf_physics(&mut cov_soft, box2, 64, 64, &db, false);
+        assert!(cov_soft.iter().any(|&v| v > 0.0 && v < 0.9), "0% sharpness must keep a soft ramp");
     }
 }

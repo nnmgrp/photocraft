@@ -8,7 +8,7 @@ use egui::{Color32, RichText, Stroke, Ui, vec2};
 use photocraft_algo::{DotShape, PatternType};
 use photocraft_doc::sfx::{
     MAX_SFX_SPLINE_POINTS, ScreentoneSpec, SfxData, SfxDistress, SfxDryBrushEngine, SfxFillSource, SfxFreeTransform, SfxGlyphTransform, SfxLineJoin,
-    SfxLineStyle, SfxMeshInterpolation, SfxPreset, SfxShtackVariant, SfxSpikeShape, SfxStylePass, SfxWarpMode,
+    SfxLineStyle, SfxMeshInterpolation, SfxPreset, SfxShtackOvershootMode, SfxShtackVariant, SfxSpikeShape, SfxStylePass, SfxWarpMode,
 };
 use photocraft_doc::{Color, LayerId};
 use serde_json::{Value, json};
@@ -200,6 +200,24 @@ fn slider_row_f32(ui: &mut Ui, t: Tokens, label: &str, val: &mut f32, range: std
         let readout = format!("{:.0}{suffix}", *val);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add_sized([34.0, 18.0], egui::Label::new(RichText::new(readout).monospace().size(10.0).color(t.text)));
+            let w = (ui.available_width() - 4.0).max(48.0);
+            ui.spacing_mut().slider_width = w;
+            if ui.add(egui::Slider::new(val, range).show_value(false)).changed() {
+                changed = true;
+            }
+        });
+    });
+    changed
+}
+
+/// Like [`slider_row_f32`] but prints one decimal (percentage-of-glyph-height sliders need it).
+fn slider_row_f32_1dp(ui: &mut Ui, t: Tokens, label: &str, val: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str) -> bool {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(label).size(10.5).color(t.text_dim));
+        let readout = format!("{:.1}{suffix}", *val);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.add_sized([40.0, 18.0], egui::Label::new(RichText::new(readout).monospace().size(10.0).color(t.text)));
             let w = (ui.available_width() - 4.0).max(48.0);
             ui.spacing_mut().slider_width = w;
             if ui.add(egui::Slider::new(val, range).show_value(false)).changed() {
@@ -515,29 +533,53 @@ fn draw_presets_card(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens, target: &Sf
 
 fn draw_gizmo_card(ui: &mut Ui, st: &mut SfxPanelState, gizmo: &mut SfxGizmoState, t: Tokens) {
     section_card(ui, t, |ui| {
-        section_header(ui, t, "GIZMO НА ХОЛСТЕ", "Перспектива (4 угла)", TEXT_SKY);
+        let mode_badge = match st.draft.warp_mode {
+            SfxWarpMode::Resize => "Размер (рамка)",
+            SfxWarpMode::FreeTransform => "Перспектива (4 угла)",
+            SfxWarpMode::PerGlyph => "По буквам",
+            SfxWarpMode::MeshLattice => "Сетка Mesh",
+            SfxWarpMode::LiquifyField => "Пластика",
+        };
+        section_header(ui, t, "GIZMO НА ХОЛСТЕ", mode_badge, TEXT_SKY);
         ui.add_space(3.0);
 
+        // Resize is the default & first selectable mode (FT / per-glyph / mesh / liquify follow).
         ui.columns(2, |cols| {
-            if seg_button(&mut cols[0], st.draft.warp_mode == SfxWarpMode::FreeTransform, ACCENT_SKY, "FT 4-Corner + Дуга", t).clicked() {
-                st.draft.warp_mode = SfxWarpMode::FreeTransform;
+            if seg_button(&mut cols[0], st.draft.warp_mode == SfxWarpMode::Resize, ACCENT_SKY, "Resize", t).clicked() {
+                st.draft.warp_mode = SfxWarpMode::Resize;
             }
-            if seg_button(&mut cols[1], st.draft.warp_mode == SfxWarpMode::PerGlyph, ACCENT_SKY, "По точкам (Alt)", t).clicked() {
-                st.draft.warp_mode = SfxWarpMode::PerGlyph;
+            if seg_button(&mut cols[1], st.draft.warp_mode == SfxWarpMode::FreeTransform, ACCENT_SKY, "FT 4-Corner + Дуга", t).clicked() {
+                st.draft.warp_mode = SfxWarpMode::FreeTransform;
             }
         });
         ui.add_space(2.0);
         ui.columns(2, |cols| {
-            if seg_button(&mut cols[0], st.draft.warp_mode == SfxWarpMode::MeshLattice, ACCENT_SKY, "Mesh Grid", t).clicked() {
+            if seg_button(&mut cols[0], st.draft.warp_mode == SfxWarpMode::PerGlyph, ACCENT_SKY, "По точкам (Alt)", t).clicked() {
+                st.draft.warp_mode = SfxWarpMode::PerGlyph;
+            }
+            if seg_button(&mut cols[1], st.draft.warp_mode == SfxWarpMode::MeshLattice, ACCENT_SKY, "Mesh Grid", t).clicked() {
                 st.draft.warp_mode = SfxWarpMode::MeshLattice;
             }
-            if seg_button(&mut cols[1], st.draft.warp_mode == SfxWarpMode::LiquifyField, ACCENT_SKY, "Liquify", t).clicked() {
-                st.draft.warp_mode = SfxWarpMode::LiquifyField;
-            }
         });
+        ui.add_space(2.0);
+        if seg_button(ui, st.draft.warp_mode == SfxWarpMode::LiquifyField, ACCENT_SKY, "Liquify", t).clicked() {
+            st.draft.warp_mode = SfxWarpMode::LiquifyField;
+        }
 
         ui.add_space(4.0);
         match st.draft.warp_mode {
+            SfxWarpMode::Resize => {
+                ui.horizontal(|ui| {
+                    dim_label(ui, t, "Масштаб рамки:");
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button("Сбросить масштаб").clicked() {
+                            st.draft.free_transform.scale_x = 1.0;
+                            st.draft.free_transform.scale_y = 1.0;
+                        }
+                    });
+                });
+                ui.label(RichText::new("Угол: размер; Alt — от центра; Shift — растяжение; Ctrl — 4 угла.").color(t.text_dim).size(10.0));
+            }
             SfxWarpMode::FreeTransform => {
                 ui.horizontal(|ui| {
                     dim_label(ui, t, "Перспектива рамки:");
@@ -792,8 +834,39 @@ fn draw_line_effect_card(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens) {
                 slider_row_f32(ui, t, "Разброс штрихов:", &mut le.shtack_split_pct, 0.0..=100.0, "%");
                 // Needle length is a percentage of the glyph height, not a document pixel length.
                 slider_row_f32(ui, t, "Вылет игл:", &mut le.shtack_overshoot_px, 0.0..=60.0, "%");
-                slider_row_f32(ui, t, "Толщина штриха:", &mut le.shtack_thickness_px, 6.0..=24.0 * scale, "px");
+                ui.horizontal(|ui| {
+                    dim_label(ui, t, "Перекрестия:");
+                    ui.columns(2, |cols| {
+                        if seg_button(
+                            &mut cols[0],
+                            le.shtack_overshoot_mode == SfxShtackOvershootMode::OuterOnly,
+                            ACCENT_SKY,
+                            "Снаружи",
+                            t,
+                        )
+                        .clicked()
+                        {
+                            le.shtack_overshoot_mode = SfxShtackOvershootMode::OuterOnly;
+                        }
+                        if seg_button(
+                            &mut cols[1],
+                            le.shtack_overshoot_mode == SfxShtackOvershootMode::All,
+                            ACCENT_SKY,
+                            "Все",
+                            t,
+                        )
+                        .clicked()
+                        {
+                            le.shtack_overshoot_mode = SfxShtackOvershootMode::All;
+                        }
+                    });
+                });
+                // Thickness is a percentage of glyph height (`gh`), not a document pixel length.
+                slider_row_f32_1dp(ui, t, "Толщина штриха:", &mut le.shtack_thickness_px, 0.5..=8.0, "%");
                 slider_row_f32(ui, t, "Сухость / Зерно:", &mut le.shtack_dryness_pct, 0.0..=100.0, "%");
+                if le.shtack_variant == SfxShtackVariant::DryPencil {
+                    slider_row_f32(ui, t, "Чёткость зерна:", &mut le.shtack_grain_sharpness_pct, 0.0..=100.0, "%");
+                }
                 ui.checkbox(&mut le.shtack_fill_interior, "Заливать внутри буквы (Fill)");
             }
         }
@@ -878,6 +951,7 @@ fn draw_fill_card(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens) {
                     }
                     slider_row_f32(ui, t, "Изгиб (Warp):", &mut db.warp_pct, 0.0..=100.0, "%");
                     slider_row_f32(ui, t, "Зерно бумаги:", &mut db.paper_grain_pct, 0.0..=100.0, "%");
+                    slider_row_f32(ui, t, "Чёткость зерна:", &mut db.grain_sharpness_pct, 0.0..=100.0, "%");
                     slider_row_f32(ui, t, "Износ краёв SDF:", &mut db.edge_wear_pct, 0.0..=100.0, "%");
                 }
                 SfxDryBrushEngine::Vector => {

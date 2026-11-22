@@ -514,6 +514,21 @@ pub(super) fn tool_event_with_view(app: &mut PhotocraftApp, ev: ToolEvent, mods:
     let Some((armed, mods)) = preflight_tool_event(app, ev, mods) else { return };
     let Some((raw, ev, mods)) = filter_event_before_tool(app, ev, mods, armed, view) else { return };
     let tool = event_tool(app, mods);
+    // `Tool::Sfx` drag-to-create owns Move/Up while its marquee is armed. The gizmo itself is
+    // handled earlier in preflight (`manga_seam::canvas_pointer`), so it keeps priority.
+    if tool == Tool::Sfx && app.manga.sfx_create_drag.is_some() {
+        match ev {
+            ToolEvent::Move { x, y, .. } => {
+                crate::manga_seam::sfx_create_move(app, [x, y], mods);
+                return;
+            }
+            ToolEvent::Up { x, y } => {
+                crate::manga_seam::sfx_create_finish(app, [x, y], mods);
+                return;
+            }
+            _ => {}
+        }
+    }
     if handle_eyedropper_event(app, tool, ev, mods) {
         return;
     }
@@ -751,7 +766,9 @@ fn down_special_tool(app: &mut PhotocraftApp, tool: Tool, raw: ToolEvent, x: f64
             return true;
         }
         Tool::Sfx => {
-            crate::manga_seam::sfx_canvas_press(app, [x, y]);
+            // The press was already processed by `manga_seam::canvas_pointer` in preflight: it
+            // either selected a hit SFX layer or armed a drag-to-create box. Creation happens on
+            // pointer release, so a plain click and a rectangle drag share this path.
             return true;
         }
         Tool::CloneStamp | Tool::Healing if mods.alt => {

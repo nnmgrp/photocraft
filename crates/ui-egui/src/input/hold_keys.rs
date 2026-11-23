@@ -90,6 +90,7 @@ pub fn cmd_moves(t: Tool) -> bool {
                 | Tool::FreeformPen
                 | Tool::CurvaturePen
                 | Tool::VectorCurve
+                | Tool::Screentone
                 | Tool::Sfx
                 | Tool::AddAnchorPoint
                 | Tool::DeleteAnchorPoint

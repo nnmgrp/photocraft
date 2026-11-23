@@ -341,6 +341,7 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         | Tool::ConvertPoint
         | Tool::Artboard
         | Tool::Frame
+        | Tool::Screentone
         | Tool::Sfx => &[],
     }
 }

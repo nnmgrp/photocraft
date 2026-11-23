@@ -1255,7 +1255,7 @@ mod native {
         }
         let Some(xf) = ViewXform::active(app) else { return };
         let mxf = to_manga_xf(&xf);
-        let panel_showing = is_panel_active(app, "screentone");
+        let panel_showing = is_panel_active(app, "screentone") || app.active_tool() == Tool::Screentone;
         let Some(st) = app.session.active() else { return };
         let doc = st.doc.clone();
         let doc_id = BridgeDocId(doc.id.0);
@@ -1271,7 +1271,7 @@ mod native {
 
     fn pointer_screentone(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers, xf: &ViewXform) -> bool {
         let mxf = to_manga_xf(xf);
-        let panel_showing = is_panel_active(app, "screentone");
+        let panel_showing = is_panel_active(app, "screentone") || app.active_tool() == Tool::Screentone;
         let Some(st) = app.session.active() else {
             return false;
         };
@@ -1628,6 +1628,22 @@ mod native {
         let _ = app.run("sfx.create", json!({ "sfx": sfx }));
     }
 
+    /// Top Options Bar controls when `Tool::Screentone` is active.
+    pub fn screentone_options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+        if ui.button("New Screentone Layer").clicked() {
+            let p = comic_screentone_panel::params(&app.manga.ui.screentone_ui);
+            let _ = app.run(comic_screentone_panel::CMD_LAYER, p);
+        }
+        if ui.button("Apply Filter to Layer").clicked() {
+            let p = comic_screentone_panel::params(&app.manga.ui.screentone_ui);
+            let _ = app.run(comic_screentone_panel::CMD_FILTER, p);
+        }
+        crate::widgets::vline(ui, 22.0);
+        if ui.button("Open Screentones Panel").clicked() {
+            let _ = app.run("window.panel.screentone", json!({ "show": true }));
+        }
+    }
+
     /// Top Options Bar controls when `Tool::Sfx` is active.
     pub fn sfx_options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         use photocraft_doc::sfx::SfxWarpMode;
@@ -1679,7 +1695,7 @@ mod native {
         }
         let st = app.session.active()?;
         let mxf = to_manga_xf(xf);
-        let panel_showing = is_panel_active(app, "screentone");
+        let panel_showing = is_panel_active(app, "screentone") || app.active_tool() == Tool::Screentone;
         let sview = GizmoView { panel_showing, doc: &st.doc, doc_id: BridgeDocId(st.doc.id.0), active_layer: st.active_layer, xf: &mxf };
         if let Some(c) = comic_screentone_gizmo::hover_cursor(&sview, &app.manga.ui.screentone_ui, &app.manga.ui.screentone_gizmo, xf.to_doc(cursor_scr)) {
             return Some(c);
@@ -1709,7 +1725,7 @@ mod native {
             return;
         };
         let mxf = to_manga_xf(xf);
-        let panel_showing = is_panel_active(app, "screentone");
+        let panel_showing = is_panel_active(app, "screentone") || app.active_tool() == Tool::Screentone;
         let sview = GizmoView { panel_showing, doc: &st.doc, doc_id: BridgeDocId(st.doc.id.0), active_layer: st.active_layer, xf: &mxf };
         comic_screentone_gizmo::draw(painter, &sview, &app.manga.ui.screentone_ui, &app.manga.ui.screentone_gizmo);
         let bview = BalloonView {

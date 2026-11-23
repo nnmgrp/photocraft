@@ -997,6 +997,10 @@ fn manga_icon_rail_and_toolbar_section_respect_seam_flags() {
 
     assert!(h.query_by_label("Manga").is_some(), "Manga icon rail button renders when seams enabled");
     assert!(h.query_by_label_contains("Balloon Tool").is_some(), "dedicated Manga section renders Balloon Tool");
+    assert!(h.query_by_label_contains("Screentone Tool").is_some(), "dedicated Manga section renders Screentone Tool");
+    assert!(h.query_by_label_contains("Vector Curve Tool").is_some(), "dedicated Manga section renders Vector Curve Tool");
+    assert!(h.query_by_label_contains("SFX Tool").is_some(), "dedicated Manga section renders SFX Tool");
+    assert!(h.query_by_label_contains("Fill Tool").is_some(), "dedicated Manga section renders Fill Tool");
 
     h.get_by_label("Manga").click();
     h.run_steps(3);
@@ -1006,4 +1010,6 @@ fn manga_icon_rail_and_toolbar_section_respect_seam_flags() {
     h.run_steps(3);
     assert!(h.query_by_label("Manga").is_none(), "Manga icon rail button hides when seams disabled");
     assert!(h.query_by_label_contains("Balloon Tool").is_none(), "Balloon Tool hides when seam.toolbar_tools = false");
+    assert!(h.query_by_label_contains("Screentone Tool").is_none(), "Screentone Tool hides when seam.toolbar_tools = false");
+    assert!(h.query_by_label_contains("Fill Tool").is_none(), "Fill Tool hides when seam.toolbar_tools = false");
 }

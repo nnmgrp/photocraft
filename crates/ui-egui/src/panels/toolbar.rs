@@ -34,7 +34,7 @@ pub(crate) const TOOL_SECTIONS: &[&[&[Tool]]] = &[
         &[Tool::CloneStamp, Tool::PatternStamp],
         &[Tool::HistoryBrush, Tool::ArtHistoryBrush],
         &[Tool::Eraser, Tool::BackgroundEraser, Tool::MagicEraser],
-        &[Tool::Gradient, Tool::PaintBucket, Tool::Fill],
+        &[Tool::Gradient, Tool::PaintBucket],
         &[Tool::Blur, Tool::Sharpen, Tool::Smudge],
         &[Tool::Dodge, Tool::Burn, Tool::Sponge],
     ],
@@ -44,7 +44,13 @@ pub(crate) const TOOL_SECTIONS: &[&[&[Tool]]] = &[
         &[Tool::PathSelection, Tool::DirectSelection],
         &[Tool::Rectangle, Tool::EllipseShape, Tool::Triangle, Tool::Polygon, Tool::Star, Tool::Line, Tool::CustomShape],
     ],
-    &[&[Tool::Balloon, Tool::VectorCurve, Tool::Sfx]],
+    &[
+        &[Tool::Balloon],
+        &[Tool::Screentone],
+        &[Tool::VectorCurve],
+        &[Tool::Sfx],
+        &[Tool::Fill],
+    ],
     &[&[Tool::Hand, Tool::RotateView], &[Tool::Zoom]],
 ];
 
@@ -173,8 +179,10 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let mut hidden = app.session.prefs().toolbar.hidden.clone();
     if !seam.toolbar_tools {
         hidden.push("Balloon Tool".into());
+        hidden.push("Screentone Tool".into());
         hidden.push("Vector Curve Tool".into());
         hidden.push("SFX Tool".into());
+        hidden.push("Fill Tool".into());
     }
     let sections = visible_sections(&hidden);
     // Two columns when the header chevron asks for them; a column that doesn't fit scrolls.

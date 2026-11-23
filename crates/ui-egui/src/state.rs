@@ -916,8 +916,9 @@ mod tests {
         assert_eq!(Tool::from_name("Fill Tool"), Some(Tool::Fill));
         assert_eq!(Tool::from_name("Vector Curve Tool"), Some(Tool::VectorCurve));
         assert_eq!(Tool::from_name("Balloon Tool"), Some(Tool::Balloon));
+        assert_eq!(Tool::from_name("Screentone Tool"), Some(Tool::Screentone));
         assert_eq!(Tool::from_name("SFX Tool"), Some(Tool::Sfx));
-        assert_eq!(Tool::ALL.len(), 73);
+        assert_eq!(Tool::ALL.len(), 74);
     }
 
     fn vector_tool_names_parse() {

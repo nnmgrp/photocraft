@@ -43,6 +43,12 @@ pub(crate) fn select(app: &mut PhotocraftApp, tool: Tool) {
     if tool == Tool::Balloon && crate::manga_seam::panel_checked(app, "window.panel.balloon") == Some(false) {
         let _ = crate::panel_docking::command(app, "window.panel.balloon", &serde_json::json!({ "show": true }));
     }
+    if tool == Tool::Screentone && crate::manga_seam::panel_checked(app, "window.panel.screentone") == Some(false) {
+        let _ = crate::panel_docking::command(app, "window.panel.screentone", &serde_json::json!({ "show": true }));
+    }
+    if tool == Tool::VectorCurve && crate::manga_seam::panel_checked(app, "window.panel.linework") == Some(false) {
+        let _ = crate::panel_docking::command(app, "window.panel.linework", &serde_json::json!({ "show": true }));
+    }
     if tool == Tool::Sfx && crate::manga_seam::panel_checked(app, "window.panel.sfx") == Some(false) {
         let _ = crate::panel_docking::command(app, "window.panel.sfx", &serde_json::json!({ "show": true }));
     }

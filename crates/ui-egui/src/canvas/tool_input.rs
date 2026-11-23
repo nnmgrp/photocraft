@@ -765,6 +765,9 @@ fn down_special_tool(app: &mut PhotocraftApp, tool: Tool, raw: ToolEvent, x: f64
             crate::vector_ui::vector_curve_down(app, [x, y], mods, false, f64::from(app.point_zoom()));
             return true;
         }
+        Tool::Screentone => {
+            return true;
+        }
         Tool::Sfx => {
             // The press was already processed by `manga_seam::canvas_pointer` in preflight: it
             // either selected a hit SFX layer or armed a drag-to-create box. Creation happens on

@@ -78,6 +78,7 @@ pub enum Tool {
     Line,
     CustomShape,
     Balloon,
+    Screentone,
     Sfx,
     Slice,
     SliceSelect,
@@ -85,7 +86,7 @@ pub enum Tool {
 }
 
 impl Tool {
-    pub const ALL: [Tool; 73] = [
+    pub const ALL: [Tool; 74] = [
         Tool::Move,
         Tool::Artboard,
         Tool::RectMarquee,
@@ -155,6 +156,7 @@ impl Tool {
         Tool::Line,
         Tool::CustomShape,
         Tool::Balloon,
+        Tool::Screentone,
         Tool::Sfx,
         Tool::Slice,
         Tool::SliceSelect,
@@ -235,6 +237,7 @@ impl Tool {
             Tool::Line => "Line Tool",
             Tool::CustomShape => "Custom Shape Tool",
             Tool::Balloon => "Balloon Tool",
+            Tool::Screentone => "Screentone Tool",
             Tool::Sfx => "SFX Tool",
         }
     }
@@ -295,7 +298,7 @@ impl Tool {
             Tool::Remove | Tool::SpotHealing | Tool::Healing | Tool::Patch | Tool::ContentAwareMove | Tool::RedEye => 'J',
             Tool::CloneStamp | Tool::PatternStamp => 'S',
             Tool::HistoryBrush | Tool::ArtHistoryBrush => 'Y',
-            Tool::Blur | Tool::Sharpen | Tool::Smudge | Tool::VectorCurve | Tool::Sfx => '\0',
+            Tool::Blur | Tool::Sharpen | Tool::Smudge | Tool::VectorCurve | Tool::Screentone | Tool::Sfx => '\0',
             // In the Marquee flyout, but M cycles only the Rectangular and Elliptical Marquee.
             Tool::SingleRowMarquee | Tool::SingleColumnMarquee => '\0',
             Tool::Dodge | Tool::Burn | Tool::Sponge => 'O',

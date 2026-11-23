@@ -1,20 +1,21 @@
-name: Windows Build
+name: Windows & Web Build
 
 on:
   push:
     branches:
       - "manga/**"
+      - "main"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: windows-build-${{ github.ref }}
+  group: manga-build-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  build:
+  windows-x64:
     name: Build Windows x64
     runs-on: windows-latest
     timeout-minutes: 90
@@ -76,12 +77,63 @@ jobs:
         shell: pwsh
         run: ./packaging/windows/package.ps1 -Arch x64
 
-      - name: Upload Windows artifacts
+      - name: Upload Windows x64 artifacts
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: photocraft-windows-x64
           path: |
             dist/release/*-windows-x64.msi
             dist/release/*-windows-x64-portable.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  web-wasm:
+    name: Build Web (WASM)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: 1
+      TRUNK_VERSION: 0.21.14
+      DIST: ${{ github.workspace }}/dist/release
+
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check out craft-i18n
+        uses: storytold/craft-common-actions/actions/checkout-craft-i18n@main
+
+      - uses: step-security/dtolnay-rust-toolchain@8dd607977d06adf4ed49b190381e74c17a9dd25f # v1.0.0
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+
+      - uses: step-security/rust-cache@8871c8ba063416da7c32246932ea6ae08700453e # v2.9.2
+        with:
+          key: manga-web-wasm
+          cache-on-failure: true
+
+      - name: Install trunk
+        uses: storytold/craft-common-actions/actions/install-trunk@main
+        with:
+          trunk-version: ${{ env.TRUNK_VERSION }}
+
+      - name: Build and package Web (WASM)
+        run: packaging/web/package.sh
+
+      - name: Upload Web (WASM) artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: photocraft-web-wasm
+          path: |
+            dist/release/photocraft-web-*.zip
+            dist/web/*
           if-no-files-found: error
           retention-days: 14

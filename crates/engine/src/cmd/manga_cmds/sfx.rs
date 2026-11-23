@@ -25,7 +25,7 @@ const MAX_PRESETS: usize = 256;
 const MAX_PRESET_JSON_BYTES: u64 = 1 << 20;
 
 fn ink_color() -> Color {
-    Color::rgb(15.0 / 255.0, 23.0 / 255.0, 42.0 / 255.0)
+    Color::BLACK
 }
 
 fn sfx_bad(cmd: &str, msg: impl Into<String>) -> EngineError {
@@ -332,13 +332,7 @@ impl SfxPresetLibrary {
                 },
                 dry_brush: SfxDryBrushSpec {
                     enabled: true,
-                    engine: SfxDryBrushEngine::SdfSeg,
-                    dryness_pct: 44.0,
-                    freq_pct: 62.0,
-                    warp_pct: 30.0,
-                    paper_grain_pct: 38.0,
-                    edge_wear_pct: 44.0,
-                    ..SfxDryBrushSpec::default()
+                    ..SfxDryBrushSpec::for_engine(SfxDryBrushEngine::SdfSeg)
                 },
                 vector_shadow: SfxVectorShadow::default(),
                 ..SfxPreset::default()

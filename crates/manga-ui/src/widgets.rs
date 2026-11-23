@@ -25,7 +25,7 @@ pub fn checkbox(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
 
 /// Draws a compact numeric scrub/drag field with suffix and clamping to `range`.
 pub fn value_field(ui: &mut Ui, value: &mut f32, range: RangeInclusive<f32>, suffix: &str, width: f32) -> Response {
-    let speed = ((*range.end() - *range.start()).abs() / 200.0).clamp(0.01, 1.0);
+    let speed = ((*range.end() - *range.start()).abs() / 600.0).clamp(0.02, 0.22);
     let mut drag = egui::DragValue::new(value).range(range).speed(speed).max_decimals(2);
     if !suffix.is_empty() {
         drag = drag.suffix(suffix);

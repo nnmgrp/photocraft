@@ -602,8 +602,15 @@ fn seg_contours_to_line_verts(contours: &[SfxGpuSegContour<'_>]) -> Vec<SegVert>
             continue;
         }
         for w in c.pts.windows(2) {
-            out.push(SegVert { pos: [w[0][0], w[0][1]], arc_phase: [w[0][2], c.phase] });
-            out.push(SegVert { pos: [w[1][0], w[1][1]], arc_phase: [w[1][2], c.phase] });
+            let dx = w[1][0] - w[0][0];
+            let dy = w[1][1] - w[0][1];
+            if dx.hypot(dy) < 1e-4 {
+                continue;
+            }
+            // Exact per-wall tangent angle (never averaged across sharp corners).
+            let tangent_ang = dy.atan2(dx);
+            out.push(SegVert { pos: [w[0][0], w[0][1]], arc_phase: [tangent_ang, w[0][2] + c.phase] });
+            out.push(SegVert { pos: [w[1][0], w[1][1]], arc_phase: [tangent_ang, w[1][2] + c.phase] });
         }
     }
     out
@@ -2115,16 +2122,36 @@ fn record_scene_passes(rec: &mut CmdRecorder<'_>, scene: &SfxGpuScene<'_>) {
             lp.p1[2] = le.line_width_px * 0.5 * px_per_doc;
             lp.p1[3] = le.one_bit_intensity / 100.0;
             rec.push_quad(QuadPipe::OneBitLine, TexSlot::Face, TexSlot::JfaExt, TexSlot::Dummy, TexSlot::Line, lp);
+            if le.line_grain_pct > 0.5 {
+                let mut gp = rec.region.base_params();
+                gp.p1[2] = (le.line_grain_pct / 100.0).clamp(0.0, 1.0);
+                gp.p1[3] = 1.0;
+                gp.p3[2] = 1.0 / rec.auto_scale.max(0.75);
+                gp.u0 = [0, le.shtack_seed.wrapping_mul(7_919), 1, 0];
+                rec.push_quad(QuadPipe::DryGrain, TexSlot::Line, TexSlot::Dummy, TexSlot::Dummy, TexSlot::ScratchA, gp);
+                rec.cmds.push(GpuCmd::CopyTex { src: TexSlot::ScratchA, dst: TexSlot::Line });
+            }
             true
         } else {
             false
         }
     } else if !scene.line_polygons.is_empty() {
         rec.raster_polys(MaskSlot::Line, scene.line_polygons);
-        if le.style == SfxLineStyle::Shtack && le.shtack_variant == SfxShtackVariant::DryPencil && le.shtack_dryness_pct > 0.5 {
+        let (eff_dry, eff_sharp) = if le.style == SfxLineStyle::Shtack {
+            let dry = le.shtack_dryness_pct.max(le.line_grain_pct);
+            let sharp = if le.shtack_variant == SfxShtackVariant::DryPencil && le.line_grain_pct <= le.shtack_dryness_pct {
+                le.shtack_grain_sharpness_pct
+            } else {
+                100.0
+            };
+            (dry, sharp)
+        } else {
+            (le.line_grain_pct, 100.0)
+        };
+        if eff_dry > 0.5 {
             let mut gp = rec.region.base_params();
-            gp.p1[2] = (le.shtack_dryness_pct / 100.0).clamp(0.0, 1.0);
-            gp.p1[3] = (le.shtack_grain_sharpness_pct / 100.0).clamp(0.0, 1.0);
+            gp.p1[2] = (eff_dry / 100.0).clamp(0.0, 1.0);
+            gp.p1[3] = (eff_sharp / 100.0).clamp(0.0, 1.0);
             gp.p3[2] = 1.0 / rec.auto_scale.max(0.75);
             gp.u0 = [0, le.shtack_seed.wrapping_mul(7_919), 0, 0];
             rec.push_quad(QuadPipe::DryGrain, TexSlot::Line, TexSlot::Dummy, TexSlot::Dummy, TexSlot::ScratchA, gp);

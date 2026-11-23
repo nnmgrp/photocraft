@@ -344,7 +344,15 @@ fn face_color_copy(fill: &SfxFillSource) -> Color {
         SfxFillSource::Solid { color } | SfxFillSource::DryBrush { color, .. } => *color,
         SfxFillSource::Gradient { start, .. } => *start,
         SfxFillSource::ShtackHatch { spec } => spec.color,
-        SfxFillSource::None | SfxFillSource::Screentone { .. } => Color::rgb(15.0 / 255.0, 23.0 / 255.0, 42.0 / 255.0),
+        SfxFillSource::None | SfxFillSource::Screentone { .. } => Color::BLACK,
+    }
+}
+
+/// Automatically raises `line_width_px` from `0px` to a visible default (`5..64 px`) when the user
+/// switches to a stylized outline mode or selects a hollow (`Полый`) fill so lettering never disappears.
+fn ensure_visible_line_width(le: &mut photocraft_doc::sfx::SfxLineEffect, scale: f32) {
+    if le.line_width_px < 1.0 {
+        le.line_width_px = (5.0 * scale.sqrt()).round().clamp(5.0, 64.0);
     }
 }
 
@@ -820,21 +828,30 @@ fn draw_line_effect_card(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens) {
             }
             if seg_button(&mut cols[1], cur == SfxLineStyle::OneBit, ACCENT_SKY, "1-Bit", t).clicked() {
                 st.draft.line_effect.style = SfxLineStyle::OneBit;
+                ensure_visible_line_width(&mut st.draft.line_effect, scale);
             }
             if seg_button(&mut cols[2], cur == SfxLineStyle::Spikes, ACCENT_SKY, "Шипы", t).clicked() {
                 st.draft.line_effect.style = SfxLineStyle::Spikes;
+                ensure_visible_line_width(&mut st.draft.line_effect, scale);
+                if st.draft.line_effect.spike_length_px < 6.0 {
+                    st.draft.line_effect.spike_length_px = (12.0 * scale.sqrt()).round().clamp(10.0, 96.0);
+                    st.draft.line_effect.spike_size_px = (7.0 * scale.sqrt()).round().clamp(6.0, 64.0);
+                }
             }
         });
         ui.add_space(2.0);
         ui.columns(3, |cols| {
             if seg_button(&mut cols[0], cur == SfxLineStyle::GPenNib, ACCENT_SKY, "✒ G-Pen", t).clicked() {
                 st.draft.line_effect.style = SfxLineStyle::GPenNib;
+                ensure_visible_line_width(&mut st.draft.line_effect, scale);
             }
             if seg_button(&mut cols[1], cur == SfxLineStyle::BrushStroke, ACCENT_SKY, "🖌 Кисть", t).clicked() {
                 st.draft.line_effect.style = SfxLineStyle::BrushStroke;
+                ensure_visible_line_width(&mut st.draft.line_effect, scale);
             }
             if seg_button(&mut cols[2], cur == SfxLineStyle::Shtack, ACCENT_SKY, "⚡ Shtack", t).clicked() {
                 st.draft.line_effect.style = SfxLineStyle::Shtack;
+                ensure_visible_line_width(&mut st.draft.line_effect, scale);
             }
         });
 
@@ -902,13 +919,24 @@ fn draw_line_effect_card(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens) {
                 // Needle length is a percentage of the glyph height, not a document pixel length.
                 slider_row_f32(ui, t, "Вылет игл:", &mut le.shtack_overshoot_px, 0.0..=60.0, "%");
                 ui.horizontal(|ui| {
-                    dim_label(ui, t, "Перекрестия:");
-                    ui.columns(2, |cols| {
+                    dim_label(ui, t, "Вылет:");
+                    ui.columns(3, |cols| {
                         if seg_button(
                             &mut cols[0],
+                            le.shtack_overshoot_mode == SfxShtackOvershootMode::FreeEnds,
+                            ACCENT_SKY,
+                            "Края",
+                            t,
+                        )
+                        .clicked()
+                        {
+                            le.shtack_overshoot_mode = SfxShtackOvershootMode::FreeEnds;
+                        }
+                        if seg_button(
+                            &mut cols[1],
                             le.shtack_overshoot_mode == SfxShtackOvershootMode::OuterOnly,
                             ACCENT_SKY,
-                            "Снаружи",
+                            "Стыки",
                             t,
                         )
                         .clicked()
@@ -916,7 +944,7 @@ fn draw_line_effect_card(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens) {
                             le.shtack_overshoot_mode = SfxShtackOvershootMode::OuterOnly;
                         }
                         if seg_button(
-                            &mut cols[1],
+                            &mut cols[2],
                             le.shtack_overshoot_mode == SfxShtackOvershootMode::All,
                             ACCENT_SKY,
                             "Все",
@@ -936,6 +964,9 @@ fn draw_line_effect_card(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens) {
                 }
                 ui.label(RichText::new("Внутренность буквы настраивается отдельно в секции «Заливка» (Полый / Solid / Shtack Fill).").size(9.5).color(t.text_dim));
             }
+        }
+        if le.style != SfxLineStyle::Shtack && (le.line_width_px > 0.05 || le.style != SfxLineStyle::Clean) {
+            slider_row_f32(ui, t, "Зерно бумаги на лайне:", &mut le.line_grain_pct, 0.0..=100.0, "%");
         }
     });
 }
@@ -1064,25 +1095,38 @@ fn draw_open_gentonik_button(ui: &mut Ui, out: &mut SfxPanelOutput) {
 /// Shared 4-engine Dry Brush editor used by both the primary `ЗАЛИВКА (FILL)` card
 /// and Photoshop-style `Blending` overlays (100% parity, zero drift).
 fn draw_dry_brush_editor(ui: &mut Ui, db: &mut SfxDryBrushSpec, scale: f32, t: Tokens) {
+    let cur_engine = db.engine;
+    let mut picked_engine: Option<SfxDryBrushEngine> = None;
     row_with_reroll(ui, 48.0, &mut db.seed, "Новый Seed щетины", |ui| {
         ui.columns(2, |cols| {
-            if seg_button(&mut cols[0], db.engine == SfxDryBrushEngine::SdfPhysics, ACCENT_SKY, "А: Физика SDF", t).clicked() {
-                db.engine = SfxDryBrushEngine::SdfPhysics;
+            if seg_button(&mut cols[0], cur_engine == SfxDryBrushEngine::SdfPhysics, ACCENT_SKY, "А: Физика SDF", t).clicked()
+                && cur_engine != SfxDryBrushEngine::SdfPhysics
+            {
+                picked_engine = Some(SfxDryBrushEngine::SdfPhysics);
             }
-            if seg_button(&mut cols[1], db.engine == SfxDryBrushEngine::SdfSeg, ACCENT_SKY, "Б1: Штрихи (Seg)", t).clicked() {
-                db.engine = SfxDryBrushEngine::SdfSeg;
+            if seg_button(&mut cols[1], cur_engine == SfxDryBrushEngine::SdfSeg, ACCENT_SKY, "Б1: Штрихи (Seg)", t).clicked()
+                && cur_engine != SfxDryBrushEngine::SdfSeg
+            {
+                picked_engine = Some(SfxDryBrushEngine::SdfSeg);
             }
         });
         ui.add_space(2.0);
         ui.columns(2, |cols| {
-            if seg_button(&mut cols[0], db.engine == SfxDryBrushEngine::SdfEtf, ACCENT_SKY, "Б2: Диффузия ETF", t).clicked() {
-                db.engine = SfxDryBrushEngine::SdfEtf;
+            if seg_button(&mut cols[0], cur_engine == SfxDryBrushEngine::SdfEtf, ACCENT_SKY, "Б2: Диффузия ETF", t).clicked()
+                && cur_engine != SfxDryBrushEngine::SdfEtf
+            {
+                picked_engine = Some(SfxDryBrushEngine::SdfEtf);
             }
-            if seg_button(&mut cols[1], db.engine == SfxDryBrushEngine::Vector, ACCENT_SKY, "Вектор", t).clicked() {
-                db.engine = SfxDryBrushEngine::Vector;
+            if seg_button(&mut cols[1], cur_engine == SfxDryBrushEngine::Vector, ACCENT_SKY, "Вектор", t).clicked()
+                && cur_engine != SfxDryBrushEngine::Vector
+            {
+                picked_engine = Some(SfxDryBrushEngine::Vector);
             }
         });
     });
+    if let Some(next_engine) = picked_engine {
+        db.apply_engine_defaults(next_engine);
+    }
 
     slider_row_f32(ui, t, "Сухость (Порог):", &mut db.dryness_pct, 10.0..=85.0, "%");
     slider_row_f32(ui, t, "Размер щетины:", &mut db.bristle_size_pct, 10.0..=500.0, "%");
@@ -1091,7 +1135,7 @@ fn draw_dry_brush_editor(ui: &mut Ui, db: &mut SfxDryBrushSpec, scale: f32, t: T
         SfxDryBrushEngine::SdfPhysics | SfxDryBrushEngine::SdfSeg | SfxDryBrushEngine::SdfEtf => {
             slider_row_f32(ui, t, "Плотность щетины:", &mut db.freq_pct, 10.0..=100.0, "%");
             if db.engine == SfxDryBrushEngine::SdfEtf {
-                slider_row_f32(ui, t, "Длина LIC:", &mut db.lic_length_px, 6.0..=26.0 * scale, "px");
+                slider_row_f32(ui, t, "Длина LIC:", &mut db.lic_length_px, 6.0..=(96.0 * scale).max(96.0), "px");
             }
             slider_row_f32(ui, t, "Изгиб (Warp):", &mut db.warp_pct, 0.0..=100.0, "%");
             slider_row_f32(ui, t, "Зерно бумаги:", &mut db.paper_grain_pct, 0.0..=100.0, "%");
@@ -1138,6 +1182,7 @@ fn draw_fill_card(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens, out: &mut SfxP
             if seg_button(&mut cols[0], is_none, ACCENT_SKY, "Полый", t).clicked() {
                 st.draft.dry_brush.enabled = false;
                 st.draft.fill = SfxFillSource::None;
+                ensure_visible_line_width(&mut st.draft.line_effect, scale);
             }
             if seg_button(&mut cols[1], is_solid, ACCENT_SKY, "Solid", t).clicked() {
                 let c = face_color_copy(&st.draft.fill);

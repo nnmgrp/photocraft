@@ -519,7 +519,7 @@ fn fs_dry_physics(inp: QuadOut) -> @location(0) vec4<f32> {
 
 @fragment
 fn fs_dry_seg(inp: QuadOut) -> @location(0) vec4<f32> {
-    // tex_a = base_cov, tex_b = Seg JFA (seed_x, seed_y, s_arc, phase), tex_c = interior JFA
+    // tex_a = base_cov, tex_b = Seg JFA (seed_x, seed_y, tangent_angle_rad, s_arc + phase), tex_c = interior JFA
     let p = vec2<i32>(floor(inp.pos.xy));
     let pf = vec2<f32>(p);
     let base = load_clamped(tex_a, p).r;
@@ -544,13 +544,20 @@ fn fs_dry_seg(inp: QuadOut) -> @location(0) vec4<f32> {
     var s_coord = dp.x + dp.y;
     var v_dist = sdf_doc;
     if seg.x > -1e6 {
-        s_coord = seg.z * inv_bs + seg.w;
-        v_dist = length(seg.xy - pf) * fx.p0.z * inv_bs;
+        // Orthogonal projection onto the winning stem wall's local (tangent, normal) frame:
+        // prevents circular distance-field U-turns ("racetrack loops") around sharp corners
+        // and lets bristles punch straight through open stem end-caps.
+        let t_ang = seg.z;
+        let t_vec = vec2<f32>(cos(t_ang), sin(t_ang));
+        let n_vec = vec2<f32>(-t_vec.y, t_vec.x);
+        let d_doc = (pf - seg.xy) * fx.p0.zw * inv_bs;
+        s_coord = seg.w * inv_bs + dot(d_doc, t_vec);
+        v_dist = abs(dot(d_doc, n_vec));
     }
     let w_off = (fbm_2d(s_coord * 0.035, v_dist * 0.035, seed + 17u) - 0.5) * warp;
     let bristle = value_noise_2d(s_coord * 0.024, (v_dist + w_off) * freq, seed);
     let paper = crisp_paper_grain(dp.x, dp.y, seed + 113u);
-    let edge_fade = clamp(sdf_doc / (3.0 + wear * 15.0), 0.0, 1.0);
+    let edge_fade = clamp(v_dist / (3.0 + wear * 15.0), 0.0, 1.0);
     let ink_score = bristle * (1.0 - grain * 0.35) + paper * (grain * 0.35) + edge_fade * wear * 0.55 - wear * 0.42;
     let thresh = dryness * 0.85;
     var keep = 0.0;
@@ -691,13 +698,17 @@ fn fs_dry_grain_breakup(inp: QuadOut) -> @location(0) vec4<f32> {
     let ink_score = (1.0 - clamp(grain * 0.72 + streak * 0.28, 0.0, 1.0)) + 0.26 * edge;
     let thresh = dryness * 0.92;
     var keep = 0.0;
-    if sharp >= 0.99 {
+    if sharp >= 0.99 || fx.u0.z == 1u {
         keep = select(0.0, 1.0, ink_score >= thresh);
     } else {
         let slope = 2.5 + sharp * sharp * 55.0;
         keep = clamp((ink_score - thresh) * slope + 0.5, 0.0, 1.0);
     }
-    return vec4<f32>(cv * keep, 0.0, 0.0, 1.0);
+    var out_cov = cv * keep;
+    if fx.u0.z == 1u {
+        out_cov = select(0.0, 1.0, out_cov >= 0.5);
+    }
+    return vec4<f32>(out_cov, 0.0, 0.0, 1.0);
 }
 
 // =============================================================================

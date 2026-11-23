@@ -79,7 +79,7 @@ fn default_white() -> Color {
 }
 
 fn default_ink() -> Color {
-    Color::rgb(15.0 / 255.0, 23.0 / 255.0, 42.0 / 255.0)
+    Color::BLACK
 }
 
 fn default_font_family() -> String {
@@ -112,6 +112,30 @@ fn default_12() -> f32 {
 
 fn default_7() -> f32 {
     7.0
+}
+
+fn default_39() -> f32 {
+    39.0
+}
+
+fn default_36() -> f32 {
+    36.0
+}
+
+fn default_96() -> f32 {
+    96.0
+}
+
+fn default_47() -> f32 {
+    47.0
+}
+
+fn default_37() -> f32 {
+    37.0
+}
+
+fn default_90() -> f32 {
+    90.0
 }
 
 fn default_18_u16() -> u16 {
@@ -155,36 +179,8 @@ fn default_20() -> f32 {
     20.0
 }
 
-fn default_14() -> f32 {
-    14.0
-}
-
 fn default_26() -> f32 {
     26.0
-}
-
-fn default_44() -> f32 {
-    44.0
-}
-
-fn default_32() -> f32 {
-    32.0
-}
-
-fn default_40() -> f32 {
-    40.0
-}
-
-fn default_42() -> f32 {
-    42.0
-}
-
-fn default_neg24() -> f32 {
-    -24.0
-}
-
-fn default_16_u16() -> u16 {
-    16
 }
 
 fn default_4() -> f32 {
@@ -293,11 +289,14 @@ pub enum SfxShtackVariant {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SfxShtackOvershootMode {
-    /// Only convex corners on the outer glyph silhouette shoot needles; inner counters
+    /// Only acute / free outer stroke tips shoot needles (`Края`); regular box corners stay clean.
+    FreeEnds,
+    /// Convex corners on the outer glyph silhouette shoot needles (`Стыки`); inner counters
     /// and concave junctions stay clean so strokes never slice through letterforms.
     #[default]
+    #[serde(alias = "outerJunctions")]
     OuterOnly,
-    /// Every corner segment shoots needles (raw chaotic sketch).
+    /// Every corner segment shoots needles (`Все`, raw chaotic sketch).
     All,
 }
 
@@ -354,7 +353,7 @@ pub struct SfxLineEffect {
     pub gpen_angle_deg: f32,
     #[serde(default = "default_45")]
     pub gpen_pinch_pct: f32,
-    #[serde(default = "default_6")]
+    #[serde(default)]
     pub gpen_overshoot_px: f32,
     #[serde(default = "default_85")]
     pub gpen_overshoot_count_pct: f32,
@@ -370,7 +369,7 @@ pub struct SfxLineEffect {
     pub ink_brush_dropout_pct: f32,
     #[serde(default = "default_60")]
     pub ink_brush_pressure_pct: f32,
-    #[serde(default = "default_7")]
+    #[serde(default)]
     pub ink_brush_overshoot_px: f32,
     #[serde(default = "default_85")]
     pub ink_brush_overshoot_count_pct: f32,
@@ -388,7 +387,7 @@ pub struct SfxLineEffect {
     pub shtack_split_pct: f32,
     #[serde(default = "default_20")]
     pub shtack_overshoot_px: f32,
-    /// Restricts Shtack needle overshoots to outer convex corners (`OuterOnly`) or allows all (`All`).
+    /// Restricts Shtack needle overshoots to free tips (`FreeEnds`), outer convex corners (`OuterOnly`), or all (`All`).
     #[serde(default)]
     pub shtack_overshoot_mode: SfxShtackOvershootMode,
     /// Thickness of a Shtack sketch pass, as a PERCENT of glyph height (`gh`) in `0.5..=8.0`.
@@ -399,14 +398,18 @@ pub struct SfxLineEffect {
     pub shtack_dryness_pct: f32,
     #[serde(default = "default_seed_one")]
     pub shtack_seed: u32,
-    /// Dry Pencil grain sharpness (`0..=100%`). At 100% paper tooth punches clean `0.0` gaps.
-    #[serde(default = "default_65")]
+    /// Dry Pencil / line grain sharpness (`0..=100%`). At 100% paper tooth punches clean `0.0` gaps.
+    #[serde(default = "default_100")]
     pub shtack_grain_sharpness_pct: f32,
     /// `false` (default) = hollow sketch contour: `ЗАЛИВКА (FILL)` colours the Shtack strokes
     /// themselves and the letter interior stays transparent. `true` = fill the letter interior
     /// with `ЗАЛИВКА (FILL)` and draw the Shtack strokes on top in `line_color`.
     #[serde(default)]
     pub shtack_fill_interior: bool,
+    /// Shared paper-grain / dry ink breakup on ANY outline mode (`0..=100%`, default `0%`),
+    /// so outlines visually fuse with `Dry Brush` fills on the same paper tooth.
+    #[serde(default)]
+    pub line_grain_pct: f32,
 }
 
 impl Default for SfxLineEffect {
@@ -427,14 +430,14 @@ impl Default for SfxLineEffect {
             gpen_contrast_pct: 78.0,
             gpen_angle_deg: -35.0,
             gpen_pinch_pct: 45.0,
-            gpen_overshoot_px: 6.0,
+            gpen_overshoot_px: 0.0,
             gpen_overshoot_count_pct: 85.0,
             gpen_overshoot_random_pct: 45.0,
             gpen_seed: 1,
             ink_brush_roughness_pct: 45.0,
             ink_brush_dropout_pct: 35.0,
             ink_brush_pressure_pct: 60.0,
-            ink_brush_overshoot_px: 7.0,
+            ink_brush_overshoot_px: 0.0,
             ink_brush_overshoot_count_pct: 85.0,
             ink_brush_overshoot_random_pct: 45.0,
             ink_brush_seed: 1,
@@ -446,8 +449,9 @@ impl Default for SfxLineEffect {
             shtack_thickness_px: 2.0,
             shtack_dryness_pct: 26.0,
             shtack_seed: 1,
-            shtack_grain_sharpness_pct: 65.0,
+            shtack_grain_sharpness_pct: 100.0,
             shtack_fill_interior: false,
+            line_grain_pct: 0.0,
         }
     }
 }
@@ -469,14 +473,14 @@ impl SfxLineEffect {
         self.gpen_contrast_pct = finite_f32(self.gpen_contrast_pct, 78.0).clamp(0.0, 100.0);
         self.gpen_angle_deg = finite_f32(self.gpen_angle_deg, -35.0).clamp(-90.0, 90.0);
         self.gpen_pinch_pct = finite_f32(self.gpen_pinch_pct, 45.0).clamp(0.0, 100.0);
-        self.gpen_overshoot_px = finite_f32(self.gpen_overshoot_px, 6.0).clamp(0.0, MAX_SFX_EFFECT_PX);
+        self.gpen_overshoot_px = finite_f32(self.gpen_overshoot_px, 0.0).clamp(0.0, MAX_SFX_EFFECT_PX);
         self.gpen_overshoot_count_pct = finite_f32(self.gpen_overshoot_count_pct, 85.0).clamp(0.0, 100.0);
         self.gpen_overshoot_random_pct = finite_f32(self.gpen_overshoot_random_pct, 45.0).clamp(0.0, 100.0);
 
         self.ink_brush_roughness_pct = finite_f32(self.ink_brush_roughness_pct, 45.0).clamp(0.0, 100.0);
         self.ink_brush_dropout_pct = finite_f32(self.ink_brush_dropout_pct, 35.0).clamp(0.0, 100.0);
         self.ink_brush_pressure_pct = finite_f32(self.ink_brush_pressure_pct, 60.0).clamp(0.0, 100.0);
-        self.ink_brush_overshoot_px = finite_f32(self.ink_brush_overshoot_px, 7.0).clamp(0.0, MAX_SFX_EFFECT_PX);
+        self.ink_brush_overshoot_px = finite_f32(self.ink_brush_overshoot_px, 0.0).clamp(0.0, MAX_SFX_EFFECT_PX);
         self.ink_brush_overshoot_count_pct = finite_f32(self.ink_brush_overshoot_count_pct, 85.0).clamp(0.0, 100.0);
         self.ink_brush_overshoot_random_pct = finite_f32(self.ink_brush_overshoot_random_pct, 45.0).clamp(0.0, 100.0);
 
@@ -487,7 +491,8 @@ impl SfxLineEffect {
         // Percentage of glyph height: never a document-pixel length, never double-scaled.
         self.shtack_thickness_px = finite_f32(self.shtack_thickness_px, 2.0).clamp(0.5, 8.0);
         self.shtack_dryness_pct = finite_f32(self.shtack_dryness_pct, 26.0).clamp(0.0, 100.0);
-        self.shtack_grain_sharpness_pct = finite_f32(self.shtack_grain_sharpness_pct, 65.0).clamp(0.0, 100.0);
+        self.shtack_grain_sharpness_pct = finite_f32(self.shtack_grain_sharpness_pct, 100.0).clamp(0.0, 100.0);
+        self.line_grain_pct = finite_f32(self.line_grain_pct, 0.0).clamp(0.0, 100.0);
     }
 }
 
@@ -497,82 +502,134 @@ impl SfxLineEffect {
 pub struct SfxDryBrushSpec {
     pub enabled: bool,
     pub engine: SfxDryBrushEngine,
-    #[serde(default = "default_44")]
+    #[serde(default = "default_39")]
     pub dryness_pct: f32,
     #[serde(default = "default_60")]
     pub freq_pct: f32,
-    #[serde(default = "default_14")]
+    #[serde(default = "default_96")]
     pub lic_length_px: f32,
-    #[serde(default = "default_32")]
+    #[serde(default = "default_47")]
     pub warp_pct: f32,
-    #[serde(default = "default_40")]
+    #[serde(default = "default_37")]
     pub paper_grain_pct: f32,
-    #[serde(default = "default_42")]
+    #[serde(default = "default_65")]
     pub edge_wear_pct: f32,
-    #[serde(default = "default_neg24")]
+    #[serde(default = "default_90")]
     pub angle_deg: f32,
     #[serde(default = "default_seed_one")]
     pub seed: u32,
     // --- Engine 4: Vector ---
-    #[serde(default = "default_16_u16")]
+    #[serde(default = "default_18_u16")]
     pub vec_bristle_count: u16,
-    #[serde(default = "default_45")]
+    #[serde(default = "default_65")]
     pub vec_bristle_random_pct: f32,
-    #[serde(default = "default_4")]
-    pub vec_mutual_tilt_deg: f32,
     #[serde(default = "default_3")]
+    pub vec_mutual_tilt_deg: f32,
+    #[serde(default = "default_4")]
     pub vec_tilt_random_deg: f32,
-    #[serde(default = "default_40")]
+    #[serde(default = "default_45")]
     pub vec_gauss_dots_pct: f32,
     /// Paper-grain / bristle threshold sharpness (`0..=100%`). 100% produces true binary gaps.
-    #[serde(default = "default_65")]
-    pub grain_sharpness_pct: f32,
-    /// Relative bristle / grain scale (`10..=500%`, default `100%`). Automatically multiplied by
-    /// glyph height so 2400-DPI / 12K×17K lettering keeps bold, organic dry-brush strokes.
     #[serde(default = "default_100")]
+    pub grain_sharpness_pct: f32,
+    /// Relative bristle / grain scale (`10..=500%`, default `36%` for `SdfSeg`). Automatically multiplied by
+    /// glyph height so 2400-DPI / 12K×17K lettering keeps bold, organic dry-brush strokes.
+    #[serde(default = "default_36")]
     pub bristle_size_pct: f32,
 }
 
 impl Default for SfxDryBrushSpec {
     fn default() -> Self {
-        Self {
-            enabled: false,
-            engine: SfxDryBrushEngine::SdfSeg,
-            dryness_pct: 44.0,
-            freq_pct: 60.0,
-            lic_length_px: 14.0,
-            warp_pct: 32.0,
-            paper_grain_pct: 40.0,
-            edge_wear_pct: 42.0,
-            angle_deg: -24.0,
-            seed: 1,
-            vec_bristle_count: 16,
-            vec_bristle_random_pct: 45.0,
-            vec_mutual_tilt_deg: 4.0,
-            vec_tilt_random_deg: 3.0,
-            vec_gauss_dots_pct: 40.0,
-            grain_sharpness_pct: 65.0,
-            bristle_size_pct: 100.0,
-        }
+        Self::for_engine(SfxDryBrushEngine::SdfSeg)
     }
 }
 
 impl SfxDryBrushSpec {
+    /// Returns calibrated out-of-the-box manga presets for each of the 4 Dry Brush engines.
+    pub fn for_engine(engine: SfxDryBrushEngine) -> Self {
+        let mut s = Self {
+            enabled: false,
+            engine,
+            dryness_pct: 39.0,
+            freq_pct: 60.0,
+            lic_length_px: 96.0,
+            warp_pct: 47.0,
+            paper_grain_pct: 37.0,
+            edge_wear_pct: 65.0,
+            angle_deg: 90.0,
+            seed: 1,
+            vec_bristle_count: 18,
+            vec_bristle_random_pct: 65.0,
+            vec_mutual_tilt_deg: 3.0,
+            vec_tilt_random_deg: 4.0,
+            vec_gauss_dots_pct: 45.0,
+            grain_sharpness_pct: 100.0,
+            bristle_size_pct: 36.0,
+        };
+        s.apply_engine_defaults(engine);
+        s
+    }
+
+    /// Switches `self.engine` to `engine` and loads its calibrated manga defaults
+    /// (preserving `self.enabled` and `self.seed`).
+    pub fn apply_engine_defaults(&mut self, engine: SfxDryBrushEngine) {
+        self.engine = engine;
+        self.grain_sharpness_pct = 100.0;
+        match engine {
+            SfxDryBrushEngine::SdfEtf => {
+                self.dryness_pct = 54.0;
+                self.bristle_size_pct = 100.0;
+                self.freq_pct = 68.0;
+                self.lic_length_px = 96.0;
+                self.warp_pct = 60.0;
+                self.paper_grain_pct = 65.0;
+                self.edge_wear_pct = 8.0;
+            }
+            SfxDryBrushEngine::SdfSeg => {
+                self.dryness_pct = 39.0;
+                self.bristle_size_pct = 36.0;
+                self.freq_pct = 60.0;
+                self.warp_pct = 47.0;
+                self.paper_grain_pct = 37.0;
+                self.edge_wear_pct = 65.0;
+            }
+            SfxDryBrushEngine::SdfPhysics => {
+                self.dryness_pct = 45.0;
+                self.bristle_size_pct = 30.0;
+                self.freq_pct = 27.0;
+                self.warp_pct = 13.0;
+                self.paper_grain_pct = 75.0;
+                self.edge_wear_pct = 56.0;
+                self.angle_deg = 90.0;
+            }
+            SfxDryBrushEngine::Vector => {
+                self.dryness_pct = 45.0;
+                self.bristle_size_pct = 100.0;
+                self.vec_bristle_count = 18;
+                self.vec_bristle_random_pct = 65.0;
+                self.vec_mutual_tilt_deg = 3.0;
+                self.vec_tilt_random_deg = 4.0;
+                self.vec_gauss_dots_pct = 45.0;
+                self.angle_deg = -24.0;
+            }
+        }
+    }
+
     pub fn validate(&mut self) {
-        self.dryness_pct = finite_f32(self.dryness_pct, 44.0).clamp(0.0, 100.0);
+        self.dryness_pct = finite_f32(self.dryness_pct, 39.0).clamp(0.0, 100.0);
         self.freq_pct = finite_f32(self.freq_pct, 60.0).clamp(10.0, 100.0);
-        self.lic_length_px = finite_f32(self.lic_length_px, 14.0).clamp(4.0, MAX_SFX_EFFECT_PX);
-        self.warp_pct = finite_f32(self.warp_pct, 32.0).clamp(0.0, 100.0);
-        self.paper_grain_pct = finite_f32(self.paper_grain_pct, 40.0).clamp(0.0, 100.0);
-        self.edge_wear_pct = finite_f32(self.edge_wear_pct, 42.0).clamp(0.0, 100.0);
-        self.angle_deg = finite_f32(self.angle_deg, -24.0).clamp(-90.0, 90.0);
+        self.lic_length_px = finite_f32(self.lic_length_px, 96.0).clamp(4.0, MAX_SFX_EFFECT_PX);
+        self.warp_pct = finite_f32(self.warp_pct, 47.0).clamp(0.0, 100.0);
+        self.paper_grain_pct = finite_f32(self.paper_grain_pct, 37.0).clamp(0.0, 100.0);
+        self.edge_wear_pct = finite_f32(self.edge_wear_pct, 65.0).clamp(0.0, 100.0);
+        self.angle_deg = finite_f32(self.angle_deg, 90.0).clamp(-90.0, 90.0);
         self.vec_bristle_count = self.vec_bristle_count.clamp(4, 40);
-        self.vec_bristle_random_pct = finite_f32(self.vec_bristle_random_pct, 45.0).clamp(0.0, 100.0);
-        self.vec_mutual_tilt_deg = finite_f32(self.vec_mutual_tilt_deg, 4.0).clamp(-10.0, 10.0);
-        self.vec_tilt_random_deg = finite_f32(self.vec_tilt_random_deg, 3.0).clamp(0.0, 10.0);
-        self.vec_gauss_dots_pct = finite_f32(self.vec_gauss_dots_pct, 40.0).clamp(0.0, 100.0);
-        self.grain_sharpness_pct = finite_f32(self.grain_sharpness_pct, 65.0).clamp(0.0, 100.0);
-        self.bristle_size_pct = finite_f32(self.bristle_size_pct, 100.0).clamp(10.0, 500.0);
+        self.vec_bristle_random_pct = finite_f32(self.vec_bristle_random_pct, 65.0).clamp(0.0, 100.0);
+        self.vec_mutual_tilt_deg = finite_f32(self.vec_mutual_tilt_deg, 3.0).clamp(-10.0, 10.0);
+        self.vec_tilt_random_deg = finite_f32(self.vec_tilt_random_deg, 4.0).clamp(0.0, 10.0);
+        self.vec_gauss_dots_pct = finite_f32(self.vec_gauss_dots_pct, 45.0).clamp(0.0, 100.0);
+        self.grain_sharpness_pct = finite_f32(self.grain_sharpness_pct, 100.0).clamp(0.0, 100.0);
+        self.bristle_size_pct = finite_f32(self.bristle_size_pct, 36.0).clamp(10.0, 500.0);
     }
 }
 
@@ -2204,15 +2261,39 @@ mod tests {
     #[test]
     fn grain_sharpness_fields_deserialize_from_legacy_and_validate() {
         let legacy: SfxData = serde_json::from_str(r#"{"text":"BOOM"}"#).unwrap();
-        assert_eq!(legacy.line_effect.shtack_grain_sharpness_pct, 65.0);
-        assert_eq!(legacy.dry_brush.grain_sharpness_pct, 65.0);
+        assert_eq!(legacy.line_effect.shtack_grain_sharpness_pct, 100.0);
+        assert_eq!(legacy.dry_brush.grain_sharpness_pct, 100.0);
+        assert_eq!(legacy.line_effect.line_grain_pct, 0.0);
 
         let mut data = SfxData::default();
         data.line_effect.shtack_grain_sharpness_pct = 500.0;
+        data.line_effect.line_grain_pct = 180.0;
         data.dry_brush.grain_sharpness_pct = f32::NAN;
         data.validate();
         assert_eq!(data.line_effect.shtack_grain_sharpness_pct, 100.0);
-        assert_eq!(data.dry_brush.grain_sharpness_pct, 65.0);
+        assert_eq!(data.line_effect.line_grain_pct, 100.0);
+        assert_eq!(data.dry_brush.grain_sharpness_pct, 100.0);
+    }
+
+    #[test]
+    fn default_ink_is_pure_black_and_dry_brush_engine_defaults_are_calibrated() {
+        let data = SfxData::default();
+        assert_eq!(data.line_effect.line_color, Color::BLACK, "default line ink must be pure #000000");
+        assert_eq!(data.fill, SfxFillSource::Solid { color: Color::BLACK }, "default fill ink must be pure #000000");
+        assert_eq!(data.vector_shadow.color, Color::BLACK);
+        assert_eq!(data.dry_brush.grain_sharpness_pct, 100.0);
+
+        let etf = SfxDryBrushSpec::for_engine(SfxDryBrushEngine::SdfEtf);
+        assert_eq!((etf.dryness_pct, etf.bristle_size_pct, etf.freq_pct, etf.lic_length_px), (54.0, 100.0, 68.0, 96.0));
+        assert_eq!((etf.warp_pct, etf.paper_grain_pct, etf.grain_sharpness_pct, etf.edge_wear_pct), (60.0, 65.0, 100.0, 8.0));
+
+        let seg = SfxDryBrushSpec::for_engine(SfxDryBrushEngine::SdfSeg);
+        assert_eq!((seg.dryness_pct, seg.bristle_size_pct, seg.freq_pct, seg.warp_pct), (39.0, 36.0, 60.0, 47.0));
+        assert_eq!((seg.paper_grain_pct, seg.grain_sharpness_pct, seg.edge_wear_pct), (37.0, 100.0, 65.0));
+
+        let sdf = SfxDryBrushSpec::for_engine(SfxDryBrushEngine::SdfPhysics);
+        assert_eq!((sdf.dryness_pct, sdf.bristle_size_pct, sdf.freq_pct, sdf.warp_pct), (45.0, 30.0, 27.0, 13.0));
+        assert_eq!((sdf.paper_grain_pct, sdf.grain_sharpness_pct, sdf.edge_wear_pct, sdf.angle_deg), (75.0, 100.0, 56.0, 90.0));
     }
 
     #[test]

@@ -121,3 +121,20 @@
   - На native CPU (`--release`): время рендера **одного даба** радиусом `100 px` с активными `Blending` и `PaperTexture` — **≤ 1.5–2.0 мс**.
   - Для больших радиусов (`> 100 px`) и `wasm32` предусмотрено адаптивное увеличение шага (`dabs_per_radius`) / прореживание `get_color`, чтобы сохранять интерактивность на холстах до `12 000 × 17 000 px`.
 - **Качество и совместимость:** Zero `unsafe`, компиляция под Windows и `wasm32-unknown-unknown`, прохождение `clippy -D warnings` и базовых golden-тестов `MemSurface`.
+
+---
+
+## 5. Внешние референсы и повторное использование (`MIT OR Apache-2.0`)
+
+В качестве совместимого по лицензии (`MIT OR Apache-2.0`) источника кода и архитектурных решений использовать [bluescreenoff/MangaNakama](https://github.com/bluescreenoff/MangaNakama) (стек `Rust + wgpu + WGSL`, с обязательным сохранением attribution при заимствовании кода):
+
+- **Парсеры внешних форматов кистей на чистом Rust (`crates/brush/src/`):**
+  - `kpp.rs` — импорт Krita `.kpp` (XML + штамп);
+  - `sut.rs` + `sqlite_ro.rs` — импорт Clip Studio Paint `.sut` через встроенный read-only парсер SQLite без `libsqlite3`;
+  - `abr.rs` + `abr_desc.rs` — импорт Photoshop `.abr`;
+  - `gbr.rs` — импорт GIMP `.gbr` / `.gih`.
+- **GPU-ускорение дабов (`crates/gpu/src/dabs.rs`, `crates/gpu/src/shaders/dab.wgsl`):**
+  - Референс для будущего переноса `draw_dab` (включая большие кисти `> 100 px` на холстах `12 000 × 17 000 px`) с CPU на `wgpu` / WGSL.
+- **Что НЕ брать из `MangaNakama`:**
+  - C/FFI-биндинги `libmypaint` (`cc` + `ffi.rs`), так как они нарушают `zero unsafe` и ломают сборку под `wasm32` — для генерации штриха `.myb` используется исключительно чистый Rust-движок `reearth/hokusai`.
+

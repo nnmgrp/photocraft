@@ -7,10 +7,10 @@
 
 | Параметр | Значение |
 |---|---|
-| Ветка / HEAD | `manga/0.23-sfx` (`807f3fa20`) |
+| Ветка / HEAD | `manga/0.23-sfx` (`89ab16ad1`) |
 | База апстрима (merge-base) | `5bdbcc118` — Merge pull request #14595 from davidmann4/fix/14592-main-green |
-| Изменено файлов апстрима (`M`) | **202** (`+8963 / -1099` строк, **869** швов/hunk-ов) |
-| Добавлено новых файлов вне чемодана (`A`) | **72** |
+| Изменено файлов апстрима (`M`) | **202** (`+9358 / -1099` строк, **869** швов/hunk-ов) |
+| Добавлено новых файлов вне чемодана (`A`) | **73** |
 | Как обновить отчёт | `powershell -ExecutionPolicy Bypass -File scripts/seam_inspector.ps1` |
 
 ## Карта швов по крейтам (изменённые файлы апстрима)
@@ -24,7 +24,7 @@
 | `crates/doc` | 5 | 44 | `+1395 / -4` |
 | `crates/engine` | 41 | 129 | `+660 / -104` |
 | `crates/format` | 6 | 25 | `+192 / -27` |
-| `crates/gpu` | 16 | 54 | `+1867 / -30` |
+| `crates/gpu` | 16 | 54 | `+2262 / -30` |
 | `crates/io` | 12 | 34 | `+339 / -16` |
 | `crates/raster` | 1 | 1 | `+1 / -1` |
 | `crates/text` | 6 | 15 | `+418 / -6` |
@@ -547,13 +547,13 @@
 #### `crates/gpu/src/batch.rs` (`+3 / -1`, 1 швов)
 - **`L128-L130`** (`+3/-1`) · `pub(crate) fn batch_runs(plan: &Plan<'_>) -> Vec<usize> {` — `- let extra = |p: &plan::Pass<'_>| lead(p) && p.mask.is_none() && p.flags & plan::F_TEXT_GAM...`
 
-#### `crates/gpu/src/compose.wgsl` (`+1159 / -1`, 6 швов)
+#### `crates/gpu/src/compose.wgsl` (`+1380 / -1`, 6 швов)
 - **`L65`** (`+1/-0`) · `const F_LAYER_SHAPE: u32 = 1048576u; // fx merge: B is the shape; layer = its co` — `+ const F_ALPHA_ONLY: u32 = 4194304u;  // layer_texel: layer_tex is R8Unorm alpha, tinted by...`
 - **`L527-L565`** (`+39/-0`) · `fn lut3(n: i32, r: i32, g: i32, b: i32) -> vec3<f32> {` — `+ // Grain: compose::adjust::{grain_hash, grain_lattice, grain_value, grain_noise}, integer-...`
 - **`L826-L832`** (`+7/-0`) · `fn adjust(c: vec3<f32>) -> vec3<f32> {` — `+ case 18: {                                                             // Grain (compose::...`
 - **`L895-L899`** (`+5/-1`) · `fn layer_texel(d: vec2<i32>) -> vec4<f32> {` — `- return textureLoad(layer_tex, q, 0);`
 - **`L902-L904`** (`+3/-0`) · `fn layer_texel(d: vec2<i32>) -> vec4<f32> {` — `+ if ((op.flags & F_ALPHA_ONLY) != 0u) {`
-- **`L1634-L2737`** (`+1104/-0`) · `fn fs_mstroke(in: VOut) -> @location(0) vec4<f32> {` — `+ // ---- comic_screentone procedural screentone -------------------------------------------...`
+- **`L1634-L2958`** (`+1325/-0`) · `fn fs_mstroke(in: VOut) -> @location(0) vec4<f32> {` — `+ // ---- comic_screentone procedural screentone -------------------------------------------...`
 
 #### `crates/gpu/src/encode.rs` (`+2 / -2`, 2 швов)
 - **`L7`** (`+1/-1`) · `use super::textures::{ChunkOut, FxKey, ResKey, Resident, Stats};` — `- use super::{Compositor, Document, LayerId, Plan, Rect, Surface, Unsupported, plan, timing};`
@@ -578,10 +578,10 @@
 - **`L62-L66`** (`+5/-0`) · `pub fn plan(doc: &Document) -> Result<Plan<'_>, Unsupported> {` — `+ plan_with_options(doc, true)`
 - **`L70`** (`+1/-1`) · `pub fn plan(doc: &Document) -> Result<Plan<'_>, Unsupported> {` — `- let mut p = Planner::new(DocCtx::of(doc));`
 
-#### `crates/gpu/src/plan/lower.rs` (`+131 / -1`, 3 швов)
+#### `crates/gpu/src/plan/lower.rs` (`+139 / -1`, 3 швов)
 - **`L330-L339`** (`+10/-1`) · `pub fn adjustment_program(adj: &Adjustment, transfer: Transfer, depth: photocraf` — `- // Identity on the CPU too (not evaluated there).`
-- **`L412-L531`** (`+120/-0`) · `pub fn mode_index(m: BlendMode) -> i32 {` — `+ /// Index of ['PatternType'] (0..=11) for 'Kernel::Screentone'.`
-- **`L535`** (`+1/-0`) · `pub(super) fn single_content_pass(layer: &Layer) -> bool {` — `+ LayerContent::Screentone(tone) => tone.spec.backend == photocraft_doc::ScreentoneBackend::...`
+- **`L412-L539`** (`+128/-0`) · `pub fn mode_index(m: BlendMode) -> i32 {` — `+ /// Index of ['PatternType'] (0..=12) for 'Kernel::Screentone'.`
+- **`L543`** (`+1/-0`) · `pub(super) fn single_content_pass(layer: &Layer) -> bool {` — `+ LayerContent::Screentone(tone) => tone.spec.backend == photocraft_doc::ScreentoneBackend::...`
 
 #### `crates/gpu/src/plan/planner.rs` (`+60 / -4`, 9 швов)
 - **`L2-L3`** (`+2/-1`) · `use super::lower::{` — `- Paint, adjustment_on_gpu, adjustment_program, check_gradient_stops, gradient_rows, placeme...`
@@ -622,10 +622,10 @@
 #### `crates/gpu/tests/it/main.rs` (`+1 / -0`, 1 швов)
 - **`L40`** (`+1/-0`) · `mod pipelines;` — `+ mod sfx;`
 
-#### `crates/gpu/tests/it/parity.rs` (`+356 / -0`, 3 швов)
+#### `crates/gpu/tests/it/parity.rs` (`+522 / -0`, 3 швов)
 - **`L753-L755`** (`+3/-0`) · `fn adjustments() -> Vec<Adjustment> {` — `+ Adjustment::Grain { amount: 60.0, size: 34.0, roughness: 50.0 },`
 - **`L833-L835`** (`+3/-0`) · `fn adjustment_layers() {` — `+ // Grain: the same position hash as the CPU's, float values over white kept in 32-bit.`
-- **`L3477-L3826`** (`+350/-0`) · `fn sibling_compositors_have_independent_residency_and_configuration() {` — `+ #[test]`
+- **`L3477-L3992`** (`+516/-0`) · `fn sibling_compositors_have_independent_residency_and_configuration() {` — `+ #[test]`
 
 #### `crates/gpu/tests/it/pipelines.rs` (`+1 / -1`, 1 швов)
 - **`L49`** (`+1/-1`) · `fn every_compositor_pipeline_builds() {` — `- if let Err(e) = photocraft_gpu::Compositor::try_new_with_format(&device, format) {`
@@ -1341,11 +1341,11 @@
 | `apps/photocraft-web/src/autosave_bridge.rs` | `+499` |
 | `apps/photocraft-web/src/web_autosave.rs` | `+456` |
 | `assets/icons/fill-tool.svg` | `+16` |
-| `crates/algo/src/comic_screentone.rs` | `+2516` |
+| `crates/algo/src/comic_screentone.rs` | `+2863` |
 | `crates/algo/src/fill.rs` | `+859` |
 | `crates/algo/src/fill/tests.rs` | `+533` |
 | `crates/compose/src/kakeami.rs` | `+483` |
-| `crates/compose/src/screentone.rs` | `+420` |
+| `crates/compose/src/screentone.rs` | `+482` |
 | `crates/doc/src/sfx.rs` | `+2634` |
 | `crates/doc/src/vector_brush.rs` | `+305` |
 | `crates/engine/src/cmd/manga_cmds.rs` | `+53` |
@@ -1353,7 +1353,7 @@
 | `crates/engine/src/cmd/manga_cmds/balloon.rs` | `+1449` |
 | `crates/engine/src/cmd/manga_cmds/balloon/tests.rs` | `+684` |
 | `crates/engine/src/cmd/manga_cmds/brush_preset_items.rs` | `+590` |
-| `crates/engine/src/cmd/manga_cmds/comic_screentone.rs` | `+1774` |
+| `crates/engine/src/cmd/manga_cmds/comic_screentone.rs` | `+1781` |
 | `crates/engine/src/cmd/manga_cmds/fill_tool.rs` | `+651` |
 | `crates/engine/src/cmd/manga_cmds/fill_tool/tests.rs` | `+419` |
 | `crates/engine/src/cmd/manga_cmds/gigapixel.rs` | `+840` |
@@ -1375,6 +1375,7 @@
 | `crates/engine/src/cmd/manga_cmds/typesetter_adapter.rs` | `+339` |
 | `crates/engine/src/cmd/manga_cmds/vector_brush.rs` | `+604` |
 | `crates/engine/src/cmd/manga_cmds/vector_curve.rs` | `+655` |
+| `crates/format/tests/screentone_block_b_roundtrip.rs` | `+60` |
 | `crates/format/tests/sfx_v3_kakeami_roundtrip.rs` | `+123` |
 | `crates/gpu/src/sfx.rs` | `+3432` |
 | `crates/gpu/src/sfx.wgsl` | `+1050` |

@@ -7,10 +7,10 @@
 
 | Параметр | Значение |
 |---|---|
-| Ветка / HEAD | `manga/0.23-sfx` (`8bd17a3a8`) |
+| Ветка / HEAD | `manga/0.23-sfx` (`807f3fa20`) |
 | База апстрима (merge-base) | `5bdbcc118` — Merge pull request #14595 from davidmann4/fix/14592-main-green |
 | Изменено файлов апстрима (`M`) | **202** (`+8963 / -1099` строк, **869** швов/hunk-ов) |
-| Добавлено новых файлов вне чемодана (`A`) | **71** |
+| Добавлено новых файлов вне чемодана (`A`) | **72** |
 | Как обновить отчёт | `powershell -ExecutionPolicy Bypass -File scripts/seam_inspector.ps1` |
 
 ## Карта швов по крейтам (изменённые файлы апстрима)
@@ -568,7 +568,7 @@
 
 #### `crates/gpu/src/lib.rs` (`+4 / -0`, 3 швов)
 - **`L51`** (`+1/-0`) · `mod prefix;` — `+ mod sfx;`
-- **`L68`** (`+1/-0`) · `pub use plan::{Kernel, Plan, Role, Unsupported, plan};` — `+ pub use sfx::{MAX_SFX_TILE_DIM, MAX_SFX_TILE_DIM_WASM, SFX_SHADER, SfxGpuRenderer, SfxGpuS...`
+- **`L68`** (`+1/-0`) · `pub use plan::{Kernel, Plan, Role, Unsupported, plan};` — `+ pub use sfx::{MAX_SFX_TILE_DIM, MAX_SFX_TILE_DIM_WASM, SFX_SHADER, SfxGpuRenderer, SfxGpuR...`
 - **`L133-L134`** (`+2/-0`) · `pub struct Compositor {` — `+ /// Runtime 'seam.gpu_screentone' gate (falls back to baked 'tone.surface' when 'false').`
 
 #### `crates/gpu/src/plan.rs` (`+14 / -5`, 5 швов)
@@ -1346,7 +1346,7 @@
 | `crates/algo/src/fill/tests.rs` | `+533` |
 | `crates/compose/src/kakeami.rs` | `+483` |
 | `crates/compose/src/screentone.rs` | `+420` |
-| `crates/doc/src/sfx.rs` | `+2525` |
+| `crates/doc/src/sfx.rs` | `+2634` |
 | `crates/doc/src/vector_brush.rs` | `+305` |
 | `crates/engine/src/cmd/manga_cmds.rs` | `+53` |
 | `crates/engine/src/cmd/manga_cmds/actions_set.rs` | `+475` |
@@ -1363,7 +1363,7 @@
 | `crates/engine/src/cmd/manga_cmds/layer_extras.rs` | `+296` |
 | `crates/engine/src/cmd/manga_cmds/mask_transfer.rs` | `+198` |
 | `crates/engine/src/cmd/manga_cmds/second_mask.rs` | `+293` |
-| `crates/engine/src/cmd/manga_cmds/sfx.rs` | `+1092` |
+| `crates/engine/src/cmd/manga_cmds/sfx.rs` | `+1169` |
 | `crates/engine/src/cmd/manga_cmds/timelapse.rs` | `+577` |
 | `crates/engine/src/cmd/manga_cmds/timelapse/deflicker.rs` | `+138` |
 | `crates/engine/src/cmd/manga_cmds/timelapse/export.rs` | `+397` |
@@ -1375,9 +1375,10 @@
 | `crates/engine/src/cmd/manga_cmds/typesetter_adapter.rs` | `+339` |
 | `crates/engine/src/cmd/manga_cmds/vector_brush.rs` | `+604` |
 | `crates/engine/src/cmd/manga_cmds/vector_curve.rs` | `+655` |
-| `crates/gpu/src/sfx.rs` | `+3074` |
-| `crates/gpu/src/sfx.wgsl` | `+983` |
-| `crates/gpu/tests/it/sfx.rs` | `+884` |
+| `crates/format/tests/sfx_v3_kakeami_roundtrip.rs` | `+123` |
+| `crates/gpu/src/sfx.rs` | `+3432` |
+| `crates/gpu/src/sfx.wgsl` | `+1050` |
+| `crates/gpu/tests/it/sfx.rs` | `+1293` |
 | `crates/io/src/tpl.rs` | `+262` |
 | `crates/kakeami-core/Cargo.toml` | `+13` |
 | `crates/kakeami-core/src/config.rs` | `+423` |
@@ -1397,7 +1398,7 @@
 | `crates/kakeami-core/src/raster/pencil.rs` | `+886` |
 | `crates/kakeami-core/tests/hardening.rs` | `+490` |
 | `crates/ui-egui/src/canvas/ruler_autoscroll_tests.rs` | `+59` |
-| `crates/ui-egui/src/canvas/sfx_gpu_preview.rs` | `+916` |
+| `crates/ui-egui/src/canvas/sfx_gpu_preview.rs` | `+945` |
 | `crates/ui-egui/src/dialogs/gigapixel_ui.rs` | `+946` |
 | `crates/ui-egui/src/manga_seam.rs` | `+4551` |
 | `crates/ui-egui/src/panels/timelapse_ui.rs` | `+1512` |

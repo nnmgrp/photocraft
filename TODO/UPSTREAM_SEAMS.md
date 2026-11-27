@@ -7,9 +7,9 @@
 
 | Параметр | Значение |
 |---|---|
-| Ветка / HEAD | `manga/0.23-sfx` (`68e4d3b49`) |
+| Ветка / HEAD | `manga/0.23-sfx` (`b2fda042e`) |
 | База апстрима (merge-base) | `5bdbcc118` — Merge pull request #14595 from davidmann4/fix/14592-main-green |
-| Изменено файлов апстрима (`M`) | **194** (`+7933 / -1060` строк, **822** швов/hunk-ов) |
+| Изменено файлов апстрима (`M`) | **198** (`+8582 / -1092` строк, **855** швов/hunk-ов) |
 | Добавлено новых файлов вне чемодана (`A`) | **52** |
 | Как обновить отчёт | `powershell -ExecutionPolicy Bypass -File scripts/seam_inspector.ps1` |
 
@@ -28,7 +28,7 @@
 | `crates/io` | 12 | 34 | `+313 / -16` |
 | `crates/raster` | 1 | 1 | `+1 / -1` |
 | `crates/text` | 6 | 15 | `+418 / -6` |
-| `crates/ui-egui` | 79 | 375 | `+2398 / -281` |
+| `crates/ui-egui` | 83 | 408 | `+3047 / -313` |
 | `crates/vector` | 5 | 19 | `+187 / -51` |
 
 ## 1. Изменённые файлы апстрима — пофайлово и построчно (`M`)
@@ -712,17 +712,23 @@
 - **`L203`** (`+1/-0`) · `impl PhotocraftApp {` — `+ window_recovery_attempts: 0,`
 - **`L236-L240`** (`+5/-0`) · `impl PhotocraftApp {` — `+ fill_drag: None,`
 
-#### `crates/ui-egui/src/app/commands.rs` (`+17 / -0`, 10 швов)
+#### `crates/ui-egui/src/app/commands.rs` (`+23 / -0`, 11 швов)
 - **`L21-L22`** (`+2/-0`) · `impl PhotocraftApp {` — `+ let undone =`
 - **`L27-L29`** (`+3/-0`) · `impl PhotocraftApp {` — `+ if result.is_ok() && undone.is_some() {`
 - **`L36`** (`+1/-0`) · `impl PhotocraftApp {` — `+ self.ui.second_mask_target = false;`
-- **`L197-L201`** (`+5/-0`) · `impl PhotocraftApp {` — `+ if let Ok(v) = &r`
-- **`L216`** (`+1/-0`) · `impl PhotocraftApp {` — `+ crate::vector_ui::reconcile_vector_curve_layer(self);`
-- **`L256`** (`+1/-0`) · `impl PhotocraftApp {` — `+ self.ui.second_mask_target = false;`
-- **`L274`** (`+1/-0`) · `impl PhotocraftApp {` — `+ self.ui.second_mask_target = false;`
-- **`L287`** (`+1/-0`) · `impl PhotocraftApp {` — `+ self.ui.second_mask_target = false;`
-- **`L338`** (`+1/-0`) · `impl PhotocraftApp {` — `+ self.ui.second_mask_target = false;`
-- **`L347`** (`+1/-0`) · `impl PhotocraftApp {` — `+ self.ui.second_mask_target = false;`
+- **`L59-L64`** (`+6/-0`) · `impl PhotocraftApp {` — `+ if id != "sfx.update"`
+- **`L203-L207`** (`+5/-0`) · `impl PhotocraftApp {` — `+ if let Ok(v) = &r`
+- **`L222`** (`+1/-0`) · `impl PhotocraftApp {` — `+ crate::vector_ui::reconcile_vector_curve_layer(self);`
+- **`L262`** (`+1/-0`) · `impl PhotocraftApp {` — `+ self.ui.second_mask_target = false;`
+- **`L280`** (`+1/-0`) · `impl PhotocraftApp {` — `+ self.ui.second_mask_target = false;`
+- **`L293`** (`+1/-0`) · `impl PhotocraftApp {` — `+ self.ui.second_mask_target = false;`
+- **`L344`** (`+1/-0`) · `impl PhotocraftApp {` — `+ self.ui.second_mask_target = false;`
+- **`L353`** (`+1/-0`) · `impl PhotocraftApp {` — `+ self.ui.second_mask_target = false;`
+
+#### `crates/ui-egui/src/app/files.rs` (`+3 / -0`, 3 швов)
+- **`L212`** (`+1/-0`) · `impl PhotocraftApp {` — `+ crate::manga_seam::flush_pending_sfx_bake(self);`
+- **`L282`** (`+1/-0`) · `impl PhotocraftApp {` — `+ crate::manga_seam::flush_pending_sfx_bake(self);`
+- **`L816`** (`+1/-0`) · `impl PhotocraftApp {` — `+ crate::manga_seam::flush_pending_sfx_bake(self);`
 
 #### `crates/ui-egui/src/app/frame.rs` (`+4 / -0`, 2 швов)
 - **`L362`** (`+1/-0`) · `impl PhotocraftApp {` — `+ crate::manga_seam::frame_overlays(self, &ctx);`
@@ -785,11 +791,21 @@
 - **`L107-L109`** (`+3/-0`) · `fn finish(app: &mut PhotocraftApp, mut d: Drag, click: Option<bool>) {` — `+ Tool::Balloon => crate::vector_ui::finish_balloon(app, d.start, [end[0], end[1]]),`
 - **`L194`** (`+1/-0`) · `fn finish(app: &mut PhotocraftApp, mut d: Drag, click: Option<bool>) {` — `+ Tool::Screentone => crate::manga_seam::screentone_drag_finish(app, d.start, [end[0], end[1...`
 
-#### `crates/ui-egui/src/canvas/gpu_canvas.rs` (`+16 / -1`, 4 швов)
-- **`L533-L543`** (`+11/-0`) · `impl GpuCanvas {` — `+ /// Runtime 'seam.gpu_screentone' gate for the wgpu compositor.`
-- **`L609`** (`+1/-0`) · `impl GpuCanvas {` — `+ let gpu_screentone = res.compositor_gpu_screentone.unwrap_or(true);`
-- **`L613`** (`+1/-1`) · `impl GpuCanvas {` — `- None => photocraft_gpu::plan(doc).is_ok(),`
-- **`L757-L759`** (`+3/-0`) · `impl GpuCanvas {` — `+ if let Some(enabled) = res.compositor_gpu_screentone {`
+#### `crates/ui-egui/src/canvas/gpu_canvas.rs` (`+72 / -29`, 14 швов)
+- **`L37`** (`+1/-1`) · `use crate::render_path::CpuReason;` — `- pub use pages::{MAX_PAGE_SIDE, PageUpload};`
+- **`L345`** (`+1/-0`) · `impl GpuCanvas {` — `+ res.preview_lru.clear();`
+- **`L534-L544`** (`+11/-0`) · `impl GpuCanvas {` — `+ /// Runtime 'seam.gpu_screentone' gate for the wgpu compositor.`
+- **`L610`** (`+1/-0`) · `impl GpuCanvas {` — `+ let gpu_screentone = res.compositor_gpu_screentone.unwrap_or(true);`
+- **`L614`** (`+1/-1`) · `impl GpuCanvas {` — `- None => photocraft_gpu::plan(doc).is_ok(),`
+- **`L639`** (`+1/-0`) · `impl GpuCanvas {` — `+ res.touch_preview_key(doc);`
+- **`L694-L695`** (`+2/-24`) · `impl GpuCanvas {` — `- /// Composite 'region' of 'doc' with the wgpu compositor straight into its display texture`
+- **`L716`** (`+1/-0`) · `impl GpuCanvas {` — `+ let (device, queue) = (&self.rs.device, &self.rs.queue);`
+- **`L719-L723`** (`+5/-1`) · `impl GpuCanvas {` — `- None => match photocraft_gpu::Compositor::try_new_with_format(device, photocraft_gpu::Comp...`
+- **`L742-L785`** (`+44/-1`) · `impl GpuCanvas {` — `- let key = doc.id.0;`
+- **`L816`** (`+1/-0`) · `impl GpuCanvas {` — `+ res.touch_preview_key(key);`
+- **`L940`** (`+1/-1`) · `impl GpuCanvas {` — `- let gpu = if key == doc.id.0 { self.composite(doc, region, encode_srgb) } else { Err(photo...`
+- **`L1035`** (`+1/-0`) · `impl GpuCanvas {` — `+ res.touch_preview_key(key);`
+- **`L1046`** (`+1/-0`) · `impl GpuCanvas {` — `+ res.preview_lru.retain(|k| live.contains(k) && res.docs.contains_key(k));`
 
 #### `crates/ui-egui/src/canvas/gpu_canvas/budget.rs` (`+49 / -4`, 4 швов)
 - **`L55-L61`** (`+7/-0`) · `pub const DEFER_PX: u64 = 1 << 22;` — `+ /// GPU bytes one document's display texture set may take on 'wasm32' before switching to`
@@ -804,11 +820,25 @@
 - **`L172-L197`** (`+26/-12`) · `impl DocTextures {` — `- let offset = ((iy0 - y0) as u64 * stride as u64 + (ix0 - x0) as u64) * bpp;`
 - **`L277-L315`** (`+39/-0`) · `impl DocTextures {` — `+ #[cfg(test)]`
 
-#### `crates/ui-egui/src/canvas/gpu_canvas/resources.rs` (`+17 / -0`, 4 швов)
-- **`L39`** (`+1/-0`) · `pub(super) struct Resources {` — `+ pub(super) compositor_gpu_screentone: Option<bool>,`
-- **`L159-L164`** (`+6/-0`) · `pub(super) struct ViewGpu {` — `+ impl Drop for ViewGpu {`
-- **`L183-L191`** (`+9/-0`) · `pub(super) struct Tile {` — `+ impl Drop for Tile {`
-- **`L393`** (`+1/-0`) · `impl Resources {` — `+ compositor_gpu_screentone: None,`
+#### `crates/ui-egui/src/canvas/gpu_canvas/pages.rs` (`+367 / -3`, 5 швов)
+- **`L5`** (`+1/-0`) — `+ use super::budget::{OVER_BUDGET, OVER_CANVAS_BUDGET};`
+- **`L8-L9`** (`+2/-2`) · `use super::resources::{DocTextures, Resources, Tile, f32_bytes};` — `- use super::texels::{texel_bytes, texels};`
+- **`L15-L28`** (`+14/-0`) · `pub const MAX_PAGE_SIDE: u32 = 1024;` — `+ /// Parameters for rendering a single viewport page directly on the GPU via 'Compositor::r...`
+- **`L139`** (`+1/-1`) · `impl GpuCanvas {` — `- usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,`
+- **`L180-L528`** (`+349/-0`) · `impl GpuCanvas {` — `+ /// Renders one viewport page directly on the GPU via ['photocraft_gpu::Compositor::render'],`
+
+#### `crates/ui-egui/src/canvas/gpu_canvas/resources.rs` (`+45 / -0`, 8 швов)
+- **`L7-L12`** (`+6/-0`) · `use super::{FORMAT, FORMAT_HIGH, HashMap, NonZeroU64, TILE_UNIFORM_SIZE, VIEW_FL` — `+ /// Keys tagged above bit 57 are previews (filter preview, adjustment proxies, gradients,`
+- **`L26-L27`** (`+2/-0`) · `pub(super) struct Resources {` — `+ /// Recently used preview keys (most recent at the back), capped at ['MAX_PREVIEW_KEYS'].`
+- **`L47`** (`+1/-0`) · `pub(super) struct Resources {` — `+ pub(super) compositor_gpu_screentone: Option<bool>,`
+- **`L167-L172`** (`+6/-0`) · `pub(super) struct ViewGpu {` — `+ impl Drop for ViewGpu {`
+- **`L191-L199`** (`+9/-0`) · `pub(super) struct Tile {` — `+ impl Drop for Tile {`
+- **`L391`** (`+1/-0`) · `impl Resources {` — `+ preview_lru: Vec::new(),`
+- **`L402`** (`+1/-0`) · `impl Resources {` — `+ compositor_gpu_screentone: None,`
+- **`L419-L437`** (`+19/-0`) · `impl Resources {` — `+ /// Whether 'key' is a tagged preview key (bits 58..63 set).`
+
+#### `crates/ui-egui/src/canvas/gpu_canvas/tests.rs` (`+83 / -0`, 1 швов)
+- **`L427-L509`** (`+83/-0`) · `fn a_deferred_redraws_gpu_attempt_is_counted_once_when_it_ends() {` — `+ #[test]`
 
 #### `crates/ui-egui/src/canvas/paint.rs` (`+13 / -5`, 4 швов)
 - **`L598-L602`** (`+5/-0`) · `pub(super) fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter` — `+ if d.tool == Tool::Fill {`
@@ -818,6 +848,12 @@
 
 #### `crates/ui-egui/src/canvas/strokes.rs` (`+1 / -1`, 1 швов)
 - **`L842`** (`+1/-1`) · `pub fn paint_target(app: &PhotocraftApp) -> serde_json::Value {` — `- json!(if mask && has_mask { "mask" } else { "pixels" })`
+
+#### `crates/ui-egui/src/canvas/tabs.rs` (`+4 / -0`, 4 швов)
+- **`L137`** (`+1/-0`) · `fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {` — `+ crate::manga_seam::flush_pending_sfx_bake(app);`
+- **`L148`** (`+1/-0`) · `fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {` — `+ crate::manga_seam::flush_pending_sfx_bake(app);`
+- **`L516`** (`+1/-0`) · `fn open_tab_clicks(` — `+ crate::manga_seam::flush_pending_sfx_bake(app);`
+- **`L848`** (`+1/-0`) · `pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {` — `+ crate::manga_seam::flush_pending_sfx_bake(app);`
 
 #### `crates/ui-egui/src/canvas/textures.rs` (`+3 / -1`, 2 швов)
 - **`L82`** (`+1/-1`) · `pub(crate) fn detail_plan(size: [u32; 2], side: u32, zoom: f32, visible: DRect)` — `- pub(super) fn canvas_texture_options(factor: u32) -> TextureOptions {`
@@ -832,20 +868,24 @@
 - **`L705-L706`** (`+2/-0`) · `pub(super) fn tool_event_with_view(app: &mut PhotocraftApp, ev: ToolEvent, mods:` — `+ } else if tool == Tool::VectorCurve {`
 - **`L740-L827`** (`+88/-0`) · `pub(super) fn tool_event_with_view(app: &mut PhotocraftApp, ev: ToolEvent, mods:` — `+ /// Handles press-only or tool-owned pointer-down actions; returns 'true' when the press i...`
 
-#### `crates/ui-egui/src/canvas/viewport_pages.rs` (`+45 / -16`, 13 швов)
-- **`L33-L36`** (`+4/-0`) · `const MAX_JOBS: usize = 2;` — `+ /// Synchronous pages rendered per frame on 'wasm32' so 12K×17K zooms/edits stay responsive`
-- **`L39`** (`+1/-0`) · `const MAX_JOBS: usize = 2;` — `+ #[cfg(not(target_arch = "wasm32"))]`
-- **`L41-L42`** (`+2/-0`) · `const UPLOADS_PER_FRAME: usize = 2;` — `+ #[cfg(target_arch = "wasm32")]`
-- **`L223-L225`** (`+3/-0`) · `pub(crate) struct Stream {` — `+ /// True when the per-frame spawn cap stopped before all wanted pages were queued (keeps`
-- **`L245`** (`+1/-0`) · `impl Default for Stream {` — `+ has_pending_work: false,`
-- **`L347`** (`+1/-11`) · `impl Stream {` — `- /// Take finished work, cancel work for pages not 'wanted', and start work for wanted pages`
-- **`L372-L386`** (`+15/-0`) · `impl Stream {` — `+ }`
-- **`L400-L404`** (`+5/-0`) · `impl Stream {` — `+ #[cfg(target_arch = "wasm32")]`
-- **`L405 (del -4)`** (`+0/-4`) · `impl Stream {` — `- let live = self.jobs.iter().filter(|j| !j.cancel.load(Ordering::Relaxed)).count();`
-- **`L416-L420`** (`+5/-0`) · `impl Stream {` — `+ let live = self.jobs.iter().filter(|j| !j.cancel.load(Ordering::Relaxed)).count();`
-- **`L424`** (`+1/-0`) · `impl Stream {` — `+ self.has_pending_work = true;`
-- **`L429-L434`** (`+6/-0`) · `impl Stream {` — `+ // On 'wasm32', 'spawn' completes synchronously into 'self.rx'. Draining immediately hands`
-- **`L457`** (`+1/-1`) · `impl Stream {` — `- !self.jobs.is_empty() || !self.ready.is_empty()`
+#### `crates/ui-egui/src/canvas/viewport_pages.rs` (`+146 / -17`, 17 швов)
+- **`L31`** (`+1/-1`) · `const MAX_PAGES: usize = 256;` — `- /// Pages rendering at once, over all views and documents.`
+- **`L33-L38`** (`+6/-0`) · `const MAX_JOBS: usize = 2;` — `+ /// Visible pages composited directly on the GPU per frame before yielding to keep pan/zoo...`
+- **`L41`** (`+1/-0`) · `const MAX_JOBS: usize = 2;` — `+ #[cfg(not(target_arch = "wasm32"))]`
+- **`L43-L44`** (`+2/-0`) · `const UPLOADS_PER_FRAME: usize = 2;` — `+ #[cfg(target_arch = "wasm32")]`
+- **`L225-L227`** (`+3/-0`) · `pub(crate) struct Stream {` — `+ /// True when the per-frame spawn cap stopped before all wanted pages were queued (keeps`
+- **`L247`** (`+1/-0`) · `impl Default for Stream {` — `+ has_pending_work: false,`
+- **`L349`** (`+1/-11`) · `impl Stream {` — `- /// Take finished work, cancel work for pages not 'wanted', and start work for wanted pages`
+- **`L374-L388`** (`+15/-0`) · `impl Stream {` — `+ }`
+- **`L402-L406`** (`+5/-0`) · `impl Stream {` — `+ #[cfg(target_arch = "wasm32")]`
+- **`L407 (del -4)`** (`+0/-4`) · `impl Stream {` — `- let live = self.jobs.iter().filter(|j| !j.cancel.load(Ordering::Relaxed)).count();`
+- **`L418-L422`** (`+5/-0`) · `impl Stream {` — `+ let live = self.jobs.iter().filter(|j| !j.cancel.load(Ordering::Relaxed)).count();`
+- **`L426`** (`+1/-0`) · `impl Stream {` — `+ self.has_pending_work = true;`
+- **`L431-L436`** (`+6/-0`) · `impl Stream {` — `+ // On 'wasm32', 'spawn' completes synchronously into 'self.rx'. Draining immediately hands`
+- **`L459`** (`+1/-1`) · `impl Stream {` — `- !self.jobs.is_empty() || !self.ready.is_empty()`
+- **`L562-L612`** (`+51/-0`) · `impl Stream {` — `+ /// Returns whether 'page' at 'size' can be rendered directly on the GPU (1:1 or aligned 2×).`
+- **`L765-L807`** (`+43/-0`) · `pub(super) fn show(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, xf:` — `+ // Prefer direct GPU compositing for visible 'factor == 1' (and aligned 'factor == 2') pages`
+- **`L810-L813`** (`+4/-0`) · `pub(super) fn show(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, xf:` — `+ if gpu_handled && Stream::gpu_eligible(page, size, region) {`
 
 #### `crates/ui-egui/src/dialogs.rs` (`+11 / -2`, 6 швов)
 - **`L347`** (`+1/-0`) · `fn command_body_more(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fie` — `+ _ if crate::gigapixel_ui::owns(fields) => crate::gigapixel_ui::body(app, ui, fields),`
@@ -890,38 +930,39 @@
 #### `crates/ui-egui/src/dialogs/color_picker_preview.rs` (`+1 / -1`, 1 швов)
 - **`L24`** (`+1/-1`) · `use crate::color_picker_ui::{hex, parse_hex};` — `- const COMMANDS: [&str; 2] = ["type.setStyle", photocraft_engine::gradient_fill_cmds::STOP];`
 
-#### `crates/ui-egui/src/dialogs/export_dialog.rs` (`+186 / -37`, 31 швов)
+#### `crates/ui-egui/src/dialogs/export_dialog.rs` (`+187 / -37`, 32 швов)
 - **`L8-L9`** (`+2/-0`) · `use std::sync::Mutex;` — `+ #[cfg(not(target_arch = "wasm32"))]`
-- **`L326-L336`** (`+11/-3`) · `fn nearest(f: &Map<String, Value>) -> bool {` — `- /// The document as exported: scaled (engine Image Size, with the dialog's Resample method...`
-- **`L345-L347`** (`+3/-0`) · `fn export_document(doc: &Document, f: &Map<String, Value>, max_side: Option<u32>` — `+ if cancel.load(Ordering::Relaxed) {`
-- **`L351-L353`** (`+3/-0`) · `fn export_document(doc: &Document, f: &Map<String, Value>, max_side: Option<u32>` — `+ if cancel.load(Ordering::Relaxed) {`
-- **`L361-L363`** (`+3/-0`) · `fn export_document(doc: &Document, f: &Map<String, Value>, max_side: Option<u32>` — `+ if cancel.load(Ordering::Relaxed) {`
-- **`L368-L370`** (`+3/-0`) · `fn export_document(doc: &Document, f: &Map<String, Value>, max_side: Option<u32>` — `+ if cancel.load(Ordering::Relaxed) {`
-- **`L374-L409`** (`+36/-0`) · `fn export_document(doc: &Document, f: &Map<String, Value>, max_side: Option<u32>` — `+ /// The document as exported: scaled (engine Image Size, with the dialog's Resample method...`
-- **`L627-L635`** (`+9/-0`) · `struct PendingPreview {` — `+ cancel: Arc<AtomicBool>,`
-- **`L643-L672`** (`+30/-0`) · `fn background_preview_needed(doc: &Document) -> bool {` — `+ #[cfg(not(target_arch = "wasm32"))]`
-- **`L674`** (`+1/-1`) · `fn background_preview_needed(doc: &Document) -> bool {` — `- /// A single pending job per document also avoids starting a worker for every slider tick.`
-- **`L687-L692`** (`+6/-3`) · `fn poll_or_start_preview(` — `- let result = pending.result.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take...`
-- **`L698`** (`+1/-0`) · `fn poll_or_start_preview(` — `+ let cancel = Arc::new(AtomicBool::new(false));`
-- **`L700`** (`+1/-0`) · `fn poll_or_start_preview(` — `+ let cancel_worker = cancel.clone();`
-- **`L704-L709`** (`+6/-9`) · `fn poll_or_start_preview(` — `- let prepared = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {`
-- **`L713`** (`+1/-1`) · `fn poll_or_start_preview(` — `- ui.data_mut(|d| d.insert_temp(pending_key, PendingPreview { key, signature: signature.to_s...`
-- **`L722-L728`** (`+7/-2`) · `fn poll_or_start_preview(` — `- fn estimate_native(doc: &Document, proxy: &Document, f: &Map<String, Value>) -> Option<u64> {`
-- **`L732-L736`** (`+5/-0`) · `fn estimate_native(doc: &Document, proxy: &Document, f: &Map<String, Value>) ->` — `+ #[cfg(all(test, not(target_arch = "wasm32")))]`
-- **`L744`** (`+1/-1`) · `const EXACT_ESTIMATE_PX: f64 = 40_000_000.0;` — `- /// large to encode for an estimate or can't be encoded.`
-- **`L746-L749`** (`+4/-1`) · `const EXACT_ESTIMATE_PX: f64 = 40_000_000.0;` — `- fn exact_estimate(doc: &Document, f: &Map<String, Value>, source_profile: &Profile) -> Opt...`
-- **`L756-L762`** (`+7/-2`) · `fn exact_estimate(doc: &Document, f: &Map<String, Value>, source_profile: &Profi` — `- let full = export_document(doc, f, None, source_profile).ok()?;`
-- **`L766-L770`** (`+5/-0`) · `fn exact_estimate(doc: &Document, f: &Map<String, Value>, source_profile: &Profi` — `+ #[cfg(all(test, not(target_arch = "wasm32")))]`
-- **`L790-L792`** (`+3/-3`) · `fn poll_or_start_exact_estimate(` — `- if let Some((sig, result)) = ui.data(|d| d.get_temp::<(String, Done)>(pending_key)) {`
-- **`L794-L795`** (`+2/-2`) · `fn poll_or_start_exact_estimate(` — `- d.remove::<(String, Done)>(pending_key);`
-- **`L799-L801`** (`+3/-4`) · `fn poll_or_start_exact_estimate(` — `- // Settings changed meanwhile: that worker's answer is for other settings.`
-- **`L804`** (`+1/-0`) · `fn poll_or_start_exact_estimate(` — `+ let cancel = Arc::new(AtomicBool::new(false));`
-- **`L806`** (`+1/-0`) · `fn poll_or_start_exact_estimate(` — `+ let cancel_worker = cancel.clone();`
-- **`L811-L813`** (`+3/-0`) · `fn poll_or_start_exact_estimate(` — `+ if cancel_worker.load(Ordering::Relaxed) {`
-- **`L815-L818`** (`+4/-1`) · `fn poll_or_start_exact_estimate(` — `- exact_estimate(&source, &fields, &source_profile)`
-- **`L820-L824`** (`+5/-3`) · `fn poll_or_start_exact_estimate(` — `- .unwrap_or(None);`
-- **`L827`** (`+1/-1`) · `fn poll_or_start_exact_estimate(` — `- ui.data_mut(|d| d.insert_temp(pending_key, (signature.to_string(), result)));`
-- **`L1325-L1342`** (`+18/-0`) · `mod jpg_progressive_tests;` — `+ #[cfg(all(test, not(target_arch = "wasm32")))]`
+- **`L104`** (`+1/-0`) · `fn open_sized(app: &mut PhotocraftApp, src_w: u32, src_h: u32) -> Result<u64, St` — `+ crate::manga_seam::flush_pending_sfx_bake(app);`
+- **`L327-L337`** (`+11/-3`) · `fn nearest(f: &Map<String, Value>) -> bool {` — `- /// The document as exported: scaled (engine Image Size, with the dialog's Resample method...`
+- **`L346-L348`** (`+3/-0`) · `fn export_document(doc: &Document, f: &Map<String, Value>, max_side: Option<u32>` — `+ if cancel.load(Ordering::Relaxed) {`
+- **`L352-L354`** (`+3/-0`) · `fn export_document(doc: &Document, f: &Map<String, Value>, max_side: Option<u32>` — `+ if cancel.load(Ordering::Relaxed) {`
+- **`L362-L364`** (`+3/-0`) · `fn export_document(doc: &Document, f: &Map<String, Value>, max_side: Option<u32>` — `+ if cancel.load(Ordering::Relaxed) {`
+- **`L369-L371`** (`+3/-0`) · `fn export_document(doc: &Document, f: &Map<String, Value>, max_side: Option<u32>` — `+ if cancel.load(Ordering::Relaxed) {`
+- **`L375-L410`** (`+36/-0`) · `fn export_document(doc: &Document, f: &Map<String, Value>, max_side: Option<u32>` — `+ /// The document as exported: scaled (engine Image Size, with the dialog's Resample method...`
+- **`L628-L636`** (`+9/-0`) · `struct PendingPreview {` — `+ cancel: Arc<AtomicBool>,`
+- **`L644-L673`** (`+30/-0`) · `fn background_preview_needed(doc: &Document) -> bool {` — `+ #[cfg(not(target_arch = "wasm32"))]`
+- **`L675`** (`+1/-1`) · `fn background_preview_needed(doc: &Document) -> bool {` — `- /// A single pending job per document also avoids starting a worker for every slider tick.`
+- **`L688-L693`** (`+6/-3`) · `fn poll_or_start_preview(` — `- let result = pending.result.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take...`
+- **`L699`** (`+1/-0`) · `fn poll_or_start_preview(` — `+ let cancel = Arc::new(AtomicBool::new(false));`
+- **`L701`** (`+1/-0`) · `fn poll_or_start_preview(` — `+ let cancel_worker = cancel.clone();`
+- **`L705-L710`** (`+6/-9`) · `fn poll_or_start_preview(` — `- let prepared = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {`
+- **`L714`** (`+1/-1`) · `fn poll_or_start_preview(` — `- ui.data_mut(|d| d.insert_temp(pending_key, PendingPreview { key, signature: signature.to_s...`
+- **`L723-L729`** (`+7/-2`) · `fn poll_or_start_preview(` — `- fn estimate_native(doc: &Document, proxy: &Document, f: &Map<String, Value>) -> Option<u64> {`
+- **`L733-L737`** (`+5/-0`) · `fn estimate_native(doc: &Document, proxy: &Document, f: &Map<String, Value>) ->` — `+ #[cfg(all(test, not(target_arch = "wasm32")))]`
+- **`L745`** (`+1/-1`) · `const EXACT_ESTIMATE_PX: f64 = 40_000_000.0;` — `- /// large to encode for an estimate or can't be encoded.`
+- **`L747-L750`** (`+4/-1`) · `const EXACT_ESTIMATE_PX: f64 = 40_000_000.0;` — `- fn exact_estimate(doc: &Document, f: &Map<String, Value>, source_profile: &Profile) -> Opt...`
+- **`L757-L763`** (`+7/-2`) · `fn exact_estimate(doc: &Document, f: &Map<String, Value>, source_profile: &Profi` — `- let full = export_document(doc, f, None, source_profile).ok()?;`
+- **`L767-L771`** (`+5/-0`) · `fn exact_estimate(doc: &Document, f: &Map<String, Value>, source_profile: &Profi` — `+ #[cfg(all(test, not(target_arch = "wasm32")))]`
+- **`L791-L793`** (`+3/-3`) · `fn poll_or_start_exact_estimate(` — `- if let Some((sig, result)) = ui.data(|d| d.get_temp::<(String, Done)>(pending_key)) {`
+- **`L795-L796`** (`+2/-2`) · `fn poll_or_start_exact_estimate(` — `- d.remove::<(String, Done)>(pending_key);`
+- **`L800-L802`** (`+3/-4`) · `fn poll_or_start_exact_estimate(` — `- // Settings changed meanwhile: that worker's answer is for other settings.`
+- **`L805`** (`+1/-0`) · `fn poll_or_start_exact_estimate(` — `+ let cancel = Arc::new(AtomicBool::new(false));`
+- **`L807`** (`+1/-0`) · `fn poll_or_start_exact_estimate(` — `+ let cancel_worker = cancel.clone();`
+- **`L812-L814`** (`+3/-0`) · `fn poll_or_start_exact_estimate(` — `+ if cancel_worker.load(Ordering::Relaxed) {`
+- **`L816-L819`** (`+4/-1`) · `fn poll_or_start_exact_estimate(` — `- exact_estimate(&source, &fields, &source_profile)`
+- **`L821-L825`** (`+5/-3`) · `fn poll_or_start_exact_estimate(` — `- .unwrap_or(None);`
+- **`L828`** (`+1/-1`) · `fn poll_or_start_exact_estimate(` — `- ui.data_mut(|d| d.insert_temp(pending_key, (signature.to_string(), result)));`
+- **`L1326-L1343`** (`+18/-0`) · `mod jpg_progressive_tests;` — `+ #[cfg(all(test, not(target_arch = "wasm32")))]`
 
 #### `crates/ui-egui/src/dialogs/mask_trash_prompt.rs` (`+5 / -1`, 1 швов)
 - **`L33-L37`** (`+5/-1`) · `pub fn drop_action(layer: u64, kind: MaskKind) -> (String, Value) {` — `- let command = if kind == MaskKind::Vector { VECTOR_MASK_DELETE } else { LAYER_MASK_DELETE };`
@@ -1278,10 +1319,10 @@
 | `apps/photocraft-web/src/autosave_bridge.rs` | `+499` |
 | `apps/photocraft-web/src/web_autosave.rs` | `+456` |
 | `assets/icons/fill-tool.svg` | `+16` |
-| `crates/algo/src/comic_screentone.rs` | `+2453` |
+| `crates/algo/src/comic_screentone.rs` | `+2516` |
 | `crates/algo/src/fill.rs` | `+859` |
 | `crates/algo/src/fill/tests.rs` | `+533` |
-| `crates/compose/src/screentone.rs` | `+323` |
+| `crates/compose/src/screentone.rs` | `+420` |
 | `crates/doc/src/sfx.rs` | `+2382` |
 | `crates/doc/src/vector_brush.rs` | `+305` |
 | `crates/engine/src/cmd/manga_cmds.rs` | `+51` |
@@ -1315,9 +1356,9 @@
 | `crates/gpu/tests/it/sfx.rs` | `+600` |
 | `crates/io/src/tpl.rs` | `+262` |
 | `crates/ui-egui/src/canvas/ruler_autoscroll_tests.rs` | `+59` |
-| `crates/ui-egui/src/canvas/sfx_gpu_preview.rs` | `+832` |
+| `crates/ui-egui/src/canvas/sfx_gpu_preview.rs` | `+906` |
 | `crates/ui-egui/src/dialogs/gigapixel_ui.rs` | `+946` |
-| `crates/ui-egui/src/manga_seam.rs` | `+4403` |
+| `crates/ui-egui/src/manga_seam.rs` | `+4518` |
 | `crates/ui-egui/src/panels/timelapse_ui.rs` | `+1512` |
 | `crates/ui-egui/src/tools/fill_tool_ui.rs` | `+619` |
 | `crates/ui-egui/src/tools/fill_tool_ui/tests.rs` | `+286` |

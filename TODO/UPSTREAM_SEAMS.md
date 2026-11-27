@@ -7,35 +7,35 @@
 
 | Параметр | Значение |
 |---|---|
-| Ветка / HEAD | `manga/0.23-sfx` (`5a0720f00`) |
+| Ветка / HEAD | `manga/0.23-sfx` (`68e4d3b49`) |
 | База апстрима (merge-base) | `5bdbcc118` — Merge pull request #14595 from davidmann4/fix/14592-main-green |
-| Изменено файлов апстрима (`M`) | **182** (`+6880 / -944` строк, **722** швов/hunk-ов) |
-| Добавлено новых файлов вне чемодана (`A`) | **51** |
+| Изменено файлов апстрима (`M`) | **194** (`+7933 / -1060` строк, **822** швов/hunk-ов) |
+| Добавлено новых файлов вне чемодана (`A`) | **52** |
 | Как обновить отчёт | `powershell -ExecutionPolicy Bypass -File scripts/seam_inspector.ps1` |
 
 ## Карта швов по крейтам (изменённые файлы апстрима)
 
 | Крейт / папка | Файлов `M` | Швов (hunks) | Строк `+ / -` |
 |---|---:|---:|---:|
-| `(root)` | 5 | 27 | `+166 / -455` |
+| `(root)` | 5 | 27 | `+167 / -455` |
 | `apps/photocraft-web` | 3 | 12 | `+85 / -3` |
 | `crates/algo` | 3 | 17 | `+46 / -5` |
-| `crates/compose` | 14 | 71 | `+418 / -77` |
+| `crates/compose` | 16 | 81 | `+508 / -84` |
 | `crates/doc` | 5 | 44 | `+1344 / -4` |
-| `crates/engine` | 40 | 117 | `+479 / -66` |
+| `crates/engine` | 41 | 129 | `+538 / -104` |
 | `crates/format` | 5 | 24 | `+158 / -27` |
-| `crates/gpu` | 12 | 40 | `+1428 / -13` |
-| `crates/io` | 10 | 27 | `+133 / -14` |
+| `crates/gpu` | 13 | 44 | `+1770 / -23` |
+| `crates/io` | 12 | 34 | `+313 / -16` |
 | `crates/raster` | 1 | 1 | `+1 / -1` |
 | `crates/text` | 6 | 15 | `+418 / -6` |
-| `crates/ui-egui` | 73 | 308 | `+2017 / -222` |
+| `crates/ui-egui` | 79 | 375 | `+2398 / -281` |
 | `crates/vector` | 5 | 19 | `+187 / -51` |
 
 ## 1. Изменённые файлы апстрима — пофайлово и построчно (`M`)
 
 ### `(root)`
 
-- **`Cargo.lock`** (`+70 / -0`) — автогенерируемый lockfile, швы не разворачиваются.
+- **`Cargo.lock`** (`+71 / -0`) — автогенерируемый lockfile, швы не разворачиваются.
 #### `Cargo.toml` (`+4 / -0`, 2 швов)
 - **`L22-L24`** (`+3/-0`) · `photocraft-geom = { path = "crates/geom" }` — `+ photocraft-manga-bridge = { path = "crates/manga-bridge" }`
 - **`L46`** (`+1/-0`) · `photocraft-ui-egui = { path = "crates/ui-egui" }` — `+ photocraft-manga-ui = { path = "crates/manga-ui" }`
@@ -118,6 +118,9 @@
 
 ### `crates/compose`
 
+#### `crates/compose/Cargo.toml` (`+1 / -0`, 1 швов)
+- **`L16`** (`+1/-0`) · `photocraft-vector = { workspace = true }` — `+ photocraft-algo = { workspace = true }`
+
 #### `crates/compose/src/adjust.rs` (`+185 / -0`, 3 швов)
 - **`L289-L303`** (`+15/-0`) · `fn apply_depth_mode(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, dept` — `+ Adjustment::Grain { amount, size, roughness } => {`
 - **`L309-L389`** (`+81/-0`) · `fn apply_depth_mode(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, dept` — `+ /// Grain's settings as the per-pixel evaluation uses them (shared with the GPU kernel, which`
@@ -130,13 +133,21 @@
 #### `crates/compose/src/cmyk_split.rs` (`+1 / -0`, 1 швов)
 - **`L259`** (`+1/-0`) · `fn stand_in_layer(l: &mut Layer, planes: Planes, depth: SampleType, canvas: Rect` — `+ LayerContent::Screentone(s) => s.surface = stand_in_surface(&s.surface, planes),`
 
-#### `crates/compose/src/composite.rs` (`+3 / -2`, 3 швов)
+#### `crates/compose/src/composite.rs` (`+82 / -9`, 10 швов)
 - **`L5`** (`+1/-1`) · `use super::fx_cache::effect_maps;` — `- use super::{BlendMode, Buffer, Fill, Layer, LayerContent, Rect, Surface, advanced, blend, ...`
 - **`L130`** (`+1/-0`) · `pub fn occludes_below(layer: &Layer, mode: photocraft_color::ColorMode) -> bool` — `+ && !masks::has_second_mask(layer)`
-- **`L374`** (`+1/-1`) · `pub(crate) fn composite_layer_plain(layer: &Layer, clipped: &[Layer], backdrop:` — `- let needs_mix = opacity < 1.0 || layer.mask.is_some() || layer.vector_mask.is_some();`
+- **`L315-L317`** (`+3/-1`) · `pub(crate) fn pixel_surface(layer: &Layer) -> Option<&Surface> {` — `- if matches!(layer.content, LayerContent::Group(_) | LayerContent::Fill(_) | LayerContent::...`
+- **`L376`** (`+1/-1`) · `pub(crate) fn composite_layer_plain(layer: &Layer, clipped: &[Layer], backdrop:` — `- let needs_mix = opacity < 1.0 || layer.mask.is_some() || layer.vector_mask.is_some();`
+- **`L492`** (`+1/-2`) · `pub(crate) fn composite_layer_plain(layer: &Layer, clipped: &[Layer], backdrop:` — `- if !matches!(layer.content, LayerContent::Group(_) | LayerContent::Fill(_) | LayerContent:...`
+- **`L520-L522`** (`+3/-1`) · `pub(crate) fn composite_layer_plain(layer: &Layer, clipped: &[Layer], backdrop:` — `- let Some(mut content) = render_content(layer, rect, cx) else { return };`
+- **`L527-L538`** (`+12/-0`) · `pub(crate) fn composite_layer_plain(layer: &Layer, clipped: &[Layer], backdrop:` — `+ fn render_layer_or_screentone(layer: &Layer, rect: Rect, cx: &Ctx, backdrop: &Buffer) -> O...`
+- **`L548-L550`** (`+3/-1`) · `fn composite_layer_effects(layer: &Layer, clipped: &[Layer], backdrop: &mut Buff` — `- let Some(content) = render_content(layer, rect, cx) else { return };`
+- **`L686-L688`** (`+3/-2`) · `fn composite_atop_any(layer: &Layer, base: &mut Buffer, cx: &Ctx) {` — `- let x = rect.x0 + (i as i32 % rect.width() as i32);`
+- **`L783-L836`** (`+54/-0`) · `fn blend_span_g(dst: &mut [[f32; 4]], src: &[[f32; 4]], x0: i32, y: i32, mode: B` — `+ #[cfg(test)]`
 
-#### `crates/compose/src/content.rs` (`+7 / -4`, 1 швов)
-- **`L176-L182`** (`+7/-4`) · `pub(crate) fn empty_in(layer: &Layer, rect: Rect) -> bool {` — `- LayerContent::Raster(_) | LayerContent::Text(_) | LayerContent::Shape(_) | LayerContent::S...`
+#### `crates/compose/src/content.rs` (`+8 / -4`, 2 швов)
+- **`L52`** (`+1/-0`) · `pub(crate) fn render_content(layer: &Layer, rect: Rect, cx: &Ctx) -> Option<Buff` — `+ LayerContent::Screentone(st) if st.surface.tile_count() == 0 => crate::screentone::render_...`
+- **`L177-L183`** (`+7/-4`) · `pub(crate) fn empty_in(layer: &Layer, rect: Rect) -> bool {` — `- LayerContent::Raster(_) | LayerContent::Text(_) | LayerContent::Shape(_) | LayerContent::S...`
 
 #### `crates/compose/src/extents.rs` (`+10 / -4`, 5 швов)
 - **`L35-L38`** (`+4/-0`) · `pub fn layer_bounds(layer: &Layer, canvas: Rect) -> Rect {` — `+ LayerContent::Screentone(st) => {`
@@ -148,6 +159,9 @@
 #### `crates/compose/src/fx_cache.rs` (`+4 / -1`, 2 швов)
 - **`L67-L69`** (`+3/-0`) · `pub(crate) fn layer_identity(layer: &Layer, h: &mut std::collections::hash_map::` — `+ if let Some(m) = &layer.second_mask {`
 - **`L139`** (`+1/-1`) · `pub fn discard_unreadable_pixel_caches() {` — `- super::masks::purge();`
+
+#### `crates/compose/src/lib.rs` (`+1 / -0`, 1 швов)
+- **`L35`** (`+1/-0`) · `pub mod psblend;` — `+ pub mod screentone;`
 
 #### `crates/compose/src/masks.rs` (`+120 / -40`, 23 швов)
 - **`L28`** (`+1/-1`) · `struct CacheEntry {` — `- _pixel_input: Option<Surface>,`
@@ -205,17 +219,17 @@
 - **`L34`** (`+1/-0`) · `fn simple(layer: &Layer) -> bool {` — `+ && !crate::masks::has_second_mask(layer)`
 - **`L70`** (`+1/-0`) · `fn collect<'a>(layers: &'a [Layer], depth: SampleType, adjustments: bool, items:` — `+ && !crate::masks::has_second_mask(layer)`
 
-#### `crates/compose/src/proxy.rs` (`+8 / -0`, 2 швов)
+#### `crates/compose/src/proxy.rs` (`+12 / -0`, 2 швов)
 - **`L68-L70`** (`+3/-0`) · `fn shrink_layer(l: &mut Layer, k: u32) {` — `+ if let Some(m) = &mut l.second_mask {`
-- **`L93-L97`** (`+5/-0`) · `fn shrink_layer(l: &mut Layer, k: u32) {` — `+ LayerContent::Screentone(s) => {`
+- **`L93-L101`** (`+9/-0`) · `fn shrink_layer(l: &mut Layer, k: u32) {` — `+ LayerContent::Screentone(s) => {`
 
 #### `crates/compose/src/uniform.rs` (`+13 / -1`, 2 швов)
 - **`L47-L52`** (`+6/-0`) · `impl<'a> UniformAreas<'a> {` — `+ if let Some(m) = &l.second_mask {`
 - **`L114-L120`** (`+7/-1`) · `fn per_pixel(a: &Adjustment) -> bool {` — `- !matches!(a, Adjustment::GradientMap { dither: true, .. } | Adjustment::ColorLookup { dith...`
 
-#### `crates/compose/src/viewport.rs` (`+8 / -0`, 2 швов)
+#### `crates/compose/src/viewport.rs` (`+12 / -0`, 2 швов)
 - **`L58-L60`** (`+3/-0`) · `pub fn preview_page(doc: &Document, source: Rect, factor: u32, interrupt: Interr` — `+ if let Some(m) = &mut l.second_mask {`
-- **`L96-L100`** (`+5/-0`) · `pub fn preview_page(doc: &Document, source: Rect, factor: u32, interrupt: Interr` — `+ LayerContent::Screentone(s) => {`
+- **`L96-L104`** (`+9/-0`) · `pub fn preview_page(doc: &Document, source: Rect, factor: u32, interrupt: Interr` — `+ LayerContent::Screentone(s) => {`
 
 ### `crates/doc`
 
@@ -293,7 +307,7 @@
 #### `crates/engine/src/cmd.rs` (`+4 / -1`, 4 швов)
 - **`L126`** (`+1/-0`) · `pub mod magnetic_cmds;` — `+ pub mod manga_cmds;`
 - **`L192`** (`+1/-1`) · `pub use adjust_params::{adjustment_from_params, adjustment_kind};` — `- pub(crate) use enabled::{always, check_all_unlocked, check_pixels_unlocked, has_paintable,...`
-- **`L883`** (`+1/-0`) · `fn build() -> Vec<CommandSpec> {` — `+ crate::manga_cmds::comic_screentone::ensure_doc_screentones_baked(doc);`
+- **`L883`** (`+1/-0`) · `fn build() -> Vec<CommandSpec> {` — `+ // 'flatten_to_surface' evaluates unbaked Sheet & Shading screentones live in bands.`
 - **`L1466`** (`+1/-0`) · `fn build() -> Vec<CommandSpec> {` — `+ v.extend(crate::cmd::manga_cmds::specs());`
 
 #### `crates/engine/src/cmd/adjust_params.rs` (`+2 / -1`, 2 швов)
@@ -316,7 +330,7 @@
 - **`L324-L327`** (`+4/-5`) · `fn run_on_layer(s: &mut Session, cmd: &str, label: &str, p: &Value, moves: bool,` — `- if !colors`
 
 #### `crates/engine/src/cmd/edit_cmds.rs` (`+1 / -0`, 1 швов)
-- **`L770`** (`+1/-0`) · `fn merge_visible(s: &mut Session) -> Result<Value> {` — `+ crate::manga_cmds::comic_screentone::ensure_doc_screentones_baked(&mut solo);`
+- **`L768`** (`+1/-0`) · `fn merge_visible(s: &mut Session) -> Result<Value> {` — `+ // 'composite_layers' evaluates unbaked Sheet & Shading screentones live band-by-band.`
 
 #### `crates/engine/src/cmd/enabled.rs` (`+10 / -5`, 4 швов)
 - **`L39`** (`+1/-1`) · `pub(crate) fn has_paintable(s: &Session) -> std::result::Result<(), String> {` — `- if matches!(l.content, LayerContent::Raster(_)) || l.mask.is_some() {`
@@ -328,12 +342,22 @@
 - **`L747`** (`+1/-0`) · `pub(crate) fn kind_of(s: &Session, id: LayerId) -> Option<&'static str> {` — `+ LayerContent::Screentone(_) => "screentone",`
 - **`L807-L825`** (`+19/-0`) · `fn rasterize_content(s: &mut Session, id: LayerId, only: Option<&str>, key: &str` — `+ "screentone" => {`
 
-#### `crates/engine/src/cmd/image_cmds.rs` (`+41 / -2`, 5 швов)
+#### `crates/engine/src/cmd/image_cmds.rs` (`+94 / -40`, 15 швов)
 - **`L27-L30`** (`+4/-2`) · `pub(crate) fn for_each_surface(layers: &mut [Layer], masks: bool, f: &mut dyn Fn` — `- if masks && let Some(m) = &mut l.mask {`
 - **`L65`** (`+1/-0`) · `pub(crate) fn for_each_surface(layers: &mut [Layer], masks: bool, f: &mut dyn Fn` — `+ LayerContent::Screentone(s) => f(&mut s.surface, false),`
 - **`L72-L101`** (`+30/-0`) · `pub(crate) fn for_each_surface(layers: &mut [Layer], masks: bool, f: &mut dyn Fn` — `+ /// Bakes live procedural content to pixels before an operation that cannot keep its param...`
 - **`L408-L409`** (`+2/-0`) · `fn resample_doc_with_styles(doc: &mut Document, cmd: &str, nw: u32, nh: u32, fil` — `+ crate::manga_cmds::comic_screentone::ensure_doc_screentones_baked(doc);`
-- **`L1206-L1209`** (`+4/-0`) · `pub(crate) fn change_depth(doc: &mut Document, depth: SampleType) {` — `+ if crosses {`
+- **`L516 (del -24)`** (`+0/-24`) · `fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {` — `- /// The flattened document, or an error when the canvas is over the compositor's render cap`
+- **`L1113-L1115`** (`+3/-1`) · `fn trim(s: &mut Session, p: &Value) -> Result<Value> {` — `- let buf = flatten_whole(&d.doc, "image.trim")?;`
+- **`L1116 (del -1)`** (`+0/-1`) · `fn trim(s: &mut Session, p: &Value) -> Result<Value> {` — `- let w = canvas.width() as usize;`
+- **`L1118-L1119`** (`+2/-2`) · `fn trim(s: &mut Session, p: &Value) -> Result<Value> {` — `- "topLeft" => buf.px.first().copied(),`
+- **`L1132`** (`+1/-0`) · `fn trim(s: &mut Session, p: &Value) -> Result<Value> {` — `+ // Stream horizontal bands (~140 MB peak) instead of flattening the entire canvas into RAM.`
+- **`L1134-L1137`** (`+4/-4`) · `fn trim(s: &mut Session, p: &Value) -> Result<Value> {` — `- for (i, q) in buf.px.iter().enumerate() {`
+- **`L1139-L1148`** (`+10/-1`) · `fn trim(s: &mut Session, p: &Value) -> Result<Value> {` — `- }`
+- **`L1193-L1196`** (`+4/-0`) · `pub(crate) fn change_depth(doc: &mut Document, depth: SampleType) {` — `+ if crosses {`
+- **`L1217 (del -1)`** (`+0/-1`) · `fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {` — `- let buf = flatten_whole(&doc, "image.duplicate")?;`
+- **`L1219`** (`+1/-4`) · `fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {` — `- let mut surf = Surface::new(fmt);`
+- **`L1328-L1359`** (`+32/-0`) · `mod image_size_drops_selection_tests;` — `+ #[cfg(test)]`
 
 #### `crates/engine/src/cmd/layer_menu_cmds.rs` (`+13 / -3`, 3 швов)
 - **`L49-L53`** (`+5/-2`) · `fn has_raster_with_mask(s: &Session) -> Enabled {` — `- has_raster(s)?;`
@@ -358,14 +382,18 @@
 - **`L415-L418`** (`+4/-0`) · `fn shift_shown(doc: &Document, l: &mut Layer, dx: i32, dy: i32, wrap: Option<pho` — `+ LayerContent::Screentone(s) => {`
 - **`L452`** (`+1/-1`) · `fn subtree_wraps_only(l: &Layer, depth: usize) -> bool {` — `- LayerContent::Text(_) | LayerContent::Shape(_) | LayerContent::Smart(_) => false,`
 
+#### `crates/engine/src/cmd/layer_multi_cmds/structure.rs` (`+3 / -0`, 1 швов)
+- **`L176-L178`** (`+3/-0`) · `pub(super) fn merge_layers(s: &mut Session) -> Result<Value> {` — `+ for l in &mut solo.layers {`
+
 #### `crates/engine/src/cmd/mode_cmds.rs` (`+2 / -4`, 2 швов)
 - **`L129`** (`+1/-1`) · `pub(crate) fn rotate_arbitrary_with(s: &mut Session, p: &Value, keep_counts: boo` — `- if let Some(m) = l.mask.as_mut() {`
 - **`L166`** (`+1/-3`) · `fn warp_unlinked_masks(l: &mut Layer, h: &Homography, interp: Interp) -> Result<` — `- if let Some(m) = l.mask.as_mut()`
 
-#### `crates/engine/src/cmd/ops.rs` (`+11 / -3`, 3 швов)
+#### `crates/engine/src/cmd/ops.rs` (`+12 / -3`, 4 швов)
 - **`L178-L183`** (`+6/-0`) · `pub(crate) fn translate_layer_wrapped(doc: &Document, l: &mut Layer, dx: i32, dy` — `+ if let Some(sfx) = &mut l.sfx {`
 - **`L185`** (`+1/-3`) · `pub(crate) fn translate_layer_wrapped(doc: &Document, l: &mut Layer, dx: i32, dy` — `- if let Some(m) = &mut l.mask`
 - **`L215-L218`** (`+4/-0`) · `pub(crate) fn translate_layer_wrapped(doc: &Document, l: &mut Layer, dx: i32, dy` — `+ LayerContent::Screentone(s) => {`
+- **`L256`** (`+1/-0`) · `pub(super) fn merge_group(s: &mut Session, id: LayerId) -> Result<Value> {` — `+ crate::manga_cmds::comic_screentone::ensure_layer_tree_shading_screentones_baked(doc, &mut...`
 
 #### `crates/engine/src/cmd/perspective_crop_cmds.rs` (`+1 / -1`, 1 швов)
 - **`L183`** (`+1/-1`) · `fn warp_layers(layers: &mut [Layer], h: &Homography, interp: Interp, clip: Rect,` — `- if let Some(m) = l.mask.as_mut() {`
@@ -442,8 +470,8 @@
 - **`L123`** (`+1/-0`) · `pub use cmd::magnetic_cmds;` — `+ pub use cmd::manga_cmds;`
 - **`L351-L352`** (`+2/-0`) · `pub struct Session {` — `+ /// Manga-specific session state (typesetter, screentone/fill/timelapse helpers).`
 
-#### `crates/engine/src/pixels.rs` (`+4 / -0`, 1 швов)
-- **`L556-L559`** (`+4/-0`) · `pub fn merge_down(doc: &Document, lower: &Layer, upper: &Layer) -> Layer {` — `+ let mut lower = lower.clone();`
+#### `crates/engine/src/pixels.rs` (`+6 / -0`, 1 швов)
+- **`L556-L561`** (`+6/-0`) · `pub fn merge_down(doc: &Document, lower: &Layer, upper: &Layer) -> Layer {` — `+ let mut lower = lower.clone();`
 
 #### `crates/engine/src/prefs.rs` (`+13 / -1`, 4 швов)
 - **`L28`** (`+1/-0`) · `use crate::{EngineError, Result, Session};` — `+ pub use photocraft_manga_bridge::SeamFlags;`
@@ -510,10 +538,10 @@
 
 ### `crates/gpu`
 
-#### `crates/gpu/src/compose.wgsl` (`+939 / -0`, 3 швов)
+#### `crates/gpu/src/compose.wgsl` (`+1150 / -0`, 3 швов)
 - **`L526-L564`** (`+39/-0`) · `fn lut3(n: i32, r: i32, g: i32, b: i32) -> vec3<f32> {` — `+ // Grain: compose::adjust::{grain_hash, grain_lattice, grain_value, grain_noise}, integer-...`
 - **`L825-L831`** (`+7/-0`) · `fn adjust(c: vec3<f32>) -> vec3<f32> {` — `+ case 18: {                                                             // Grain (compose::...`
-- **`L1626-L2518`** (`+893/-0`) · `fn fs_mstroke(in: VOut) -> @location(0) vec4<f32> {` — `+ // ---- comic_screentone procedural screentone -------------------------------------------...`
+- **`L1626-L2729`** (`+1104/-0`) · `fn fs_mstroke(in: VOut) -> @location(0) vec4<f32> {` — `+ // ---- comic_screentone procedural screentone -------------------------------------------...`
 
 #### `crates/gpu/src/encode.rs` (`+2 / -2`, 2 швов)
 - **`L7`** (`+1/-1`) · `use super::textures::{ChunkOut, FxKey, ResKey, Resident, Stats};` — `- use super::{Compositor, Document, LayerId, Plan, Rect, Surface, Unsupported, plan, timing};`
@@ -533,23 +561,23 @@
 - **`L61-L65`** (`+5/-0`) · `pub fn plan(doc: &Document) -> Result<Plan<'_>, Unsupported> {` — `+ plan_with_options(doc, true)`
 - **`L69`** (`+1/-1`) · `pub fn plan(doc: &Document) -> Result<Plan<'_>, Unsupported> {` — `- let mut p = Planner::new(DocCtx::of(doc));`
 
-#### `crates/gpu/src/plan/lower.rs` (`+128 / -1`, 3 швов)
+#### `crates/gpu/src/plan/lower.rs` (`+131 / -1`, 3 швов)
 - **`L330-L339`** (`+10/-1`) · `pub fn adjustment_program(adj: &Adjustment, transfer: Transfer, depth: photocraf` — `- // Identity on the CPU too (not evaluated there).`
-- **`L412-L528`** (`+117/-0`) · `pub fn mode_index(m: BlendMode) -> i32 {` — `+ /// Index of ['PatternType'] (0..=11) for 'Kernel::Screentone'.`
-- **`L532`** (`+1/-0`) · `pub(super) fn single_content_pass(layer: &Layer) -> bool {` — `+ LayerContent::Screentone(tone) => tone.spec.backend == photocraft_doc::ScreentoneBackend::...`
+- **`L412-L531`** (`+120/-0`) · `pub fn mode_index(m: BlendMode) -> i32 {` — `+ /// Index of ['PatternType'] (0..=11) for 'Kernel::Screentone'.`
+- **`L535`** (`+1/-0`) · `pub(super) fn single_content_pass(layer: &Layer) -> bool {` — `+ LayerContent::Screentone(tone) => tone.spec.backend == photocraft_doc::ScreentoneBackend::...`
 
-#### `crates/gpu/src/plan/planner.rs` (`+52 / -4`, 8 швов)
+#### `crates/gpu/src/plan/planner.rs` (`+42 / -4`, 8 швов)
 - **`L2-L3`** (`+2/-1`) · `use super::lower::{` — `- Paint, adjustment_on_gpu, adjustment_program, check_gradient_stops, gradient_rows, placeme...`
-- **`L7`** (`+1/-0`) · `use super::{Adjustment, BlendMode, Effect, Fill, FxPaint, Glow, Layer, LayerCont` — `+ use photocraft_doc::{ScreentoneBackend, ScreentoneLayer, ScreentoneMode};`
+- **`L7`** (`+1/-0`) · `use super::{Adjustment, BlendMode, Effect, Fill, FxPaint, Glow, Layer, LayerCont` — `+ use photocraft_doc::{ScreentoneLayer, ScreentoneMode};`
 - **`L444`** (`+1/-1`) · `impl<'a> Planner<'a> {` — `- if opacity < 1.0 || layer.mask.is_some() || layer.vector_mask.is_some() {`
 - **`L563-L575`** (`+13/-0`) · `impl<'a> Planner<'a> {` — `+ if let LayerContent::Screentone(tone) = &layer.content`
 - **`L655`** (`+1/-1`) · `impl<'a> Planner<'a> {` — `- if layer.mask.is_some() || layer.vector_mask.is_some() {`
 - **`L683`** (`+1/-1`) · `impl<'a> Planner<'a> {` — `- if layer.mask.is_some() || layer.vector_mask.is_some() {`
 - **`L707-L715`** (`+9/-0`) · `impl<'a> Planner<'a> {` — `+ // Screentone GPU shader lands in S5; fall back to CPU compositing in S2.`
-- **`L733-L756`** (`+24/-0`) · `impl<'a> Planner<'a> {` — `+ /// Whether 'tone' should be evaluated procedurally via 'Kernel::Screentone' on the GPU.`
+- **`L733-L746`** (`+14/-0`) · `impl<'a> Planner<'a> {` — `+ /// Whether 'tone' should be evaluated procedurally via 'Kernel::Screentone' on the GPU.`
 
-#### `crates/gpu/src/plan/tests.rs` (`+73 / -0`, 1 швов)
-- **`L550-L622`** (`+73/-0`) · `fn planning_reads_cached_rows_instead_of_rebuilding_them() {` — `+ #[test]`
+#### `crates/gpu/src/plan/tests.rs` (`+75 / -0`, 1 швов)
+- **`L550-L624`** (`+75/-0`) · `fn planning_reads_cached_rows_instead_of_rebuilding_them() {` — `+ #[test]`
 
 #### `crates/gpu/src/plan/types.rs` (`+8 / -1`, 6 швов)
 - **`L9-L10`** (`+2/-0`) · `pub enum Kernel {` — `+ /// Procedural comic screentone sheet generator ('fs_screentone').`
@@ -559,20 +587,26 @@
 - **`L294-L295`** (`+2/-0`) · `pub struct DocCtx<'a> {` — `+ /// Whether procedural GPU screentone ('Kernel::Screentone') is permitted by runtime seam ...`
 - **`L308`** (`+1/-0`) · `impl<'a> DocCtx<'a> {` — `+ gpu_screentone: true,`
 
-#### `crates/gpu/src/setup.rs` (`+9 / -2`, 5 швов)
-- **`L220`** (`+1/-0`) · `impl Compositor {` — `+ sibling.gpu_screentone = self.gpu_screentone;`
-- **`L258`** (`+1/-0`) · `impl Compositor {` — `+ gpu_screentone: true,`
-- **`L373-L377`** (`+5/-0`) · `impl Compositor {` — `+ /// Enable or disable procedural 'Kernel::Screentone' evaluation ('seam.gpu_screentone').`
-- **`L381`** (`+1/-1`) · `impl Compositor {` — `- let Ok(plan) = plan(doc) else { return 0 };`
-- **`L437`** (`+1/-1`) · `impl Compositor {` — `- let p = plan(doc)?;`
+#### `crates/gpu/src/setup.rs` (`+33 / -11`, 8 швов)
+- **`L69-L79`** (`+11/-0`) · `impl Compositor {` — `+ /// Like ['Self::try_new_with_format'], building pipelines sequentially on 'wgpu::Backend:...`
+- **`L83-L85`** (`+3/-3`) · `impl Compositor {` — `- /// If the pool cannot be created, pipeline enumeration runs sequentially on the calling`
+- **`L96-L105`** (`+10/-6`) · `impl Compositor {` — `- let pool = rayon::ThreadPoolBuilder::new().num_threads(threads.max(1)).thread_name(|index|...`
+- **`L235`** (`+1/-0`) · `impl Compositor {` — `+ sibling.gpu_screentone = self.gpu_screentone;`
+- **`L273`** (`+1/-0`) · `impl Compositor {` — `+ gpu_screentone: true,`
+- **`L388-L392`** (`+5/-0`) · `impl Compositor {` — `+ /// Enable or disable procedural 'Kernel::Screentone' evaluation ('seam.gpu_screentone').`
+- **`L396`** (`+1/-1`) · `impl Compositor {` — `- let Ok(plan) = plan(doc) else { return 0 };`
+- **`L452`** (`+1/-1`) · `impl Compositor {` — `- let p = plan(doc)?;`
 
 #### `crates/gpu/tests/it/main.rs` (`+1 / -0`, 1 швов)
 - **`L40`** (`+1/-0`) · `mod pipelines;` — `+ mod sfx;`
 
-#### `crates/gpu/tests/it/parity.rs` (`+198 / -0`, 3 швов)
+#### `crates/gpu/tests/it/parity.rs` (`+309 / -0`, 3 швов)
 - **`L753-L755`** (`+3/-0`) · `fn adjustments() -> Vec<Adjustment> {` — `+ Adjustment::Grain { amount: 60.0, size: 34.0, roughness: 50.0 },`
 - **`L833-L835`** (`+3/-0`) · `fn adjustment_layers() {` — `+ // Grain: the same position hash as the CPU's, float values over white kept in 32-bit.`
-- **`L3477-L3668`** (`+192/-0`) · `fn sibling_compositors_have_independent_residency_and_configuration() {` — `+ #[test]`
+- **`L3477-L3779`** (`+303/-0`) · `fn sibling_compositors_have_independent_residency_and_configuration() {` — `+ #[test]`
+
+#### `crates/gpu/tests/it/pipelines.rs` (`+1 / -1`, 1 швов)
+- **`L49`** (`+1/-1`) · `fn every_compositor_pipeline_builds() {` — `- if let Err(e) = photocraft_gpu::Compositor::try_new_with_format(&device, format) {`
 
 ### `crates/io`
 
@@ -600,11 +634,22 @@
 #### `crates/io/src/lib.rs` (`+1 / -0`, 1 швов)
 - **`L89`** (`+1/-0`) · `pub mod tiff_layers;` — `+ pub mod tpl;`
 
-#### `crates/io/src/psd_export.rs` (`+30 / -1`, 4 швов)
-- **`L562`** (`+1/-1`) · `impl Ex<'_> {` — `- LayerContent::Raster(_) => {`
-- **`L616`** (`+1/-0`) · `impl Ex<'_> {` — `+ self.layer_sfx_block(l, &mut raw);`
-- **`L627-L640`** (`+14/-0`) · `impl Ex<'_> {` — `+ /// Writes the layer's live Manga SFX metadata into its 'pcSf' block, padded to 4 bytes with`
-- **`L1095-L1108`** (`+14/-0`) · `impl Ex<'_> {` — `+ LayerContent::Screentone(s) => {`
+#### `crates/io/src/psd_export.rs` (`+148 / -3`, 9 швов)
+- **`L98`** (`+1/-0`) · `struct Ex<'c> {` — `+ doc: &'c Document,`
+- **`L258-L331`** (`+74/-0`) · `impl Ex<'_> {` — `+ fn banded_mask_channel(&self, s: &Surface, r: photocraft_geom::Rect) -> ChannelData {`
+- **`L337-L343`** (`+7/-1`) · `impl Ex<'_> {` — `- let plane = if r.is_empty() { Vec::new() } else { deinterleave(&s.to_interleaved(r), 1, se...`
+- **`L364`** (`+1/-1`) · `impl Ex<'_> {` — `- (MaskData::Mask(pm), Some(self.encode(-2, &plane, w, h)))`
+- **`L643`** (`+1/-1`) · `impl Ex<'_> {` — `- LayerContent::Raster(_) => {`
+- **`L697`** (`+1/-0`) · `impl Ex<'_> {` — `+ self.layer_sfx_block(l, &mut raw);`
+- **`L708-L721`** (`+14/-0`) · `impl Ex<'_> {` — `+ /// Writes the layer's live Manga SFX metadata into its 'pcSf' block, padded to 4 bytes with`
+- **`L1176-L1187`** (`+12/-0`) · `impl Ex<'_> {` — `+ LayerContent::Screentone(s) => {`
+- **`L1225-L1261`** (`+37/-0`) · `mod tests;` — `+ #[cfg(test)]`
+
+#### `crates/io/src/psd_export/document.rs` (`+1 / -0`, 1 швов)
+- **`L89`** (`+1/-0`) · `fn export_supported_document(` — `+ doc,`
+
+#### `crates/io/src/psd_export/tests.rs` (`+61 / -0`, 1 швов)
+- **`L845-L905`** (`+61/-0`) · `fn a_cancelled_save_stops_between_the_bands_of_a_layer() {` — `+ #[test]`
 
 #### `crates/io/src/psd_import.rs` (`+14 / -2`, 3 швов)
 - **`L435-L445`** (`+11/-0`) · `impl Ctx<'_> {` — `+ if let Some(data) = rec.block(b"pcSf").filter(|b| b.data.len() <= 8 << 20) {`
@@ -728,11 +773,17 @@
 - **`L2422-L2423`** (`+2/-0`) · `pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:` — `+ crate::manga_seam::screentone_escape(app, &ctx);`
 - **`L2842-L2843`** (`+2/-0`) · `mod doc_window_dialog_tests;` — `+ #[cfg(test)]`
 
+#### `crates/ui-egui/src/canvas/background_redraw.rs` (`+48 / -1`, 3 швов)
+- **`L546-L574`** (`+29/-0`) · `fn spawn(app: &mut PhotocraftApp, ctx: &egui::Context, s: Spawn) {` — `+ /// Renders 'rect' band-by-band (at 'RENDER_TILE = 256' px boundaries), returning 'None'`
+- **`L607-L613`** (`+7/-1`) · `fn draw(` — `- .map(|&block| Piece { block, texels: crate::gpu_canvas::display_texels(format, display, &p...`
+- **`L626-L637`** (`+12/-0`) · `mod tests;` — `+ #[cfg(test)]`
+
 #### `crates/ui-egui/src/canvas/display.rs` (`+4 / -0`, 1 швов)
 - **`L156-L159`** (`+4/-0`) · `pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> (std::sync::Ar` — `+ // Live screentone drag preview hides the target layer while dragging on canvas.`
 
-#### `crates/ui-egui/src/canvas/gesture.rs` (`+3 / -0`, 1 швов)
+#### `crates/ui-egui/src/canvas/gesture.rs` (`+4 / -0`, 2 швов)
 - **`L107-L109`** (`+3/-0`) · `fn finish(app: &mut PhotocraftApp, mut d: Drag, click: Option<bool>) {` — `+ Tool::Balloon => crate::vector_ui::finish_balloon(app, d.start, [end[0], end[1]]),`
+- **`L194`** (`+1/-0`) · `fn finish(app: &mut PhotocraftApp, mut d: Drag, click: Option<bool>) {` — `+ Tool::Screentone => crate::manga_seam::screentone_drag_finish(app, d.start, [end[0], end[1...`
 
 #### `crates/ui-egui/src/canvas/gpu_canvas.rs` (`+16 / -1`, 4 швов)
 - **`L533-L543`** (`+11/-0`) · `impl GpuCanvas {` — `+ /// Runtime 'seam.gpu_screentone' gate for the wgpu compositor.`
@@ -759,9 +810,11 @@
 - **`L183-L191`** (`+9/-0`) · `pub(super) struct Tile {` — `+ impl Drop for Tile {`
 - **`L393`** (`+1/-0`) · `impl Resources {` — `+ compositor_gpu_screentone: None,`
 
-#### `crates/ui-egui/src/canvas/paint.rs` (`+6 / -0`, 2 швов)
+#### `crates/ui-egui/src/canvas/paint.rs` (`+13 / -5`, 4 швов)
 - **`L598-L602`** (`+5/-0`) · `pub(super) fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter` — `+ if d.tool == Tool::Fill {`
 - **`L647`** (`+1/-0`) · `pub(super) fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter` — `+ Tool::Balloon => crate::vector_ui::draw_balloon_preview(app, painter, xf, d.start, last),`
+- **`L697`** (`+1/-1`) · `pub(super) fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter` — `- Tool::Gradient => {`
+- **`L700-L705`** (`+6/-4`) · `pub(super) fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter` — `- painter.line_segment([a, b], Stroke::new(3.0, Color32::from_black_alpha(140)));`
 
 #### `crates/ui-egui/src/canvas/strokes.rs` (`+1 / -1`, 1 швов)
 - **`L842`** (`+1/-1`) · `pub fn paint_target(app: &PhotocraftApp) -> serde_json::Value {` — `- json!(if mask && has_mask { "mask" } else { "pixels" })`
@@ -770,14 +823,14 @@
 - **`L82`** (`+1/-1`) · `pub(crate) fn detail_plan(size: [u32; 2], side: u32, zoom: f32, visible: DRect)` — `- pub(super) fn canvas_texture_options(factor: u32) -> TextureOptions {`
 - **`L640-L641`** (`+2/-0`) · `fn gpu_budget(app: &mut PhotocraftApp, gpu: &crate::gpu_canvas::GpuCanvas, idx:` — `+ let seam = app.session.seam_flags();`
 
-#### `crates/ui-egui/src/canvas/tool_input.rs` (`+114 / -62`, 7 швов)
+#### `crates/ui-egui/src/canvas/tool_input.rs` (`+115 / -62`, 7 швов)
 - **`L32-L33`** (`+2/-0`) · `fn tool_move(app: &mut PhotocraftApp, x: f64, y: f64, pressure: f32, mods: egui:` — `+ } else if tool == Tool::VectorCurve {`
 - **`L75-L77`** (`+3/-0`) · `fn preflight_tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modi` — `+ if crate::manga_seam::canvas_pointer(app, ev, crate::workspace_ui::sticky_mods(app, mods)) {`
 - **`L517-L531`** (`+15/-0`) · `pub(super) fn tool_event_with_view(app: &mut PhotocraftApp, ev: ToolEvent, mods:` — `+ // 'Tool::Sfx' drag-to-create owns Move/Up while its marquee is armed. The gizmo itself is`
 - **`L619-L620`** (`+2/-62`) · `pub(super) fn tool_event_with_view(app: &mut PhotocraftApp, ev: ToolEvent, mods:` — `- match tool {`
 - **`L687-L689`** (`+3/-0`) · `pub(super) fn tool_event_with_view(app: &mut PhotocraftApp, ev: ToolEvent, mods:` — `+ if app.fill_drag.is_some() && app.drag.as_ref().is_some_and(|d| matches!(d.tool, Tool::Fil...`
 - **`L705-L706`** (`+2/-0`) · `pub(super) fn tool_event_with_view(app: &mut PhotocraftApp, ev: ToolEvent, mods:` — `+ } else if tool == Tool::VectorCurve {`
-- **`L740-L826`** (`+87/-0`) · `pub(super) fn tool_event_with_view(app: &mut PhotocraftApp, ev: ToolEvent, mods:` — `+ /// Handles press-only or tool-owned pointer-down actions; returns 'true' when the press i...`
+- **`L740-L827`** (`+88/-0`) · `pub(super) fn tool_event_with_view(app: &mut PhotocraftApp, ev: ToolEvent, mods:` — `+ /// Handles press-only or tool-owned pointer-down actions; returns 'true' when the press i...`
 
 #### `crates/ui-egui/src/canvas/viewport_pages.rs` (`+45 / -16`, 13 швов)
 - **`L33-L36`** (`+4/-0`) · `const MAX_JOBS: usize = 2;` — `+ /// Synchronous pages rendered per frame on 'wasm32' so 12K×17K zooms/edits stay responsive`
@@ -802,8 +855,73 @@
 - **`L1191`** (`+1/-0`) · `fn confirm_command_more(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, Str` — `+ _ if crate::gigapixel_ui::owns(&d.fields) => crate::gigapixel_ui::confirm(app, &d.fields),`
 - **`L1366`** (`+1/-0`) · `pub mod gallery_ui;` — `+ pub mod gigapixel_ui;`
 
+#### `crates/ui-egui/src/dialogs/camera_raw_ui.rs` (`+37 / -8`, 12 швов)
+- **`L108-L113`** (`+6/-2`) · `pub struct CameraRawDialog {` — `- /// The proxy develop running on a worker (['Self::request_render']).`
+- **`L130-L135`** (`+6/-0`) · `pub struct CameraRawDialog {` — `+ impl Drop for CameraRawDialog {`
+- **`L137-L142`** (`+6/-0`) · `impl CameraRawDialog {` — `+ fn cancel_pending(&self) {`
+- **`L211`** (`+1/-0`) · `impl CameraRawDialog {` — `+ self.cancel_pending();`
+- **`L219-L222`** (`+4/-0`) · `impl CameraRawDialog {` — `+ self.proxy_job_with_cancel(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)))`
+- **`L234`** (`+1/-0`) · `impl CameraRawDialog {` — `+ cancel,`
+- **`L266-L269`** (`+4/-0`) · `impl CameraRawDialog {` — `+ if self.dirty {`
+- **`L275-L277`** (`+3/-2`) · `impl CameraRawDialog {` — `- let job = self.proxy_job();`
+- **`L280`** (`+1/-1`) · `impl CameraRawDialog {` — `- let frame = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job.run())).map_err(|...`
+- **`L288`** (`+1/-1`) · `impl CameraRawDialog {` — `- self.pending = Some(rx);`
+- **`L302`** (`+1/-1`) · `impl CameraRawDialog {` — `- let Some(rx) = &self.pending else { return Ok(()) };`
+- **`L309-L311`** (`+3/-1`) · `impl CameraRawDialog {` — `- self.publish(ctx, frame?);`
+
+#### `crates/ui-egui/src/dialogs/camera_raw_ui/proxy.rs` (`+87 / -6`, 13 швов)
+- **`L1-L3`** (`+3/-0`) — `+ use std::sync::Arc;`
+- **`L11-L13`** (`+3/-3`) · `pub(super) struct ProxyJob {` — `- pub(super) proxy: std::sync::Arc<Vec<[f32; 4]>>,`
+- **`L18`** (`+1/-1`) · `pub(super) struct ProxyJob {` — `- pub(super) display: std::sync::Arc<photocraft_engine::display_color::CanvasDisplay>,`
+- **`L21`** (`+1/-0`) · `pub(super) struct ProxyJob {` — `+ pub(super) cancel: Arc<AtomicBool>,`
+- **`L30`** (`+1/-1`) · `pub(super) struct ProxyFrame {` — `- pub(super) display: std::sync::Arc<photocraft_engine::display_color::CanvasDisplay>,`
+- **`L38-L60`** (`+23/-0`) · `impl ProxyJob {` — `+ let display = self.display.clone();`
+- **`L72-L74`** (`+3/-0`) · `impl ProxyJob {` — `+ if cancelled() {`
+- **`L84-L86`** (`+3/-0`) · `impl ProxyJob {` — `+ if cancelled() {`
+- **`L92-L94`** (`+3/-0`) · `impl ProxyJob {` — `+ if cancelled() {`
+- **`L98-L100`** (`+3/-0`) · `impl ProxyJob {` — `+ if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {`
+- **`L113-L115`** (`+3/-0`) · `impl ProxyJob {` — `+ if cancelled() {`
+- **`L120-L122`** (`+3/-0`) · `impl ProxyJob {` — `+ if cancelled() {`
+- **`L124-L160`** (`+37/-1`) · `impl ProxyJob {` — `- ProxyFrame { px, histogram, histogram_ms, image, display: self.display, ms: crate::gpu_can...`
+
+#### `crates/ui-egui/src/dialogs/camera_raw_ui/tests.rs` (`+1 / -1`, 1 швов)
+- **`L304`** (`+1/-1`) · `fn a_worker_failure_is_reported_until_the_next_frame() {` — `- d.pending = Some(rx);`
+
 #### `crates/ui-egui/src/dialogs/color_picker_preview.rs` (`+1 / -1`, 1 швов)
 - **`L24`** (`+1/-1`) · `use crate::color_picker_ui::{hex, parse_hex};` — `- const COMMANDS: [&str; 2] = ["type.setStyle", photocraft_engine::gradient_fill_cmds::STOP];`
+
+#### `crates/ui-egui/src/dialogs/export_dialog.rs` (`+186 / -37`, 31 швов)
+- **`L8-L9`** (`+2/-0`) · `use std::sync::Mutex;` — `+ #[cfg(not(target_arch = "wasm32"))]`
+- **`L326-L336`** (`+11/-3`) · `fn nearest(f: &Map<String, Value>) -> bool {` — `- /// The document as exported: scaled (engine Image Size, with the dialog's Resample method...`
+- **`L345-L347`** (`+3/-0`) · `fn export_document(doc: &Document, f: &Map<String, Value>, max_side: Option<u32>` — `+ if cancel.load(Ordering::Relaxed) {`
+- **`L351-L353`** (`+3/-0`) · `fn export_document(doc: &Document, f: &Map<String, Value>, max_side: Option<u32>` — `+ if cancel.load(Ordering::Relaxed) {`
+- **`L361-L363`** (`+3/-0`) · `fn export_document(doc: &Document, f: &Map<String, Value>, max_side: Option<u32>` — `+ if cancel.load(Ordering::Relaxed) {`
+- **`L368-L370`** (`+3/-0`) · `fn export_document(doc: &Document, f: &Map<String, Value>, max_side: Option<u32>` — `+ if cancel.load(Ordering::Relaxed) {`
+- **`L374-L409`** (`+36/-0`) · `fn export_document(doc: &Document, f: &Map<String, Value>, max_side: Option<u32>` — `+ /// The document as exported: scaled (engine Image Size, with the dialog's Resample method...`
+- **`L627-L635`** (`+9/-0`) · `struct PendingPreview {` — `+ cancel: Arc<AtomicBool>,`
+- **`L643-L672`** (`+30/-0`) · `fn background_preview_needed(doc: &Document) -> bool {` — `+ #[cfg(not(target_arch = "wasm32"))]`
+- **`L674`** (`+1/-1`) · `fn background_preview_needed(doc: &Document) -> bool {` — `- /// A single pending job per document also avoids starting a worker for every slider tick.`
+- **`L687-L692`** (`+6/-3`) · `fn poll_or_start_preview(` — `- let result = pending.result.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take...`
+- **`L698`** (`+1/-0`) · `fn poll_or_start_preview(` — `+ let cancel = Arc::new(AtomicBool::new(false));`
+- **`L700`** (`+1/-0`) · `fn poll_or_start_preview(` — `+ let cancel_worker = cancel.clone();`
+- **`L704-L709`** (`+6/-9`) · `fn poll_or_start_preview(` — `- let prepared = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {`
+- **`L713`** (`+1/-1`) · `fn poll_or_start_preview(` — `- ui.data_mut(|d| d.insert_temp(pending_key, PendingPreview { key, signature: signature.to_s...`
+- **`L722-L728`** (`+7/-2`) · `fn poll_or_start_preview(` — `- fn estimate_native(doc: &Document, proxy: &Document, f: &Map<String, Value>) -> Option<u64> {`
+- **`L732-L736`** (`+5/-0`) · `fn estimate_native(doc: &Document, proxy: &Document, f: &Map<String, Value>) ->` — `+ #[cfg(all(test, not(target_arch = "wasm32")))]`
+- **`L744`** (`+1/-1`) · `const EXACT_ESTIMATE_PX: f64 = 40_000_000.0;` — `- /// large to encode for an estimate or can't be encoded.`
+- **`L746-L749`** (`+4/-1`) · `const EXACT_ESTIMATE_PX: f64 = 40_000_000.0;` — `- fn exact_estimate(doc: &Document, f: &Map<String, Value>, source_profile: &Profile) -> Opt...`
+- **`L756-L762`** (`+7/-2`) · `fn exact_estimate(doc: &Document, f: &Map<String, Value>, source_profile: &Profi` — `- let full = export_document(doc, f, None, source_profile).ok()?;`
+- **`L766-L770`** (`+5/-0`) · `fn exact_estimate(doc: &Document, f: &Map<String, Value>, source_profile: &Profi` — `+ #[cfg(all(test, not(target_arch = "wasm32")))]`
+- **`L790-L792`** (`+3/-3`) · `fn poll_or_start_exact_estimate(` — `- if let Some((sig, result)) = ui.data(|d| d.get_temp::<(String, Done)>(pending_key)) {`
+- **`L794-L795`** (`+2/-2`) · `fn poll_or_start_exact_estimate(` — `- d.remove::<(String, Done)>(pending_key);`
+- **`L799-L801`** (`+3/-4`) · `fn poll_or_start_exact_estimate(` — `- // Settings changed meanwhile: that worker's answer is for other settings.`
+- **`L804`** (`+1/-0`) · `fn poll_or_start_exact_estimate(` — `+ let cancel = Arc::new(AtomicBool::new(false));`
+- **`L806`** (`+1/-0`) · `fn poll_or_start_exact_estimate(` — `+ let cancel_worker = cancel.clone();`
+- **`L811-L813`** (`+3/-0`) · `fn poll_or_start_exact_estimate(` — `+ if cancel_worker.load(Ordering::Relaxed) {`
+- **`L815-L818`** (`+4/-1`) · `fn poll_or_start_exact_estimate(` — `- exact_estimate(&source, &fields, &source_profile)`
+- **`L820-L824`** (`+5/-3`) · `fn poll_or_start_exact_estimate(` — `- .unwrap_or(None);`
+- **`L827`** (`+1/-1`) · `fn poll_or_start_exact_estimate(` — `- ui.data_mut(|d| d.insert_temp(pending_key, (signature.to_string(), result)));`
+- **`L1325-L1342`** (`+18/-0`) · `mod jpg_progressive_tests;` — `+ #[cfg(all(test, not(target_arch = "wasm32")))]`
 
 #### `crates/ui-egui/src/dialogs/mask_trash_prompt.rs` (`+5 / -1`, 1 швов)
 - **`L33-L37`** (`+5/-1`) · `pub fn drop_action(layer: u64, kind: MaskKind) -> (String, Value) {` — `- let command = if kind == MaskKind::Vector { VECTOR_MASK_DELETE } else { LAYER_MASK_DELETE };`
@@ -1032,12 +1150,14 @@
 - **`L301`** (`+1/-1`) · `impl Tool {` — `- Tool::Blur | Tool::Sharpen | Tool::Smudge => '\0',`
 - **`L310`** (`+1/-1`) · `impl Tool {` — `- Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Star | Tool:...`
 
-#### `crates/ui-egui/src/state/tool_options.rs` (`+112 / -0`, 5 швов)
+#### `crates/ui-egui/src/state/tool_options.rs` (`+124 / -0`, 7 швов)
 - **`L39-L44`** (`+6/-0`) · `pub struct ToolOptions {` — `+ /// Fill tool (PaintTool SAI / CSP): Click, Enclose & Fill, Paint Unfilled Area.`
 - **`L153-L184`** (`+32/-0`) · `pub struct ToolOptions {` — `+ #[serde(default = "default_balloon_mode")]`
-- **`L441-L496`** (`+56/-0`) · `fn one_u32() -> u32 {` — `+ fn default_balloon_mode() -> String {`
-- **`L587-L588`** (`+2/-0`) · `impl Default for ToolOptions {` — `+ fill_tool: Default::default(),`
-- **`L646-L661`** (`+16/-0`) · `impl Default for ToolOptions {` — `+ balloon_mode: default_balloon_mode(),`
+- **`L370-L379`** (`+10/-0`) · `pub struct ToolOptions {` — `+ /// Screentone tool: clip new screentone layers to the layer below.`
+- **`L451-L506`** (`+56/-0`) · `fn one_u32() -> u32 {` — `+ fn default_balloon_mode() -> String {`
+- **`L597-L598`** (`+2/-0`) · `impl Default for ToolOptions {` — `+ fill_tool: Default::default(),`
+- **`L656-L671`** (`+16/-0`) · `impl Default for ToolOptions {` — `+ balloon_mode: default_balloon_mode(),`
+- **`L737-L738`** (`+2/-0`) · `impl Default for ToolOptions {` — `+ screentone_clip: false,`
 
 #### `crates/ui-egui/src/text/font_preview.rs` (`+204 / -0`, 1 швов)
 - **`L215-L418`** (`+204/-0`) · `pub(crate) fn paint_text(ui: &egui::Ui, family: &str, text: &str, rect: Rect, si` — `+ #[cfg(any(not(target_arch = "wasm32"), test))]`
@@ -1055,10 +1175,14 @@
 #### `crates/ui-egui/src/tools/retouch_ui.rs` (`+21 / -0`, 1 швов)
 - **`L315-L335`** (`+21/-0`) · `fn remove_params(o: &crate::state::ToolOptions, composite: bool) -> Value {` — `+ /// Remove what is currently selected via Content-Aware Fill ('edit.contentAwareFill'),`
 
-#### `crates/ui-egui/src/tools/tool_reset.rs` (`+19 / -2`, 3 швов)
+#### `crates/ui-egui/src/tools/stroke_constraint.rs` (`+2 / -2`, 2 швов)
+- **`L33`** (`+1/-1`) · `pub fn applies(tool: Tool) -> bool {` — `- tool.is_brushlike() || tool == Tool::Gradient || tool == Tool::FreeformPen`
+- **`L132`** (`+1/-1`) · `pub fn constrain(tool: Tool, axis: &mut Option<Axis>, start: [f64; 2], last: [f6` — `- if tool == Tool::Gradient {`
+
+#### `crates/ui-egui/src/tools/tool_reset.rs` (`+18 / -1`, 3 швов)
 - **`L212`** (`+1/-1`) · `pub fn option_keys(tool: Tool) -> &'static [&'static str] {` — `- Tool::MagicWand => reset!(tolerance, anti_alias, contiguous),`
 - **`L241-L255`** (`+15/-0`) · `pub fn option_keys(tool: Tool) -> &'static [&'static str] {` — `+ Tool::Fill => reset!(fill_tool, fill_opacity),`
-- **`L343-L345`** (`+3/-1`) · `pub fn option_keys(tool: Tool) -> &'static [&'static str] {` — `- | Tool::Frame => &[],`
+- **`L344-L345`** (`+2/-0`) · `pub fn option_keys(tool: Tool) -> &'static [&'static str] {` — `+ Tool::Screentone => reset!(screentone_clip, screentone_drag_gradient),`
 
 #### `crates/ui-egui/src/tools/transform_tool/preview.rs` (`+2 / -0`, 2 швов)
 - **`L59`** (`+1/-0`) · `fn preview_mask(l: &photocraft_doc::Layer, b: photocraft_geom::Rect) -> Option<c` — `+ let second = l.second_mask.as_ref().filter(|m| m.enabled);`
@@ -1154,9 +1278,10 @@
 | `apps/photocraft-web/src/autosave_bridge.rs` | `+499` |
 | `apps/photocraft-web/src/web_autosave.rs` | `+456` |
 | `assets/icons/fill-tool.svg` | `+16` |
-| `crates/algo/src/comic_screentone.rs` | `+2321` |
+| `crates/algo/src/comic_screentone.rs` | `+2453` |
 | `crates/algo/src/fill.rs` | `+859` |
 | `crates/algo/src/fill/tests.rs` | `+533` |
+| `crates/compose/src/screentone.rs` | `+323` |
 | `crates/doc/src/sfx.rs` | `+2382` |
 | `crates/doc/src/vector_brush.rs` | `+305` |
 | `crates/engine/src/cmd/manga_cmds.rs` | `+51` |
@@ -1164,7 +1289,7 @@
 | `crates/engine/src/cmd/manga_cmds/balloon.rs` | `+1449` |
 | `crates/engine/src/cmd/manga_cmds/balloon/tests.rs` | `+684` |
 | `crates/engine/src/cmd/manga_cmds/brush_preset_items.rs` | `+590` |
-| `crates/engine/src/cmd/manga_cmds/comic_screentone.rs` | `+1492` |
+| `crates/engine/src/cmd/manga_cmds/comic_screentone.rs` | `+1774` |
 | `crates/engine/src/cmd/manga_cmds/fill_tool.rs` | `+640` |
 | `crates/engine/src/cmd/manga_cmds/fill_tool/tests.rs` | `+419` |
 | `crates/engine/src/cmd/manga_cmds/gigapixel.rs` | `+840` |
@@ -1185,14 +1310,14 @@
 | `crates/engine/src/cmd/manga_cmds/typesetter_adapter.rs` | `+339` |
 | `crates/engine/src/cmd/manga_cmds/vector_brush.rs` | `+604` |
 | `crates/engine/src/cmd/manga_cmds/vector_curve.rs` | `+655` |
-| `crates/gpu/src/sfx.rs` | `+2207` |
+| `crates/gpu/src/sfx.rs` | `+2646` |
 | `crates/gpu/src/sfx.wgsl` | `+843` |
-| `crates/gpu/tests/it/sfx.rs` | `+426` |
+| `crates/gpu/tests/it/sfx.rs` | `+600` |
 | `crates/io/src/tpl.rs` | `+262` |
 | `crates/ui-egui/src/canvas/ruler_autoscroll_tests.rs` | `+59` |
-| `crates/ui-egui/src/canvas/sfx_gpu_preview.rs` | `+718` |
+| `crates/ui-egui/src/canvas/sfx_gpu_preview.rs` | `+832` |
 | `crates/ui-egui/src/dialogs/gigapixel_ui.rs` | `+946` |
-| `crates/ui-egui/src/manga_seam.rs` | `+4297` |
+| `crates/ui-egui/src/manga_seam.rs` | `+4403` |
 | `crates/ui-egui/src/panels/timelapse_ui.rs` | `+1512` |
 | `crates/ui-egui/src/tools/fill_tool_ui.rs` | `+619` |
 | `crates/ui-egui/src/tools/fill_tool_ui/tests.rs` | `+286` |

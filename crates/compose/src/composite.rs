@@ -312,7 +312,9 @@ fn composite_artboard(layer: &Layer, ab: &photocraft_doc::Artboard, clipped: &[L
 
 /// The surface `render_content` reads `layer`'s pixels from, when that is all it draws.
 pub(crate) fn pixel_surface(layer: &Layer) -> Option<&Surface> {
-    if matches!(layer.content, LayerContent::Group(_) | LayerContent::Fill(_) | LayerContent::Adjustment(_)) {
+    if matches!(layer.content, LayerContent::Group(_) | LayerContent::Fill(_) | LayerContent::Adjustment(_))
+        || matches!(&layer.content, LayerContent::Screentone(st) if st.surface.tile_count() == 0)
+    {
         return None;
     }
     layer.surface()
@@ -487,8 +489,7 @@ pub(crate) fn composite_layer_plain(layer: &Layer, clipped: &[Layer], backdrop: 
         recycle_mask(mask);
         return;
     }
-    if !matches!(layer.content, LayerContent::Group(_) | LayerContent::Fill(_) | LayerContent::Adjustment(_))
-        && let Some(s) = layer.surface()
+    if let Some(s) = pixel_surface(layer)
         && layer.blend == BlendMode::Normal
         && opacity >= 1.0
         && !clipped.iter().any(|c| c.visible)
@@ -516,9 +517,23 @@ pub(crate) fn composite_layer_plain(layer: &Layer, clipped: &[Layer], backdrop: 
     {
         return composite_pixel_layer(layer, surf, backdrop, cx);
     }
-    let Some(mut content) = render_content(layer, rect, cx) else { return };
+    let Some(mut content) = render_layer_or_screentone(layer, rect, cx, backdrop) else {
+        return;
+    };
     advanced::composite_clipped(clipped, &mut content, cx);
     blend_layer_into(backdrop, &content, layer, cx, text_gamma(layer));
+}
+
+fn render_layer_or_screentone(layer: &Layer, rect: Rect, cx: &Ctx, backdrop: &Buffer) -> Option<Buffer> {
+    if let LayerContent::Screentone(st) = &layer.content
+        && crate::screentone::is_unbaked_shading(layer)
+    {
+        let use_backdrop = crate::screentone::buffer_has_tonal_ink(backdrop)
+            || cx.doc.is_none_or(|d| crate::screentone::has_visible_backdrop_below(&d.layers, layer.id));
+        Some(crate::screentone::render_masked(layer, st, rect, cx, use_backdrop.then_some(backdrop)))
+    } else {
+        render_content(layer, rect, cx)
+    }
 }
 
 /// A layer with effects (and its clipping group) onto `backdrop`.
@@ -530,7 +545,9 @@ fn composite_layer_effects(layer: &Layer, clipped: &[Layer], backdrop: &mut Buff
     let (mut content, parts) = match split_parts(layer, rect, cx) {
         Some((fill, stroke, mask)) => (fill, Some((stroke, mask))),
         None => {
-            let Some(content) = render_content(layer, rect, cx) else { return };
+            let Some(content) = render_layer_or_screentone(layer, rect, cx, backdrop) else {
+                return;
+            };
             (content, None)
         }
     };
@@ -666,8 +683,9 @@ fn composite_atop_any(layer: &Layer, base: &mut Buffer, cx: &Ctx) {
         if layer.blend == BlendMode::Dissolve {
             // Clipping preserves the opaque base's alpha. Dissolve still selects source
             // pixels by spatial coverage instead of continuously mixing the colours (#3052).
-            let x = rect.x0 + (i as i32 % rect.width() as i32);
-            let y = rect.y0 + (i as i32 / rect.width() as i32);
+            let rw = rect.width() as usize;
+            let x = rect.x0 + (i % rw) as i32;
+            let y = rect.y0 + (i / rw) as i32;
             if dissolve_noise(x, y) < s[3] * opacity {
                 *p = [s[0], s[1], s[2], alpha];
             }
@@ -760,5 +778,59 @@ fn blend_span_g(dst: &mut [[f32; 4]], src: &[[f32; 4]], x0: i32, y: i32, mode: B
             continue;
         }
         *b = blend::composite_gamma(mode, *b, s, opacity, gamma);
+    }
+}
+
+#[cfg(test)]
+mod dissolve_index_tests {
+    use super::*;
+    use photocraft_color::PixelFormat;
+    use photocraft_doc::{Layer, LayerContent};
+    use photocraft_raster::Surface;
+
+    #[test]
+    fn dissolve_clipped_matches_spatial_coordinates_without_i32_cast_bug() {
+        let rect = Rect::new(10, 20, 42, 52);
+        let mut base_s = Surface::new(PixelFormat::RGBA8);
+        base_s.fill_rect(rect, &[0.2, 0.2, 0.2, 1.0]);
+        let mut top_s = Surface::new(PixelFormat::RGBA8);
+        top_s.fill_rect(rect, &[0.9, 0.1, 0.1, 0.5]);
+        let mut top = Layer::new("top", LayerContent::Raster(top_s));
+        top.blend = BlendMode::Dissolve;
+        top.clipped = true;
+
+        let mut base = crate::surface_to_buffer(&base_s, rect);
+        let patterns = crate::pattern::PreparedPatterns::new(&[], crate::pattern::PREPARED_PATTERN_BYTES);
+        let cx = Ctx {
+            canvas: rect,
+            transfer: crate::adjust::Transfer::Srgb,
+            light: photocraft_doc::GlobalLight::default(),
+            patterns: &patterns,
+            mode: photocraft_color::ColorMode::Rgb,
+            depth: photocraft_color::SampleType::U8,
+            vector_masks: Default::default(),
+            fx_maps: Default::default(),
+            fx_clip: Default::default(),
+            fx_over_budget: false,
+            tone_luts: Default::default(),
+            doc: None,
+            layer_keys: Default::default(),
+        };
+        composite_atop(&top, &mut base, &cx);
+        let rw = rect.width() as usize;
+        for (i, p) in base.px.iter().enumerate() {
+            let x = rect.x0 + (i % rw) as i32;
+            let y = rect.y0 + (i / rw) as i32;
+            let expect_top = dissolve_noise(x, y) < (top_s_alpha_u8(0.5));
+            if expect_top {
+                assert!(p[0] > 0.8, "expected dissolve hit at ({x},{y}), got {p:?}");
+            } else {
+                assert!(p[0] < 0.3, "expected dissolve miss at ({x},{y}), got {p:?}");
+            }
+        }
+    }
+
+    fn top_s_alpha_u8(a: f32) -> f32 {
+        (a * 255.0).round() / 255.0
     }
 }

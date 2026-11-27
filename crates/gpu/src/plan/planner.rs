@@ -4,7 +4,7 @@ use super::lower::{
 };
 use super::types::{Checkpoint, DocCtx, FxLayer, Kernel, MapRef, MaskUse, Pass, Role, SurfaceRef, TexUse, Unsupported};
 use super::{Adjustment, BlendMode, Effect, Fill, FxPaint, Glow, Layer, LayerContent, LayerId, Plan, Rect, Slot, Surface, bounds, has_effects};
-use photocraft_doc::{ScreentoneBackend, ScreentoneLayer, ScreentoneMode};
+use photocraft_doc::{ScreentoneLayer, ScreentoneMode};
 
 pub(super) struct Planner<'a> {
     passes: Vec<Pass<'a>>,
@@ -706,7 +706,7 @@ impl<'a> Planner<'a> {
             },
             // Screentone GPU shader lands in S5; fall back to CPU compositing in S2.
             LayerContent::Screentone(tone) => {
-                if self.screentone_on_gpu(tone) {
+                if self.screentone_on_gpu(layer, tone) {
                     let frame = self.screentone_frame(layer, tone);
                     pack_screentone_pass(&mut p, &tone.spec, frame, tone.origin);
                 } else {
@@ -731,26 +731,16 @@ impl<'a> Planner<'a> {
     }
 
     /// Whether `tone` should be evaluated procedurally via `Kernel::Screentone` on the GPU.
-    fn screentone_on_gpu(&self, tone: &ScreentoneLayer) -> bool {
-        if !self.cx.gpu_screentone || self.cx.mode == photocraft_color::ColorMode::Cmyk || self.cx.mode == photocraft_color::ColorMode::Lab {
+    fn screentone_on_gpu(&self, layer: &Layer, tone: &ScreentoneLayer) -> bool {
+        if !self.cx.gpu_screentone {
             return false;
         }
-        match tone.spec.backend {
-            ScreentoneBackend::Cpu => false,
-            ScreentoneBackend::Gpu => true,
-            ScreentoneBackend::Auto => {
-                let area = u64::from(self.cx.canvas.width()) * u64::from(self.cx.canvas.height());
-                area >= 512 * 512
-            }
-        }
+        let frame = self.screentone_frame(layer, tone);
+        photocraft_algo::comic_screentone::screentone_prefers_gpu(tone.spec.backend, self.cx.mode, frame)
     }
 
     /// Reference bounds over which a live `ScreentoneLayer` anchors its lattice and gradient.
-    fn screentone_frame(&self, layer: &Layer, tone: &ScreentoneLayer) -> Rect {
-        let tb = tone.surface.content_bounds().intersect(&self.cx.canvas);
-        if !tb.is_empty() {
-            return tb;
-        }
+    fn screentone_frame(&self, layer: &Layer, _tone: &ScreentoneLayer) -> Rect {
         photocraft_compose::fill_frame(layer, self.cx.canvas)
     }
 

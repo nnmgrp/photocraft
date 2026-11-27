@@ -23,7 +23,8 @@ use photocraft_geom::Rect;
 #[cfg(not(target_arch = "wasm32"))]
 use photocraft_raster::{Surface, from_rgba_into};
 
-use crate::Unsupported;
+use crate::paging::first_error;
+use crate::{DeviceHealth, Unsupported};
 
 /// WGSL source for all Manga SFX GPU passes.
 pub const SFX_SHADER: &str = include_str!("sfx.wgsl");
@@ -105,12 +106,6 @@ struct Tex2d {
     view: wgpu::TextureView,
 }
 
-impl Drop for Tex2d {
-    fn drop(&mut self) {
-        self.tex.destroy();
-    }
-}
-
 impl Tex2d {
     fn new(device: &wgpu::Device, label: &str, w: u32, h: u32, format: wgpu::TextureFormat, sample_count: u32, extra: wgpu::TextureUsages) -> Self {
         let tex = device.create_texture(&wgpu::TextureDescriptor {
@@ -129,16 +124,18 @@ impl Tex2d {
 }
 
 #[derive(Clone, Copy, Default)]
-struct JfaUsage {
+struct AuxUsage {
+    scratch_c: bool,
     ab: bool,
     ext: bool,
     int: bool,
     seg: bool,
 }
 
-impl JfaUsage {
+impl AuxUsage {
     fn mark_slot(&mut self, slot: TexSlot) {
         match slot {
+            TexSlot::ScratchC => self.scratch_c = true,
             TexSlot::JfaA | TexSlot::JfaB => self.ab = true,
             TexSlot::JfaExt => self.ext = true,
             TexSlot::JfaInt => self.int = true,
@@ -162,6 +159,8 @@ impl JfaUsage {
                     u.mark_slot(src);
                     u.mark_slot(dst);
                 }
+                GpuCmd::ClearMask(MaskSlot::ScratchC)
+                | GpuCmd::RasterPolys { target: MaskSlot::ScratchC, .. } => u.scratch_c = true,
                 GpuCmd::ClearMask(_) | GpuCmd::RasterPolys { .. } => {}
             }
         }
@@ -184,6 +183,7 @@ struct WorkTargets {
     union_mask: Tex2d,
     scratch_mask_a: Tex2d,
     scratch_mask_b: Tex2d,
+    scratch_mask_c: Option<Tex2d>,
     shtack_mask: Tex2d,
     jfa_a: Option<Tex2d>,
     jfa_b: Option<Tex2d>,
@@ -195,7 +195,7 @@ struct WorkTargets {
 }
 
 impl WorkTargets {
-    fn new(device: &wgpu::Device, w: u32, h: u32, msaa_samples: u32, need_jfa: JfaUsage) -> Self {
+    fn new(device: &wgpu::Device, w: u32, h: u32, msaa_samples: u32, need_aux: AuxUsage) -> Self {
         let bindable = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST;
         let stencil = Tex2d::new(device, "sfx-stencil", w, h, STENCIL_FMT, msaa_samples, wgpu::TextureUsages::empty());
         let msaa_mask = (msaa_samples > 1).then(|| Tex2d::new(device, "sfx-msaa-mask", w, h, MASK_FMT, msaa_samples, wgpu::TextureUsages::empty()));
@@ -208,6 +208,7 @@ impl WorkTargets {
             union_mask: Tex2d::new(device, "sfx-union", w, h, MASK_FMT, 1, bindable),
             scratch_mask_a: Tex2d::new(device, "sfx-scratch-a", w, h, MASK_FMT, 1, bindable),
             scratch_mask_b: Tex2d::new(device, "sfx-scratch-b", w, h, MASK_FMT, 1, bindable),
+            scratch_mask_c: None,
             shtack_mask: Tex2d::new(device, "sfx-shtack", w, h, MASK_FMT, 1, bindable),
             jfa_a: None,
             jfa_b: None,
@@ -217,13 +218,16 @@ impl WorkTargets {
             accum_a: Tex2d::new(device, "sfx-accum-a", w, h, RGBA_FMT, 1, bindable),
             accum_b: Tex2d::new(device, "sfx-accum-b", w, h, RGBA_FMT, 1, bindable),
         };
-        wt.ensure_jfa(device, need_jfa);
+        wt.ensure_aux(device, need_aux);
         wt
     }
 
-    fn ensure_jfa(&mut self, device: &wgpu::Device, need: JfaUsage) {
+    fn ensure_aux(&mut self, device: &wgpu::Device, need: AuxUsage) {
         let [w, h] = self.cap;
         let bindable = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST;
+        if need.scratch_c && self.scratch_mask_c.is_none() {
+            self.scratch_mask_c = Some(Tex2d::new(device, "sfx-scratch-c", w, h, MASK_FMT, 1, bindable));
+        }
         if need.ab {
             if self.jfa_a.is_none() {
                 self.jfa_a = Some(Tex2d::new(device, "sfx-jfa-a", w, h, JFA_FMT, 1, bindable));
@@ -247,15 +251,8 @@ impl WorkTargets {
 /// Dynamic uniform ring buffer so every pass in one `CommandEncoder` reads its own `FxParams`.
 struct UniformRing {
     align: u32,
-    bytes: Vec<u8>,
     buf: wgpu::Buffer,
     cap: usize,
-}
-
-impl Drop for UniformRing {
-    fn drop(&mut self) {
-        self.buf.destroy();
-    }
 }
 
 impl UniformRing {
@@ -268,29 +265,15 @@ impl UniformRing {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        Self { align, bytes: Vec::with_capacity(cap), buf, cap }
+        Self { align, buf, cap }
     }
 
-    fn reset(&mut self) {
-        self.bytes.clear();
-    }
-
-    fn push(&mut self, params: FxParams) -> u32 {
-        let off = self.bytes.len();
-        let stride = self.align as usize;
-        self.bytes.resize(off + stride, 0);
-        let raw = bytemuck::bytes_of(&params);
-        self.bytes[off..off + raw.len()].copy_from_slice(raw);
-        off as u32
-    }
-
-    fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
-        if self.bytes.is_empty() {
+    fn upload_bytes(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, bytes: &[u8]) {
+        if bytes.is_empty() {
             return;
         }
-        if self.bytes.len() > self.cap {
-            self.buf.destroy();
-            self.cap = self.bytes.len().next_power_of_two();
+        if bytes.len() > self.cap {
+            self.cap = bytes.len().next_power_of_two();
             self.buf = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("sfx-fx-ring"),
                 size: self.cap as u64,
@@ -298,20 +281,13 @@ impl UniformRing {
                 mapped_at_creation: false,
             });
         }
-        queue.write_buffer(&self.buf, 0, &self.bytes);
+        queue.write_buffer(&self.buf, 0, bytes);
     }
 }
 
 struct VertexArena {
-    data: Vec<u8>,
     buf: wgpu::Buffer,
     cap: usize,
-}
-
-impl Drop for VertexArena {
-    fn drop(&mut self) {
-        self.buf.destroy();
-    }
 }
 
 impl VertexArena {
@@ -323,29 +299,15 @@ impl VertexArena {
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        Self { data: Vec::with_capacity(cap), buf, cap }
+        Self { buf, cap }
     }
 
-    fn reset(&mut self) {
-        self.data.clear();
-    }
-
-    fn push_slice<T: Pod>(&mut self, items: &[T]) -> (u64, u32) {
-        let align = 4usize;
-        let pad = (align - (self.data.len() % align)) % align;
-        self.data.resize(self.data.len() + pad, 0);
-        let off = self.data.len() as u64;
-        self.data.extend_from_slice(bytemuck::cast_slice(items));
-        (off, items.len() as u32)
-    }
-
-    fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
-        if self.data.is_empty() {
+    fn upload_bytes(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, data: &[u8]) {
+        if data.is_empty() {
             return;
         }
-        if self.data.len() > self.cap {
-            self.buf.destroy();
-            self.cap = self.data.len().next_power_of_two();
+        if data.len() > self.cap {
+            self.cap = data.len().next_power_of_two();
             self.buf = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("sfx-vbuf"),
                 size: self.cap as u64,
@@ -353,7 +315,7 @@ impl VertexArena {
                 mapped_at_creation: false,
             });
         }
-        queue.write_buffer(&self.buf, 0, &self.data);
+        queue.write_buffer(&self.buf, 0, data);
     }
 }
 
@@ -361,6 +323,7 @@ impl VertexArena {
 pub struct SfxGpuRenderer {
     max_dim: u32,
     msaa_samples: u32,
+    health: Option<DeviceHealth>,
     shader: wgpu::ShaderModule,
     fx_bgl: wgpu::BindGroupLayout,
     raster_bgl: wgpu::BindGroupLayout,
@@ -388,6 +351,7 @@ pub struct SfxGpuRenderer {
     blit_uni: wgpu::Buffer,
     blit_bg: Option<wgpu::BindGroup>,
     dummy_tex: Tex2d,
+    rec_bufs: CpuRecordBuffers,
     ring: UniformRing,
     vbuf: VertexArena,
     targets: Option<WorkTargets>,
@@ -398,15 +362,33 @@ pub struct SfxGpuRenderer {
     readback: Option<(wgpu::Buffer, u64)>,
 }
 
-impl Drop for SfxGpuRenderer {
-    fn drop(&mut self) {
-        self.blit_bg = None;
-        self.targets = None;
-        self.blit_uni.destroy();
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Some((buf, _)) = self.readback.take() {
-            buf.destroy();
+/// Runs `f` inside `wgpu` error scopes so an isolated SFX GPU error returns `Err(Unsupported)`
+/// instead of escaping to wgpu's default panic handler or poisoning the shared `GpuCanvas`.
+fn run_scoped<T>(
+    device: &wgpu::Device,
+    health: Option<&DeviceHealth>,
+    label: &str,
+    f: impl FnOnce() -> Result<T, Unsupported>,
+) -> Result<T, Unsupported> {
+    if let Some(h) = health
+        && let Some(fault) = h.fault()
+    {
+        return Err(Unsupported(format!("SFX GPU skipped ({label}): {fault}")));
+    }
+    if cfg!(target_arch = "wasm32") {
+        return f();
+    }
+    let (result, error) = first_error(device, f);
+    match error {
+        Some(err) => {
+            log::error!("SFX GPU error in {label}: {err}");
+            if let Some(h) = health {
+                // Probe only for true device loss; keep GpuCanvas healthy on isolated SFX errors.
+                h.probe(device);
+            }
+            Err(Unsupported(format!("SFX GPU {label} failed: {err}")))
         }
+        None => result,
     }
 }
 
@@ -665,7 +647,7 @@ enum GpuCmd {
     CopyTex { src: TexSlot, dst: TexSlot },
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MaskSlot {
     Face,
     Line,
@@ -673,9 +655,10 @@ enum MaskSlot {
     Shtack,
     ScratchA,
     ScratchB,
+    ScratchC,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TexSlot {
     Dummy,
     Face,
@@ -684,6 +667,7 @@ enum TexSlot {
     Shtack,
     ScratchA,
     ScratchB,
+    ScratchC,
     JfaA,
     JfaB,
     JfaExt,
@@ -693,7 +677,7 @@ enum TexSlot {
     AccumB,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum QuadPipe {
     Union,
     Mul,
@@ -714,9 +698,53 @@ enum QuadPipe {
     Composite,
 }
 
+/// Returns `true` when a quad pass would bind the same non-dummy texture for both reading and writing,
+/// or attempt to write into `TexSlot::Dummy`.
+fn has_slot_alias(a: TexSlot, b: TexSlot, c: TexSlot, dst: TexSlot) -> bool {
+    dst == TexSlot::Dummy
+        || (a != TexSlot::Dummy && a == dst)
+        || (b != TexSlot::Dummy && b == dst)
+        || (c != TexSlot::Dummy && c == dst)
+}
+
+/// CPU-only sink used by [`CmdRecorder`] so recording can be unit-tested without a `wgpu::Device`.
+struct CpuRecordBuffers {
+    align: u32,
+    uniforms: Vec<u8>,
+    verts: Vec<u8>,
+}
+
+impl CpuRecordBuffers {
+    fn new(align: u32) -> Self {
+        Self { align: align.max(256), uniforms: Vec::with_capacity(4096), verts: Vec::with_capacity(4096) }
+    }
+
+    fn reset(&mut self) {
+        self.uniforms.clear();
+        self.verts.clear();
+    }
+
+    fn push_uniform(&mut self, params: FxParams) -> u32 {
+        let off = self.uniforms.len();
+        let stride = self.align as usize;
+        self.uniforms.resize(off + stride, 0);
+        let raw = bytemuck::bytes_of(&params);
+        self.uniforms[off..off + raw.len()].copy_from_slice(raw);
+        off as u32
+    }
+
+    fn push_verts<T: Pod>(&mut self, items: &[T]) -> (u64, u32) {
+        let align = 4usize;
+        let pad = (align - (self.verts.len() % align)) % align;
+        self.verts.resize(self.verts.len() + pad, 0);
+        let off = self.verts.len() as u64;
+        self.verts.extend_from_slice(bytemuck::cast_slice(items));
+        (off, items.len() as u32)
+    }
+}
+
 struct CmdRecorder<'a> {
-    ring: &'a mut UniformRing,
-    vbuf: &'a mut VertexArena,
+    bufs: &'a mut CpuRecordBuffers,
     cmds: Vec<GpuCmd>,
     accum_is_a: bool,
     region: RegionInfo,
@@ -737,8 +765,22 @@ impl<'a> CmdRecorder<'a> {
     }
 
     fn push_quad(&mut self, pipe: QuadPipe, a: TexSlot, b: TexSlot, c: TexSlot, dst: TexSlot, params: FxParams) {
-        let uni_off = self.ring.push(params);
+        if has_slot_alias(a, b, c, dst) {
+            debug_assert!(false, "SFX GPU texture aliasing in {pipe:?}: inputs=({a:?}, {b:?}, {c:?}) dst={dst:?}");
+            log::error!("SFX GPU texture aliasing skipped in {pipe:?}: inputs=({a:?}, {b:?}, {c:?}) dst={dst:?}");
+            return;
+        }
+        let uni_off = self.bufs.push_uniform(params);
         self.cmds.push(GpuCmd::Quad { pipe, a, b, c, dst, uni_off });
+    }
+
+    fn push_copy(&mut self, src: TexSlot, dst: TexSlot) {
+        if src == dst || src == TexSlot::Dummy || dst == TexSlot::Dummy {
+            debug_assert!(false, "SFX GPU invalid CopyTex: src={src:?} dst={dst:?}");
+            log::error!("SFX GPU invalid CopyTex skipped: src={src:?} dst={dst:?}");
+            return;
+        }
+        self.cmds.push(GpuCmd::CopyTex { src, dst });
     }
 
     fn raster_polys(&mut self, target: MaskSlot, polys: &[Vec<(f64, f64)>]) {
@@ -747,19 +789,22 @@ impl<'a> CmdRecorder<'a> {
             self.cmds.push(GpuCmd::ClearMask(target));
             return;
         }
-        let (v_off, v_count) = self.vbuf.push_slice(&verts);
-        let uni_off = self.ring.push(self.region.raster_params());
+        let (v_off, v_count) = self.bufs.push_verts(&verts);
+        let uni_off = self.bufs.push_uniform(self.region.raster_params());
         self.cmds.push(GpuCmd::RasterPolys { target, v_off, v_count, uni_off });
     }
 
-    fn run_jfa_from_mask(&mut self, src_mask: TexSlot, invert: bool, max_radius_px: f32, dst_jfa: TexSlot) {
+    /// Runs Jump Flooding from `src_mask` and returns the exact `TexSlot` containing the final JFA.
+    /// Pass `dst_jfa = None` to keep the result in whichever of `JfaA`/`JfaB` does not alias the
+    /// final step's input (used by `UkiyoBrush` to avoid `JfaB -> JfaB` on odd step counts).
+    fn run_jfa_from_mask(&mut self, src_mask: TexSlot, invert: bool, max_radius_px: f32, dst_jfa: Option<TexSlot>) -> TexSlot {
         let mut init_p = self.region.base_params();
         init_p.u0[0] = u32::from(invert);
         self.push_quad(QuadPipe::JfaInit, src_mask, TexSlot::Dummy, TexSlot::Dummy, TexSlot::JfaA, init_p);
-        self.run_jfa_steps(max_radius_px, dst_jfa);
+        self.run_jfa_steps(max_radius_px, dst_jfa)
     }
 
-    fn run_jfa_steps(&mut self, max_radius_px: f32, dst_jfa: TexSlot) {
+    fn run_jfa_steps(&mut self, max_radius_px: f32, dst_jfa: Option<TexSlot>) -> TexSlot {
         let max_side = self.region.px_w.max(self.region.px_h).max(1);
         let reach = (max_radius_px.ceil() as u32).clamp(2, max_side);
         let mut step = reach.next_power_of_two() >> 1;
@@ -780,7 +825,13 @@ impl<'a> CmdRecorder<'a> {
         let mut p = self.region.base_params();
         p.u0[3] = 1;
         let final_src = if src_is_a { TexSlot::JfaA } else { TexSlot::JfaB };
-        self.push_quad(QuadPipe::JfaStep, final_src, TexSlot::Dummy, TexSlot::Dummy, dst_jfa, p);
+        let ping_pong_dst = if src_is_a { TexSlot::JfaB } else { TexSlot::JfaA };
+        let final_dst = match dst_jfa {
+            Some(dst) if dst != TexSlot::JfaA && dst != TexSlot::JfaB && dst != TexSlot::Dummy => dst,
+            _ => ping_pong_dst,
+        };
+        self.push_quad(QuadPipe::JfaStep, final_src, TexSlot::Dummy, TexSlot::Dummy, final_dst, p);
+        final_dst
     }
 
     fn blur_mask_in_place(&mut self, slot_a: TexSlot, slot_b: TexSlot, sigma_doc_px: f32) {
@@ -811,7 +862,7 @@ impl<'a> CmdRecorder<'a> {
     }
 
     fn composite_fill_paint(&mut self, fill: &SfxFillSource, cov: TexSlot, opacity: f32, blend: SfxChannelBlend) {
-        if opacity <= 1e-4 {
+        if opacity <= 1e-4 || matches!(fill, SfxFillSource::None) {
             return;
         }
         let (src_acc, dst_acc) = self.next_accum();
@@ -913,10 +964,16 @@ impl<'a> CmdRecorder<'a> {
                 self.push_quad(QuadPipe::DryEtfLic, src_cov, TexSlot::JfaA, TexSlot::JfaInt, dst_cov, p);
             }
             SfxDryBrushEngine::Vector => {
-                self.raster_polys(MaskSlot::ScratchB, vec_cuts);
+                // Pick a temporary cut mask slot that never overwrites `src_cov` or aliases `dst_cov`.
+                let (cut_mask, cut_tex) = if src_cov == TexSlot::ScratchB || dst_cov == TexSlot::ScratchB {
+                    (MaskSlot::ScratchC, TexSlot::ScratchC)
+                } else {
+                    (MaskSlot::ScratchB, TexSlot::ScratchB)
+                };
+                self.raster_polys(cut_mask, vec_cuts);
                 let mut mp = self.region.base_params();
                 mp.u0 = [1, 0, u32::from(is_binary), 0];
-                self.push_quad(QuadPipe::Mul, src_cov, TexSlot::ScratchB, TexSlot::Dummy, dst_cov, mp);
+                self.push_quad(QuadPipe::Mul, src_cov, cut_tex, TexSlot::Dummy, dst_cov, mp);
             }
         }
     }
@@ -924,33 +981,48 @@ impl<'a> CmdRecorder<'a> {
     fn raster_shtack_fill_mask(&mut self, polys: &[Vec<(f64, f64)>], spec: &SfxShtackFillSpec, face_slot: TexSlot, dst: MaskSlot) {
         self.raster_polys(dst, polys);
         let dst_tex = match dst {
+            MaskSlot::Face => TexSlot::Face,
+            MaskSlot::Line => TexSlot::Line,
+            MaskSlot::Union => TexSlot::Union,
             MaskSlot::Shtack => TexSlot::Shtack,
-            _ => TexSlot::ScratchA,
+            MaskSlot::ScratchA => TexSlot::ScratchA,
+            MaskSlot::ScratchB => TexSlot::ScratchB,
+            MaskSlot::ScratchC => TexSlot::ScratchC,
+        };
+        let tmp_tex = if face_slot == TexSlot::ScratchB || dst_tex == TexSlot::ScratchB {
+            TexSlot::ScratchC
+        } else {
+            TexSlot::ScratchB
         };
         if spec.overshoot_pct <= 0.1 {
             let mp = self.region.base_params();
-            self.push_quad(QuadPipe::Mul, dst_tex, face_slot, TexSlot::Dummy, TexSlot::ScratchB, mp);
-            self.cmds.push(GpuCmd::CopyTex { src: TexSlot::ScratchB, dst: dst_tex });
+            self.push_quad(QuadPipe::Mul, dst_tex, face_slot, TexSlot::Dummy, tmp_tex, mp);
+            self.push_copy(tmp_tex, dst_tex);
         }
         let inv_gs = 1.0 / self.auto_scale.max(0.75);
         if spec.mode == SfxShtackFillMode::UkiyoBrush {
             let eff_dry = spec.dryness_pct.max(18.0);
-            self.run_jfa_from_mask(dst_tex, true, (16.0 * self.auto_scale * self.region.px_per_doc()).clamp(16.0, 128.0), TexSlot::JfaB);
+            let jfa_slot = self.run_jfa_from_mask(
+                dst_tex,
+                true,
+                (16.0 * self.auto_scale * self.region.px_per_doc()).clamp(16.0, 128.0),
+                None,
+            );
             let mut gp = self.region.base_params();
             gp.p1[2] = (eff_dry / 100.0).clamp(0.0, 1.0);
             gp.p1[3] = (spec.grain_sharpness_pct / 100.0).clamp(0.0, 1.0);
             gp.p3[2] = inv_gs;
             gp.u0 = [1, spec.seed.wrapping_mul(11_173), 0, 0];
-            self.push_quad(QuadPipe::DryGrain, dst_tex, TexSlot::JfaB, TexSlot::Dummy, TexSlot::ScratchB, gp);
-            self.cmds.push(GpuCmd::CopyTex { src: TexSlot::ScratchB, dst: dst_tex });
+            self.push_quad(QuadPipe::DryGrain, dst_tex, jfa_slot, TexSlot::Dummy, tmp_tex, gp);
+            self.push_copy(tmp_tex, dst_tex);
         } else if spec.dryness_pct > 0.5 {
             let mut gp = self.region.base_params();
             gp.p1[2] = (spec.dryness_pct / 100.0).clamp(0.0, 1.0);
             gp.p1[3] = (spec.grain_sharpness_pct / 100.0).clamp(0.0, 1.0);
             gp.p3[2] = inv_gs;
             gp.u0 = [0, spec.seed.wrapping_mul(7_919), 0, 0];
-            self.push_quad(QuadPipe::DryGrain, dst_tex, TexSlot::Dummy, TexSlot::Dummy, TexSlot::ScratchB, gp);
-            self.cmds.push(GpuCmd::CopyTex { src: TexSlot::ScratchB, dst: dst_tex });
+            self.push_quad(QuadPipe::DryGrain, dst_tex, TexSlot::Dummy, TexSlot::Dummy, tmp_tex, gp);
+            self.push_copy(tmp_tex, dst_tex);
         }
     }
 }
@@ -1042,165 +1114,182 @@ impl SfxGpuRenderer {
     }
 
     fn new_with_msaa(device: &wgpu::Device, msaa_samples: u32) -> Result<Self, Unsupported> {
-        let msaa_samples = if msaa_samples >= 4 { 4 } else { 1 };
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("photocraft-sfx-wgsl"),
-            source: wgpu::ShaderSource::Wgsl(SFX_SHADER.into()),
-        });
-        let fx_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("sfx-fx-bgl"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
+        run_scoped(device, None, "init", || {
+            let msaa_samples = if msaa_samples >= 4 { 4 } else { 1 };
+            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("photocraft-sfx-wgsl"),
+                source: wgpu::ShaderSource::Wgsl(SFX_SHADER.into()),
+            });
+            let fx_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("sfx-fx-bgl"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: true,
+                            min_binding_size: wgpu::BufferSize::new(std::mem::size_of::<FxParams>() as u64),
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+            let raster_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("sfx-raster-bgl"),
+                entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    visibility: wgpu::ShaderStages::VERTEX,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: true,
                         min_binding_size: wgpu::BufferSize::new(std::mem::size_of::<FxParams>() as u64),
                     },
                     count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-            ],
-        });
-        let raster_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("sfx-raster-bgl"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: true,
-                    min_binding_size: wgpu::BufferSize::new(std::mem::size_of::<FxParams>() as u64),
-                },
-                count: None,
-            }],
-        });
-        let fx_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("sfx-fx-layout"),
-            bind_group_layouts: &[Some(&fx_bgl)],
-            immediate_size: 0,
-        });
-        let raster_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("sfx-raster-layout"),
-            bind_group_layouts: &[Some(&raster_bgl)],
-            immediate_size: 0,
-        });
-        let empty_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("sfx-empty-layout"),
-            bind_group_layouts: &[],
-            immediate_size: 0,
-        });
+                }],
+            });
+            let fx_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("sfx-fx-layout"),
+                bind_group_layouts: &[Some(&fx_bgl)],
+                immediate_size: 0,
+            });
+            let raster_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("sfx-raster-layout"),
+                bind_group_layouts: &[Some(&raster_bgl)],
+                immediate_size: 0,
+            });
+            let empty_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("sfx-empty-layout"),
+                bind_group_layouts: &[],
+                immediate_size: 0,
+            });
 
-        let (stencil_pipe, cover_pipe) = build_stencil_pipelines(device, &shader, &raster_layout, &empty_layout, msaa_samples);
+            let (stencil_pipe, cover_pipe) = build_stencil_pipelines(device, &shader, &raster_layout, &empty_layout, msaa_samples);
 
-        let seg_seed_pipe = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("sfx-seg-seed"),
-            layout: Some(&raster_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_seg_line"),
-                buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<SegVert>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &[
-                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 0, shader_location: 0 },
-                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 8, shader_location: 1 },
-                    ],
-                })],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_jfa_init_seg"),
-                targets: &[Some(wgpu::ColorTargetState { format: JFA_FMT, blend: None, write_mask: wgpu::ColorWrites::ALL })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::LineList, ..Default::default() },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+            let seg_seed_pipe = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("sfx-seg-seed"),
+                layout: Some(&raster_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_seg_line"),
+                    buffers: &[Some(wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<SegVert>() as u64,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &[
+                            wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 0, shader_location: 0 },
+                            wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 8, shader_location: 1 },
+                        ],
+                    })],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_jfa_init_seg"),
+                    targets: &[Some(wgpu::ColorTargetState { format: JFA_FMT, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::LineList, ..Default::default() },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            });
 
-        let qp = |lbl: &str, fs: &str, fmt: wgpu::TextureFormat| make_quad_pipeline(device, lbl, &fx_layout, &shader, fs, fmt);
-        let dummy_tex = Tex2d::new(device, "sfx-dummy", 1, 1, MASK_FMT, 1, wgpu::TextureUsages::TEXTURE_BINDING);
-        let blit_uni = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("sfx-blit-uni"),
-            size: std::mem::size_of::<FxParams>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let max_dim = device.limits().max_texture_dimension_2d.min(8192);
+            let qp = |lbl: &str, fs: &str, fmt: wgpu::TextureFormat| make_quad_pipeline(device, lbl, &fx_layout, &shader, fs, fmt);
+            let dummy_tex = Tex2d::new(device, "sfx-dummy", 1, 1, MASK_FMT, 1, wgpu::TextureUsages::TEXTURE_BINDING);
+            let blit_uni = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("sfx-blit-uni"),
+                size: std::mem::size_of::<FxParams>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let max_dim = device.limits().max_texture_dimension_2d.min(8192);
+            let ring = UniformRing::new(device);
+            let rec_bufs = CpuRecordBuffers::new(ring.align);
 
-        Ok(Self {
-            max_dim,
-            msaa_samples,
-            union_pipe: qp("sfx-union", "fs_union_mask", MASK_FMT),
-            mul_pipe: qp("sfx-mul", "fs_mul_mask", MASK_FMT),
-            one_bit_face_pipe: qp("sfx-1bit-face", "fs_one_bit_face", MASK_FMT),
-            one_bit_line_pipe: qp("sfx-1bit-line", "fs_one_bit_line_mask", MASK_FMT),
-            jfa_init_pipe: qp("sfx-jfa-init", "fs_jfa_init_mask", JFA_FMT),
-            jfa_step_pipe: qp("sfx-jfa-step", "fs_jfa_step", JFA_FMT),
-            blur_mask_pipe: qp("sfx-blur-mask", "fs_box_blur_1d", MASK_FMT),
-            blur_jfa_pipe: qp("sfx-blur-jfa", "fs_box_blur_1d", JFA_FMT),
-            halo_pipe: qp("sfx-halo", "fs_halo_mask", MASK_FMT),
-            stroke_ring_pipe: qp("sfx-stroke-ring", "fs_stroke_ring_mask", MASK_FMT),
-            shadow_extrude_pipe: qp("sfx-shadow-ext", "fs_shadow_extrude_mask", MASK_FMT),
-            dry_physics_pipe: qp("sfx-dry-phys", "fs_dry_physics", MASK_FMT),
-            dry_seg_pipe: qp("sfx-dry-seg", "fs_dry_seg", MASK_FMT),
-            etf_seed_pipe: qp("sfx-etf-seed", "fs_etf_seed", JFA_FMT),
-            dry_etf_lic_pipe: qp("sfx-dry-lic", "fs_dry_etf_lic", MASK_FMT),
-            dry_grain_pipe: qp("sfx-dry-grain", "fs_dry_grain_breakup", MASK_FMT),
-            composite_pipe: qp("sfx-composite", "fs_composite_fill", RGBA_FMT),
-            blit_pipes: Vec::new(),
-            blit_uni,
-            blit_bg: None,
-            shader,
-            fx_bgl,
-            raster_bgl,
-            stencil_pipe,
-            cover_pipe,
-            seg_seed_pipe,
-            dummy_tex,
-            ring: UniformRing::new(device),
-            vbuf: VertexArena::new(device, "sfx-vbuf"),
-            targets: None,
-            targets_alloc_count: 0,
-            last_accum_is_a: true,
-            last_size: [0, 0],
-            #[cfg(not(target_arch = "wasm32"))]
-            readback: None,
+            Ok(Self {
+                max_dim,
+                msaa_samples,
+                health: None,
+                union_pipe: qp("sfx-union", "fs_union_mask", MASK_FMT),
+                mul_pipe: qp("sfx-mul", "fs_mul_mask", MASK_FMT),
+                one_bit_face_pipe: qp("sfx-1bit-face", "fs_one_bit_face", MASK_FMT),
+                one_bit_line_pipe: qp("sfx-1bit-line", "fs_one_bit_line_mask", MASK_FMT),
+                jfa_init_pipe: qp("sfx-jfa-init", "fs_jfa_init_mask", JFA_FMT),
+                jfa_step_pipe: qp("sfx-jfa-step", "fs_jfa_step", JFA_FMT),
+                blur_mask_pipe: qp("sfx-blur-mask", "fs_box_blur_1d", MASK_FMT),
+                blur_jfa_pipe: qp("sfx-blur-jfa", "fs_box_blur_1d", JFA_FMT),
+                halo_pipe: qp("sfx-halo", "fs_halo_mask", MASK_FMT),
+                stroke_ring_pipe: qp("sfx-stroke-ring", "fs_stroke_ring_mask", MASK_FMT),
+                shadow_extrude_pipe: qp("sfx-shadow-ext", "fs_shadow_extrude_mask", MASK_FMT),
+                dry_physics_pipe: qp("sfx-dry-phys", "fs_dry_physics", MASK_FMT),
+                dry_seg_pipe: qp("sfx-dry-seg", "fs_dry_seg", MASK_FMT),
+                etf_seed_pipe: qp("sfx-etf-seed", "fs_etf_seed", JFA_FMT),
+                dry_etf_lic_pipe: qp("sfx-dry-lic", "fs_dry_etf_lic", MASK_FMT),
+                dry_grain_pipe: qp("sfx-dry-grain", "fs_dry_grain_breakup", MASK_FMT),
+                composite_pipe: qp("sfx-composite", "fs_composite_fill", RGBA_FMT),
+                blit_pipes: Vec::new(),
+                blit_uni,
+                blit_bg: None,
+                shader,
+                fx_bgl,
+                raster_bgl,
+                stencil_pipe,
+                cover_pipe,
+                seg_seed_pipe,
+                dummy_tex,
+                rec_bufs,
+                ring,
+                vbuf: VertexArena::new(device, "sfx-vbuf"),
+                targets: None,
+                targets_alloc_count: 0,
+                last_accum_is_a: true,
+                last_size: [0, 0],
+                #[cfg(not(target_arch = "wasm32"))]
+                readback: None,
+            })
         })
+    }
+
+    /// Attaches a shared [`DeviceHealth`] tracker so SFX skips work on a lost device and uses
+    /// panic-safe polling during readback.
+    pub fn set_health(&mut self, health: DeviceHealth) {
+        self.health = Some(health);
+    }
+
+    /// Returns the attached [`DeviceHealth`] tracker, if any.
+    pub fn health(&self) -> Option<&DeviceHealth> {
+        self.health.as_ref()
     }
 
     pub fn max_texture_dim(&self) -> u32 {
@@ -1217,14 +1306,15 @@ impl SfxGpuRenderer {
         }
     }
 
-    /// Immediately destroys all pooled working textures (freeing VRAM right away on WebGPU/Dawn).
+    /// Releases references to all pooled working textures (reclaimed by `wgpu` once any in-flight
+    /// frame or snapshot `BindGroup` finishes using them).
     pub fn release_targets(&mut self) {
         self.blit_bg = None;
         self.targets = None;
         self.last_size = [0, 0];
         #[cfg(not(target_arch = "wasm32"))]
-        if let Some((buf, _)) = self.readback.take() {
-            buf.destroy();
+        {
+            self.readback = None;
         }
     }
 
@@ -1247,6 +1337,57 @@ impl SfxGpuRenderer {
         Some(if self.last_accum_is_a { &t.accum_a.view } else { &t.accum_b.view })
     }
 
+    fn ensure_blit_pipeline(&mut self, device: &wgpu::Device, target_format: wgpu::TextureFormat) {
+        if self.blit_pipes.iter().any(|(f, _)| *f == target_format) {
+            return;
+        }
+        let fx_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("sfx-blit-layout"),
+            bind_group_layouts: &[Some(&self.fx_bgl)],
+            immediate_size: 0,
+        });
+        let pipe = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("sfx-blit-premul"),
+            layout: Some(&fx_layout),
+            vertex: wgpu::VertexState {
+                module: &self.shader,
+                entry_point: Some("vs_quad"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &self.shader,
+                entry_point: Some("fs_blit_premul"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: target_format,
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+        self.blit_pipes.push((target_format, pipe));
+    }
+
+    fn build_blit_params(&self, target_format: wgpu::TextureFormat, screen_to_uv: Option<([f32; 3], [f32; 3], f32)>) -> FxParams {
+        let mut params = FxParams::default();
+        params.u0[1] = u32::from(target_format.is_srgb());
+        params.p2[1] = self.last_size[0] as f32;
+        params.p2[2] = self.last_size[1] as f32;
+        if let Some((ru, rv, opacity)) = screen_to_uv {
+            params.u0[0] = 1;
+            params.p0 = [ru[0], ru[1], ru[2], 0.0];
+            params.p1 = [rv[0], rv[1], rv[2], 0.0];
+            params.p2[0] = opacity.clamp(0.0, 1.0);
+        }
+        params
+    }
+
     /// Prepares the premultiplied blit pipeline, uniform transform, and bind group for
     /// [`Self::draw_last_output_into_pass`]. Call inside `egui_wgpu::CallbackTrait::prepare`.
     ///
@@ -1264,82 +1405,107 @@ impl SfxGpuRenderer {
             self.blit_bg = None;
             return;
         }
-        if !self.blit_pipes.iter().any(|(f, _)| *f == target_format) {
-            let fx_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("sfx-blit-layout"),
-                bind_group_layouts: &[Some(&self.fx_bgl)],
-                immediate_size: 0,
-            });
-            let pipe = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("sfx-blit-premul"),
-                layout: Some(&fx_layout),
-                vertex: wgpu::VertexState {
-                    module: &self.shader,
-                    entry_point: Some("vs_quad"),
-                    buffers: &[],
-                    compilation_options: Default::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &self.shader,
-                    entry_point: Some("fs_blit_premul"),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: target_format,
-                        blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: Default::default(),
-                }),
-                primitive: wgpu::PrimitiveState::default(),
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-                multiview_mask: None,
-                cache: None,
-            });
-            self.blit_pipes.push((target_format, pipe));
-        }
-        let mut params = FxParams::default();
-        params.u0[1] = u32::from(target_format.is_srgb());
-        params.p2[1] = self.last_size[0] as f32;
-        params.p2[2] = self.last_size[1] as f32;
-        if let Some((ru, rv, opacity)) = screen_to_uv {
-            params.u0[0] = 1;
-            params.p0 = [ru[0], ru[1], ru[2], 0.0];
-            params.p1 = [rv[0], rv[1], rv[2], 0.0];
-            params.p2[0] = opacity.clamp(0.0, 1.0);
-        }
-        queue.write_buffer(&self.blit_uni, 0, bytemuck::bytes_of(&params));
-        let Some(t) = self.targets.as_ref() else {
+        let health = self.health.clone();
+        let res = run_scoped(device, health.as_ref(), "prepare_blit", || {
+            self.ensure_blit_pipeline(device, target_format);
+            let params = self.build_blit_params(target_format, screen_to_uv);
+            queue.write_buffer(&self.blit_uni, 0, bytemuck::bytes_of(&params));
+            let Some(t) = self.targets.as_ref() else {
+                self.blit_bg = None;
+                return Ok(());
+            };
+            let out_view = if self.last_accum_is_a { &t.accum_a.view } else { &t.accum_b.view };
+            self.blit_bg = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("sfx-blit-bg"),
+                layout: &self.fx_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                            buffer: &self.blit_uni,
+                            offset: 0,
+                            size: wgpu::BufferSize::new(std::mem::size_of::<FxParams>() as u64),
+                        }),
+                    },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(out_view) },
+                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&self.dummy_tex.view) },
+                    wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&self.dummy_tex.view) },
+                ],
+            }));
+            Ok(())
+        });
+        if res.is_err() {
             self.blit_bg = None;
-            return;
-        };
-        let out_view = if self.last_accum_is_a { &t.accum_a.view } else { &t.accum_b.view };
-        self.blit_bg = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("sfx-blit-bg"),
-            layout: &self.fx_bgl,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: &self.blit_uni,
-                        offset: 0,
-                        size: wgpu::BufferSize::new(std::mem::size_of::<FxParams>() as u64),
-                    }),
-                },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(out_view) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&self.dummy_tex.view) },
-                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&self.dummy_tex.view) },
-            ],
-        }));
+        }
+    }
+
+    /// Prepares a self-contained blit [`wgpu::BindGroup`] (owning its own uniform buffer and
+    /// refcounted output texture view) for [`Self::draw_blit_bind_group`].
+    ///
+    /// Safe when multiple `egui_wgpu` callbacks run `prepare()` before any `paint()` in the same
+    /// frame (multi-window or split-pane overlays).
+    pub fn prepare_blit_snapshot(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        target_format: wgpu::TextureFormat,
+        screen_to_uv: Option<([f32; 3], [f32; 3], f32)>,
+    ) -> Option<wgpu::BindGroup> {
+        if self.targets.is_none() || self.last_size[0] == 0 || self.last_size[1] == 0 {
+            return None;
+        }
+        let health = self.health.clone();
+        run_scoped(device, health.as_ref(), "prepare_blit_snapshot", || {
+            self.ensure_blit_pipeline(device, target_format);
+            let params = self.build_blit_params(target_format, screen_to_uv);
+            let uni = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("sfx-blit-snap-uni"),
+                size: std::mem::size_of::<FxParams>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            queue.write_buffer(&uni, 0, bytemuck::bytes_of(&params));
+            let Some(t) = self.targets.as_ref() else {
+                return Ok(None);
+            };
+            let out_view = if self.last_accum_is_a { &t.accum_a.view } else { &t.accum_b.view };
+            let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("sfx-blit-snap-bg"),
+                layout: &self.fx_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                            buffer: &uni,
+                            offset: 0,
+                            size: wgpu::BufferSize::new(std::mem::size_of::<FxParams>() as u64),
+                        }),
+                    },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(out_view) },
+                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&self.dummy_tex.view) },
+                    wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&self.dummy_tex.view) },
+                ],
+            });
+            Ok(Some(bg))
+        })
+        .ok()
+        .flatten()
+    }
+
+    /// Draws a snapshot [`wgpu::BindGroup`] returned by [`Self::prepare_blit_snapshot`] onto a
+    /// render pass with premultiplied alpha. Safe to call with `&self` in `paint`.
+    pub fn draw_blit_bind_group(&self, rpass: &mut wgpu::RenderPass<'static>, target_format: wgpu::TextureFormat, bg: &wgpu::BindGroup) {
+        let Some((_, pipe)) = self.blit_pipes.iter().find(|(f, _)| *f == target_format) else { return };
+        rpass.set_pipeline(pipe);
+        rpass.set_bind_group(0, bg, &[0]);
+        rpass.draw(0..3, 0..1);
     }
 
     /// Draws the last rendered GPU SFX output prepared by [`Self::prepare_blit`] onto an
     /// egui/canvas render pass with premultiplied alpha. Safe to call with `&self` in `paint`.
     pub fn draw_last_output_into_pass(&self, rpass: &mut wgpu::RenderPass<'static>, target_format: wgpu::TextureFormat) {
         let Some(bg) = self.blit_bg.as_ref() else { return };
-        let Some((_, pipe)) = self.blit_pipes.iter().find(|(f, _)| *f == target_format) else { return };
-        rpass.set_pipeline(pipe);
-        rpass.set_bind_group(0, bg, &[0]);
-        rpass.draw(0..3, 0..1);
+        self.draw_blit_bind_group(rpass, target_format, bg);
     }
 
     /// Renders `region_doc = [x0, y0, x1, y1]` into an internal `target_px = [w, h]` GPU texture
@@ -1365,12 +1531,10 @@ impl SfxGpuRenderer {
             px_h: h,
         };
         let auto_scale = (scene.glyph_em_px / 120.0).clamp(0.75, 64.0);
-        self.ring.reset();
-        self.vbuf.reset();
+        self.rec_bufs.reset();
         let (cmds, accum_is_a) = {
             let mut rec = CmdRecorder {
-                ring: &mut self.ring,
-                vbuf: &mut self.vbuf,
+                bufs: &mut self.rec_bufs,
                 cmds: Vec::with_capacity(64),
                 accum_is_a: true,
                 region,
@@ -1380,33 +1544,40 @@ impl SfxGpuRenderer {
             record_scene_passes(&mut rec, scene);
             (rec.cmds, rec.accum_is_a)
         };
-        let jfa_need = JfaUsage::from_cmds(&cmds);
+        let aux_need = AuxUsage::from_cmds(&cmds);
 
-        // Reuse pooled WorkTargets whenever the requested active `[w, h]` fits inside current
-        // capacity. Any resize drops (and explicitly `.destroy()`s) the old textures BEFORE
-        // creating the new `CommandEncoder`, so no in-flight encoder ever references a destroyed
-        // texture.
-        let fits = self.targets.as_ref().is_some_and(|t| t.cap[0] >= w && t.cap[1] >= h);
-        if fits {
-            if let Some(t) = self.targets.as_mut() {
-                t.ensure_jfa(device, jfa_need);
+        let health = self.health.clone();
+        let run_res = run_scoped(device, health.as_ref(), "render_region", || {
+            // Reuse pooled WorkTargets whenever the requested active `[w, h]` fits inside current
+            // capacity. Any resize drops the old `WorkTargets` without explicit `.destroy()`, so
+            // any snapshot `BindGroup` or in-flight pass from earlier in the frame stays valid.
+            let fits = self.targets.as_ref().is_some_and(|t| t.cap[0] >= w && t.cap[1] >= h);
+            if fits {
+                if let Some(t) = self.targets.as_mut() {
+                    t.ensure_aux(device, aux_need);
+                }
+            } else {
+                let prev_cap = self.targets.as_ref().map_or([0, 0], |t| t.cap);
+                self.blit_bg = None;
+                self.targets = None;
+                let cap_w = round_cap_dim(w.max(prev_cap[0]), self.max_dim);
+                let cap_h = round_cap_dim(h.max(prev_cap[1]), self.max_dim);
+                self.targets = Some(WorkTargets::new(device, cap_w, cap_h, self.msaa_samples, aux_need));
+                self.targets_alloc_count = self.targets_alloc_count.saturating_add(1);
             }
-        } else {
-            let prev_cap = self.targets.as_ref().map_or([0, 0], |t| t.cap);
-            self.blit_bg = None;
-            self.targets = None;
-            let cap_w = round_cap_dim(w.max(prev_cap[0]), self.max_dim);
-            let cap_h = round_cap_dim(h.max(prev_cap[1]), self.max_dim);
-            self.targets = Some(WorkTargets::new(device, cap_w, cap_h, self.msaa_samples, jfa_need));
-            self.targets_alloc_count = self.targets_alloc_count.saturating_add(1);
+
+            self.ring.upload_bytes(device, queue, &self.rec_bufs.uniforms);
+            self.vbuf.upload_bytes(device, queue, &self.rec_bufs.verts);
+
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("sfx-gpu-encoder") });
+            self.execute_commands(device, &mut encoder, &cmds, [w, h]);
+            queue.submit(Some(encoder.finish()));
+            Ok(())
+        });
+        if let Err(err) = run_res {
+            self.release_targets();
+            return Err(err);
         }
-
-        self.ring.upload(device, queue);
-        self.vbuf.upload(device, queue);
-
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("sfx-gpu-encoder") });
-        self.execute_commands(device, &mut encoder, &cmds, [w, h]);
-        queue.submit(Some(encoder.finish()));
 
         self.last_accum_is_a = accum_is_a;
         self.last_size = [w, h];
@@ -1454,6 +1625,7 @@ impl SfxGpuRenderer {
                 MaskSlot::Shtack => &t.shtack_mask,
                 MaskSlot::ScratchA => &t.scratch_mask_a,
                 MaskSlot::ScratchB => &t.scratch_mask_b,
+                MaskSlot::ScratchC => t.scratch_mask_c.as_ref().unwrap_or(&t.scratch_mask_b),
             }
         };
         let slot_tex = |s: TexSlot| -> &Tex2d {
@@ -1465,6 +1637,7 @@ impl SfxGpuRenderer {
                 TexSlot::Shtack => &t.shtack_mask,
                 TexSlot::ScratchA => &t.scratch_mask_a,
                 TexSlot::ScratchB => &t.scratch_mask_b,
+                TexSlot::ScratchC => t.scratch_mask_c.as_ref().unwrap_or(&self.dummy_tex),
                 TexSlot::JfaA => t.jfa_a.as_ref().unwrap_or(&self.dummy_tex),
                 TexSlot::JfaB => t.jfa_b.as_ref().unwrap_or(&self.dummy_tex),
                 TexSlot::JfaExt => t.jfa_ext.as_ref().unwrap_or(&self.dummy_tex),
@@ -1553,6 +1726,9 @@ impl SfxGpuRenderer {
                     rp.draw(0..v_count, 0..1);
                 }
                 GpuCmd::CopyTex { src, dst } => {
+                    if src == dst {
+                        continue;
+                    }
                     enc.copy_texture_to_texture(
                         slot_tex(src).tex.as_image_copy(),
                         slot_tex(dst).tex.as_image_copy(),
@@ -1640,35 +1816,37 @@ impl SfxGpuRenderer {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
     ) -> Result<(wgpu::Buffer, u32, u32, u32), Unsupported> {
-        let Some(t) = self.targets.as_ref() else {
-            return Err(Unsupported("missing GPU target".into()));
-        };
-        let [w, h] = self.last_size;
-        if w == 0 || h == 0 {
-            return Err(Unsupported("empty GPU target".into()));
-        }
-        let unpadded_row = w * 4;
-        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-        let padded_row = unpadded_row.div_ceil(align) * align;
-        let total_bytes = u64::from(padded_row) * u64::from(h);
-        let rb_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("sfx-async-readback"),
-            size: total_bytes,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        let src_tex = if self.last_accum_is_a { &t.accum_a.tex } else { &t.accum_b.tex };
-        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("sfx-async-rb") });
-        enc.copy_texture_to_buffer(
-            src_tex.as_image_copy(),
-            wgpu::TexelCopyBufferInfo {
-                buffer: &rb_buf,
-                layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(padded_row), rows_per_image: Some(h) },
-            },
-            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-        );
-        queue.submit(Some(enc.finish()));
-        Ok((rb_buf, padded_row, w, h))
+        run_scoped(device, self.health.as_ref(), "copy_last_output_to_buffer", || {
+            let Some(t) = self.targets.as_ref() else {
+                return Err(Unsupported("missing GPU target".into()));
+            };
+            let [w, h] = self.last_size;
+            if w == 0 || h == 0 {
+                return Err(Unsupported("empty GPU target".into()));
+            }
+            let unpadded_row = w * 4;
+            let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+            let padded_row = unpadded_row.div_ceil(align) * align;
+            let total_bytes = u64::from(padded_row) * u64::from(h);
+            let rb_buf = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("sfx-async-readback"),
+                size: total_bytes,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            let src_tex = if self.last_accum_is_a { &t.accum_a.tex } else { &t.accum_b.tex };
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("sfx-async-rb") });
+            enc.copy_texture_to_buffer(
+                src_tex.as_image_copy(),
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &rb_buf,
+                    layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(padded_row), rows_per_image: Some(h) },
+                },
+                wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            );
+            queue.submit(Some(enc.finish()));
+            Ok((rb_buf, padded_row, w, h))
+        })
     }
 
     /// Native full-resolution tiled GPU render straight into a sparse [`Surface`].
@@ -1682,6 +1860,9 @@ impl SfxGpuRenderer {
         scene: &SfxGpuScene<'_>,
         format: PixelFormat,
     ) -> Result<Surface, Unsupported> {
+        if let Some(fault) = self.health.as_ref().and_then(DeviceHealth::fault) {
+            return Err(Unsupported(format!("SFX GPU tiled render skipped: {fault}")));
+        }
         let full = scene.full_bounds;
         if full.is_empty() {
             return Ok(Surface::new(format));
@@ -1765,54 +1946,76 @@ impl SfxGpuRenderer {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn readback_last_rgba8(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) -> Result<Vec<u8>, Unsupported> {
-        let Some(t) = self.targets.as_ref() else {
-            return Err(Unsupported("missing GPU target".into()));
-        };
         let [w, h] = self.last_size;
+        if w == 0 || h == 0 || self.targets.is_none() {
+            return Err(Unsupported("missing GPU target".into()));
+        }
         let unpadded_row = w * 4;
         let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
         let padded_row = unpadded_row.div_ceil(align) * align;
         let total_bytes = u64::from(padded_row) * u64::from(h);
-        let need_new = self.readback.as_ref().is_none_or(|(_, sz)| *sz < total_bytes);
-        if need_new {
-            if let Some((old, _)) = self.readback.take() {
-                old.destroy();
+        let health = self.health.clone();
+        let sub_idx = run_scoped(device, health.as_ref(), "readback_submit", || {
+            let need_new = self.readback.as_ref().is_none_or(|(_, sz)| *sz < total_bytes);
+            if need_new {
+                let buf = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("sfx-readback"),
+                    size: total_bytes,
+                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                    mapped_at_creation: false,
+                });
+                self.readback = Some((buf, total_bytes));
             }
-            let buf = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("sfx-readback"),
-                size: total_bytes,
-                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                mapped_at_creation: false,
-            });
-            self.readback = Some((buf, total_bytes));
-        }
+            let Some(t) = self.targets.as_ref() else {
+                return Err(Unsupported("missing GPU target".into()));
+            };
+            let Some((rb_buf, _)) = self.readback.as_ref() else {
+                return Err(Unsupported("missing readback buffer".into()));
+            };
+            let src_tex = if self.last_accum_is_a { &t.accum_a.tex } else { &t.accum_b.tex };
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("sfx-rb") });
+            enc.copy_texture_to_buffer(
+                src_tex.as_image_copy(),
+                wgpu::TexelCopyBufferInfo {
+                    buffer: rb_buf,
+                    layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(padded_row), rows_per_image: Some(h) },
+                },
+                wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            );
+            Ok(queue.submit(Some(enc.finish())))
+        })?;
+
         let Some((rb_buf, _)) = self.readback.as_ref() else {
             return Err(Unsupported("missing readback buffer".into()));
         };
-        let src_tex = if self.last_accum_is_a { &t.accum_a.tex } else { &t.accum_b.tex };
-        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("sfx-rb") });
-        enc.copy_texture_to_buffer(
-            src_tex.as_image_copy(),
-            wgpu::TexelCopyBufferInfo {
-                buffer: rb_buf,
-                layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(padded_row), rows_per_image: Some(h) },
-            },
-            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-        );
-        queue.submit(Some(enc.finish()));
-
         let slice = rb_buf.slice(0..total_bytes);
         let (tx, rx) = std::sync::mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |res| {
             let _ = tx.send(res);
         });
-        let _ = device.poll(wgpu::PollType::wait_indefinitely());
+        let poll_ok = match health.as_ref() {
+            Some(h) => h.wait(device, Some(sub_idx)),
+            None => matches!(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    device.poll(wgpu::PollType::Wait { submission_index: Some(sub_idx), timeout: None })
+                })),
+                Ok(Ok(_))
+            ),
+        };
+        if !poll_ok {
+            self.readback = None;
+            return Err(Unsupported("SFX GPU readback poll failed or device lost".into()));
+        }
         match rx.recv() {
             Ok(Ok(())) => {}
-            _ => return Err(Unsupported("SFX GPU readback failed".into())),
+            _ => {
+                self.readback = None;
+                return Err(Unsupported("SFX GPU readback failed".into()));
+            }
         }
         let Ok(mapped) = slice.get_mapped_range() else {
             rb_buf.unmap();
+            self.readback = None;
             return Err(Unsupported("SFX GPU readback map range failed".into()));
         };
         let mut out = vec![0u8; (w as usize) * (h as usize) * 4];
@@ -2005,10 +2208,10 @@ fn record_fill_and_blending_passes(rec: &mut CmdRecorder<'_>, scene: &SfxGpuScen
                 sp.p1[2] = *width_px * px_per_doc;
                 sp.u0[0] = if *pos == SfxStrokePosition::Inside { 2 } else { 1 };
                 let base = if *pos == SfxStrokePosition::Inside { TexSlot::Face } else { TexSlot::Union };
-                rec.push_quad(QuadPipe::StrokeRing, base, TexSlot::JfaExt, TexSlot::JfaInt, TexSlot::ScratchB, sp);
+                rec.push_quad(QuadPipe::StrokeRing, base, TexSlot::JfaExt, TexSlot::JfaInt, TexSlot::ScratchC, sp);
                 rec.render_fill_pass(FillPassArgs {
                     fill,
-                    base_cov: TexSlot::ScratchB,
+                    base_cov: TexSlot::ScratchC,
                     dry_override: None,
                     shtack_polys: s_polys,
                     vec_cuts: v_cuts,
@@ -2081,12 +2284,12 @@ fn record_outer_passes(rec: &mut CmdRecorder<'_>, scene: &SfxGpuScene<'_>, is_bi
             let mut sp = rec.region.base_params();
             sp.p1[2] = *width_px * px_per_doc;
             sp.u0[0] = 0;
-            rec.push_quad(QuadPipe::StrokeRing, TexSlot::Union, TexSlot::JfaExt, TexSlot::JfaInt, TexSlot::ScratchB, sp);
+            rec.push_quad(QuadPipe::StrokeRing, TexSlot::Union, TexSlot::JfaExt, TexSlot::JfaInt, TexSlot::ScratchC, sp);
             let s_polys = scene.effect_shtack_polygons.iter().find(|(i, _)| *i == idx).map_or(&[][..], |(_, v)| v.as_slice());
             let v_cuts = scene.effect_dry_vector_cuts.iter().find(|(i, _)| *i == idx).map_or(&[][..], |(_, v)| v.as_slice());
             rec.render_fill_pass(FillPassArgs {
                 fill,
-                base_cov: TexSlot::ScratchB,
+                base_cov: TexSlot::ScratchC,
                 dry_override: None,
                 shtack_polys: s_polys,
                 vec_cuts: v_cuts,
@@ -2112,12 +2315,12 @@ fn record_scene_passes(rec: &mut CmdRecorder<'_>, scene: &SfxGpuScene<'_>) {
         let mut op = rec.region.base_params();
         op.p1[2] = le.one_bit_intensity / 100.0;
         rec.push_quad(QuadPipe::OneBitFace, TexSlot::Face, TexSlot::Dummy, TexSlot::Dummy, TexSlot::ScratchA, op);
-        rec.cmds.push(GpuCmd::CopyTex { src: TexSlot::ScratchA, dst: TexSlot::Face });
+        rec.push_copy(TexSlot::ScratchA, TexSlot::Face);
     }
 
     let has_line = if is_binary {
         if le.line_width_px > 0.05 {
-            rec.run_jfa_from_mask(TexSlot::Face, false, (le.line_width_px * 0.5 * px_per_doc).max(2.0), TexSlot::JfaExt);
+            let _ = rec.run_jfa_from_mask(TexSlot::Face, false, (le.line_width_px * 0.5 * px_per_doc).max(2.0), Some(TexSlot::JfaExt));
             let mut lp = rec.region.base_params();
             lp.p1[2] = le.line_width_px * 0.5 * px_per_doc;
             lp.p1[3] = le.one_bit_intensity / 100.0;
@@ -2129,7 +2332,7 @@ fn record_scene_passes(rec: &mut CmdRecorder<'_>, scene: &SfxGpuScene<'_>) {
                 gp.p3[2] = 1.0 / rec.auto_scale.max(0.75);
                 gp.u0 = [0, le.shtack_seed.wrapping_mul(7_919), 1, 0];
                 rec.push_quad(QuadPipe::DryGrain, TexSlot::Line, TexSlot::Dummy, TexSlot::Dummy, TexSlot::ScratchA, gp);
-                rec.cmds.push(GpuCmd::CopyTex { src: TexSlot::ScratchA, dst: TexSlot::Line });
+                rec.push_copy(TexSlot::ScratchA, TexSlot::Line);
             }
             true
         } else {
@@ -2155,7 +2358,7 @@ fn record_scene_passes(rec: &mut CmdRecorder<'_>, scene: &SfxGpuScene<'_>) {
             gp.p3[2] = 1.0 / rec.auto_scale.max(0.75);
             gp.u0 = [0, le.shtack_seed.wrapping_mul(7_919), 0, 0];
             rec.push_quad(QuadPipe::DryGrain, TexSlot::Line, TexSlot::Dummy, TexSlot::Dummy, TexSlot::ScratchA, gp);
-            rec.cmds.push(GpuCmd::CopyTex { src: TexSlot::ScratchA, dst: TexSlot::Line });
+            rec.push_copy(TexSlot::ScratchA, TexSlot::Line);
         }
         true
     } else {
@@ -2173,26 +2376,26 @@ fn record_scene_passes(rec: &mut CmdRecorder<'_>, scene: &SfxGpuScene<'_>) {
             let up = rec.region.base_params();
             rec.push_quad(QuadPipe::Union, f, TexSlot::Line, TexSlot::Dummy, TexSlot::Union, up);
         }
-        (Some(f), false) => rec.cmds.push(GpuCmd::CopyTex { src: f, dst: TexSlot::Union }),
-        (None, true) => rec.cmds.push(GpuCmd::CopyTex { src: TexSlot::Line, dst: TexSlot::Union }),
+        (Some(f), false) => rec.push_copy(f, TexSlot::Union),
+        (None, true) => rec.push_copy(TexSlot::Line, TexSlot::Union),
         (None, false) => rec.cmds.push(GpuCmd::ClearMask(MaskSlot::Union)),
     }
 
     // 2. GPU Jump Flooding (Exterior SDF, Interior SDF, and `Б1: Seg` curvilinear `(s, d)`).
     let ext_r = max_exterior_jfa_radius_px(data, px_per_doc);
     if ext_r > 0.2 {
-        rec.run_jfa_from_mask(TexSlot::Union, false, ext_r + 2.0, TexSlot::JfaExt);
+        let _ = rec.run_jfa_from_mask(TexSlot::Union, false, ext_r + 2.0, Some(TexSlot::JfaExt));
     }
     if scene_needs_interior_sdf(data) {
-        rec.run_jfa_from_mask(TexSlot::Face, true, (rec.region.px_w.max(rec.region.px_h) as f32).min(512.0), TexSlot::JfaInt);
+        let _ = rec.run_jfa_from_mask(TexSlot::Face, true, (rec.region.px_w.max(rec.region.px_h) as f32).min(512.0), Some(TexSlot::JfaInt));
     }
     let has_seg_jfa = if !scene.seg_contours.is_empty() {
         let seg_verts = seg_contours_to_line_verts(&scene.seg_contours);
         if !seg_verts.is_empty() {
-            let (v_off, v_count) = rec.vbuf.push_slice(&seg_verts);
-            let uni_off = rec.ring.push(rec.region.raster_params());
+            let (v_off, v_count) = rec.bufs.push_verts(&seg_verts);
+            let uni_off = rec.bufs.push_uniform(rec.region.raster_params());
             rec.cmds.push(GpuCmd::RasterSegSeed { v_off, v_count, uni_off });
-            rec.run_jfa_steps((rec.region.px_w.max(rec.region.px_h) as f32).min(512.0), TexSlot::JfaSeg);
+            let _ = rec.run_jfa_steps((rec.region.px_w.max(rec.region.px_h) as f32).min(512.0), Some(TexSlot::JfaSeg));
             true
         } else {
             false
@@ -2204,4 +2407,240 @@ fn record_scene_passes(rec: &mut CmdRecorder<'_>, scene: &SfxGpuScene<'_>) {
     // 3. Outer passes (Vector Shadow, DropShadow/3D, Halo, Outside Strokes) + Fill/Blending/Line
     record_outer_passes(rec, scene, is_binary, has_seg_jfa);
     record_fill_and_blending_passes(rec, scene, has_line, is_binary, has_seg_jfa);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use photocraft_doc::sfx::SfxLineJoin;
+
+    fn test_region(w: u32, h: u32) -> RegionInfo {
+        RegionInfo { doc_x0: 0.0, doc_y0: 0.0, doc_w: 256.0, doc_h: 256.0, px_w: w, px_h: h }
+    }
+
+    fn assert_no_cmd_aliasing(cmds: &[GpuCmd]) {
+        for cmd in cmds {
+            match *cmd {
+                GpuCmd::Quad { pipe, a, b, c, dst, .. } => {
+                    assert!(!has_slot_alias(a, b, c, dst), "aliased Quad {pipe:?}: ({a:?}, {b:?}, {c:?}) -> {dst:?}");
+                }
+                GpuCmd::CopyTex { src, dst } => {
+                    assert!(src != dst && src != TexSlot::Dummy && dst != TexSlot::Dummy, "invalid CopyTex: {src:?} -> {dst:?}");
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn unit_square() -> Vec<SfxGpuPolyRing> {
+        vec![vec![(32.0, 32.0), (224.0, 32.0), (224.0, 224.0), (32.0, 224.0)]]
+    }
+
+    #[test]
+    fn has_slot_alias_catches_all_read_write_hazards() {
+        assert!(has_slot_alias(TexSlot::JfaB, TexSlot::Dummy, TexSlot::Dummy, TexSlot::JfaB));
+        assert!(has_slot_alias(TexSlot::ScratchA, TexSlot::ScratchB, TexSlot::Dummy, TexSlot::ScratchB));
+        assert!(has_slot_alias(TexSlot::Face, TexSlot::JfaExt, TexSlot::JfaInt, TexSlot::JfaInt));
+        assert!(has_slot_alias(TexSlot::Face, TexSlot::Dummy, TexSlot::Dummy, TexSlot::Dummy));
+        assert!(!has_slot_alias(TexSlot::ScratchA, TexSlot::ScratchC, TexSlot::Dummy, TexSlot::ScratchB));
+        assert!(!has_slot_alias(TexSlot::JfaA, TexSlot::Dummy, TexSlot::Dummy, TexSlot::JfaB));
+    }
+
+    #[test]
+    fn ukiyo_brush_jfa_never_aliases_across_reach_values() {
+        let mut bufs = CpuRecordBuffers::new(256);
+        // Directly test `run_jfa_from_mask` across even and odd step counts (reach 2..128).
+        for reach in [2.0_f32, 4.0, 8.0, 16.0, 17.0, 24.0, 32.0, 33.0, 64.0, 65.0, 96.0, 128.0] {
+            bufs.reset();
+            let mut rec = CmdRecorder {
+                bufs: &mut bufs,
+                cmds: Vec::new(),
+                accum_is_a: true,
+                region: test_region(512, 512),
+                full_bounds: Rect::from_xywh(0, 0, 256, 256),
+                auto_scale: 1.0,
+            };
+            let out = rec.run_jfa_from_mask(TexSlot::Shtack, true, reach, None);
+            assert!(out == TexSlot::JfaA || out == TexSlot::JfaB, "reach={reach} returned unexpected {out:?}");
+            assert_no_cmd_aliasing(&rec.cmds);
+            // The final JfaStep must write exactly into `out`.
+            let last_dst = rec.cmds.last().and_then(|c| match *c {
+                GpuCmd::Quad { pipe: QuadPipe::JfaStep, dst, .. } => Some(dst),
+                _ => None,
+            });
+            assert_eq!(last_dst, Some(out), "reach={reach} final JFA dst mismatch");
+        }
+
+        // End-to-end `record_scene_passes` with primary UkiyoBrush across zooms hitting even & odd JFA steps.
+        let poly = unit_square();
+        let data = SfxData {
+            fill: SfxFillSource::ShtackHatch {
+                spec: SfxShtackFillSpec {
+                    mode: SfxShtackFillMode::UkiyoBrush,
+                    overshoot_pct: 0.0,
+                    dryness_pct: 40.0,
+                    ..SfxShtackFillSpec::default()
+                },
+            },
+            ..SfxData::default()
+        };
+        let scene = SfxGpuScene {
+            data: &data,
+            full_bounds: Rect::from_xywh(0, 0, 256, 256),
+            glyph_em_px: 240.0,
+            face_contours: &poly,
+            line_polygons: &[],
+            primary_shtack_polygons: &poly,
+            secondary_shtack_polygons: &[],
+            effect_shtack_polygons: &[],
+            seg_contours: Vec::new(),
+            primary_dry_vector_cuts: &[],
+            effect_dry_vector_cuts: &[],
+        };
+        for (px_dim, auto_scale) in [(128, 1.0_f32), (256, 1.0), (512, 1.0), (512, 2.0), (1024, 2.0)] {
+            bufs.reset();
+            let mut rec = CmdRecorder {
+                bufs: &mut bufs,
+                cmds: Vec::new(),
+                accum_is_a: true,
+                region: test_region(px_dim, px_dim),
+                full_bounds: scene.full_bounds,
+                auto_scale,
+            };
+            record_scene_passes(&mut rec, &scene);
+            assert_no_cmd_aliasing(&rec.cmds);
+            // Verify DryGrain actually consumes the same JFA slot written by the preceding JfaStep.
+            let mut last_jfa_dst = None;
+            let mut saw_ukiyo_grain = false;
+            for cmd in &rec.cmds {
+                if let GpuCmd::Quad { pipe: QuadPipe::JfaStep, dst, .. } = *cmd {
+                    last_jfa_dst = Some(dst);
+                }
+                if let GpuCmd::Quad { pipe: QuadPipe::DryGrain, b, .. } = *cmd
+                    && b != TexSlot::Dummy
+                {
+                    assert_eq!(Some(b), last_jfa_dst, "UkiyoBrush DryGrain read stale JFA slot");
+                    saw_ukiyo_grain = true;
+                }
+            }
+            assert!(saw_ukiyo_grain, "expected UkiyoBrush DryGrain pass for px_dim={px_dim}, auto_scale={auto_scale}");
+        }
+    }
+
+    #[test]
+    fn stroke_with_shtack_hatch_and_dry_vector_has_no_aliasing_and_preserves_ring() {
+        let mut bufs = CpuRecordBuffers::new(256);
+        let poly = unit_square();
+        let cuts = vec![vec![(40.0, 100.0), (210.0, 100.0), (210.0, 110.0), (40.0, 110.0)]];
+
+        for pos in [SfxStrokePosition::Outside, SfxStrokePosition::Center, SfxStrokePosition::Inside] {
+            for overshoot in [0.0_f32, 50.0] {
+                for mode in [SfxShtackFillMode::Hatch, SfxShtackFillMode::UkiyoBrush] {
+                    let mut data = SfxData::default();
+                    data.blending.effects = vec![
+                        SfxBlendEffect::Stroke {
+                            enabled: true,
+                            width_px: 12.0,
+                            position: pos,
+                            join: SfxLineJoin::Round,
+                            fill: SfxFillSource::ShtackHatch {
+                                spec: SfxShtackFillSpec {
+                                    mode,
+                                    overshoot_pct: overshoot,
+                                    dryness_pct: 35.0,
+                                    ..SfxShtackFillSpec::default()
+                                },
+                            },
+                            blend: SfxChannelBlend::Normal,
+                            opacity: 1.0,
+                        },
+                        SfxBlendEffect::Stroke {
+                            enabled: true,
+                            width_px: 8.0,
+                            position: pos,
+                            join: SfxLineJoin::Round,
+                            fill: SfxFillSource::DryBrush {
+                                color: Color::BLACK,
+                                spec: SfxDryBrushSpec {
+                                    enabled: true,
+                                    engine: SfxDryBrushEngine::Vector,
+                                    ..SfxDryBrushSpec::default()
+                                },
+                            },
+                            blend: SfxChannelBlend::Normal,
+                            opacity: 1.0,
+                        },
+                    ];
+                    let eff_shtack = [(0usize, poly.clone())];
+                    let eff_cuts = [(1usize, cuts.clone())];
+                    let scene = SfxGpuScene {
+                        data: &data,
+                        full_bounds: Rect::from_xywh(0, 0, 256, 256),
+                        glyph_em_px: 240.0,
+                        face_contours: &poly,
+                        line_polygons: &[],
+                        primary_shtack_polygons: &[],
+                        secondary_shtack_polygons: &[],
+                        effect_shtack_polygons: &eff_shtack,
+                        seg_contours: Vec::new(),
+                        primary_dry_vector_cuts: &[],
+                        effect_dry_vector_cuts: &eff_cuts,
+                    };
+                    bufs.reset();
+                    let mut rec = CmdRecorder {
+                        bufs: &mut bufs,
+                        cmds: Vec::new(),
+                        accum_is_a: true,
+                        region: test_region(512, 512),
+                        full_bounds: scene.full_bounds,
+                        auto_scale: 2.0,
+                    };
+                    record_scene_passes(&mut rec, &scene);
+                    assert_no_cmd_aliasing(&rec.cmds);
+                    let usage = AuxUsage::from_cmds(&rec.cmds);
+                    assert!(usage.scratch_c, "Stroke must allocate lazy ScratchC for {pos:?}");
+
+                    // Confirm StrokeRing writes ScratchC and subsequent Vector DryBrush rasterizes cuts into ScratchB (never clobbering ScratchC).
+                    let mut last_stroke_ring_dst = None;
+                    let mut verified_vector_cut = false;
+                    for cmd in &rec.cmds {
+                        match *cmd {
+                            GpuCmd::Quad { pipe: QuadPipe::StrokeRing, dst, .. } => {
+                                assert_eq!(dst, TexSlot::ScratchC);
+                                last_stroke_ring_dst = Some(dst);
+                            }
+                            GpuCmd::RasterPolys { target, .. } if last_stroke_ring_dst == Some(TexSlot::ScratchC) => {
+                                assert_ne!(target, MaskSlot::ScratchC, "cut/hatch rasterization clobbered StrokeRing ScratchC");
+                            }
+                            GpuCmd::Quad { pipe: QuadPipe::Mul, a: TexSlot::ScratchC, b: TexSlot::ScratchB, dst: TexSlot::ScratchA, .. } => {
+                                verified_vector_cut = true;
+                            }
+                            _ => {}
+                        }
+                    }
+                    assert!(verified_vector_cut, "expected Vector DryBrush Mul(ScratchC, ScratchB -> ScratchA) for {pos:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fill_source_none_preserves_accum_parity() {
+        let mut bufs = CpuRecordBuffers::new(256);
+        let mut rec = CmdRecorder {
+            bufs: &mut bufs,
+            cmds: Vec::new(),
+            accum_is_a: true,
+            region: test_region(128, 128),
+            full_bounds: Rect::from_xywh(0, 0, 128, 128),
+            auto_scale: 1.0,
+        };
+        rec.composite_solid(TexSlot::Face, Color::BLACK, 1.0, SfxChannelBlend::Normal);
+        let after_solid = rec.accum_is_a;
+        let cmd_count = rec.cmds.len();
+
+        rec.composite_fill_paint(&SfxFillSource::None, TexSlot::Face, 1.0, SfxChannelBlend::Normal);
+        assert_eq!(rec.accum_is_a, after_solid, "SfxFillSource::None must not flip accum_is_a");
+        assert_eq!(rec.cmds.len(), cmd_count, "SfxFillSource::None must emit zero commands");
+    }
 }

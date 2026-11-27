@@ -17,8 +17,7 @@
 //! spec (`ScreentoneUi::spec`), so a drag's live preview and its committed render share a source.
 
 use egui::{pos2, vec2};
-use photocraft_algo::{FilterParams, ScreentoneBackend, ScreentoneMode, ScreentoneSpec};
-use photocraft_color::ColorMode;
+use photocraft_algo::{FilterParams, ScreentoneMode, ScreentoneSpec};
 use photocraft_compose::Buffer;
 use photocraft_doc::{Document, Layer, LayerContent, LayerId, Rect};
 use photocraft_raster::Surface;
@@ -208,18 +207,12 @@ fn sheet_bounds(view: &GizmoView<'_>, gizmo: &ScreentoneGizmoState) -> Option<Re
 /// planner's `screentone_on_gpu`: GPU mode always, Auto only on a large enough sheet, native
 /// CMYK/Lab never, and an old raster layer cannot be restyled procedurally at all.
 pub fn gizmo_uses_gpu(view: &GizmoView<'_>, st: &ScreentoneUi, gizmo: &ScreentoneGizmoState) -> bool {
-    if matches!(view.doc.pixel_format().mode, ColorMode::Cmyk | ColorMode::Lab) {
-        return false;
-    }
     let Some(target) = gizmo.target_layer(view.doc, view.active_layer) else { return false };
     if !view.doc.layer(target).is_some_and(|l| matches!(l.content, LayerContent::Screentone(_))) {
         return false;
     }
-    match st.spec.backend {
-        ScreentoneBackend::Cpu => false,
-        ScreentoneBackend::Gpu => true,
-        ScreentoneBackend::Auto => sheet_bounds(view, gizmo).is_some_and(|b| b.width() >= 512 && b.height() >= 512),
-    }
+    let Some(bounds) = sheet_bounds(view, gizmo) else { return false };
+    photocraft_algo::comic_screentone::screentone_prefers_gpu(st.spec.backend, view.doc.pixel_format().mode, bounds)
 }
 
 /// The coalesce key one drag's live restyles share, so a whole drag is a single history step.
@@ -972,6 +965,11 @@ mod tests {
         let mut g = ScreentoneGizmoState::default();
         g.bind_layer(BridgeDocId(42), large_id);
         assert!(gizmo_uses_gpu(&view(&large, &xf, large_id), &st, &g), "large Auto uses the GPU");
+
+        let (strip, strip_id) = tone_doc(ScreentoneBackend::Auto, (2000, 300));
+        let mut g = ScreentoneGizmoState::default();
+        g.bind_layer(BridgeDocId(42), strip_id);
+        assert!(gizmo_uses_gpu(&view(&strip, &xf, strip_id), &st, &g), "2000x300 Auto strip uses the GPU");
 
         // Native CMYK never uses the RGB shader, even with an explicit GPU backend.
         let mut cmyk = Document::new("cmyk", Size::new(512, 512), ColorMode::Cmyk, SampleType::U8);

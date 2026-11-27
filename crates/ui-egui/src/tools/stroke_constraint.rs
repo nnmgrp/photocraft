@@ -30,7 +30,7 @@ pub struct Axis {
 /// Tools whose drag ⇧ constrains: every painting tool, the Gradient tool, and the Freeform Pen
 /// (Photoshop's freehand path segment with ⇧, #7171).
 pub fn applies(tool: Tool) -> bool {
-    tool.is_brushlike() || tool == Tool::Gradient || tool == Tool::FreeformPen
+    tool.is_brushlike() || matches!(tool, Tool::Gradient | Tool::FreeformPen | Tool::Screentone)
 }
 
 /// Tools that ⇧-click connects to the previous stroke with a straight line.
@@ -129,7 +129,7 @@ pub fn constrain(tool: Tool, axis: &mut Option<Axis>, start: [f64; 2], last: [f6
         *axis = None;
         return p;
     }
-    if tool == Tool::Gradient {
+    if matches!(tool, Tool::Gradient | Tool::Screentone) {
         return snap45(start, p);
     }
     let mode = snap_mode(tool);

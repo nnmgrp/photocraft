@@ -5,6 +5,8 @@
 use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::Mutex;
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use craft_cms::Profile;
 use photocraft_doc::{ColorMode, Document};
@@ -321,9 +323,17 @@ fn nearest(f: &Map<String, Value>) -> bool {
     f.get("resample").and_then(Value::as_str) == Some("nearest")
 }
 
-/// The document as exported: scaled (engine Image Size, with the dialog's Resample method) and
-/// flattened over white when transparency is off or the format has no alpha.
-fn export_document(doc: &Document, f: &Map<String, Value>, max_side: Option<u32>, source_profile: &Profile) -> Result<Document, String> {
+#[cfg(not(target_arch = "wasm32"))]
+fn export_document_cancellable(
+    doc: &Document,
+    f: &Map<String, Value>,
+    max_side: Option<u32>,
+    source_profile: &Profile,
+    cancel: &AtomicBool,
+) -> Result<Document, String> {
+    if cancel.load(Ordering::Relaxed) {
+        return Err("cancelled".into());
+    }
     let resample = resample_method(f, max_side)?;
     let srgb = s(f, "profile") == "srgb";
     let mut copy = doc.clone();
@@ -332,8 +342,14 @@ fn export_document(doc: &Document, f: &Map<String, Value>, max_side: Option<u32>
     }
     let mut session = photocraft_engine::Session::new();
     session.add_document(copy, None);
+    if cancel.load(Ordering::Relaxed) {
+        return Err("cancelled".into());
+    }
     if srgb && (doc.mode != ColorMode::Rgb || !source_profile.same_bytes(craft_cms::Builtin::Srgb.profile())) {
         session.execute("edit.convertToProfile", json!({"profile": "srgb", "intent": "perceptual"})).map_err(|e| e.to_string())?;
+    }
+    if cancel.load(Ordering::Relaxed) {
+        return Err("cancelled".into());
     }
     let (w, h) = export_pixels(f64::from(doc.size.width), f64::from(doc.size.height), f, max_side)?;
     if s_fmt(f) == "ico" && (w > 256.0 || h > 256.0) && max_side.is_none() {
@@ -342,11 +358,53 @@ fn export_document(doc: &Document, f: &Map<String, Value>, max_side: Option<u32>
     if (w - doc.size.width as f64).abs() >= 1.0 || (h - doc.size.height as f64).abs() >= 1.0 {
         session.execute("image.imageSize", json!({"width": w, "height": h, "resample": resample})).map_err(|e| e.to_string())?;
     }
+    if cancel.load(Ordering::Relaxed) {
+        return Err("cancelled".into());
+    }
     let fmt = s_fmt(f);
     if !f.get("transparency").and_then(Value::as_bool).unwrap_or(true) || fmt == "jpg" {
         session.execute("layer.flattenImage", json!({})).map_err(|e| e.to_string())?;
     }
+    if cancel.load(Ordering::Relaxed) {
+        return Err("cancelled".into());
+    }
     session.active().map(|d| (*d.doc).clone()).ok_or_else(|| "export failed".into())
+}
+
+/// The document as exported: scaled (engine Image Size, with the dialog's Resample method) and
+/// flattened over white when transparency is off or the format has no alpha.
+fn export_document(doc: &Document, f: &Map<String, Value>, max_side: Option<u32>, source_profile: &Profile) -> Result<Document, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let never = AtomicBool::new(false);
+        return export_document_cancellable(doc, f, max_side, source_profile, &never);
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let resample = resample_method(f, max_side)?;
+        let srgb = s(f, "profile") == "srgb";
+        let mut copy = doc.clone();
+        if srgb {
+            copy.icc_profile = Some(source_profile.to_bytes());
+        }
+        let mut session = photocraft_engine::Session::new();
+        session.add_document(copy, None);
+        if srgb && (doc.mode != ColorMode::Rgb || !source_profile.same_bytes(craft_cms::Builtin::Srgb.profile())) {
+            session.execute("edit.convertToProfile", json!({"profile": "srgb", "intent": "perceptual"})).map_err(|e| e.to_string())?;
+        }
+        let (w, h) = export_pixels(f64::from(doc.size.width), f64::from(doc.size.height), f, max_side)?;
+        if s_fmt(f) == "ico" && (w > 256.0 || h > 256.0) && max_side.is_none() {
+            return Err("ICO export is limited to 256 × 256 pixels; reduce the export scale".into());
+        }
+        if (w - doc.size.width as f64).abs() >= 1.0 || (h - doc.size.height as f64).abs() >= 1.0 {
+            session.execute("image.imageSize", json!({"width": w, "height": h, "resample": resample})).map_err(|e| e.to_string())?;
+        }
+        let fmt = s_fmt(f);
+        if !f.get("transparency").and_then(Value::as_bool).unwrap_or(true) || fmt == "jpg" {
+            session.execute("layer.flattenImage", json!({})).map_err(|e| e.to_string())?;
+        }
+        session.active().map(|d| (*d.doc).clone()).ok_or_else(|| "export failed".into())
+    }
 }
 
 /// The exported pixel size: each side scaled and rounded on its own, never below 1 px. The
@@ -566,6 +624,15 @@ struct PendingPreview {
     key: egui::Id,
     signature: String,
     result: Arc<Mutex<Option<Result<PreviewPixels, String>>>>,
+    cancel: Arc<AtomicBool>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone)]
+struct PendingEstimate {
+    signature: String,
+    result: Arc<Mutex<Option<Option<u64>>>>,
+    cancel: Arc<AtomicBool>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -573,8 +640,38 @@ fn background_preview_needed(doc: &Document) -> bool {
     doc.walk().len() > 32 || doc.size.area() > 16_000_000
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn run_preview_worker(
+    doc: Arc<Document>,
+    fields: &Map<String, Value>,
+    source_profile: &Profile,
+    cancel: &AtomicBool,
+) -> Option<Result<PreviewPixels, String>> {
+    if cancel.load(Ordering::Relaxed) {
+        return None;
+    }
+    let source = source_document_from(doc.clone(), fields).unwrap_or(doc);
+    if cancel.load(Ordering::Relaxed) {
+        return None;
+    }
+    let max_side = if s_fmt(fields) == "ico" { 256 } else { 512 };
+    let proxy = match export_document_cancellable(&source, fields, Some(max_side), source_profile, cancel) {
+        Ok(p) => p,
+        Err(_) if cancel.load(Ordering::Relaxed) => return None,
+        Err(e) => return Some(Err(e)),
+    };
+    if cancel.load(Ordering::Relaxed) {
+        return None;
+    }
+    let estimate = estimate_native_cancellable(&source, &proxy, fields, cancel);
+    if cancel.load(Ordering::Relaxed) {
+        return None;
+    }
+    Some(Ok(preview_pixels(&proxy, estimate)))
+}
+
 /// Native app: keep the UI responsive while a many-layer document is reduced and encoded.
-/// A single pending job per document also avoids starting a worker for every slider tick.
+/// Superseding settings cooperatively cancel the in-flight worker so stale work stops promptly.
 #[cfg(not(target_arch = "wasm32"))]
 fn poll_or_start_preview(
     ui: &mut egui::Ui,
@@ -587,31 +684,33 @@ fn poll_or_start_preview(
     let pending_key = egui::Id::unique(("export-preview-pending", doc.id.0));
     let pending: Option<PendingPreview> = ui.data(|d| d.get_temp(pending_key));
     if let Some(pending) = pending {
-        let result = pending.result.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()?;
-        ui.data_mut(|d| d.remove::<PendingPreview>(pending_key));
-        if pending.key == key && pending.signature == signature {
+        if pending.key != key || pending.signature != signature {
+            pending.cancel.store(true, Ordering::Relaxed);
+            ui.data_mut(|d| d.remove::<PendingPreview>(pending_key));
+        } else {
+            let result = pending.result.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()?;
+            ui.data_mut(|d| d.remove::<PendingPreview>(pending_key));
             return Some(result);
         }
     }
 
     let result = Arc::new(Mutex::new(None));
+    let cancel = Arc::new(AtomicBool::new(false));
     let shared = result.clone();
+    let cancel_worker = cancel.clone();
     let ctx = ui.ctx().clone();
     let fields = fields.clone();
     let started = std::thread::Builder::new().name("export-preview".into()).spawn(move || {
-        let prepared = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let source = source_document_from(doc.clone(), &fields).unwrap_or(doc);
-            let proxy = preview_proxy(&source, &fields, &source_profile)?;
-            let estimate = estimate_native(&source, &proxy, &fields);
-            Ok::<_, String>(preview_pixels(&proxy, estimate))
-        }))
-        .unwrap_or_else(|_| Err("preview worker panicked".into()));
-        *shared.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(prepared);
-        ctx.request_repaint();
+        let prepared = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_preview_worker(doc, &fields, &source_profile, &cancel_worker)))
+            .unwrap_or_else(|_| Some(Err("preview worker panicked".into())));
+        if let Some(prepared) = prepared {
+            *shared.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(prepared);
+            ctx.request_repaint();
+        }
     });
     match started {
         Ok(_) => {
-            ui.data_mut(|d| d.insert_temp(pending_key, PendingPreview { key, signature: signature.to_string(), result }));
+            ui.data_mut(|d| d.insert_temp(pending_key, PendingPreview { key, signature: signature.to_string(), result, cancel }));
             None
         }
         Err(error) => Some(Err(format!("could not start preview worker: {error}"))),
@@ -620,9 +719,19 @@ fn poll_or_start_preview(
 
 /// The native exporter uses this same IO encoder. Keep the entire estimate off the UI thread.
 #[cfg(not(target_arch = "wasm32"))]
-fn estimate_native(doc: &Document, proxy: &Document, f: &Map<String, Value>) -> Option<u64> {
-    let bytes = photocraft_io::export(proxy, &format!("estimate.{}", s_fmt(f)), &settings(f).io_options()).ok()?.bytes;
+fn estimate_native_cancellable(doc: &Document, proxy: &Document, f: &Map<String, Value>, cancel: &AtomicBool) -> Option<u64> {
+    if cancel.load(Ordering::Relaxed) {
+        return None;
+    }
+    let check = || cancel.load(Ordering::Relaxed);
+    let ctl = photocraft_raster::Interrupt::cancel_only(&check);
+    let bytes = photocraft_io::export_with(proxy, &format!("estimate.{}", s_fmt(f)), &settings(f).io_options(), &ctl).ok()?.bytes;
     Some(scaled_estimate(bytes.len(), doc, proxy, f))
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+fn estimate_native(doc: &Document, proxy: &Document, f: &Map<String, Value>) -> Option<u64> {
+    estimate_native_cancellable(doc, proxy, f, &AtomicBool::new(false))
 }
 
 /// Exports up to this many pixels get an exact size: the full image encoded as Export will
@@ -632,18 +741,31 @@ fn estimate_native(doc: &Document, proxy: &Document, f: &Map<String, Value>) -> 
 const EXACT_ESTIMATE_PX: f64 = 40_000_000.0;
 
 /// The exported file's size in bytes, from encoding the full export, or `None` when it is too
-/// large to encode for an estimate or can't be encoded.
+/// large to encode for an estimate, cancelled, or can't be encoded.
 #[cfg(not(target_arch = "wasm32"))]
-fn exact_estimate(doc: &Document, f: &Map<String, Value>, source_profile: &Profile) -> Option<u64> {
+fn exact_estimate_cancellable(doc: &Document, f: &Map<String, Value>, source_profile: &Profile, cancel: &AtomicBool) -> Option<u64> {
+    if cancel.load(Ordering::Relaxed) {
+        return None;
+    }
     // The size `export_document` will make: exact pixels only in pixel mode, else the scale.
     let (w, h) = export_pixels(f64::from(doc.size.width), f64::from(doc.size.height), f, None).ok()?;
     let px = w * h;
     if !px.is_finite() || px > EXACT_ESTIMATE_PX {
         return None;
     }
-    let full = export_document(doc, f, None, source_profile).ok()?;
-    let bytes = photocraft_io::export(&full, &format!("estimate.{}", s_fmt(f)), &settings(f).io_options()).ok()?.bytes;
+    let full = export_document_cancellable(doc, f, None, source_profile, cancel).ok()?;
+    if cancel.load(Ordering::Relaxed) {
+        return None;
+    }
+    let check = || cancel.load(Ordering::Relaxed);
+    let ctl = photocraft_raster::Interrupt::cancel_only(&check);
+    let bytes = photocraft_io::export_with(&full, &format!("estimate.{}", s_fmt(f)), &settings(f).io_options(), &ctl).ok()?.bytes;
     u64::try_from(bytes.len()).ok()
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+fn exact_estimate(doc: &Document, f: &Map<String, Value>, source_profile: &Profile) -> Option<u64> {
+    exact_estimate_cancellable(doc, f, source_profile, &AtomicBool::new(false))
 }
 
 /// The exact size for `signature`, worked out off the UI thread: `None` until it is ready (the
@@ -665,35 +787,44 @@ fn poll_or_start_exact_estimate(
         return Some(size);
     }
     let pending_key = key.with("exact-estimate-pending");
-    if let Some((sig, result)) = ui.data(|d| d.get_temp::<(String, Done)>(pending_key)) {
-        if sig == signature {
-            let size = result.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()?;
+    if let Some(pending) = ui.data(|d| d.get_temp::<PendingEstimate>(pending_key)) {
+        if pending.signature == signature {
+            let size = pending.result.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()?;
             ui.data_mut(|d| {
-                d.remove::<(String, Done)>(pending_key);
-                d.insert_temp(done_key, (sig, size));
+                d.remove::<PendingEstimate>(pending_key);
+                d.insert_temp(done_key, (pending.signature, size));
             });
             return Some(size);
         }
-        // Settings changed meanwhile: that worker's answer is for other settings.
-        if result.lock().unwrap_or_else(std::sync::PoisonError::into_inner).is_none() {
-            return None;
-        }
+        // Settings changed meanwhile: cancel the stale worker immediately and start a fresh one.
+        pending.cancel.store(true, Ordering::Relaxed);
+        ui.data_mut(|d| d.remove::<PendingEstimate>(pending_key));
     }
     let result: Done = Arc::new(Mutex::new(None));
+    let cancel = Arc::new(AtomicBool::new(false));
     let shared = result.clone();
+    let cancel_worker = cancel.clone();
     let ctx = ui.ctx().clone();
     let fields = fields.clone();
     let started = std::thread::Builder::new().name("export-estimate".into()).spawn(move || {
         let size = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if cancel_worker.load(Ordering::Relaxed) {
+                return None;
+            }
             let source = source_document_from(doc.clone(), &fields).unwrap_or(doc);
-            exact_estimate(&source, &fields, &source_profile)
+            if cancel_worker.load(Ordering::Relaxed) {
+                return None;
+            }
+            Some(exact_estimate_cancellable(&source, &fields, &source_profile, &cancel_worker))
         }))
-        .unwrap_or(None);
-        *shared.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(size);
-        ctx.request_repaint();
+        .unwrap_or(Some(None));
+        if let Some(size) = size {
+            *shared.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(size);
+            ctx.request_repaint();
+        }
     });
     if started.is_ok() {
-        ui.data_mut(|d| d.insert_temp(pending_key, (signature.to_string(), result)));
+        ui.data_mut(|d| d.insert_temp(pending_key, PendingEstimate { signature: signature.to_string(), result, cancel }));
         None
     } else {
         Some(None)
@@ -1190,6 +1321,24 @@ mod enter_key_tests;
 
 #[cfg(test)]
 mod jpg_progressive_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod cancel_tests {
+    use super::*;
+    use photocraft_doc::{ColorMode, SampleType, Size};
+
+    #[test]
+    fn cancelled_export_workers_exit_immediately() {
+        let doc = Arc::new(Document::new("cancel_exp", Size::new(64, 64), ColorMode::Rgb, SampleType::U8));
+        let mut f = Map::new();
+        f.insert("format".into(), json!("png"));
+        f.insert("scale".into(), json!(100));
+        let profile = craft_cms::Builtin::Srgb.profile();
+        let cancel = AtomicBool::new(true);
+        assert!(run_preview_worker(doc.clone(), &f, &profile, &cancel).is_none());
+        assert!(exact_estimate_cancellable(&doc, &f, &profile, &cancel).is_none());
+    }
+}
 
 #[cfg(all(test, unix))]
 mod batch_name_tests {

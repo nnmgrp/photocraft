@@ -543,6 +543,35 @@ fn spawn(app: &mut PhotocraftApp, ctx: &egui::Context, s: Spawn) {
     );
 }
 
+/// Renders `rect` band-by-band (at `RENDER_TILE = 256` px boundaries), returning `None`
+/// immediately when `stop` is raised instead of waiting for a full `1024×1024` block to finish.
+fn render_block_cancellable(doc: &Document, rect: Rect, stop: &AtomicBool) -> Option<photocraft_compose::Buffer> {
+    if stop.load(Ordering::Relaxed) {
+        return None;
+    }
+    let w = rect.width() as usize;
+    if w == 0 || rect.height() == 0 {
+        return Some(photocraft_compose::Buffer::transparent(rect));
+    }
+    let mut out = photocraft_compose::Buffer::transparent(rect);
+    let res = photocraft_compose::render_bands(doc, rect, photocraft_compose::RENDER_TILE, |band| {
+        if stop.load(Ordering::Relaxed) {
+            return Err(());
+        }
+        let bw = band.rect.width() as usize;
+        let row_off = (band.rect.y0 - rect.y0) as usize;
+        for (r, src) in band.px.chunks_exact(bw).enumerate() {
+            let dst_off = (row_off + r) * w + (band.rect.x0 - rect.x0) as usize;
+            out.px[dst_off..dst_off + bw].copy_from_slice(src);
+        }
+        Ok(())
+    });
+    if res.is_err() || stop.load(Ordering::Relaxed) {
+        return None;
+    }
+    Some(out)
+}
+
 /// The worker: composite `todo`'s blocks of `doc` in batches and hand each over, until done or
 /// stopped.
 #[allow(clippy::too_many_arguments)]
@@ -575,7 +604,13 @@ fn draw(
         #[cfg(target_arch = "wasm32")]
         let batch = batch.iter();
         let pieces: Vec<Piece> = batch
-            .map(|&block| Piece { block, texels: crate::gpu_canvas::display_texels(format, display, &photocraft_compose::render(doc, blocks[block])) })
+            .filter_map(|&block| {
+                let buf = render_block_cancellable(doc, blocks[block], stop)?;
+                if stop.load(Ordering::Relaxed) {
+                    return None;
+                }
+                Some(Piece { block, texels: crate::gpu_canvas::display_texels(format, display, &buf) })
+            })
             .collect();
         for p in pieces {
             if stop.load(Ordering::Relaxed) || tx.send(p).is_err() {
@@ -588,3 +623,15 @@ fn draw(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod cancel_tests {
+    use super::*;
+
+    #[test]
+    fn render_block_cancellable_exits_immediately_when_stopped() {
+        let doc = Document::new("bg_cancel", photocraft_doc::Size::new(512, 512), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+        let stop = AtomicBool::new(true);
+        assert!(render_block_cancellable(&doc, Rect::new(0, 0, 512, 512), &stop).is_none());
+    }
+}

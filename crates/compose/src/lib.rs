@@ -32,6 +32,7 @@ pub mod native_lab;
 pub mod pattern;
 pub mod proxy;
 pub mod psblend;
+pub mod screentone;
 pub mod shape_split;
 pub mod smart_mix;
 mod uniform;

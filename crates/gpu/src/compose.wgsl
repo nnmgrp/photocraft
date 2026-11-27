@@ -2038,6 +2038,214 @@ fn compute_screentone_grad_factor(
     return st_mid_bias_curve(g, grad_midpoint);
 }
 
+fn st_load_luma(p: vec2<i32>, dims: vec2<i32>) -> f32 {
+    let c = clamp(p, vec2<i32>(0), dims - vec2<i32>(1));
+    let base_c = textureLoad(tex_a, c, 0);
+    let a = clamp(base_c.a, 0.0, 1.0);
+    if (a <= 1e-3) {
+        return 1.0;
+    }
+    let raw_luma = clamp(0.299 * base_c.r + 0.587 * base_c.g + 0.114 * base_c.b, 0.0, 1.0);
+    return clamp(raw_luma * a + (1.0 - a), 0.0, 1.0);
+}
+
+fn st_half_axis_peak(l_c: f32, v1: f32, v2: f32, p3: vec2<i32>, dims: vec2<i32>) -> f32 {
+    var peak = l_c;
+    if (v1 >= l_c - 0.08) {
+        peak = max(peak, v1);
+        if (v2 >= l_c - 0.08) {
+            peak = max(peak, v2);
+            let v3 = st_load_luma(p3, dims);
+            if (v3 >= l_c - 0.08) {
+                peak = max(peak, v3);
+            }
+        }
+    }
+    return peak;
+}
+
+fn st_is_line_edge(p: vec2<i32>, dims: vec2<i32>, line_thresh: f32) -> bool {
+    let thresh = clamp(line_thresh, 0.02, 0.72);
+    let l_c = st_load_luma(p, dims);
+    if (l_c >= 0.72) {
+        return false;
+    }
+    if (l_c <= thresh * 0.85) {
+        return true;
+    }
+    let l_l = st_load_luma(p + vec2<i32>(-1, 0), dims);
+    let l_r = st_load_luma(p + vec2<i32>(1, 0), dims);
+    let l_u = st_load_luma(p + vec2<i32>(0, -1), dims);
+    let l_d = st_load_luma(p + vec2<i32>(0, 1), dims);
+    let l_ul = st_load_luma(p + vec2<i32>(-1, -1), dims);
+    let l_ur = st_load_luma(p + vec2<i32>(1, -1), dims);
+    let l_dl = st_load_luma(p + vec2<i32>(-1, 1), dims);
+    let l_dr = st_load_luma(p + vec2<i32>(1, 1), dims);
+
+    let l_l2 = st_load_luma(p + vec2<i32>(-2, 0), dims);
+    let l_r2 = st_load_luma(p + vec2<i32>(2, 0), dims);
+    let l_u2 = st_load_luma(p + vec2<i32>(0, -2), dims);
+    let l_d2 = st_load_luma(p + vec2<i32>(0, 2), dims);
+    let l_ul2 = st_load_luma(p + vec2<i32>(-2, -2), dims);
+    let l_ur2 = st_load_luma(p + vec2<i32>(2, -2), dims);
+    let l_dl2 = st_load_luma(p + vec2<i32>(-2, 2), dims);
+    let l_dr2 = st_load_luma(p + vec2<i32>(2, 2), dims);
+
+    var nb_max = max(max(max(l_l, l_r), max(l_u, l_d)), max(max(l_ul, l_ur), max(l_dl, l_dr)));
+    nb_max = max(nb_max, max(max(l_l2, l_r2), max(l_u2, l_d2)));
+    nb_max = max(nb_max, max(max(l_ul2, l_ur2), max(l_dl2, l_dr2)));
+
+    let local_dip = max(nb_max - l_c, 0.0);
+    let contrast_nb = max(max(max(l_l - l_c, l_r - l_c), max(l_u - l_c, l_d - l_c)), max(max(max(l_ul - l_c, l_ur - l_c), max(l_dl - l_c, l_dr - l_c)), 0.0));
+    let e_ortho = length(vec2<f32>(l_r - l_l, l_d - l_u));
+    let e_diag = length(vec2<f32>(l_dr - l_ul, l_ur - l_dl));
+    let edge_mag = max(max(e_ortho, e_diag), contrast_nb);
+
+    if (l_c <= thresh && (edge_mag > 0.04 || local_dip > 0.05)) {
+        return true;
+    }
+    if (l_c >= 0.65) {
+        return false;
+    }
+    // Reuse already-loaded +-1 and +-2 samples; only +-3 requires extra textureLoad calls (max 8).
+    let v_h = max(min(st_half_axis_peak(l_c, l_l, l_l2, p + vec2<i32>(-3, 0), dims), st_half_axis_peak(l_c, l_r, l_r2, p + vec2<i32>(3, 0), dims)) - l_c, 0.0);
+    let v_v = max(min(st_half_axis_peak(l_c, l_u, l_u2, p + vec2<i32>(0, -3), dims), st_half_axis_peak(l_c, l_d, l_d2, p + vec2<i32>(0, 3), dims)) - l_c, 0.0);
+    let v_d1 = max(min(st_half_axis_peak(l_c, l_ul, l_ul2, p + vec2<i32>(-3, -3), dims), st_half_axis_peak(l_c, l_dr, l_dr2, p + vec2<i32>(3, 3), dims)) - l_c, 0.0);
+    let v_d2 = max(min(st_half_axis_peak(l_c, l_ur, l_ur2, p + vec2<i32>(3, -3), dims), st_half_axis_peak(l_c, l_dl, l_dl2, p + vec2<i32>(-3, 3), dims)) - l_c, 0.0);
+    let max_valley = max(max(v_h, v_v), max(v_d1, v_d2));
+    if (max_valley > max(0.14 - thresh * 0.20, 0.06)) {
+        return true;
+    }
+    return (l_c < 0.62 && edge_mag > max(0.22 - thresh * 0.35, 0.06) && local_dip > 0.08 && max_valley > 0.03);
+}
+
+// Bounded 8-ray line preservation + de-lining (`preserve_lines`), synced with CPU `comic_screentone.rs`.
+// Returns `vec2(solid_line_flag, eff_luma)`.
+// Worst-case textureLoad budget at `line_thickness == 5.0`:
+// - 1 center check (<=25) + 48 ray luma loads + <=8 inner + <=8 outer edge checks (<=400) = <=473 loads max
+// - Typical flat paper: 49 loads; flat 50% gray: 73 loads (down from ~5 400..17 000 loads -> no TDR).
+fn st_delined_luma(loc: vec2<i32>, dims: vec2<i32>, center_luma: f32, line_thresh: f32, line_thick: f32) -> vec2<f32> {
+    if (st_is_line_edge(loc, dims, line_thresh)) {
+        return vec2<f32>(1.0, center_luma);
+    }
+    let thresh = clamp(line_thresh, 0.02, 0.72);
+    let r_px = max(clamp(line_thick, 0.5, 5.0) - 0.5, 0.0);
+    let r_sq = r_px * r_px + 0.25;
+    let inner_card = select(0, i32(floor(sqrt(r_sq))), r_px > 0.0);
+    let inner_diag = select(0, i32(floor(sqrt(r_sq * 0.5))), r_px > 0.0);
+
+    // Paired opposite directions so opposite ray index is `i ^ 1`.
+    let dirs = array<vec2<i32>, 8>(
+        vec2<i32>(1, 0),
+        vec2<i32>(-1, 0),
+        vec2<i32>(0, 1),
+        vec2<i32>(0, -1),
+        vec2<i32>(1, 1),
+        vec2<i32>(-1, -1),
+        vec2<i32>(1, -1),
+        vec2<i32>(-1, 1),
+    );
+
+    var ray_l1 = array<f32, 8>(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+    var ray_l2 = array<f32, 8>(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+    var outer_s = array<i32, 8>(0, 0, 0, 0, 0, 0, 0, 0);
+    var outer_l = array<f32, 8>(1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0);
+    var outer_max_l = array<f32, 8>(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+    var ray_near = array<bool, 8>(false, false, false, false, false, false, false, false);
+    var ray_slit = array<bool, 8>(false, false, false, false, false, false, false, false);
+
+    for (var i = 0; i < 8; i = i + 1) {
+        let dir = dirs[i];
+        let is_diag = i >= 4;
+        let inner_max = select(inner_card, inner_diag, is_diag);
+        let slit_steps = select(3, 2, is_diag);
+        let outer_max = inner_max + slit_steps;
+
+        var ray_max = center_luma;
+        var in_best_s = 0;
+        var in_best_l = 1.0;
+        var out_best_s = 0;
+        var out_best_l = 1.0;
+        var l1 = center_luma;
+        var l2 = center_luma;
+
+        for (var s = 1; s <= outer_max; s = s + 1) {
+            let q = loc + dir * s;
+            let in_bounds = q.x >= 0 && q.x < dims.x && q.y >= 0 && q.y < dims.y;
+            let l = st_load_luma(q, dims);
+            if (s == 1) {
+                l1 = l;
+                l2 = l;
+            } else if (s == 2) {
+                l2 = l;
+            }
+            if (!in_bounds) {
+                continue;
+            }
+            ray_max = max(ray_max, l);
+            if (s <= inner_max) {
+                if (l < in_best_l) {
+                    in_best_l = l;
+                    in_best_s = s;
+                }
+            } else if (l < out_best_l) {
+                out_best_l = l;
+                out_best_s = s;
+            }
+        }
+        ray_l1[i] = l1;
+        ray_l2[i] = l2;
+        outer_s[i] = out_best_s;
+        outer_l[i] = out_best_l;
+        outer_max_l[i] = ray_max;
+
+        if (in_best_s > 0 && in_best_l < 0.72 && (in_best_l <= thresh || ray_max - in_best_l > 0.03)) {
+            if (st_is_line_edge(loc + dir * in_best_s, dims, line_thresh)) {
+                return vec2<f32>(1.0, center_luma);
+            }
+        }
+    }
+
+    var any_near = false;
+    for (var i = 0; i < 8; i = i + 1) {
+        let s = outer_s[i];
+        let ol = outer_l[i];
+        if (s > 0 && ol < 0.72 && (ol <= thresh || outer_max_l[i] - ol > 0.03)) {
+            if (st_is_line_edge(loc + dirs[i] * s, dims, line_thresh)) {
+                let is_diag = i >= 4;
+                let near_max = select(inner_card + 2, inner_diag + 1, is_diag);
+                ray_slit[i] = true;
+                if (s <= near_max) {
+                    ray_near[i] = true;
+                    any_near = true;
+                }
+            }
+        }
+    }
+    if (!any_near) {
+        return vec2<f32>(0.0, center_luma);
+    }
+
+    var best_luma = center_luma;
+    for (var i = 0; i < 8; i = i + 1) {
+        if (!ray_near[i]) {
+            continue;
+        }
+        let opp = i ^ 1;
+        if (!ray_near[opp]) {
+            best_luma = max(best_luma, max(ray_l1[opp], ray_l2[opp]));
+        }
+    }
+    let in_tight_slit = (ray_slit[0] && ray_slit[1])
+        || (ray_slit[2] && ray_slit[3])
+        || (ray_slit[4] && ray_slit[5])
+        || (ray_slit[6] && ray_slit[7]);
+    if (in_tight_slit && best_luma >= 0.50) {
+        return vec2<f32>(0.0, min(best_luma + 0.28, 1.0));
+    }
+    return vec2<f32>(0.0, best_luma);
+}
+
 // Core procedural screentone evaluation at document pixel `d`, returning straight-alpha RGBA.
 fn screentone_tone(d: vec2<i32>, loc: vec2<i32>) -> vec4<f32> {
     let doc_x = f32(d.x) + 0.5;
@@ -2058,10 +2266,10 @@ fn screentone_tone(d: vec2<i32>, loc: vec2<i32>) -> vec4<f32> {
     let sat_shape = (packed_bits >> 2u) & 3u;
     let sat_enabled = ((packed_bits >> 4u) & 1u) != 0u;
     var sat_count = clamp(i32((packed_bits >> 5u) & 7u), 1, 8);
-    let grad_type = (packed_bits >> 8u) & 3u;
-    let grad_reverse = ((packed_bits >> 10u) & 1u) != 0u;
-    let grad_color_trans = ((packed_bits >> 11u) & 1u) != 0u;
-    let sat_even = ((packed_bits >> 12u) & 1u) != 0u;
+    let grad_type = (packed_bits >> 8u) & 7u;
+    let grad_reverse = ((packed_bits >> 11u) & 1u) != 0u;
+    let grad_color_trans = ((packed_bits >> 12u) & 1u) != 0u;
+    let sat_even = ((packed_bits >> 13u) & 1u) != 0u;
 
     let dot_size = max(op.p1.y, 0.0);
     let smoothness = clamp(op.p1.z, 0.0, 1.0);
@@ -2109,6 +2317,7 @@ fn screentone_tone(d: vec2<i32>, loc: vec2<i32>) -> vec4<f32> {
     let gamma = select(1.0, lut_at(24), has_ext);
     let preserve_lines = select(0.0, lut_at(25), has_ext) > 0.5;
     let line_thresh = select(0.24, lut_at(26), has_ext);
+    let line_thick = select(1.0, lut_at(27), has_ext);
     let equalize_area = select(0.0, lut_at(29), has_ext);
     let auto_dot_size = select(0.0, lut_at(30), has_ext);
     let posterize_steps = select(0.0, lut_at(31), has_ext);
@@ -2164,14 +2373,16 @@ fn screentone_tone(d: vec2<i32>, loc: vec2<i32>) -> vec4<f32> {
     var solid_line = false;
 
     if (use_shading) {
-        let base_c = textureLoad(tex_a, loc, 0);
-        let a = clamp(base_c.a, 0.0, 1.0);
-        let raw_luma = clamp(0.299 * base_c.r + 0.587 * base_c.g + 0.114 * base_c.b, 0.0, 1.0);
-        let luma_eff = clamp(raw_luma * a + (1.0 - a), 0.0, 1.0);
-        if (preserve_lines && luma_eff <= line_thresh) {
-            solid_line = true;
-        } else {
-            let base_luma = clamp(luma_eff + brightness, 0.0, 1.0);
+        let dims = max(vec2<i32>(chunk.size), vec2<i32>(1));
+        let luma_eff = st_load_luma(loc, dims);
+        var eff_luma = luma_eff;
+        if (preserve_lines) {
+            let pl = st_delined_luma(loc, dims, luma_eff, line_thresh, line_thick);
+            solid_line = pl.x > 0.5;
+            eff_luma = pl.y;
+        }
+        if (!solid_line) {
+            let base_luma = clamp(eff_luma + brightness, 0.0, 1.0);
             let g = select(pow(base_luma, gamma), base_luma, abs(gamma - 1.0) < 1e-4);
             let luma_adj = clamp((g - 0.5) * contrast + 0.5, 0.0, 1.0);
             if (luma_adj >= white_thresh) {

@@ -66,12 +66,23 @@ impl Compositor {
         }
     }
 
+    /// Like [`Self::try_new_with_format`], building pipelines sequentially on `wgpu::Backend::Gl`
+    /// where `wgpu-hal`'s GLES adapter context lock is single-threaded (avoiding rayon lock
+    /// deadlocks), while keeping parallel compilation on Vulkan, DX12, and Metal.
+    pub fn try_new_for_adapter(adapter: &wgpu::Adapter, device: &wgpu::Device, acc_format: wgpu::TextureFormat) -> Result<Self, Unsupported> {
+        let sequential = adapter.get_info().backend == wgpu::Backend::Gl;
+        match first_error(device, || Self::build(device, acc_format, sequential)) {
+            ((comp, None), None) => Ok(comp),
+            ((_, Some(e)), _) | (_, Some(e)) => Err(Unsupported(format!("couldn't build the compositor's pipelines: {e}"))),
+        }
+    }
+
     /// Build pipelines using a dedicated Rayon pool instead of the process-wide pool.
     ///
     /// This keeps shader compilation from occupying workers needed by CPU compositing.
-    /// If the pool cannot be created, pipeline enumeration runs sequentially on the calling
-    /// thread. The outer and per-pipeline wgpu error scopes are kept on their respective
-    /// build threads.
+    /// When `threads <= 1` or the pool cannot be created, pipeline enumeration runs sequentially
+    /// on the calling thread (safe for single-threaded GLES contexts). The outer and per-pipeline
+    /// wgpu error scopes are kept on their respective build threads.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn try_new_with_format_threads(device: &wgpu::Device, acc_format: wgpu::TextureFormat, threads: usize) -> Result<Self, Unsupported> {
         Self::try_new_with_format_threads_classified(device, acc_format, threads).map_err(|e| Unsupported(e.message))
@@ -82,12 +93,16 @@ impl Compositor {
     /// diagnostics are marked deterministic; all other wgpu errors are transient or unknown.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn try_new_with_format_threads_classified(device: &wgpu::Device, acc_format: wgpu::TextureFormat, threads: usize) -> Result<Self, BuildFailure> {
-        let pool = rayon::ThreadPoolBuilder::new().num_threads(threads.max(1)).thread_name(|index| format!("photocraft-gpu-build-{index}")).build();
-        let built = match pool {
-            Ok(pool) => pool.install(|| first_error(device, || Self::build(device, acc_format, false))),
-            Err(e) => {
-                log::warn!("GPU compositor: couldn't create dedicated build pool; building sequentially: {e}");
-                first_error(device, || Self::build(device, acc_format, true))
+        let built = if threads <= 1 {
+            first_error(device, || Self::build(device, acc_format, true))
+        } else {
+            let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).thread_name(|index| format!("photocraft-gpu-build-{index}")).build();
+            match pool {
+                Ok(pool) => pool.install(|| first_error(device, || Self::build(device, acc_format, false))),
+                Err(e) => {
+                    log::warn!("GPU compositor: couldn't create dedicated build pool; building sequentially: {e}");
+                    first_error(device, || Self::build(device, acc_format, true))
+                }
             }
         };
         match built {

@@ -439,13 +439,16 @@ pub fn screentone_shape_index(s: photocraft_doc::DotShape) -> u32 {
     }
 }
 
-/// Index of [`ScreentoneGradientType`] (0..=2) for `Kernel::Screentone`.
+/// Index of [`ScreentoneGradientType`] (0..=5) for `Kernel::Screentone`.
 pub fn screentone_grad_index(g: photocraft_doc::ScreentoneGradientType) -> u32 {
     use photocraft_doc::ScreentoneGradientType;
     match g {
         ScreentoneGradientType::None => 0,
         ScreentoneGradientType::Linear => 1,
         ScreentoneGradientType::Radial => 2,
+        ScreentoneGradientType::Angle => 3,
+        ScreentoneGradientType::Reflected => 4,
+        ScreentoneGradientType::Diamond => 5,
     }
 }
 
@@ -479,9 +482,9 @@ pub fn pack_screentone_pass(p: &mut super::types::Pass<'_>, spec: &photocraft_do
         | (u32::from(spec.satellite_enabled) << 4)
         | ((spec.satellite_count.clamp(1, 4) & 0x7) << 5)
         | (screentone_grad_index(spec.grad_type) << 8)
-        | (u32::from(spec.grad_reverse) << 10)
-        | (u32::from(spec.grad_color_trans) << 11)
-        | (u32::from(matches!(spec.satellite_layout, photocraft_doc::SatelliteLayout::Even)) << 12);
+        | (u32::from(spec.grad_reverse) << 11)
+        | (u32::from(spec.grad_color_trans) << 12)
+        | (u32::from(matches!(spec.satellite_layout, photocraft_doc::SatelliteLayout::Even)) << 13);
 
     p.params[0] = [spacing_x, spec.angle.to_radians(), phase_x, phase_y];
     p.params[1] = [shape_bits as f32, spec.dot_size.clamp(0.0, 500.0), spec.smoothness.clamp(0.0, 1.0), spec.density.clamp(0.0, 1.0)];

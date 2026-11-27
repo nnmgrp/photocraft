@@ -842,3 +842,64 @@ fn a_cancelled_save_stops_between_the_bands_of_a_layer() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn unbaked_screentone_sheet_and_shading_survive_psd_and_png_export() {
+    use photocraft_doc::{PatternType, ScreentoneBackend, ScreentoneLayer, ScreentoneMode, ScreentoneSpec};
+    use photocraft_geom::Rect;
+
+    let mut doc = document(32, 32);
+    let mut bg = Layer::raster("Art", doc.pixel_format());
+    let bounds = doc.bounds();
+    bg.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 16, 32), &[0.2, 0.2, 0.2, 1.0]);
+    bg.surface_mut().unwrap().fill_rect(Rect::new(16, 0, 32, 32), &[0.95, 0.95, 0.95, 1.0]);
+    doc.layers.push(bg);
+
+    let sheet_spec = ScreentoneSpec {
+        pattern_type: PatternType::Dots,
+        spacing_x: 8.0,
+        spacing_y: 8.0,
+        dot_size: 3.5,
+        mode: ScreentoneMode::Sheet,
+        use_source_luminance: false,
+        backend: ScreentoneBackend::Gpu,
+        ..Default::default()
+    };
+    doc.layers.push(Layer::new(
+        "UnbakedSheet",
+        LayerContent::Screentone(ScreentoneLayer::new(sheet_spec, (16.0, 16.0), Surface::new(doc.pixel_format()))),
+    ));
+
+    let shading_spec = ScreentoneSpec {
+        pattern_type: PatternType::Dots,
+        spacing_x: 8.0,
+        spacing_y: 8.0,
+        dot_size: 3.5,
+        mode: ScreentoneMode::Shading,
+        use_source_luminance: true,
+        backend: ScreentoneBackend::Gpu,
+        ..Default::default()
+    };
+    let mut mask = LayerMask::hide_all();
+    mask.surface.fill_rect(Rect::new(0, 0, 16, 32), &[1.0]);
+    let mut shade_layer = Layer::new(
+        "UnbakedShading",
+        LayerContent::Screentone(ScreentoneLayer::new(shading_spec, (8.0, 16.0), Surface::new(doc.pixel_format()))),
+    );
+    shade_layer.mask = Some(mask);
+    doc.layers.push(shade_layer);
+
+    let psd = document_to_psd(&doc).unwrap();
+    let psd_bytes = psd.to_bytes().unwrap();
+    let reimported = crate::import("tone.psd", &psd_bytes).unwrap().document;
+    let sheet_px = reimported.layers[1].surface().unwrap().read_region(bounds);
+    assert!(sheet_px.chunks_exact(4).any(|p| p[3] > 0.0), "exported PSD sheet layer must contain rendered dots");
+    let shading_px = reimported.layers[2].surface().unwrap().read_region(Rect::new(0, 0, 16, 32));
+    assert!(shading_px.chunks_exact(4).any(|p| p[3] > 0.0), "exported PSD shading layer must sample backdrop and render dots");
+
+    let exported = crate::encode_with(&doc, "tone.png", &crate::ExportOptions::default(), &Interrupt::NONE).unwrap();
+    let png_bytes = exported.encoded.bytes().unwrap();
+    let re_png = crate::import("tone.png", &png_bytes).unwrap().document;
+    let flat_px = re_png.layers[0].surface().unwrap().read_region(bounds);
+    assert!(flat_px.chunks_exact(4).any(|p| p[0] < 0.05), "exported PNG must include unbaked screentone dots");
+}

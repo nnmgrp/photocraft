@@ -880,7 +880,7 @@ fn build() -> Vec<CommandSpec> {
         }),
         cmd!("layer.flattenImage", "Flatten Image", ["Layer"], None, "{}", has_doc, |s, _| {
             s.edit("Flatten Image", |doc, active| {
-                crate::manga_cmds::comic_screentone::ensure_doc_screentones_baked(doc);
+                // `flatten_to_surface` evaluates unbaked Sheet & Shading screentones live in bands.
                 let fmt = doc.pixel_format();
                 let mut bg = Layer::raster("Background", fmt);
                 bg.locks.transparency = true;

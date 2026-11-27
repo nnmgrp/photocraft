@@ -766,6 +766,7 @@ fn down_special_tool(app: &mut PhotocraftApp, tool: Tool, raw: ToolEvent, x: f64
             return true;
         }
         Tool::Screentone => {
+            app.drag = Some(Drag::new(Tool::Screentone, [x, y], vec![[x, y, 1.0]], mods, false));
             return true;
         }
         Tool::Sfx => {

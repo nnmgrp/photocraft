@@ -614,9 +614,11 @@ fn screentone_plans_on_gpu_and_falls_back_by_backend() {
     let p = plan(&lab_doc).expect("Lab screentone falls back to Content");
     assert!(p.passes.iter().all(|pass| pass.kernel != Kernel::Screentone));
 
-    // Auto backend activates GPU at >= 512x512 and CPU below that threshold.
+    // Auto backend activates GPU at area >= 512*512 (including narrow strips like 2000x300).
     let small_auto = make_doc(128, 128, ColorMode::Rgb, ScreentoneBackend::Auto, ScreentoneMode::Sheet, false);
     assert!(plan(&small_auto).unwrap().passes.iter().all(|pass| pass.kernel != Kernel::Screentone));
     let large_auto = make_doc(512, 512, ColorMode::Rgb, ScreentoneBackend::Auto, ScreentoneMode::Sheet, false);
     assert!(plan(&large_auto).unwrap().passes.iter().any(|pass| pass.kernel == Kernel::Screentone));
+    let strip_auto = make_doc(2000, 300, ColorMode::Rgb, ScreentoneBackend::Auto, ScreentoneMode::Sheet, false);
+    assert!(plan(&strip_auto).unwrap().passes.iter().any(|pass| pass.kernel == Kernel::Screentone));
 }

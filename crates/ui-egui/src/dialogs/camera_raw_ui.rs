@@ -105,8 +105,12 @@ pub struct CameraRawDialog {
     /// The open-time dialog's camera tone curve: Shadows / Highlights act on the raw data there,
     /// in linear light before this curve, and the preview undoes it to show the same.
     raw_curve: Option<std::sync::Arc<Vec<[f32; 2]>>>,
-    /// The proxy develop running on a worker ([`Self::request_render`]).
-    pending: Option<std::sync::mpsc::Receiver<Result<ProxyFrame, String>>>,
+    /// The proxy develop running on a worker ([`Self::request_render`]), paired with its
+    /// cooperative cancellation flag.
+    pending: Option<(
+        std::sync::mpsc::Receiver<Result<Option<ProxyFrame>, String>>,
+        std::sync::Arc<std::sync::atomic::AtomicBool>,
+    )>,
     /// The last worker failure the status bar shows, with the preview revision it failed on.
     preview_error: Option<(String, u64)>,
     /// The GPU develop, when the app may use one.
@@ -123,7 +127,19 @@ pub struct CameraRawDialog {
     edit_origin: Option<CameraRaw>,
 }
 
+impl Drop for CameraRawDialog {
+    fn drop(&mut self) {
+        self.cancel_pending();
+    }
+}
+
 impl CameraRawDialog {
+    fn cancel_pending(&self) {
+        if let Some((_, cancel)) = &self.pending {
+            cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
     pub fn describe(&self, view: &crate::state::CameraRawScopeState, navigation: &crate::state::CameraRawPreviewState) -> Value {
         let h = self.histogram();
         let mut result = json!({"layer": self.layer.0, "params": serde_json::to_value(&self.params).unwrap_or(Value::Null), "proxy": [self.pw, self.ph],
@@ -192,6 +208,7 @@ impl CameraRawDialog {
     /// dialog's own controls go through [`Self::request_render`].
     pub(crate) fn render(&mut self, ctx: &egui::Context) {
         // A render still running on the worker has older settings than this one.
+        self.cancel_pending();
         self.pending = None;
         let frame = self.proxy_job().run();
         self.publish(ctx, frame);
@@ -199,6 +216,10 @@ impl CameraRawDialog {
     }
 
     fn proxy_job(&self) -> ProxyJob {
+        self.proxy_job_with_cancel(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)))
+    }
+
+    fn proxy_job_with_cancel(&self, cancel: std::sync::Arc<std::sync::atomic::AtomicBool>) -> ProxyJob {
         ProxyJob {
             proxy: self.proxy.clone(),
             selection: self.selection.clone(),
@@ -210,6 +231,7 @@ impl CameraRawDialog {
             display: self.display.clone(),
             gpu: self.gpu.clone(),
             source_key: self.source_key,
+            cancel,
         }
     }
 
@@ -241,16 +263,21 @@ impl CameraRawDialog {
     /// A slider drag never waits for the develop, which takes hundreds of milliseconds with
     /// Shadows or Highlights set (#5964); the preview shows the latest finished frame.
     fn request_render(&mut self, ctx: &egui::Context) {
+        if self.dirty {
+            // Signal any superseded in-flight worker to abort cooperatively.
+            self.cancel_pending();
+        }
         if !self.dirty || self.pending.is_some() {
             return;
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let job = self.proxy_job();
-            let (tx, rx) = std::sync::mpsc::channel::<Result<ProxyFrame, String>>();
+            let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let job = self.proxy_job_with_cancel(cancel.clone());
+            let (tx, rx) = std::sync::mpsc::channel::<Result<Option<ProxyFrame>, String>>();
             let repaint = ctx.clone();
             let spawned = std::thread::Builder::new().name("camera-raw-proxy".into()).spawn(move || {
-                let frame = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job.run())).map_err(|_| "RAW Develop preview failed".to_string());
+                let frame = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job.run_cancellable())).map_err(|_| "RAW Develop preview failed".to_string());
                 // The dialog may have closed or rendered on its own meanwhile; then nobody listens.
                 if tx.send(frame).is_ok() {
                     repaint.request_repaint();
@@ -258,7 +285,7 @@ impl CameraRawDialog {
             });
             match spawned {
                 Ok(_) => {
-                    self.pending = Some(rx);
+                    self.pending = Some((rx, cancel));
                     self.dirty = false;
                 }
                 // No thread to spare: develop here rather than show stale settings.
@@ -272,14 +299,16 @@ impl CameraRawDialog {
     /// Shows the worker's frame once it is done. `Err` when the develop failed; the preview keeps
     /// the last frame then.
     fn poll_render(&mut self, ctx: &egui::Context) -> Result<(), String> {
-        let Some(rx) = &self.pending else { return Ok(()) };
+        let Some((rx, _)) = &self.pending else { return Ok(()) };
         let frame = match rx.try_recv() {
             Ok(frame) => frame,
             Err(std::sync::mpsc::TryRecvError::Empty) => return Ok(()),
             Err(std::sync::mpsc::TryRecvError::Disconnected) => Err("RAW Develop preview worker stopped".to_string()),
         };
         self.pending = None;
-        self.publish(ctx, frame?);
+        if let Some(frame) = frame? {
+            self.publish(ctx, frame);
+        }
         Ok(())
     }
 

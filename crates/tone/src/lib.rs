@@ -58,6 +58,9 @@ pub enum ScreentoneGradientType {
     None,
     Linear,
     Radial,
+    Angle,
+    Reflected,
+    Diamond,
 }
 
 /// Screentone generation mode: halftone shading from underlying artwork (`Shading`) or a uniform

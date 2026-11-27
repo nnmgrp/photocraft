@@ -191,6 +191,7 @@ fn finish(app: &mut PhotocraftApp, mut d: Drag, click: Option<bool>) {
             let (dx, dy) = ((end[0] - d.start[0]).round(), (end[1] - d.start[1]).round());
             crate::move_ui::finish(app, dx, dy);
         }
+        Tool::Screentone => crate::manga_seam::screentone_drag_finish(app, d.start, [end[0], end[1]]),
         _ => {}
     }
 }

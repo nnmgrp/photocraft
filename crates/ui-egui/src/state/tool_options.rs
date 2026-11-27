@@ -367,6 +367,16 @@ pub struct ToolOptions {
     pub art_history_area: f32,
     #[serde(default)]
     pub art_history_tolerance: f32,
+    /// Screentone tool: clip new screentone layers to the layer below.
+    #[serde(default)]
+    pub screentone_clip: bool,
+    /// Screentone tool: gradient type applied when dragging across the canvas (`linear | radial | angle | reflected | diamond`).
+    #[serde(default = "default_screentone_drag_gradient")]
+    pub screentone_drag_gradient: String,
+}
+
+fn default_screentone_drag_gradient() -> String {
+    "linear".into()
 }
 
 fn default_art_history_style() -> String {
@@ -724,6 +734,8 @@ impl Default for ToolOptions {
             art_history_style: default_art_history_style(),
             art_history_area: 50.0,
             art_history_tolerance: 0.0,
+            screentone_clip: false,
+            screentone_drag_gradient: default_screentone_drag_gradient(),
         }
     }
 }

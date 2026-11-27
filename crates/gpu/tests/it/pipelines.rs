@@ -46,7 +46,7 @@ fn every_compositor_pipeline_builds() {
             };
             let info = adapter.get_info();
             let format = photocraft_gpu::Compositor::preferred_acc_format(&adapter);
-            if let Err(e) = photocraft_gpu::Compositor::try_new_with_format(&device, format) {
+            if let Err(e) = photocraft_gpu::Compositor::try_new_for_adapter(&adapter, &device, format) {
                 panic!("{:?} adapter {} (driver {}): {e}", info.backend, info.name, info.driver_info);
             }
         }

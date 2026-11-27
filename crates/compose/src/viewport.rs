@@ -94,9 +94,13 @@ pub fn preview_page(doc: &Document, source: Rect, factor: u32, interrupt: Interr
                 }
             }
             LayerContent::Screentone(s) => {
+                let unbaked = s.surface.tile_count() == 0;
                 s.surface = shrink(&s.surface, r, k, last, i)?;
-                let k = k as f32;
-                s.origin = (s.origin.0 / k, s.origin.1 / k);
+                let inv_k = 1.0 / k as f32;
+                s.origin = (s.origin.0 * inv_k, s.origin.1 * inv_k);
+                if unbaked {
+                    crate::screentone::scale_spec_for_downsample(&mut s.spec, inv_k);
+                }
             }
             _ => {}
         }

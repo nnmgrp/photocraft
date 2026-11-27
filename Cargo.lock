@@ -5550,6 +5550,7 @@ version = "0.23.1"
 dependencies = [
  "craft-cms",
  "criterion",
+ "photocraft-algo",
  "photocraft-color",
  "photocraft-doc",
  "photocraft-geom",

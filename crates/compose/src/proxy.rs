@@ -91,9 +91,13 @@ fn shrink_layer(l: &mut Layer, k: u32) {
         LayerContent::Shape(sh) => sh.cache = sh.cache.as_ref().map(|s| downsample(s, k)),
         LayerContent::Smart(so) => shrink_smart(so, k),
         LayerContent::Screentone(s) => {
+            let unbaked = s.surface.tile_count() == 0;
             s.surface = downsample(&s.surface, k);
-            let k = k as f32;
-            s.origin = (s.origin.0 / k, s.origin.1 / k);
+            let inv_k = 1.0 / k as f32;
+            s.origin = (s.origin.0 * inv_k, s.origin.1 * inv_k);
+            if unbaked {
+                crate::screentone::scale_spec_for_downsample(&mut s.spec, inv_k);
+            }
         }
         LayerContent::Adjustment(_) | LayerContent::Fill(_) => {}
     }

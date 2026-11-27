@@ -301,7 +301,7 @@ fn a_worker_failure_is_reported_until_the_next_frame() {
         let (tx, rx) = std::sync::mpsc::channel();
         tx.send(Err("RAW Develop preview failed".to_string())).unwrap();
         let d = app.camera_raw.as_mut().unwrap();
-        d.pending = Some(rx);
+        d.pending = Some((rx, std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))));
         d.dirty = false;
     };
     let edit = |app: &mut PhotocraftApp, exposure: f32| {

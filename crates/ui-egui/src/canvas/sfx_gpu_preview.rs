@@ -13,6 +13,7 @@
 //!   while keeping the live 60 FPS GPU overlay visible — eliminating 100% of CPU raster freezes on
 //!   button clicks and slider releases.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -42,13 +43,30 @@ const ASYNC_BAKE_TILE_DIM: u32 = MAX_SFX_TILE_DIM;
 
 static GPU_SFX_FAILED: AtomicBool = AtomicBool::new(false);
 
+/// Drop idle per-viewport preview renderers after this many `prepare()` calls so closed secondary
+/// windows automatically release their VRAM pools.
+const IDLE_SLOT_PRUNE_EPOCHS: u64 = 120;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct PreviewSlotKey {
+    viewport_id: egui::ViewportId,
+    slot_idx: usize,
+}
+
+struct SfxViewportSlot {
+    renderer: SfxGpuRenderer,
+    last_render_key: Option<(SfxData, u32, [u64; 4], [u32; 2])>,
+    last_prepared_pass: u64,
+    last_used_epoch: u64,
+}
+
 struct SfxGpuPreviewResource {
     adapter: wgpu::Adapter,
     target_format: wgpu::TextureFormat,
-    renderer: Option<SfxGpuRenderer>,
+    slots: HashMap<PreviewSlotKey, SfxViewportSlot>,
     failed: bool,
     vec_cache: SfxVectorCache,
-    last_render_key: Option<(SfxData, u32, [u64; 4], [u32; 2])>,
+    prepare_epoch: u64,
 }
 
 impl SfxGpuPreviewResource {
@@ -56,22 +74,42 @@ impl SfxGpuPreviewResource {
         Self {
             adapter: rs.adapter.clone(),
             target_format: rs.target_format,
-            renderer: None,
+            slots: HashMap::new(),
             failed: false,
             vec_cache: SfxVectorCache::default(),
-            last_render_key: None,
+            prepare_epoch: 0,
         }
     }
 
-    fn ensure_renderer(&mut self, device: &wgpu::Device) -> Option<&mut SfxGpuRenderer> {
+    fn pick_slot_key(&self, viewport_id: egui::ViewportId, pass_nr: u64) -> PreviewSlotKey {
+        let mut slot_idx = 0usize;
+        while self
+            .slots
+            .get(&PreviewSlotKey { viewport_id, slot_idx })
+            .is_some_and(|s| s.last_prepared_pass == pass_nr)
+        {
+            slot_idx += 1;
+        }
+        PreviewSlotKey { viewport_id, slot_idx }
+    }
+
+    fn ensure_slot(&mut self, device: &wgpu::Device, key: PreviewSlotKey) -> Option<&mut SfxViewportSlot> {
         if self.failed {
             return None;
         }
-        if self.renderer.is_none() {
+        if !self.slots.contains_key(&key) {
             match SfxGpuRenderer::new_for_adapter(&self.adapter, device) {
                 Ok(mut r) => {
                     r.set_max_dim(MAX_PREVIEW_DIM);
-                    self.renderer = Some(r);
+                    self.slots.insert(
+                        key,
+                        SfxViewportSlot {
+                            renderer: r,
+                            last_render_key: None,
+                            last_prepared_pass: u64::MAX,
+                            last_used_epoch: self.prepare_epoch,
+                        },
+                    );
                 }
                 Err(e) => {
                     log::warn!("SFX GPU preview disabled (falling back to CPU): {}", e.0);
@@ -81,7 +119,12 @@ impl SfxGpuPreviewResource {
                 }
             }
         }
-        self.renderer.as_mut()
+        self.slots.get_mut(&key)
+    }
+
+    fn prune_idle_slots(&mut self) {
+        let now = self.prepare_epoch;
+        self.slots.retain(|_, slot| now.wrapping_sub(slot.last_used_epoch) <= IDLE_SLOT_PRUNE_EPOCHS);
     }
 }
 
@@ -221,7 +264,6 @@ impl Drop for InFlightTile {
             self.buf.unmap();
             self.mapped = false;
         }
-        self.buf.destroy();
     }
 }
 
@@ -580,12 +622,36 @@ fn max_preview_apron_doc(data: &SfxData) -> f64 {
     (pad + 16.0).min(512.0)
 }
 
+/// Clamps a pixel-space scissor rectangle against `[sw, sh]` using `i64` arithmetic so negative
+/// origins or right/bottom overflow never violate `wgpu::RenderPass::set_scissor_rect` invariants
+/// (`x + w <= sw`, `y + h <= sh`, `w > 0`, `h > 0`).
+fn clamp_scissor_rect(left_px: i32, top_px: i32, width_px: i32, height_px: i32, sw: u32, sh: u32) -> Option<[u32; 4]> {
+    if width_px <= 0 || height_px <= 0 || sw == 0 || sh == 0 {
+        return None;
+    }
+    let sw_i = i64::from(sw);
+    let sh_i = i64::from(sh);
+    let x0 = i64::from(left_px).clamp(0, sw_i);
+    let y0 = i64::from(top_px).clamp(0, sh_i);
+    let x1 = (i64::from(left_px) + i64::from(width_px)).clamp(0, sw_i);
+    let y1 = (i64::from(top_px) + i64::from(height_px)).clamp(0, sh_i);
+    let w = x1 - x0;
+    let h = y1 - y0;
+    if w <= 0 || h <= 0 {
+        return None;
+    }
+    Some([x0 as u32, y0 as u32, w as u32, h as u32])
+}
+
 struct SfxGpuOverlayCallback {
+    viewport_id: egui::ViewportId,
+    pass_nr: u64,
     data: SfxData,
     dpi: f32,
     opacity: f32,
     xf: ViewXform,
     canvas_rect: egui::Rect,
+    prepared: Arc<Mutex<Option<(PreviewSlotKey, wgpu::BindGroup)>>>,
 }
 
 impl CallbackTrait for SfxGpuOverlayCallback {
@@ -597,7 +663,13 @@ impl CallbackTrait for SfxGpuOverlayCallback {
         _encoder: &mut wgpu::CommandEncoder,
         resources: &mut CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
+        if let Ok(mut guard) = self.prepared.lock() {
+            *guard = None;
+        }
         let Some(res) = resources.get_mut::<SfxGpuPreviewResource>() else { return Vec::new() };
+        res.prepare_epoch = res.prepare_epoch.wrapping_add(1);
+        res.prune_idle_slots();
+
         let dpi_bits = self.dpi.to_bits();
         let full = {
             let mut text = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
@@ -606,9 +678,6 @@ impl CallbackTrait for SfxGpuOverlayCallback {
         };
         let target_format = res.target_format;
         if full.is_empty() {
-            if let Some(r) = res.renderer.as_mut() {
-                r.prepare_blit(device, queue, target_format, None);
-            }
             return Vec::new();
         }
 
@@ -652,25 +721,30 @@ impl CallbackTrait for SfxGpuOverlayCallback {
             th = ((f64::from(th) * down).floor() as u32).clamp(1, max_dim);
         }
 
-        let key = (self.data.clone(), dpi_bits, reg_doc.map(f64::to_bits), [tw, th]);
-        let need_render = res.last_render_key.as_ref() != Some(&key);
-
-        if res.ensure_renderer(device).is_none() {
+        let slot_key = res.pick_slot_key(self.viewport_id, self.pass_nr);
+        if res.ensure_slot(device, slot_key).is_none() {
             return Vec::new();
         }
-        if need_render {
+
+        let render_key = (self.data.clone(), dpi_bits, reg_doc.map(f64::to_bits), [tw, th]);
+        let epoch = res.prepare_epoch;
+        let SfxGpuPreviewResource { slots, vec_cache, .. } = res;
+        let Some(slot) = slots.get_mut(&slot_key) else {
+            return Vec::new();
+        };
+        slot.last_prepared_pass = self.pass_nr;
+        slot.last_used_epoch = epoch;
+
+        if slot.last_render_key.as_ref() != Some(&render_key) {
             let mut text = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
-            let SfxGpuPreviewResource { renderer, vec_cache, last_render_key, .. } = res;
-            let Some(renderer) = renderer.as_mut() else {
-                return Vec::new();
-            };
             let sc = vec_cache.get_or_update(&self.data, &mut text, self.dpi);
             let gpu_scene = build_gpu_scene(&self.data, sc);
-            if let Err(e) = renderer.render_region(device, queue, &gpu_scene, reg_doc, [tw, th]) {
+            if let Err(e) = slot.renderer.render_region(device, queue, &gpu_scene, reg_doc, [tw, th]) {
                 log::warn!("SFX GPU preview render_region failed: {}", e.0);
+                slot.last_render_key = None;
                 return Vec::new();
             }
-            *last_render_key = Some(key);
+            slot.last_render_key = Some(render_key);
         }
 
         // Exact affine transform from screen physical pixel (sx, sy) -> region UV (u, v).
@@ -686,23 +760,27 @@ impl CallbackTrait for SfxGpuOverlayCallback {
         let row_u = [dx_dsx * inv_w, dx_dsy * inv_w, ((p0[0] - reg_x0) as f32) * inv_w];
         let row_v = [dy_dsx * inv_h, dy_dsy * inv_h, ((p0[1] - reg_y0) as f32) * inv_h];
 
-        if let Some(renderer) = res.renderer.as_mut() {
-            renderer.prepare_blit(device, queue, target_format, Some((row_u, row_v, self.opacity)));
+        if let Some(bg) = slot.renderer.prepare_blit_snapshot(device, queue, target_format, Some((row_u, row_v, self.opacity)))
+            && let Ok(mut guard) = self.prepared.lock()
+        {
+            *guard = Some((slot_key, bg));
         }
         Vec::new()
     }
 
     fn paint(&self, info: egui::PaintCallbackInfo, pass: &mut wgpu::RenderPass<'static>, resources: &CallbackResources) {
         let Some(res) = resources.get::<SfxGpuPreviewResource>() else { return };
-        let Some(renderer) = res.renderer.as_ref() else { return };
+        let Ok(guard) = self.prepared.lock() else { return };
+        let Some((slot_key, bg)) = guard.as_ref() else { return };
+        let Some(slot) = res.slots.get(slot_key) else { return };
         let [sw, sh] = info.screen_size_px;
         let clip = info.clip_rect_in_pixels();
-        if clip.width_px <= 0 || clip.height_px <= 0 || sw == 0 || sh == 0 {
+        let Some([sx, sy, cw, ch]) = clamp_scissor_rect(clip.left_px, clip.top_px, clip.width_px, clip.height_px, sw, sh) else {
             return;
-        }
+        };
         pass.set_viewport(0.0, 0.0, sw as f32, sh as f32, 0.0, 1.0);
-        pass.set_scissor_rect(clip.left_px.max(0) as u32, clip.top_px.max(0) as u32, clip.width_px as u32, clip.height_px as u32);
-        renderer.draw_last_output_into_pass(pass, res.target_format);
+        pass.set_scissor_rect(sx, sy, cw, ch);
+        slot.renderer.draw_blit_bind_group(pass, res.target_format, bg);
     }
 }
 
@@ -711,8 +789,44 @@ pub fn paint(painter: &egui::Painter, canvas_rect: egui::Rect, xf: ViewXform, da
     if !canvas_rect.is_positive() {
         return;
     }
+    let viewport_id = painter.ctx().viewport_id();
+    let pass_nr = painter.ctx().cumulative_pass_nr_for(viewport_id);
     painter.add(egui_wgpu::Callback::new_paint_callback(
         canvas_rect,
-        SfxGpuOverlayCallback { data, dpi, opacity, xf, canvas_rect },
+        SfxGpuOverlayCallback {
+            viewport_id,
+            pass_nr,
+            data,
+            dpi,
+            opacity,
+            xf,
+            canvas_rect,
+            prepared: Arc::new(Mutex::new(None)),
+        },
     ));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::clamp_scissor_rect;
+
+    #[test]
+    fn scissor_rect_clamping_handles_negative_overflow_and_empty_clips() {
+        // Normal interior clip
+        assert_eq!(clamp_scissor_rect(10, 20, 100, 80, 200, 200), Some([10, 20, 100, 80]));
+        // Negative origin shrinks width/height instead of shifting right/down past surface bounds
+        assert_eq!(clamp_scissor_rect(-10, -5, 50, 40, 100, 100), Some([0, 0, 40, 35]));
+        assert_eq!(clamp_scissor_rect(-10, 0, 105, 100, 100, 100), Some([0, 0, 95, 100]));
+        // Right/bottom overflow clamped strictly inside [sw, sh]
+        assert_eq!(clamp_scissor_rect(80, 90, 50, 50, 100, 100), Some([80, 90, 20, 10]));
+        // Completely outside surface or zero/negative extent -> None
+        assert_eq!(clamp_scissor_rect(100, 0, 20, 20, 100, 100), None);
+        assert_eq!(clamp_scissor_rect(-50, 0, 50, 20, 100, 100), None);
+        assert_eq!(clamp_scissor_rect(10, 10, 0, 20, 100, 100), None);
+        assert_eq!(clamp_scissor_rect(10, 10, 20, -4, 100, 100), None);
+        assert_eq!(clamp_scissor_rect(0, 0, 20, 20, 0, 100), None);
+        // Extreme i32 values do not overflow
+        assert_eq!(clamp_scissor_rect(i32::MAX, i32::MAX, i32::MAX, i32::MAX, 100, 100), None);
+        assert_eq!(clamp_scissor_rect(i32::MIN, i32::MIN, 100, 100, 100, 100), None);
+    }
 }

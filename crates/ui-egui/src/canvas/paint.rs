@@ -694,13 +694,15 @@ pub(super) fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter
                 crate::tool_feedback::draw_ants(painter, &pts, false);
             }
         }
-        Tool::Gradient => {
+        Tool::Gradient | Tool::Screentone => {
             let a = xf.to_screen(d.start[0] as f32, d.start[1] as f32);
             let b = xf.to_screen(last[0] as f32, last[1] as f32);
-            painter.line_segment([a, b], Stroke::new(3.0, Color32::from_black_alpha(140)));
-            painter.line_segment([a, b], Stroke::new(1.0, Color32::WHITE));
-            painter.circle_filled(a, 3.0, Color32::WHITE);
-            painter.circle_filled(b, 3.0, Color32::WHITE);
+            if d.tool == Tool::Gradient || a.distance(b) >= 4.0 {
+                painter.line_segment([a, b], Stroke::new(3.0, Color32::from_black_alpha(140)));
+                painter.line_segment([a, b], Stroke::new(1.0, Color32::WHITE));
+                painter.circle_filled(a, 3.0, Color32::WHITE);
+                painter.circle_filled(b, 3.0, Color32::WHITE);
+            }
         }
         Tool::Type | Tool::VerticalType | Tool::HorizontalTypeMask | Tool::VerticalTypeMask => {
             let [p0, p1, p2, p3] = doc_box_corners(xf, d.start, last);

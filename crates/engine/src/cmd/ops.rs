@@ -253,6 +253,7 @@ pub(super) fn merge_group(s: &mut Session, id: LayerId) -> Result<Value> {
         solo.opacity = 1.0;
         solo.blend = photocraft_doc::BlendMode::Normal;
         solo.clipped = false;
+        crate::manga_cmds::comic_screentone::ensure_layer_tree_shading_screentones_baked(doc, &mut solo);
         let mut tmp = doc.clone();
         tmp.layers = vec![solo];
         let mut merged = Layer::new(group.name.clone(), LayerContent::Raster(pixels::composite_layers_uncropped(&tmp, fmt)));

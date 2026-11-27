@@ -14,9 +14,9 @@ use photocraft_color::{Color, PixelFormat};
 use photocraft_doc::Rect;
 use photocraft_doc::sfx::{
     SfxBlendEffect, SfxChannelBlend, SfxData, SfxDryBrushEngine, SfxDryBrushSpec, SfxFillSource, SfxLineJoin, SfxLineStyle,
-    SfxStrokePosition,
+    SfxShtackFillMode, SfxShtackFillSpec, SfxStrokePosition,
 };
-use photocraft_gpu::{SFX_SHADER, SfxGpuRenderer, SfxGpuScene, SfxGpuSegContour};
+use photocraft_gpu::{DeviceHealth, SFX_SHADER, SfxGpuRenderer, SfxGpuScene, SfxGpuSegContour};
 
 struct Gpu {
     device: wgpu::Device,
@@ -423,4 +423,178 @@ fn gpu_work_targets_reuse_subviewport_without_realloc_or_edge_leakage() {
     // 4. Verify explicit target release drops pooled textures immediately.
     g.renderer.release_targets();
     assert_eq!(g.renderer.targets_capacity(), None);
+}
+
+#[test]
+fn gpu_ukiyo_brush_and_stroke_shtack_render_cleanly_across_zooms() {
+    let Some(mut g) = gpu() else { return };
+    let health = DeviceHealth::watch(&g.device);
+    g.renderer.set_health(health.clone());
+
+    let face = holed_square_contours(48.0, 48.0, 160.0);
+    let hatch_bars = vec![
+        vec![(40.0, 60.0), (216.0, 60.0), (216.0, 74.0), (40.0, 74.0)],
+        vec![(40.0, 92.0), (216.0, 92.0), (216.0, 108.0), (40.0, 108.0)],
+        vec![(40.0, 130.0), (216.0, 130.0), (216.0, 150.0), (40.0, 150.0)],
+        vec![(40.0, 174.0), (216.0, 174.0), (216.0, 196.0), (40.0, 196.0)],
+    ];
+    let vec_cuts = vec![vec![(36.0, 118.0), (220.0, 118.0), (220.0, 126.0), (36.0, 126.0)]];
+
+    // 1. UkiyoBrush primary fill + Stroke(ShtackHatch overshoot=0 & 50, Hatch & UkiyoBrush) + Stroke(DryBrush Vector)
+    let mut data = SfxData {
+        fill: SfxFillSource::ShtackHatch {
+            spec: SfxShtackFillSpec {
+                mode: SfxShtackFillMode::UkiyoBrush,
+                overshoot_pct: 0.0,
+                dryness_pct: 35.0,
+                color: Color::rgb(0.08, 0.08, 0.12),
+                ..SfxShtackFillSpec::default()
+            },
+        },
+        ..SfxData::default()
+    };
+    data.line_effect.halo_width_px = 6.0;
+    data.blending.effects = vec![
+        SfxBlendEffect::Stroke {
+            enabled: true,
+            width_px: 12.0,
+            position: SfxStrokePosition::Outside,
+            join: SfxLineJoin::Round,
+            fill: SfxFillSource::ShtackHatch {
+                spec: SfxShtackFillSpec {
+                    mode: SfxShtackFillMode::UkiyoBrush,
+                    overshoot_pct: 0.0,
+                    dryness_pct: 30.0,
+                    color: Color::rgb(0.85, 0.1, 0.15),
+                    ..SfxShtackFillSpec::default()
+                },
+            },
+            blend: SfxChannelBlend::Normal,
+            opacity: 1.0,
+        },
+        SfxBlendEffect::Stroke {
+            enabled: true,
+            width_px: 8.0,
+            position: SfxStrokePosition::Inside,
+            join: SfxLineJoin::Round,
+            fill: SfxFillSource::DryBrush {
+                color: Color::rgb(0.1, 0.2, 0.85),
+                spec: SfxDryBrushSpec {
+                    enabled: true,
+                    engine: SfxDryBrushEngine::Vector,
+                    ..SfxDryBrushSpec::default()
+                },
+            },
+            blend: SfxChannelBlend::Normal,
+            opacity: 1.0,
+        },
+        SfxBlendEffect::Stroke {
+            enabled: true,
+            width_px: 10.0,
+            position: SfxStrokePosition::Center,
+            join: SfxLineJoin::Round,
+            fill: SfxFillSource::ShtackHatch {
+                spec: SfxShtackFillSpec {
+                    mode: SfxShtackFillMode::Hatch,
+                    overshoot_pct: 0.0,
+                    dryness_pct: 25.0,
+                    color: Color::rgb(0.1, 0.65, 0.2),
+                    ..SfxShtackFillSpec::default()
+                },
+            },
+            blend: SfxChannelBlend::Normal,
+            opacity: 1.0,
+        },
+    ];
+    data.validate();
+
+    let eff_shtack = [(0usize, hatch_bars.clone()), (2usize, hatch_bars.clone())];
+    let eff_cuts = [(1usize, vec_cuts.clone())];
+
+    // Sweep across target sizes & glyph_em_px so UkiyoBrush JFA hits both even and odd step counts (reach 16..128).
+    for (glyph_em_px, target_px) in [
+        (120.0_f32, [128, 128]),
+        (120.0, [256, 256]),
+        (240.0, [256, 256]),
+        (240.0, [512, 512]),
+        (480.0, [512, 512]),
+    ] {
+        let scene = SfxGpuScene {
+            data: &data,
+            full_bounds: Rect::from_xywh(16, 16, 224, 224),
+            glyph_em_px,
+            face_contours: &face,
+            line_polygons: &[],
+            primary_shtack_polygons: &hatch_bars,
+            secondary_shtack_polygons: &[],
+            effect_shtack_polygons: &eff_shtack,
+            seg_contours: Vec::new(),
+            primary_dry_vector_cuts: &[],
+            effect_dry_vector_cuts: &eff_cuts,
+        };
+        let _ = g
+            .renderer
+            .render_region(&g.device, &g.queue, &scene, [16.0, 16.0, 240.0, 240.0], target_px)
+            .unwrap_or_else(|e| panic!("render_region failed for em={glyph_em_px} px={target_px:?}: {}", e.0));
+        // Also exercise snapshot blit creation (multi-window safe path).
+        let snap = g
+            .renderer
+            .prepare_blit_snapshot(&g.device, &g.queue, wgpu::TextureFormat::Bgra8UnormSrgb, None);
+        assert!(snap.is_some(), "prepare_blit_snapshot returned None");
+    }
+
+    let scene = SfxGpuScene {
+        data: &data,
+        full_bounds: Rect::from_xywh(16, 16, 224, 224),
+        glyph_em_px: 240.0,
+        face_contours: &face,
+        line_polygons: &[],
+        primary_shtack_polygons: &hatch_bars,
+        secondary_shtack_polygons: &[],
+        effect_shtack_polygons: &eff_shtack,
+        seg_contours: Vec::new(),
+        primary_dry_vector_cuts: &[],
+        effect_dry_vector_cuts: &eff_cuts,
+    };
+    let surf = g
+        .renderer
+        .render_tiled_to_surface(&g.device, &g.queue, &scene, PixelFormat::RGBA8)
+        .expect("GPU tiled UkiyoBrush + Stroke Shtack render");
+    assert!(!surf.content_bounds().is_empty(), "UkiyoBrush + Stroke Shtack rendered empty surface");
+
+    // 2. Verify SfxFillSource::None with active Stroke preserves accum parity and produces visible stroke.
+    let mut hollow_data = SfxData { fill: SfxFillSource::None, ..SfxData::default() };
+    hollow_data.line_effect.line_width_px = 0.0;
+    hollow_data.line_effect.halo_width_px = 0.0;
+    hollow_data.blending.effects = vec![SfxBlendEffect::Stroke {
+        enabled: true,
+        width_px: 10.0,
+        position: SfxStrokePosition::Inside,
+        join: SfxLineJoin::Round,
+        fill: SfxFillSource::Solid { color: Color::rgb(0.9, 0.2, 0.1) },
+        blend: SfxChannelBlend::Normal,
+        opacity: 1.0,
+    }];
+    hollow_data.validate();
+    let hollow_scene = SfxGpuScene {
+        data: &hollow_data,
+        full_bounds: Rect::from_xywh(16, 16, 224, 224),
+        glyph_em_px: 160.0,
+        face_contours: &face,
+        line_polygons: &[],
+        primary_shtack_polygons: &[],
+        secondary_shtack_polygons: &[],
+        effect_shtack_polygons: &[],
+        seg_contours: Vec::new(),
+        primary_dry_vector_cuts: &[],
+        effect_dry_vector_cuts: &[],
+    };
+    let hollow_surf = g
+        .renderer
+        .render_tiled_to_surface(&g.device, &g.queue, &hollow_scene, PixelFormat::RGBA8)
+        .expect("GPU hollow stroke render");
+    assert!(!hollow_surf.content_bounds().is_empty(), "hollow fill + inside stroke rendered empty");
+
+    assert_eq!(health.errors(), 0, "expected 0 uncaptured wgpu errors");
+    assert!(health.fault().is_none(), "expected healthy device, got {:?}", health.fault());
 }

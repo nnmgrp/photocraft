@@ -444,8 +444,27 @@ mod native {
                 app.manga.sfx_gpu_live_draft = None;
                 app.manga.sfx_gpu_layer_cleared = None;
             }
+            let screentone_restyle_target = (cmd.id == "layer.screentone")
+                .then(|| cmd.params.get("layer").and_then(Value::as_u64).map(LayerId))
+                .flatten();
             match app.run(cmd.id, cmd.params) {
-                Ok(v) => last = Some(v),
+                Ok(v) => {
+                    // Live GPU screentone drags only invalidate the layer's `fill_frame` instead
+                    // of forcing a full-canvas recomposite on every pointer move.
+                    if let Some(lid) = screentone_restyle_target
+                        && let Some(st) = app.session.active_mut()
+                        && st.last_damage.is_none()
+                        && let Some(layer) = st.doc.layer(lid)
+                        && matches!(layer.content, LayerContent::Screentone(_))
+                        && !photocraft_compose::effects::has_effects(layer)
+                    {
+                        let frame = photocraft_compose::fill_frame(layer, st.doc.bounds());
+                        if !frame.is_empty() {
+                            st.last_damage = Some(frame);
+                        }
+                    }
+                    last = Some(v);
+                }
                 Err(e) => {
                     app.ui.status = e;
                     app.ui.status_error = true;
@@ -1628,18 +1647,76 @@ mod native {
         let _ = app.run("sfx.create", json!({ "sfx": sfx }));
     }
 
+    /// Creates a new Screentone layer from `app.manga.ui.screentone_ui`, honoring `screentone_clip`,
+    /// and binds the on-canvas gizmo to it.
+    fn create_screentone_from_ui(app: &mut PhotocraftApp) {
+        let mut p = comic_screentone_panel::params(&app.manga.ui.screentone_ui);
+        if app.ui.tool_options.screentone_clip
+            && let Some(map) = p.as_object_mut()
+        {
+            map.insert("clipped".into(), json!(true));
+        }
+        if let Ok(v) = app.run(comic_screentone_panel::CMD_LAYER, p)
+            && let Some(lid) = v.get("layer").and_then(Value::as_u64)
+            && let Some(doc_id) = app.session.active().map(|st| BridgeDocId(st.doc.id.0))
+        {
+            app.manga.ui.screentone_gizmo.bind_layer(doc_id, LayerId(lid));
+        }
+    }
+
+    /// Finishes a `Tool::Screentone` press/drag:
+    /// - A plain click (`< 4` screen px) creates a Screentone layer over the selection/canvas.
+    /// - A drag sets gradient type & angle from `(start -> end)` before creating the Screentone layer.
+    pub fn screentone_drag_finish(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
+        use photocraft_algo::ScreentoneGradientType;
+        let zoom = f64::from(app.point_zoom().max(0.05));
+        let dist_px = (end[0] - start[0]).hypot(end[1] - start[1]) * zoom;
+        if dist_px >= 4.0 {
+            let gt = match app.ui.tool_options.screentone_drag_gradient.as_str() {
+                "radial" => ScreentoneGradientType::Radial,
+                "angle" => ScreentoneGradientType::Angle,
+                "reflected" => ScreentoneGradientType::Reflected,
+                "diamond" => ScreentoneGradientType::Diamond,
+                _ => ScreentoneGradientType::Linear,
+            };
+            let angle = (end[1] - start[1]).atan2(end[0] - start[0]).to_degrees() as f32;
+            let spec = &mut app.manga.ui.screentone_ui.spec;
+            spec.grad_type = gt;
+            spec.grad_angle = angle;
+            if (spec.grad_size_start - spec.grad_size_end).abs() < 1e-4 {
+                spec.grad_size_start = 1.0;
+                spec.grad_size_end = 0.0;
+            }
+        }
+        create_screentone_from_ui(app);
+    }
+
     /// Top Options Bar controls when `Tool::Screentone` is active.
     pub fn screentone_options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-        if ui.button("New Screentone Layer").clicked() {
-            let p = comic_screentone_panel::params(&app.manga.ui.screentone_ui);
-            let _ = app.run(comic_screentone_panel::CMD_LAYER, p);
+        ui.spacing_mut().item_spacing.x = 2.0;
+        for (style, icon, tip) in [
+            ("linear", "gradient", tl!("Linear Gradient")),
+            ("radial", "circle", tl!("Radial Gradient")),
+            ("angle", "rotate-cw", tl!("Angle Gradient")),
+            ("reflected", "arrow-left-right", tl!("Reflected Gradient")),
+            ("diamond", "diamond", tl!("Diamond Gradient")),
+        ] {
+            if crate::icons::button(ui, icon, 24.0, app.ui.tool_options.screentone_drag_gradient == style, tip).clicked() {
+                app.ui.tool_options.screentone_drag_gradient = style.into();
+            }
         }
-        if ui.button("Apply Filter to Layer").clicked() {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        crate::widgets::checkbox(ui, &mut app.ui.tool_options.screentone_clip, tl!("Clip"));
+        crate::widgets::vline(ui, 22.0);
+        if ui.button(tl!("New Screentone Layer")).clicked() {
+            create_screentone_from_ui(app);
+        }
+        if ui.button(tl!("Apply Filter to Layer")).clicked() {
             let p = comic_screentone_panel::params(&app.manga.ui.screentone_ui);
             let _ = app.run(comic_screentone_panel::CMD_FILTER, p);
         }
         crate::widgets::vline(ui, 22.0);
-        if ui.button("Open Screentones Panel").clicked() {
+        if ui.button(tl!("Open Screentones Panel")).clicked() {
             let _ = app.run("window.panel.screentone", json!({ "show": true }));
         }
     }
@@ -4290,6 +4367,35 @@ mod native {
             let (id_after_safe, back_t) = newest_text_layer(&app);
             assert_eq!(id_after_safe, text_id);
             assert!(matches!(back_t.shape, photocraft_doc::text::TextShape::Box { .. }));
+        }
+
+        #[test]
+        fn screentone_tool_click_fills_and_drag_creates_angled_gradient() {
+            use photocraft_algo::ScreentoneGradientType;
+            let mut app = new_balloon_app();
+            app.ui.tool = Tool::Screentone;
+            app.ui.tool_options.screentone_clip = true;
+            // Click (< 4px move) creates a screentone layer preserving existing gradient_type and clipped flag.
+            screentone_drag_finish(&mut app, [10.0, 10.0], [10.5, 10.5]);
+            let st1 = app.session.active().unwrap();
+            let id1 = st1.active_layer.unwrap();
+            let layer1 = st1.doc.layer(id1).unwrap();
+            assert!(layer1.is_screentone());
+            assert!(layer1.clipped, "click honors screentone_clip");
+
+            // Drag (>= 4px) configures Linear gradient at the drag angle and binds gizmo.
+            app.ui.tool_options.screentone_clip = false;
+            app.ui.tool_options.screentone_drag_gradient = "diamond".into();
+            screentone_drag_finish(&mut app, [20.0, 20.0], [60.0, 60.0]);
+            let st2 = app.session.active().unwrap();
+            let id2 = st2.active_layer.unwrap();
+            assert_ne!(id1, id2);
+            let LayerContent::Screentone(tone2) = &st2.doc.layer(id2).unwrap().content else {
+                panic!("expected ScreentoneLayer");
+            };
+            assert_eq!(tone2.spec.grad_type, ScreentoneGradientType::Diamond);
+            assert!((tone2.spec.grad_angle - 45.0).abs() < 1e-3, "got {}", tone2.spec.grad_angle);
+            assert!(!st2.doc.layer(id2).unwrap().clipped);
         }
     }
 }

@@ -3476,6 +3476,63 @@ fn sibling_compositors_have_independent_residency_and_configuration() {
 }
 
 #[test]
+fn screentone_preserve_lines_parity() {
+    use photocraft_doc::{DotShape, PatternType, ScreentoneBackend, ScreentoneLayer, ScreentoneMode, ScreentoneSpec};
+
+    let Some(mut g) = gpu() else { return };
+    let bounds = Rect::from_xywh(0, 0, 64, 48);
+    let mut base = photocraft_raster::Surface::new(PixelFormat::RGBA8);
+    let mut px = Vec::with_capacity(64 * 48 * 4);
+    for y in 0..48i32 {
+        for x in 0..64i32 {
+            // Light gray tone field with an anti-aliased thin dark line down the center and diagonal.
+            let dist = ((x - 32) as f32).abs().min(((x - y - 4) as f32).abs());
+            let v = if dist < 0.6 {
+                0.08
+            } else if dist < 1.5 {
+                0.42
+            } else {
+                0.65
+            };
+            px.extend_from_slice(&[v, v, v, 1.0]);
+        }
+    }
+    base.write_region(bounds, &px);
+
+    let spec = ScreentoneSpec {
+        pattern_type: PatternType::Dots,
+        dot_shape: DotShape::Circle,
+        spacing_x: 10.0,
+        spacing_y: 10.0,
+        dot_size: 4.5,
+        smoothness: 0.5,
+        mode: ScreentoneMode::Shading,
+        use_source_luminance: true,
+        preserve_lines: true,
+        line_threshold: 0.24,
+        line_thickness: 2.0,
+        backend: ScreentoneBackend::Gpu,
+        ..Default::default()
+    };
+
+    let origin = photocraft_algo::comic_screentone::origin_doc(&spec, bounds);
+    let mut d = Document::new("preserve_lines_gpu", Size::new(bounds.width(), bounds.height()), ColorMode::Rgb, SampleType::U8);
+    d.layers.push(Layer::new("art", LayerContent::Raster(base.clone())));
+    d.layers.push(Layer::new("tone", LayerContent::Screentone(ScreentoneLayer::new(spec.clone(), origin, photocraft_raster::Surface::new(PixelFormat::RGBA8)))));
+    let (gpu_out, _) = photocraft_gpu::render_to_vec_stats(&mut g.comp, &g.device, &g.queue, &d, bounds).unwrap();
+
+    let mut cpu_surf = base.clone();
+    let _ = photocraft_algo::comic_screentone::render_screentone_to_surface(&mut cpu_surf, bounds, &spec, origin);
+    let mut d_cpu = Document::new("preserve_lines_cpu", Size::new(bounds.width(), bounds.height()), ColorMode::Rgb, SampleType::U8);
+    d_cpu.layers.push(Layer::new("art", LayerContent::Raster(base)));
+    d_cpu.layers.push(Layer::new("tone_cpu", LayerContent::Raster(cpu_surf)));
+    let cpu_buf = photocraft_compose::render(&d_cpu, bounds);
+
+    let (w, _i) = worst_diff(&cpu_buf.px, &gpu_out);
+    assert!(w <= TOL, "screentone preserve_lines CPU/GPU diff {w} > {TOL}");
+}
+
+#[test]
 fn screentone_layers() {
     use photocraft_doc::{DotShape, PatternType, ScreentoneBackend, ScreentoneGradientType, ScreentoneLayer, ScreentoneMode, ScreentoneSpec};
 
@@ -3548,6 +3605,60 @@ fn screentone_layers() {
                 grad_type: ScreentoneGradientType::Radial,
                 grad_size_start: 1.2,
                 grad_size_end: 0.4,
+                mode: ScreentoneMode::Sheet,
+                use_source_luminance: false,
+                backend: ScreentoneBackend::Gpu,
+                ..Default::default()
+            },
+        ),
+        (
+            "dots_angle_grad",
+            ScreentoneSpec {
+                pattern_type: PatternType::Dots,
+                spacing_x: 10.0,
+                spacing_y: 10.0,
+                dot_size: 4.0,
+                smoothness: 0.5,
+                grad_type: ScreentoneGradientType::Angle,
+                grad_angle: 35.0,
+                grad_size_start: 1.3,
+                grad_size_end: 0.25,
+                mode: ScreentoneMode::Sheet,
+                use_source_luminance: false,
+                backend: ScreentoneBackend::Gpu,
+                ..Default::default()
+            },
+        ),
+        (
+            "dots_reflected_grad",
+            ScreentoneSpec {
+                pattern_type: PatternType::Dots,
+                spacing_x: 10.0,
+                spacing_y: 10.0,
+                dot_size: 4.0,
+                smoothness: 0.5,
+                grad_type: ScreentoneGradientType::Reflected,
+                grad_angle: 20.0,
+                grad_size_start: 1.3,
+                grad_size_end: 0.25,
+                mode: ScreentoneMode::Sheet,
+                use_source_luminance: false,
+                backend: ScreentoneBackend::Gpu,
+                ..Default::default()
+            },
+        ),
+        (
+            "dots_diamond_grad",
+            ScreentoneSpec {
+                pattern_type: PatternType::Dots,
+                spacing_x: 10.0,
+                spacing_y: 10.0,
+                dot_size: 4.0,
+                smoothness: 0.5,
+                grad_type: ScreentoneGradientType::Diamond,
+                grad_angle: 45.0,
+                grad_size_start: 1.3,
+                grad_size_end: 0.25,
                 mode: ScreentoneMode::Sheet,
                 use_source_luminance: false,
                 backend: ScreentoneBackend::Gpu,

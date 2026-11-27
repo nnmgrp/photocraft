@@ -11,7 +11,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use photocraft_algo::{SatelliteLayout, ScreentoneBackend, ScreentoneMode, ScreentoneSpec};
+use photocraft_algo::{PatternType, SatelliteLayout, ScreentoneBackend, ScreentoneMode, ScreentoneSpec};
 
 use crate::theme::Tokens;
 
@@ -36,7 +36,7 @@ const PATTERNS: [&str; 12] =
 /// The dot shapes the panel offers (the dots' and the satellites').
 const SHAPES: [&str; 4] = ["circle", "square", "diamond", "hexagon"];
 /// The gradient types the panel offers for modulation.
-const GRADIENTS: [&str; 3] = ["none", "linear", "radial"];
+const GRADIENTS: [&str; 6] = ["none", "linear", "radial", "angle", "reflected", "diamond"];
 
 /// Panel state (serde, so the control channel can read and drive it).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -329,6 +329,27 @@ fn draw_core_grid(ui: &mut egui::Ui, st: &mut ScreentoneUi, t: Tokens) {
         });
         ui.end_row();
 
+        row(ui, t, &format!("{}:", tl!("Foreground")));
+        ui.horizontal(|ui| {
+            let fg = st.spec.foreground;
+            let mut c = egui::Color32::from_rgba_unmultiplied(
+                (fg[0].clamp(0.0, 1.0) * 255.0).round() as u8,
+                (fg[1].clamp(0.0, 1.0) * 255.0).round() as u8,
+                (fg[2].clamp(0.0, 1.0) * 255.0).round() as u8,
+                (fg[3].clamp(0.0, 1.0) * 255.0).round() as u8,
+            );
+            if ui.color_edit_button_srgba(&mut c).changed() {
+                st.spec.foreground = [f32::from(c.r()) / 255.0, f32::from(c.g()) / 255.0, f32::from(c.b()) / 255.0, f32::from(c.a()) / 255.0];
+            }
+            if ui.small_button(tl!("Black")).clicked() {
+                st.spec.foreground = [0.0, 0.0, 0.0, 1.0];
+            }
+            if ui.small_button(tl!("White")).clicked() {
+                st.spec.foreground = [1.0, 1.0, 1.0, 1.0];
+            }
+        });
+        ui.end_row();
+
         row(ui, t, "");
         let mut opaque_paper = st.spec.background[3] >= 0.5;
         if crate::widgets::checkbox(ui, &mut opaque_paper, tl!("Opaque Paper")).changed() {
@@ -550,6 +571,67 @@ pub struct SfxScreentoneBanner<'a> {
     pub is_secondary: bool,
 }
 
+const SFX_PATTERNS: [&str; 4] = ["dots", "lines", "crosshatch", "noise"];
+
+fn draw_sfx_grid(ui: &mut egui::Ui, st: &mut ScreentoneUi, t: Tokens) {
+    if !matches!(st.spec.pattern_type, PatternType::Dots | PatternType::Lines | PatternType::Crosshatch | PatternType::Noise) {
+        st.spec.pattern_type = PatternType::Dots;
+    }
+    egui::Grid::new("comic_screentone_sfx_grid").num_columns(2).spacing([8.0, 5.0]).show(ui, |ui| {
+        row(ui, t, &crate::i18n::param_label("patternType"));
+        let mut cur = id_of(&st.spec.pattern_type);
+        let labels: Vec<String> = SFX_PATTERNS.iter().map(|p| crate::i18n::source_label(p)).collect();
+        let opts: Vec<(String, &str)> = SFX_PATTERNS.iter().map(|p| p.to_string()).zip(labels.iter().map(String::as_str)).collect();
+        if crate::widgets::dropdown(ui, "comic_screentone_sfx_pattern", &mut cur, &opts, 176.0)
+            && let Some(p) = from_id(&cur)
+        {
+            st.spec.pattern_type = p;
+        }
+        ui.end_row();
+
+        if st.spec.pattern_type == PatternType::Dots {
+            row(ui, t, &crate::i18n::param_label("dotShape"));
+            let mut cur = id_of(&st.spec.dot_shape);
+            let labels: Vec<String> = SHAPES.iter().map(|s| crate::i18n::source_label(s)).collect();
+            let opts: Vec<(String, &str)> = SHAPES.iter().map(|s| s.to_string()).zip(labels.iter().map(String::as_str)).collect();
+            if crate::widgets::dropdown(ui, "comic_screentone_sfx_shape", &mut cur, &opts, 176.0)
+                && let Some(s) = from_id(&cur)
+            {
+                st.spec.dot_shape = s;
+            }
+            ui.end_row();
+
+            row(ui, t, &crate::i18n::param_label("dotSize"));
+            crate::widgets::value_field(ui, &mut st.spec.dot_size, 0.0..=500.0, "px", 76.0);
+            ui.end_row();
+        }
+
+        row(ui, t, &crate::i18n::param_label("spacingX"));
+        crate::widgets::value_field(ui, &mut st.spec.spacing_x, 1.0..=2000.0, "px", 76.0);
+        ui.end_row();
+
+        row(ui, t, &crate::i18n::param_label("spacingY"));
+        crate::widgets::value_field(ui, &mut st.spec.spacing_y, 1.0..=2000.0, "px", 76.0);
+        ui.end_row();
+
+        row(ui, t, &crate::i18n::param_label("angle"));
+        if crate::widgets::value_field(ui, &mut st.spec.angle, 0.0..=360.0, "°", 76.0).changed() {
+            st.spec.angle = st.spec.angle.rem_euclid(360.0);
+        }
+        ui.end_row();
+
+        row(ui, t, &crate::i18n::param_label("density"));
+        crate::widgets::value_field(ui, &mut st.spec.density, 0.0..=1.0, "", 76.0);
+        ui.end_row();
+
+        if matches!(st.spec.pattern_type, PatternType::Lines | PatternType::Crosshatch) {
+            row(ui, t, &crate::i18n::param_label("lineWidth"));
+            crate::widgets::value_field(ui, &mut st.spec.line_width, 0.0..=200.0, "px", 76.0);
+            ui.end_row();
+        }
+    });
+}
+
 /// Renders the Screentone (Gentonik) dock bound directly to an active SFX layer's screentone fill.
 ///
 /// The host supplies an isolated [`ScreentoneUi`] instance so global screentone settings and
@@ -585,11 +667,7 @@ pub fn panel_for_sfx(ui: &mut egui::Ui, st: &mut ScreentoneUi, banner: &SfxScree
         // SFX screentone fills always evaluate as a pattern sheet clipped to the glyph mask.
         st.spec.mode = ScreentoneMode::Sheet;
         st.spec.use_source_luminance = false;
-        draw_core_grid(ui, st, t);
-        ui.add_space(4.0);
-        draw_satellites(ui, st, t);
-        draw_distortion(ui, st, t);
-        draw_gradient(ui, st, t);
+        draw_sfx_grid(ui, st, t);
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("Синхронизация с SFX в реальном времени").size(10.0).color(t.text_dim));

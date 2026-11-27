@@ -340,9 +340,9 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         | Tool::DeleteAnchorPoint
         | Tool::ConvertPoint
         | Tool::Artboard
-        | Tool::Frame
-        | Tool::Screentone
-        | Tool::Sfx => &[],
+        | Tool::Frame => &[],
+        Tool::Screentone => reset!(screentone_clip, screentone_drag_gradient),
+        Tool::Sfx => &[],
     }
 }
 

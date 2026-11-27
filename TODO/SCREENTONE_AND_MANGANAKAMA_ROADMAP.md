@@ -4,25 +4,21 @@
 
 ---
 
-## Блок A — Зачистка багов и расхождений в нашем Screentone (подтверждено на `HEAD`)
+## Блок A — Зачистка багов и расхождений в нашем Screentone (ВЫПОЛНЕНО)
 
-1. **Убрать старый дубль и баг знака `sdf_polygon` в `crates/manga-core/src/comic_screentone.rs:383`:**
-   - В `manga-core` застряла старая копия (19 пресетов против 26 в `algo` и старый баг знака `(vj.1 - vi.1).abs().max(1e-6)`).
-   - Свести к единому источнику правды (`photocraft-tone` / `crates/algo/src/comic_screentone.rs`).
-2. **Активировать 3 уже написанных градиента (`Angle`, `Reflected`, `Diamond`):**
-   - В `crates/gpu/src/compose.wgsl:2061` они уже реализованы, но отрезаны 2-битной маской `(packed_bits >> 8u) & 3u`.
-   - Расширить поле до 3 бит (`& 7u`) в `crates/gpu/src/plan/lower.rs` и `compose.wgsl`, добавить 3 ветки в CPU `compute_grad_factor`, валидацию `engine` и UI-выпадашку `GRADIENTS`.
-3. **Устранить расхождение GPU vs CPU в `preserve_lines`:**
-   - В `crates/gpu/src/compose.wgsl:2171` сейчас голый 1-пиксельный порог `if (preserve_lines && luma_eff <= line_thresh)` без `line_thickness` и детектора долин.
-   - Перенести компактный 3×3/5×5 детектор долин + дилатацию в `compose.wgsl`, чтобы GPU-превью совпадал с CPU Freeze.
-4. **Синхронизировать `eval_screentone_sheet` в `crates/gpu/src/sfx.wgsl`:**
-   - Сейчас `sfx.wgsl` рендерит только 4 базовых паттерна и игнорирует `Stars/Hearts/Hexgrid/Stipple`, `Satellites`, `Gradient`, `Roundness`, `Smoothness`, `Row Offset`.
-   - Переиспользовать общий WGSL-код скринтона (либо скрыть неподдерживаемые секции в `panel_for_sfx`).
-5. **Открытые баги `0.23.1` и базовый UX:**
-   - Починить пропажу `LayerContent::Screentone` при `Merge Layers` и сохранении документа;
-   - Починить экспорт `LayerContent::Screentone` в PSD (`crates/io/src/psd_export.rs:1095-1108`) с учётом `use_source_luminance` и обрезки по объекту/маске;
-   - Вывести выбор цвета **`foreground`** в `comic_screentone_panel.rs` (поле `ScreentoneSpec::foreground` уже есть в `crates/tone/src/lib.rs:134`) — чтобы можно было накладывать белые и цветные линии/скринтоны;
-   - Интерактивный **`Screentone Tool`**: клик = заливка слоя/выделения, зажим + тяга = живой линейный/радиальный градиент скринтона (плюс `Clip`).
+1. **[x] Убрать старый дубль и баг знака `sdf_polygon` в `crates/manga-core/src/comic_screentone.rs`:**
+   - Модуль сведён к `pub use photocraft_algo::comic_screentone::*;` (единый источник правды без старого дубля и бага знака `sdf_polygon`).
+2. **[x] Активировать 3 уже написанных градиента (`Angle`, `Reflected`, `Diamond`):**
+   - Расширено поле до 3 бит (`& 7u`) в `crates/gpu/src/plan/lower.rs` и `crates/gpu/src/compose.wgsl`, добавлены ветки в `ScreentoneGradientType`, CPU `compute_grad_factor`, валидацию `engine` и UI-список `GRADIENTS`; исправлен `screentone_frame` в `planner.rs` для `fill_frame`; добавлен GPU/CPU-паритет тест.
+3. **[x] Устранить расхождение GPU vs CPU в `preserve_lines`:**
+   - Перенесены 4-осевой детектор линий, `line_thickness`-дилатация (`lut_at(27)`) и 2px де-лайнинг `best_delined_luma` в `crates/gpu/src/compose.wgsl`, добавлен паритет-тест `screentone_preserve_lines_parity`.
+4. **[x] Синхронизировать `panel_for_sfx` с `eval_screentone_sheet` в `crates/gpu/src/sfx.wgsl`:**
+   - `panel_for_sfx` в `crates/manga-ui/src/comic_screentone_panel.rs` ограничен параметрами, реально поддерживаемыми `sfx.wgsl` (`Dots/Lines/Crosshatch/Noise`, `dotShape`, `dotSize`, `spacingX/Y`, `angle`, `density`, `lineWidth`), без правок в активных SFX-файлах.
+5. **[x] Открытые баги `0.23.1` и базовый UX:**
+   - Починена пропажа нерастрированных `LayerContent::Screentone` при `Merge Layers`, `Merge Group`, сохранении/превью и CPU-композитинге (`crates/compose/src/screentone.rs`, `content.rs`, `composite.rs`, `proxy.rs`, `viewport.rs`, `engine`);
+   - Починен экспорт `LayerContent::Screentone` в PSD/PNG (`crates/io/src/psd_export.rs`) с учётом `use_source_luminance` подложки и `fill_frame`/маски;
+   - Выведен выбор цвета **`Foreground`** (+ `Black` / `White` и автовыбор `Normal` для светлых/цветных тонов) в `comic_screentone_panel.rs`;
+   - Реализован интерактивный **`Tool::Screentone`**: клик = заливка выделения/холста, зажим + тяга (с `Shift`-привязкой по 45° и предпросмотром вектора) = живой градиент скринтона выбранного стиля + опция **`Clip`**.
 
 ---
 

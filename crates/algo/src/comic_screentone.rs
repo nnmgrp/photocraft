@@ -402,6 +402,24 @@ pub fn sheet_spec(spec: &ScreentoneSpec, bounds: Rect, origin: (f32, f32)) -> Sc
     ScreentoneSpec { origin_x: dx * cos + dy * sin, origin_y: -dx * sin + dy * cos, ..spec.clone() }
 }
 
+/// Area threshold (`512 × 512` px) at which `ScreentoneBackend::Auto` selects the live GPU shader.
+/// Using pixel area rather than per-axis minimums ensures wide or tall masked strips (such as
+/// `2000 × 300`) stay on the GPU path instead of falling back to synchronous CPU bakes.
+pub const SCREENTONE_AUTO_GPU_AREA: u64 = 512 * 512;
+
+/// Single source of truth for whether a screentone layer with `(backend, mode, bounds)` should use
+/// the live GPU shader instead of baking on the CPU (`planner`, `engine`, and `ScreentoneGizmo`).
+pub fn screentone_prefers_gpu(backend: ScreentoneBackend, mode: photocraft_color::ColorMode, bounds: Rect) -> bool {
+    if matches!(mode, photocraft_color::ColorMode::Cmyk | photocraft_color::ColorMode::Lab) {
+        return false;
+    }
+    match backend {
+        ScreentoneBackend::Cpu => false,
+        ScreentoneBackend::Gpu => true,
+        ScreentoneBackend::Auto => u64::from(bounds.width()).saturating_mul(u64::from(bounds.height())) >= SCREENTONE_AUTO_GPU_AREA,
+    }
+}
+
 /// Render a procedural sheet into `surface`, anchored at the document-space `origin`.
 ///
 /// The whole `bounds` frame is rendered (a layer mask shapes the visible area), and the function
@@ -420,11 +438,31 @@ pub fn render_screentone_to_surface(surface: &mut Surface, bounds: Rect, spec: &
     if area.is_empty() {
         return area;
     }
-    let rendered = crate::apply_in(surface, &params, area, bounds, None, content);
-    *surface = Surface::new(surface.format());
-    let px = rendered.read_region(area);
-    surface.write_region(area, &px);
-    surface.prune();
+    let fmt = surface.format();
+    let mut rendered = crate::apply_in(surface, &params, area, bounds, None, content);
+    // Transfer 256×256 tiles directly instead of gathering a dense full-canvas `Vec<f32>`
+    // (6.8 GB on a 17 000 × 25 000 page). Only border tiles straddling `area` are clipped.
+    let mut out = Surface::new(fmt);
+    let mut interior = Vec::new();
+    for (tc, tile) in rendered.take_tiles(area) {
+        let tr = tc.rect();
+        if tr.x0 >= area.x0 && tr.y0 >= area.y0 && tr.x1 <= area.x1 && tr.y1 <= area.y1 {
+            interior.push((tc, tile));
+        } else {
+            let clip = tr.intersect(&area);
+            if !clip.is_empty() {
+                let mut one = Surface::new(fmt);
+                one.put_tiles([(tc, tile)]);
+                let px = one.read_region(clip);
+                out.write_region(clip, &px);
+            }
+        }
+    }
+    if !interior.is_empty() {
+        out.put_tiles(interior);
+    }
+    out.prune();
+    *surface = out;
     area
 }
 
@@ -499,6 +537,16 @@ fn compute_grad_factor(x: f32, y: f32, width: f32, height: f32, spec: &Screenton
         ScreentoneGradientType::Radial => {
             let dist = sdist2(x, y);
             dist / (width.min(height) * 0.6).max(1.0)
+        }
+        ScreentoneGradientType::Angle => ((rad - (-y).atan2(x)) / std::f32::consts::TAU).rem_euclid(1.0),
+        ScreentoneGradientType::Reflected => {
+            let proj = x * dir_x + y * dir_y;
+            proj.abs() / (width * 0.4).max(1.0)
+        }
+        ScreentoneGradientType::Diamond => {
+            let along = x * dir_x + y * dir_y;
+            let across = -x * dir_y + y * dir_x;
+            (along.abs() + across.abs()) / (width.min(height) * 0.6).max(1.0)
         }
         ScreentoneGradientType::None => 0.5,
     };
@@ -745,7 +793,6 @@ fn coverage_from_sdf(dist: f32, smoothness: f32) -> f32 {
 // Screentone Kernel Execution
 // ────────────────────────────────────────────────────────────
 
-const NEAR_2PX: u8 = 4;
 const AXES_4: [(i32, i32); 4] = [(1, 0), (0, 1), (1, 1), (1, -1)];
 
 #[derive(Clone, Copy)]
@@ -813,13 +860,6 @@ fn grid_sample(grid: &[f32], ww: usize, wh: usize, ix: i32, iy: i32) -> f32 {
     let cx = ix.clamp(0, ww as i32 - 1) as usize;
     let cy = iy.clamp(0, wh as i32 - 1) as usize;
     grid[cy * ww + cx]
-}
-
-fn is_line_core(line_edge_grid: &[u8], preserved_grid: &[u8], ww: usize, wh: usize, wx: i32, wy: i32) -> bool {
-    let cx = wx.clamp(0, ww as i32 - 1) as usize;
-    let cy = wy.clamp(0, wh as i32 - 1) as usize;
-    let idx = cy * ww + cx;
-    line_edge_grid[idx] != 0 || preserved_grid[idx] != 0
 }
 
 fn axis_valley_depth(luma_grid: &[f32], ww: usize, wh: usize, ix: i32, iy: i32, l_c: f32) -> f32 {
@@ -893,96 +933,139 @@ fn detect_line_edges(luma_grid: &[f32], ww: usize, wh: usize, line_thresh: f32) 
     edges
 }
 
-/// Dilates detected line edges by `line_thickness` radius (`0.5..=5.0` px).
-fn dilate_line_edges(line_edge_grid: &[u8], ww: usize, wh: usize, line_thick: f32) -> Vec<u8> {
-    let r_px = (line_thick - 0.5).max(0.0);
-    let rad = r_px.ceil() as i32;
-    if rad <= 0 {
-        return line_edge_grid.to_vec();
+/// Bounded 8-ray line preservation + de-lining mirror of `compose.wgsl::st_delined_luma`.
+/// Returns `(solid_line, eff_luma)` using the exact same paired 8-direction scan and tie-breaking.
+fn eval_preserve_lines_8ray(
+    luma_grid: &[f32],
+    line_edge_grid: &[u8],
+    ww: usize,
+    wh: usize,
+    ix: i32,
+    iy: i32,
+    line_thresh: f32,
+    line_thick: f32,
+) -> (bool, f32) {
+    let idx_center = iy as usize * ww + ix as usize;
+    let center_luma = luma_grid[idx_center];
+    if line_edge_grid[idx_center] != 0 {
+        return (true, center_luma);
     }
+    let thresh = line_thresh.clamp(0.02, 0.72);
+    let r_px = (line_thick.clamp(0.5, 5.0) - 0.5).max(0.0);
     let r_sq = r_px * r_px + 0.25;
-    let mut preserved = vec![0u8; ww * wh];
-    for wy in 0..wh {
-        let iy = wy as i32;
-        let row_off = wy * ww;
-        for wx in 0..ww {
-            let ix = wx as i32;
-            let mut hit = false;
-            'dilate: for dy in -rad..=rad {
-                let ny = iy + dy;
-                if ny < 0 || ny >= wh as i32 {
-                    continue;
-                }
-                for dx in -rad..=rad {
-                    let nx = ix + dx;
-                    if nx >= 0 && nx < ww as i32 && (dx * dx + dy * dy) as f32 <= r_sq && line_edge_grid[ny as usize * ww + nx as usize] != 0 {
-                        hit = true;
-                        break 'dilate;
-                    }
-                }
-            }
-            if hit {
-                preserved[row_off + wx] = 1;
-            }
-        }
-    }
-    preserved
-}
+    let inner_card = if r_px > 0.0 { r_sq.sqrt().floor() as i32 } else { 0 };
+    let inner_diag = if r_px > 0.0 { (r_sq * 0.5).sqrt().floor() as i32 } else { 0 };
 
-/// Builds proximity bitmask (`NEAR_2PX`) around core lines (`1..=2` px radius).
-fn build_near_mask(line_edge_grid: &[u8], preserved_grid: &[u8], ww: usize, wh: usize) -> Vec<u8> {
-    let mut near = vec![0u8; ww * wh];
-    for wy in 0..wh {
-        let iy = wy as i32;
-        let row_off = wy * ww;
-        for wx in 0..ww {
-            let ix = wx as i32;
-            let mut mask = 0u8;
-            'near: for dy in -2i32..=2 {
-                let ny = iy + dy;
-                if ny < 0 || ny >= wh as i32 {
-                    continue;
-                }
-                for dx in -2i32..=2 {
-                    let nx = ix + dx;
-                    if dx * dx + dy * dy <= 4 && nx >= 0 && nx < ww as i32 {
-                        let n_idx = ny as usize * ww + nx as usize;
-                        if line_edge_grid[n_idx] != 0 || preserved_grid[n_idx] != 0 {
-                            mask |= NEAR_2PX;
-                            break 'near;
-                        }
-                    }
-                }
-            }
-            near[row_off + wx] = mask;
-        }
-    }
-    near
-}
+    const DIRS_8: [(i32, i32); 8] = [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (-1, -1), (1, -1), (-1, 1)];
+    let load_luma = |x: i32, y: i32| -> f32 {
+        let cx = x.clamp(0, ww as i32 - 1) as usize;
+        let cy = y.clamp(0, wh as i32 - 1) as usize;
+        luma_grid[cy * ww + cx]
+    };
 
-fn best_delined_luma(luma_grid: &[f32], line_edge_grid: &[u8], preserved_grid: &[u8], ww: usize, wh: usize, ix: i32, iy: i32) -> f32 {
-    let mut best_luma = luma_grid[iy as usize * ww + ix as usize];
-    for dy in -2i32..=2 {
-        for dx in -2i32..=2 {
-            if (dx == 0 && dy == 0) || dx * dx + dy * dy > 4 || !is_line_core(line_edge_grid, preserved_grid, ww, wh, ix + dx, iy + dy) {
+    let mut ray_l1 = [0.0f32; 8];
+    let mut ray_l2 = [0.0f32; 8];
+    let mut outer_s = [0i32; 8];
+    let mut outer_l = [1.0f32; 8];
+    let mut outer_max_l = [0.0f32; 8];
+    let mut ray_near = [false; 8];
+    let mut ray_slit = [false; 8];
+
+    for (i, &(dx, dy)) in DIRS_8.iter().enumerate() {
+        let is_diag = i >= 4;
+        let inner_max = if is_diag { inner_diag } else { inner_card };
+        let slit_steps = if is_diag { 2 } else { 3 };
+        let outer_max = inner_max + slit_steps;
+
+        let mut ray_max = center_luma;
+        let mut in_best_s = 0i32;
+        let mut in_best_l = 1.0f32;
+        let mut out_best_s = 0i32;
+        let mut out_best_l = 1.0f32;
+        let mut l1 = center_luma;
+        let mut l2 = center_luma;
+
+        for s in 1..=outer_max {
+            let qx = ix + dx * s;
+            let qy = iy + dy * s;
+            let in_bounds = qx >= 0 && qx < ww as i32 && qy >= 0 && qy < wh as i32;
+            let l = load_luma(qx, qy);
+            if s == 1 {
+                l1 = l;
+                l2 = l;
+            } else if s == 2 {
+                l2 = l;
+            }
+            if !in_bounds {
                 continue;
             }
-            let (ux, uy) = (-dx.signum(), -dy.signum());
-            let (nx1, ny1) = ((ix + ux).clamp(0, ww as i32 - 1), (iy + uy).clamp(0, wh as i32 - 1));
-            if !is_line_core(line_edge_grid, preserved_grid, ww, wh, nx1, ny1) {
-                best_luma = best_luma.max(luma_grid[ny1 as usize * ww + nx1 as usize]);
-                let (nx2, ny2) = ((ix + ux * 2).clamp(0, ww as i32 - 1), (iy + uy * 2).clamp(0, wh as i32 - 1));
-                if !is_line_core(line_edge_grid, preserved_grid, ww, wh, nx2, ny2) {
-                    best_luma = best_luma.max(luma_grid[ny2 as usize * ww + nx2 as usize]);
+            ray_max = ray_max.max(l);
+            if s <= inner_max {
+                if l < in_best_l {
+                    in_best_l = l;
+                    in_best_s = s;
+                }
+            } else if l < out_best_l {
+                out_best_l = l;
+                out_best_s = s;
+            }
+        }
+        ray_l1[i] = l1;
+        ray_l2[i] = l2;
+        outer_s[i] = out_best_s;
+        outer_l[i] = out_best_l;
+        outer_max_l[i] = ray_max;
+
+        if in_best_s > 0 && in_best_l < 0.72 && (in_best_l <= thresh || ray_max - in_best_l > 0.03) {
+            let ex = (ix + dx * in_best_s) as usize;
+            let ey = (iy + dy * in_best_s) as usize;
+            if line_edge_grid[ey * ww + ex] != 0 {
+                return (true, center_luma);
+            }
+        }
+    }
+
+    let mut any_near = false;
+    for (i, &(dx, dy)) in DIRS_8.iter().enumerate() {
+        let s = outer_s[i];
+        let ol = outer_l[i];
+        if s > 0 && ol < 0.72 && (ol <= thresh || outer_max_l[i] - ol > 0.03) {
+            let ex = (ix + dx * s) as usize;
+            let ey = (iy + dy * s) as usize;
+            if line_edge_grid[ey * ww + ex] != 0 {
+                let is_diag = i >= 4;
+                let near_max = if is_diag { inner_diag + 1 } else { inner_card + 2 };
+                ray_slit[i] = true;
+                if s <= near_max {
+                    ray_near[i] = true;
+                    any_near = true;
                 }
             }
         }
     }
-    let in_tight_slit = AXES_4.iter().any(|&(ax, ay)| {
-        (1..=3).any(|s| is_line_core(line_edge_grid, preserved_grid, ww, wh, ix - ax * s, iy - ay * s))
-            && (1..=3).any(|s| is_line_core(line_edge_grid, preserved_grid, ww, wh, ix + ax * s, iy + ay * s))
-    });
-    if in_tight_slit && best_luma >= 0.50 { (best_luma + 0.28).min(1.0) } else { best_luma }
+    if !any_near {
+        return (false, center_luma);
+    }
+
+    let mut best_luma = center_luma;
+    for i in 0..8 {
+        if !ray_near[i] {
+            continue;
+        }
+        let opp = i ^ 1;
+        if !ray_near[opp] {
+            best_luma = best_luma.max(ray_l1[opp].max(ray_l2[opp]));
+        }
+    }
+    let in_tight_slit = (ray_slit[0] && ray_slit[1])
+        || (ray_slit[2] && ray_slit[3])
+        || (ray_slit[4] && ray_slit[5])
+        || (ray_slit[6] && ray_slit[7]);
+    if in_tight_slit && best_luma >= 0.50 {
+        (false, (best_luma + 0.28).min(1.0))
+    } else {
+        (false, best_luma)
+    }
 }
 
 struct ShadingGrids {
@@ -1011,23 +1094,27 @@ impl ShadingGrids {
                 luma_grid[row_off + wx] = raw_paper_luma(src, ctx, work_rect.x0 + wx as i32, iy);
             }
         }
-        let (line_edge_grid, preserved_grid, near_line_grid) = if spec.preserve_lines {
-            let edges = detect_line_edges(&luma_grid, ww, wh, spec.line_threshold.clamp(0.0, 1.0));
-            let preserved = dilate_line_edges(&edges, ww, wh, spec.line_thickness.clamp(0.5, 5.0));
-            let near = build_near_mask(&edges, &preserved, ww, wh);
-            (edges, preserved, near)
+        let line_edge_grid = if spec.preserve_lines {
+            detect_line_edges(&luma_grid, ww, wh, spec.line_threshold.clamp(0.0, 1.0))
         } else {
-            (Vec::new(), Vec::new(), Vec::new())
+            Vec::new()
         };
+        let mut preserved_grid = if spec.preserve_lines { vec![0u8; ww * wh] } else { Vec::new() };
         let mut ambient_ink_grid = vec![0.0f32; ww * wh];
+        let line_thresh = spec.line_threshold.clamp(0.0, 1.0);
+        let line_thick = spec.line_thickness.clamp(0.5, 5.0);
         for wy in 0..wh {
             let row_off = wy * ww;
             for wx in 0..ww {
                 let idx = row_off + wx;
-                let eff_luma = if !spec.preserve_lines || (near_line_grid[idx] & NEAR_2PX) == 0 {
+                let eff_luma = if !spec.preserve_lines {
                     luma_grid[idx]
                 } else {
-                    best_delined_luma(&luma_grid, &line_edge_grid, &preserved_grid, ww, wh, wx as i32, wy as i32)
+                    let (solid, delined) = eval_preserve_lines_8ray(&luma_grid, &line_edge_grid, ww, wh, wx as i32, wy as i32, line_thresh, line_thick);
+                    if solid {
+                        preserved_grid[idx] = 1;
+                    }
+                    delined
                 };
                 ambient_ink_grid[idx] = tone.luma_to_ink(eff_luma, spec.posterize_steps);
             }
@@ -1627,7 +1714,13 @@ mod tests {
         let img = make_test_image(40, 40, 0.5);
         let ctx = Ctx { bounds, mode: ColorMode::Rgb, alpha: false };
 
-        for grad in [ScreentoneGradientType::Linear, ScreentoneGradientType::Radial] {
+        for grad in [
+            ScreentoneGradientType::Linear,
+            ScreentoneGradientType::Radial,
+            ScreentoneGradientType::Angle,
+            ScreentoneGradientType::Reflected,
+            ScreentoneGradientType::Diamond,
+        ] {
             let spec =
                 ScreentoneSpec { grad_type: grad, grad_angle: 45.0, grad_size_start: 2.0, grad_size_end: 0.1, grad_color_trans: true, ..Default::default() };
             let out_px = screentone(&img, bounds, &ctx, &spec);
@@ -2317,5 +2410,44 @@ mod tests {
         let ctx = Ctx { bounds, mode: photocraft_color::ColorMode::Rgb, alpha: true };
         let out = screentone(&img, bounds, &ctx, &spec);
         assert!(out.chunks_exact(4).all(|px| px.iter().all(|v| v.is_finite() && *v >= -0.01 && *v <= 1.01)));
+    }
+
+    #[test]
+    fn render_screentone_to_surface_transfers_tiles_and_clips_area() {
+        let mut surf = Surface::new(photocraft_color::PixelFormat::RGBA8);
+        // Span multiple 256×256 tiles with non-tile-aligned borders (10..530 × 12..300) to test both
+        // zero-copy interior tile transfer and edge-tile clipping.
+        let bounds = Rect::new(10, 12, 530, 300);
+        let spec = ScreentoneSpec {
+            mode: ScreentoneMode::Sheet,
+            pattern_type: PatternType::Dots,
+            spacing_x: 12.0,
+            spacing_y: 12.0,
+            dot_size: 4.0,
+            foreground: [0.0, 0.0, 0.0, 1.0],
+            background: [1.0, 1.0, 1.0, 0.0],
+            ..Default::default()
+        };
+        let origin = origin_doc(&spec, bounds);
+        let written = render_screentone_to_surface(&mut surf, bounds, &spec, origin);
+        assert_eq!(written, bounds);
+        assert!(surf.tile_count() >= 4, "expected multi-tile output, got {}", surf.tile_count());
+        let cb = surf.content_bounds();
+        assert!(cb.x0 >= bounds.x0 && cb.y0 >= bounds.y0 && cb.x1 <= bounds.x1 && cb.y1 <= bounds.y1, "content leaked outside area: {cb:?} vs {bounds:?}");
+        // Pixels strictly outside `bounds` inside the straddling tiles must remain transparent.
+        assert_eq!(surf.pixel(9, 12)[3], 0.0);
+        assert_eq!(surf.pixel(10, 11)[3], 0.0);
+        assert_eq!(surf.pixel(530, 100)[3], 0.0);
+    }
+
+    #[test]
+    fn auto_gpu_predicate_handles_narrow_strips_consistently() {
+        use photocraft_color::ColorMode;
+        assert!(screentone_prefers_gpu(ScreentoneBackend::Auto, ColorMode::Rgb, Rect::from_xywh(0, 0, 2000, 300)));
+        assert!(screentone_prefers_gpu(ScreentoneBackend::Auto, ColorMode::Rgb, Rect::from_xywh(0, 0, 512, 512)));
+        assert!(!screentone_prefers_gpu(ScreentoneBackend::Auto, ColorMode::Rgb, Rect::from_xywh(0, 0, 256, 256)));
+        assert!(!screentone_prefers_gpu(ScreentoneBackend::Auto, ColorMode::Cmyk, Rect::from_xywh(0, 0, 2000, 300)));
+        assert!(!screentone_prefers_gpu(ScreentoneBackend::Gpu, ColorMode::Lab, Rect::from_xywh(0, 0, 2000, 300)));
+        assert!(!screentone_prefers_gpu(ScreentoneBackend::Cpu, ColorMode::Rgb, Rect::from_xywh(0, 0, 2000, 300)));
     }
 }

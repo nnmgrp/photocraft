@@ -95,6 +95,7 @@ impl Default for PsdExportOptions {
 }
 
 struct Ex<'c> {
+    doc: &'c Document,
     /// The save's interrupt: a layer saved in bands checks it between bands and channels, so a
     /// cancelled save stops within a band (#5333).
     ctl: Interrupt<'c>,
@@ -254,12 +255,92 @@ impl Ex<'_> {
         (to_psd_rect(r), ch, warnings)
     }
 
+    fn banded_mask_channel(&self, s: &Surface, r: photocraft_geom::Rect) -> ChannelData {
+        match self.banded_mask_pass(s, r, self.compression()) {
+            Ok(ch) => ch,
+            Err(_) if self.ctl.cancelled() => ChannelData::new(-2, None, Vec::new()),
+            Err(_) => self.banded_mask_pass(s, r, Compression::Raw).unwrap_or_else(|_| ChannelData::new(-2, None, Vec::new())),
+        }
+    }
+
+    fn banded_mask_pass(&self, s: &Surface, r: photocraft_geom::Rect, compression: Compression) -> craft_psd::Result<ChannelData> {
+        use std::io::Write as _;
+        use craft_psd::PsdError;
+        use craft_psd::compression::{PlaneLayout, encode_planes, predict};
+
+        let (w, h) = (r.width() as usize, r.height() as usize);
+        let bpp = s.format().bytes_per_pixel();
+        let band_budget = {
+            #[cfg(test)]
+            {
+                banded::BANDS_FOR_TESTS.get().map_or(64 << 20, |(_, b)| b)
+            }
+            #[cfg(not(test))]
+            {
+                64 << 20
+            }
+        };
+        let band_rows = (band_budget / (w * bpp).max(1)).max(1);
+        let depth = psd_depth(self.mask_fmt.sample);
+        let count = if self.version.is_psb() { 4 } else { 2 };
+        let head = if compression == Compression::Rle { h.checked_mul(count).ok_or(PsdError::LimitExceeded("row count overflow"))? } else { 0 };
+        let mut table = Vec::with_capacity(head);
+        let mut zip = (compression == Compression::ZipPrediction).then(|| flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default()));
+        let mut parts = stage::Parts::new(self.stage.clone(), head);
+        let ctl = self.ctl;
+        for y in (0..h).step_by(band_rows) {
+            if ctl.cancelled() {
+                return Err(PsdError::Invalid("cancelled".into()));
+            }
+            let rows = band_rows.min(h - y);
+            let top = r.y0 + y as i32;
+            let pieces = crate::pixels::par_map(crate::pixels::bands(rows), |b| {
+                s.to_interleaved(photocraft_geom::Rect::new(r.x0, top + b.start as i32, r.x1, top + b.end as i32))
+            });
+            let mut bytes = Vec::with_capacity(w * rows * bpp);
+            for piece in pieces {
+                bytes.extend_from_slice(&piece);
+            }
+            let mut plane = deinterleave(&bytes, 1, self.mask_fmt.sample, &[false]).remove(0);
+            drop(bytes);
+            let layout = PlaneLayout { planes: 1, width: w, height: rows, depth, version: self.version };
+            match compression {
+                Compression::Rle => {
+                    let mut packed = encode_planes(Compression::Rle, &plane, &layout)?;
+                    let rest = packed.split_off(rows * count);
+                    table.extend_from_slice(&packed);
+                    parts.push(rest);
+                }
+                Compression::ZipPrediction => {
+                    predict(&mut plane, &layout)?;
+                    let z = zip.as_mut().ok_or_else(|| PsdError::Invalid("banded ZIP mask without its stream".into()))?;
+                    z.write_all(&plane).map_err(|e| PsdError::Invalid(format!("zlib: {e}")))?;
+                    let out = std::mem::take(z.get_mut());
+                    parts.push(out);
+                }
+                _ => parts.push(plane),
+            }
+            #[cfg(test)]
+            banded::BANDS_DONE.set(banded::BANDS_DONE.get() + 1);
+        }
+        if let Some(z) = zip.take() {
+            parts.push(z.finish().map_err(|e| PsdError::Invalid(format!("zlib: {e}")))?);
+        }
+        parts.finish(-2, compression, &table)
+    }
+
     fn mask(&self, m: &LayerMask, vector: Option<(f32, f32)>) -> (MaskData, Option<ChannelData>) {
         let s = if m.surface.format() != self.mask_fmt { m.surface.convert(self.mask_fmt) } else { m.surface.clone() };
         let default = s.default_pixel().first().copied().unwrap_or(0.0);
         let r = s.content_bounds();
         let (w, h) = (r.width() as usize, r.height() as usize);
-        let plane = if r.is_empty() { Vec::new() } else { deinterleave(&s.to_interleaved(r), 1, self.mask_fmt.sample, &[false]).remove(0) };
+        let dense = u64::from(r.width()).saturating_mul(u64::from(r.height())).saturating_mul(s.format().bytes_per_pixel() as u64);
+        let channel = if !r.is_empty() && dense > banded::banded_from() {
+            self.banded_mask_channel(&s, r)
+        } else {
+            let plane = if r.is_empty() { Vec::new() } else { deinterleave(&s.to_interleaved(r), 1, self.mask_fmt.sample, &[false]).remove(0) };
+            self.encode(-2, &plane, w, h)
+        };
         let mut flags = 0u8;
         if !m.linked {
             flags |= PsdMask::FLAG_RELATIVE;
@@ -280,7 +361,7 @@ impl Ex<'_> {
             real: None,
             real_first: true,
         };
-        (MaskData::Mask(pm), Some(self.encode(-2, &plane, w, h)))
+        (MaskData::Mask(pm), Some(channel))
     }
 
     /// Prefer numbers above imported layer IDs, wrapping safely at u32::MAX.
@@ -1096,9 +1177,7 @@ impl Ex<'_> {
                     // PSD has no procedural screentone object: export its rendered pixels.
                     let px;
                     let surface_ref = if s.surface.tile_count() == 0 {
-                        let mut surf = Surface::new(self.fmt);
-                        let _ = photocraft_algo::screentone::render_screentone_to_surface(&mut surf, self.canvas, &s.spec, s.origin);
-                        px = surf;
+                        px = photocraft_compose::screentone::render_unbaked_for_export(self.doc, l, s, self.fmt);
                         &px
                     } else {
                         &s.surface
@@ -1142,6 +1221,43 @@ impl Ex<'_> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod mask_banded_tests {
+    use super::*;
+    use photocraft_doc::{Document, Layer, LayerContent, LayerMask, Rect, Size};
+
+    #[test]
+    fn banded_mask_matches_dense_bitwise() {
+        let mut doc = Document::new("mask_band", Size::new(64, 48), ColorMode::Rgb, SampleType::U8);
+        let mut surf = Surface::new(PixelFormat::RGBA8);
+        surf.fill_rect(Rect::new(0, 0, 64, 48), &[0.2, 0.4, 0.6, 1.0]);
+        let mut layer = Layer::new("L", LayerContent::Raster(surf));
+        let mut mask = LayerMask::hide_all();
+        let mut vals = Vec::with_capacity(64 * 48);
+        for y in 0..48u32 {
+            for x in 0..64u32 {
+                vals.push((((x * 7 + y * 13) % 256) as f32) / 255.0);
+            }
+        }
+        mask.surface.write_region(Rect::new(0, 0, 64, 48), &vals);
+        layer.mask = Some(mask);
+        doc.layers.push(layer);
+
+        banded::BANDS_FOR_TESTS.set(None);
+        let dense_psd = document_to_psd(&doc).unwrap();
+        banded::BANDS_DONE.set(0);
+        banded::BANDS_FOR_TESTS.set(Some((1, 512)));
+        let banded_psd = document_to_psd(&doc).unwrap();
+        let bands_run = banded::BANDS_DONE.get();
+        banded::BANDS_FOR_TESTS.set(None);
+
+        assert!(bands_run > 1, "expected banded mask pass to split into multiple bands, got {bands_run}");
+        let dense_mask_ch = dense_psd.layer_info.as_ref().unwrap().layers[0].channels.iter().find(|c| c.id == -2).unwrap();
+        let banded_mask_ch = banded_psd.layer_info.as_ref().unwrap().layers[0].channels.iter().find(|c| c.id == -2).unwrap();
+        assert_eq!(banded_mask_ch.data, dense_mask_ch.data, "banded mask channel bytes must equal dense bit-for-bit");
+    }
+}
 
 #[cfg(test)]
 pub(crate) use smart::EMBED_HASHED_SOURCE_BYTES;

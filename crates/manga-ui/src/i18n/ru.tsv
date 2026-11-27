@@ -541,6 +541,8 @@ layers	Fill:	Заливка:
 	🎨 Ukiyo-e brush	🎨 Кисть укиё-э
 	🤫 Whisper	🤫 Шёпот
 	◇ Chamfer rect	◇ Срезанный прям.
+	Black	Чёрный
+	Reflected	Отражённый
 Auto dot size	Авто-размер точки
 By area	по площади
 Coverage = brightness × Density; dot size is ignored	Покрытие = яркость × Плотность; размер точки не используется

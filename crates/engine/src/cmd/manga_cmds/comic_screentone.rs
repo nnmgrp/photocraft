@@ -36,17 +36,17 @@ pub const PATTERN: &str = "pattern.screentone";
 
 const PATTERNS: &str = "dots|lines|crosshatch|noise|gaussianNoise|stipple|hexgrid|checker|concentric|stars|hearts|triangles";
 const SHAPES: &str = "circle|square|diamond|hexagon";
-const GRADIENTS: &str = "none|linear|radial";
+const GRADIENTS: &str = "none|linear|radial|angle|reflected|diamond";
 const MODES: &str = "shading|sheet";
 
 /// The flat parameter notation for [`FILTER`] (Photoshop-style dialog units).
-const FILTER_PARAMS: &str = r##"{"mode":"shading|sheet","patternType":"dots|lines|crosshatch|noise|gaussianNoise|stipple|hexgrid|checker|concentric|stars|hearts|triangles","dotShape":"circle|square|diamond|hexagon","dotSize":0..500=6,"spacingX":1..2000=16,"spacingY":1..2000=16,"density":0..1=0.5,"angle":-360..360=0,"lineWidth":0..200=1.5,"crossAngle":-360..360=45,"originX":-100000..100000=0,"originY":-100000..100000=0,"roundness":0..1=0,"smoothness":0..1=1,"brightness":-1..1=0,"contrast":0..4=1,"whiteThreshold":0..1=0.85,"blackThreshold":0..1=0.08,"toneGamma":0.01..10=1,"preserveLines":bool,"lineThreshold":0..1=0.24,"lineThickness":0.5..5=1,"useSourceLuminance":bool=true,"satelliteEnabled":bool,"satelliteSize":0..500=4,"satelliteDistance":0..2000=18,"satelliteCount":1..8=4,"satelliteAngle":-360..360=0,"satelliteShape":"circle|square|diamond|hexagon","satelliteStretch":0..10=0,"aspectX":0.05..20=1,"aspectY":0.05..20=1,"rowOffset":-1..1=0,"mergeFactor":0..1=0,"jitterPosition":0..100=0,"jitterSize":0..100=0,"gradientType":"none|linear|radial","gradientAngle":-360..360=90,"gradientReverse":bool,"gradientMidpoint":0..1=0.5,"gradientSizeStart":0..10=1,"gradientSizeEnd":0..10=0,"gradientStretchStart":0..10=1,"gradientStretchEnd":0..10=1,"gradientColorTransition":bool,"foreground":color=#000000,"background":color,"rotateCanvas":-360..360=0,"rotatePattern":-360..360=0,"seed":u32=42,"equalizeArea":bool,"autoDotSize":bool,"posterizeSteps":0..8=0,"scrapeStrength":0..1=0,"satelliteLayout":"cross|even"}"##;
+const FILTER_PARAMS: &str = r##"{"mode":"shading|sheet","patternType":"dots|lines|crosshatch|noise|gaussianNoise|stipple|hexgrid|checker|concentric|stars|hearts|triangles","dotShape":"circle|square|diamond|hexagon","dotSize":0..500=6,"spacingX":1..2000=16,"spacingY":1..2000=16,"density":0..1=0.5,"angle":-360..360=0,"lineWidth":0..200=1.5,"crossAngle":-360..360=45,"originX":-100000..100000=0,"originY":-100000..100000=0,"roundness":0..1=0,"smoothness":0..1=1,"brightness":-1..1=0,"contrast":0..4=1,"whiteThreshold":0..1=0.85,"blackThreshold":0..1=0.08,"toneGamma":0.01..10=1,"preserveLines":bool,"lineThreshold":0..1=0.24,"lineThickness":0.5..5=1,"useSourceLuminance":bool=true,"satelliteEnabled":bool,"satelliteSize":0..500=4,"satelliteDistance":0..2000=18,"satelliteCount":1..8=4,"satelliteAngle":-360..360=0,"satelliteShape":"circle|square|diamond|hexagon","satelliteStretch":0..10=0,"aspectX":0.05..20=1,"aspectY":0.05..20=1,"rowOffset":-1..1=0,"mergeFactor":0..1=0,"jitterPosition":0..100=0,"jitterSize":0..100=0,"gradientType":"none|linear|radial|angle|reflected|diamond","gradientAngle":-360..360=90,"gradientReverse":bool,"gradientMidpoint":0..1=0.5,"gradientSizeStart":0..10=1,"gradientSizeEnd":0..10=0,"gradientStretchStart":0..10=1,"gradientStretchEnd":0..10=1,"gradientColorTransition":bool,"foreground":color=#000000,"background":color,"rotateCanvas":-360..360=0,"rotatePattern":-360..360=0,"seed":u32=42,"equalizeArea":bool,"autoDotSize":bool,"posterizeSteps":0..8=0,"scrapeStrength":0..1=0,"satelliteLayout":"cross|even"}"##;
 
 /// The flat parameter notation for [`LAYER`].
-const PARAMS: &str = r##"{"preset":text,"mode":"shading|sheet","patternType":"dots|lines|crosshatch|noise|gaussianNoise|stipple|hexgrid|checker|concentric|stars|hearts|triangles","dotShape":"circle|square|diamond|hexagon","dotSize":0..500=6,"spacingX":1..2000=16,"spacingY":1..2000=16,"density":0..1=0.5,"angle":-360..360=0,"lineWidth":0..200=1.5,"crossAngle":-360..360=45,"originX":-100000..100000=0,"originY":-100000..100000=0,"roundness":0..1=0,"smoothness":0..1=1,"brightness":-1..1=0,"contrast":0..4=1,"whiteThreshold":0..1=0.85,"blackThreshold":0..1=0.08,"toneGamma":0.01..10=1,"preserveLines":bool,"lineThreshold":0..1=0.24,"lineThickness":0.5..5=1,"useSourceLuminance":bool=true,"satelliteEnabled":bool,"satelliteSize":0..500=4,"satelliteDistance":0..2000=18,"satelliteCount":1..8=4,"satelliteAngle":-360..360=0,"satelliteShape":"circle|square|diamond|hexagon","satelliteStretch":0..10=0,"aspectX":0.05..20=1,"aspectY":0.05..20=1,"rowOffset":-1..1=0,"mergeFactor":0..1=0,"jitterPosition":0..100=0,"jitterSize":0..100=0,"gradientType":"none|linear|radial","gradientAngle":-360..360=90,"gradientReverse":bool,"gradientMidpoint":0..1=0.5,"gradientSizeStart":0..10=1,"gradientSizeEnd":0..10=0,"gradientStretchStart":0..10=1,"gradientStretchEnd":0..10=1,"gradientColorTransition":bool,"foreground":color=#000000,"background":color,"rotateCanvas":-360..360=0,"rotatePattern":-360..360=0,"seed":u32=42,"equalizeArea":bool,"autoDotSize":bool,"posterizeSteps":0..8=0,"scrapeStrength":0..1=0,"satelliteLayout":"cross|even","layer":id?,"name":text?} → {layer,bounds}"##;
+const PARAMS: &str = r##"{"preset":text,"mode":"shading|sheet","patternType":"dots|lines|crosshatch|noise|gaussianNoise|stipple|hexgrid|checker|concentric|stars|hearts|triangles","dotShape":"circle|square|diamond|hexagon","dotSize":0..500=6,"spacingX":1..2000=16,"spacingY":1..2000=16,"density":0..1=0.5,"angle":-360..360=0,"lineWidth":0..200=1.5,"crossAngle":-360..360=45,"originX":-100000..100000=0,"originY":-100000..100000=0,"roundness":0..1=0,"smoothness":0..1=1,"brightness":-1..1=0,"contrast":0..4=1,"whiteThreshold":0..1=0.85,"blackThreshold":0..1=0.08,"toneGamma":0.01..10=1,"preserveLines":bool,"lineThreshold":0..1=0.24,"lineThickness":0.5..5=1,"useSourceLuminance":bool=true,"satelliteEnabled":bool,"satelliteSize":0..500=4,"satelliteDistance":0..2000=18,"satelliteCount":1..8=4,"satelliteAngle":-360..360=0,"satelliteShape":"circle|square|diamond|hexagon","satelliteStretch":0..10=0,"aspectX":0.05..20=1,"aspectY":0.05..20=1,"rowOffset":-1..1=0,"mergeFactor":0..1=0,"jitterPosition":0..100=0,"jitterSize":0..100=0,"gradientType":"none|linear|radial|angle|reflected|diamond","gradientAngle":-360..360=90,"gradientReverse":bool,"gradientMidpoint":0..1=0.5,"gradientSizeStart":0..10=1,"gradientSizeEnd":0..10=0,"gradientStretchStart":0..10=1,"gradientStretchEnd":0..10=1,"gradientColorTransition":bool,"foreground":color=#000000,"background":color,"rotateCanvas":-360..360=0,"rotatePattern":-360..360=0,"seed":u32=42,"equalizeArea":bool,"autoDotSize":bool,"posterizeSteps":0..8=0,"scrapeStrength":0..1=0,"satelliteLayout":"cross|even","clipped":bool?,"layer":id?,"name":text?} → {layer,bounds}"##;
 
 /// [PATTERN]'s notation: the same dialog fields, but the pattern library is the target.
-const PATTERN_PARAMS: &str = r##"{"preset":text,"mode":"shading|sheet","patternType":"dots|lines|crosshatch|noise|gaussianNoise|stipple|hexgrid|checker|concentric|stars|hearts|triangles","dotShape":"circle|square|diamond|hexagon","dotSize":0..500=6,"spacingX":1..2000=16,"spacingY":1..2000=16,"density":0..1=0.5,"angle":-360..360=0,"lineWidth":0..200=1.5,"crossAngle":-360..360=45,"originX":-100000..100000=0,"originY":-100000..100000=0,"roundness":0..1=0,"smoothness":0..1=1,"brightness":-1..1=0,"contrast":0..4=1,"whiteThreshold":0..1=0.85,"blackThreshold":0..1=0.08,"toneGamma":0.01..10=1,"preserveLines":bool,"lineThreshold":0..1=0.24,"lineThickness":0.5..5=1,"useSourceLuminance":bool=true,"satelliteEnabled":bool,"satelliteSize":0..500=4,"satelliteDistance":0..2000=18,"satelliteCount":1..8=4,"satelliteAngle":-360..360=0,"satelliteShape":"circle|square|diamond|hexagon","satelliteStretch":0..10=0,"aspectX":0.05..20=1,"aspectY":0.05..20=1,"rowOffset":-1..1=0,"mergeFactor":0..1=0,"jitterPosition":0..100=0,"jitterSize":0..100=0,"gradientType":"none|linear|radial","gradientAngle":-360..360=90,"gradientReverse":bool,"gradientMidpoint":0..1=0.5,"gradientSizeStart":0..10=1,"gradientSizeEnd":0..10=0,"gradientStretchStart":0..10=1,"gradientStretchEnd":0..10=1,"gradientColorTransition":bool,"foreground":color=#000000,"background":color,"rotateCanvas":-360..360=0,"rotatePattern":-360..360=0,"seed":u32=42,"equalizeArea":bool,"autoDotSize":bool,"posterizeSteps":0..8=0,"scrapeStrength":0..1=0,"satelliteLayout":"cross|even","name":text?} → {pattern,bounds}"##;
+const PATTERN_PARAMS: &str = r##"{"preset":text,"mode":"shading|sheet","patternType":"dots|lines|crosshatch|noise|gaussianNoise|stipple|hexgrid|checker|concentric|stars|hearts|triangles","dotShape":"circle|square|diamond|hexagon","dotSize":0..500=6,"spacingX":1..2000=16,"spacingY":1..2000=16,"density":0..1=0.5,"angle":-360..360=0,"lineWidth":0..200=1.5,"crossAngle":-360..360=45,"originX":-100000..100000=0,"originY":-100000..100000=0,"roundness":0..1=0,"smoothness":0..1=1,"brightness":-1..1=0,"contrast":0..4=1,"whiteThreshold":0..1=0.85,"blackThreshold":0..1=0.08,"toneGamma":0.01..10=1,"preserveLines":bool,"lineThreshold":0..1=0.24,"lineThickness":0.5..5=1,"useSourceLuminance":bool=true,"satelliteEnabled":bool,"satelliteSize":0..500=4,"satelliteDistance":0..2000=18,"satelliteCount":1..8=4,"satelliteAngle":-360..360=0,"satelliteShape":"circle|square|diamond|hexagon","satelliteStretch":0..10=0,"aspectX":0.05..20=1,"aspectY":0.05..20=1,"rowOffset":-1..1=0,"mergeFactor":0..1=0,"jitterPosition":0..100=0,"jitterSize":0..100=0,"gradientType":"none|linear|radial|angle|reflected|diamond","gradientAngle":-360..360=90,"gradientReverse":bool,"gradientMidpoint":0..1=0.5,"gradientSizeStart":0..10=1,"gradientSizeEnd":0..10=0,"gradientStretchStart":0..10=1,"gradientStretchEnd":0..10=1,"gradientColorTransition":bool,"foreground":color=#000000,"background":color,"rotateCanvas":-360..360=0,"rotatePattern":-360..360=0,"seed":u32=42,"equalizeArea":bool,"autoDotSize":bool,"posterizeSteps":0..8=0,"scrapeStrength":0..1=0,"satelliteLayout":"cross|even","name":text?} → {pattern,bounds}"##;
 
 fn f_any(p: &Value, keys: &[&str], d: f32) -> f32 {
     for &k in keys {
@@ -137,6 +137,9 @@ fn gradient_any(p: &Value, keys: &[&str], base: ScreentoneGradientType) -> Scree
                 "none" => return ScreentoneGradientType::None,
                 "linear" => return ScreentoneGradientType::Linear,
                 "radial" => return ScreentoneGradientType::Radial,
+                "angle" => return ScreentoneGradientType::Angle,
+                "reflected" => return ScreentoneGradientType::Reflected,
+                "diamond" => return ScreentoneGradientType::Diamond,
                 _ => {}
             }
         }
@@ -300,6 +303,9 @@ pub(crate) fn validate_params(id: &str, p: &Value) -> Result<()> {
             "foreground" | "background" if !value.is_string() && !value.is_array() => {
                 return Err(bad(format!("`{key}` must be a colour")));
             }
+            "clipped" if !value.is_boolean() => {
+                return Err(bad("`clipped` must be a boolean".into()));
+            }
             _ => {}
         }
     }
@@ -325,49 +331,103 @@ fn requested_name(p: &Value) -> String {
 
 /// Whether `surf` holds non-white, non-transparent ink inside `rect` that can modulate halftone
 /// dot sizes (`(1.0 - luma) * alpha > 1e-3`).
+fn pixel_has_source_ink(px: &[f32], fmt: PixelFormat) -> bool {
+    let ch = fmt.channels();
+    let color_ch = fmt.mode.color_channels();
+    if px.len() < ch || ch == 0 || color_ch == 0 {
+        return false;
+    }
+    let a = if fmt.alpha { px[ch - 1].clamp(0.0, 1.0) } else { 1.0 };
+    if a <= 1e-3 {
+        return false;
+    }
+    let luma = match fmt.mode {
+        photocraft_color::ColorMode::Grayscale | photocraft_color::ColorMode::Bitmap => px[0],
+        photocraft_color::ColorMode::Cmyk if color_ch >= 4 => {
+            let k = px[3];
+            let r = (1.0 - px[0]) * (1.0 - k);
+            let g = (1.0 - px[1]) * (1.0 - k);
+            let b = (1.0 - px[2]) * (1.0 - k);
+            0.2126 * r + 0.7152 * g + 0.0722 * b
+        }
+        photocraft_color::ColorMode::Lab => px[0],
+        _ if color_ch >= 3 => 0.2126 * px[0] + 0.7152 * px[1] + 0.0722 * px[2],
+        _ => px[0],
+    }
+    .clamp(0.0, 1.0);
+    (1.0 - luma) * a > 1e-3
+}
+
+/// Scans `surf` inside `rect` tile by tile (<= 1 MB per tile) with early exit on the first
+/// non-zero ink pixel, avoiding multi-gigabyte full-canvas `read_region` allocations.
 fn has_source_ink(surf: &Surface, rect: Rect) -> bool {
     let cb = surf.content_bounds().intersect(&rect);
+    let fmt = surf.format();
+    let ch = fmt.channels();
+    if ch == 0 || fmt.mode.color_channels() == 0 {
+        return false;
+    }
+    if pixel_has_source_ink(&surf.default_pixel(), fmt) && !rect.is_empty() {
+        let t = i64::from(photocraft_geom::TILE_SIZE);
+        let cols = (i64::from(rect.x1) - 1).div_euclid(t) - i64::from(rect.x0).div_euclid(t) + 1;
+        let rows = (i64::from(rect.y1) - 1).div_euclid(t) - i64::from(rect.y0).div_euclid(t) + 1;
+        let grid_count = (cols.max(0) as u64).saturating_mul(rows.max(0) as u64);
+        let stored_in_rect = surf.tiles().filter(|(c, _)| !c.rect().intersect(&rect).is_empty()).count() as u64;
+        if stored_in_rect < grid_count {
+            return true;
+        }
+    }
     if cb.is_empty() {
         return false;
     }
-    let fmt = surf.format();
-    let ch = fmt.channels();
-    let color_ch = fmt.mode.color_channels();
-    if ch == 0 || color_ch == 0 {
-        return false;
+    let mut tile_buf = Vec::new();
+    for (tc, _) in surf.tiles() {
+        let tr = tc.rect().intersect(&cb);
+        if tr.is_empty() {
+            continue;
+        }
+        surf.read_region_into(tr, &mut tile_buf);
+        if tile_buf.chunks_exact(ch).any(|px| pixel_has_source_ink(px, fmt)) {
+            return true;
+        }
     }
-    let has_alpha = fmt.alpha;
-    let buf = surf.read_region(cb);
-    buf.chunks_exact(ch).any(|px| {
-        let a = if has_alpha { px[ch - 1].clamp(0.0, 1.0) } else { 1.0 };
-        if a <= 1e-3 {
-            return false;
-        }
-        let luma = match fmt.mode {
-            photocraft_color::ColorMode::Grayscale | photocraft_color::ColorMode::Bitmap => px[0],
-            photocraft_color::ColorMode::Cmyk if color_ch >= 4 => {
-                let k = px[3];
-                let r = (1.0 - px[0]) * (1.0 - k);
-                let g = (1.0 - px[1]) * (1.0 - k);
-                let b = (1.0 - px[2]) * (1.0 - k);
-                0.2126 * r + 0.7152 * g + 0.0722 * b
+    false
+}
+
+fn copy_surface_region_tiled(src: &Surface, rect: Rect) -> Surface {
+    let fmt = src.format();
+    let mut out = Surface::new(fmt);
+    let r = src.content_bounds().intersect(&rect);
+    if r.is_empty() {
+        return out;
+    }
+    let mut interior = Vec::new();
+    let mut tile_buf = Vec::new();
+    for (tc, tile) in src.tiles() {
+        let tr = tc.rect();
+        if tr.x0 >= r.x0 && tr.y0 >= r.y0 && tr.x1 <= r.x1 && tr.y1 <= r.y1 {
+            interior.push((*tc, tile.clone()));
+        } else {
+            let clip = tr.intersect(&r);
+            if !clip.is_empty() {
+                src.read_region_into(clip, &mut tile_buf);
+                out.write_region(clip, &tile_buf);
             }
-            photocraft_color::ColorMode::Lab => px[0],
-            _ if color_ch >= 3 => 0.2126 * px[0] + 0.7152 * px[1] + 0.0722 * px[2],
-            _ => px[0],
         }
-        .clamp(0.0, 1.0);
-        (1.0 - luma) * a > 1e-3
-    })
+    }
+    if !interior.is_empty() {
+        out.put_tiles(interior);
+    }
+    out
 }
 
 /// Samples the underlying tonal source inside `rect` when `useSourceLuminance` is active:
 ///
 /// 1. If `active` is a non-screentone pixel layer that already has tonal ink in `rect`, its own
-///    surface region is sampled directly (with transparent pixels treated as 0 ink by `algo`).
+///    surface region is copied tile-by-tile (with transparent pixels treated as 0 ink by `algo`).
 /// 2. Otherwise (empty layer, group, or restyling an existing screentone layer `exclude`), all
-///    visible non-screentone pixel layers (excluding `exclude`) are composited over white paper so
-///    transparent layers above white paper or multiple sketch/shading layers combine naturally.
+///    visible non-screentone layers (excluding `exclude`) are composited band-by-band over white
+///    paper (`BAND_PIXELS = 8 MP`, ~140 MB per band) so large 17K×25K pages never OOM.
 /// 3. If the resulting source has no tonal ink at all (e.g. a blank white canvas), returns `None`
 ///    so the caller falls back to a uniform procedural sheet (`use_source_luminance = false`).
 pub(crate) fn sample_source_surface(
@@ -387,11 +447,7 @@ pub(crate) fn sample_source_surface(
         && let Some(surf) = layer.surface()
         && has_source_ink(surf, rect)
     {
-        let mut out = Surface::new(surf.format());
-        let r = surf.content_bounds().intersect(&rect);
-        let px = surf.read_region(r);
-        out.write_region(r, &px);
-        return Some(out);
+        return Some(copy_surface_region_tiled(surf, rect));
     }
 
     let mut flat = doc.clone();
@@ -400,42 +456,67 @@ pub(crate) fn sample_source_surface(
             l.visible = false;
         }
     }
-    let comp = photocraft_compose::render(&flat, rect).over_background([1.0, 1.0, 1.0]);
     let mut out = Surface::new(fmt);
     let ch = fmt.channels();
     let color_ch = fmt.mode.color_channels();
     let has_alpha = fmt.alpha;
-    let mut buf = vec![0.0f32; (rect.width() as usize) * (rect.height() as usize) * ch];
-    for (dst, rgba) in buf.chunks_exact_mut(ch).zip(comp.px.iter()) {
-        let [r, g, b, _] = *rgba;
-        match fmt.mode {
-            photocraft_color::ColorMode::Grayscale | photocraft_color::ColorMode::Bitmap => {
-                dst[0] = 0.299 * r + 0.587 * g + 0.114 * b;
-            }
-            photocraft_color::ColorMode::Cmyk if color_ch >= 4 => {
-                let k = (1.0f32 - r.max(g).max(b)).clamp(0.0, 1.0);
-                if k < 1.0 - 1e-6 {
-                    dst[0] = (1.0 - r - k) / (1.0 - k);
-                    dst[1] = (1.0 - g - k) / (1.0 - k);
-                    dst[2] = (1.0 - b - k) / (1.0 - k);
+    let mut buf = Vec::new();
+    let mut any_ink = false;
+    let _ = photocraft_compose::render_bands(&flat, rect, 0, |band| -> std::result::Result<(), ()> {
+        let comp = band.over_background([1.0, 1.0, 1.0]);
+        buf.resize(comp.px.len() * ch, 0.0f32);
+        for (dst, rgba) in buf.chunks_exact_mut(ch).zip(comp.px.iter()) {
+            let [r, g, b, _] = *rgba;
+            match fmt.mode {
+                photocraft_color::ColorMode::Grayscale | photocraft_color::ColorMode::Bitmap => {
+                    let l = 0.299 * r + 0.587 * g + 0.114 * b;
+                    dst[0] = l;
+                    if 1.0 - l.clamp(0.0, 1.0) > 1e-3 {
+                        any_ink = true;
+                    }
                 }
-                dst[3] = k;
+                photocraft_color::ColorMode::Cmyk if color_ch >= 4 => {
+                    let k = (1.0f32 - r.max(g).max(b)).clamp(0.0, 1.0);
+                    if k < 1.0 - 1e-6 {
+                        dst[0] = (1.0 - r - k) / (1.0 - k);
+                        dst[1] = (1.0 - g - k) / (1.0 - k);
+                        dst[2] = (1.0 - b - k) / (1.0 - k);
+                    } else {
+                        dst[0] = 0.0;
+                        dst[1] = 0.0;
+                        dst[2] = 0.0;
+                    }
+                    dst[3] = k;
+                    if k > 1e-3 || dst[0] > 1e-3 || dst[1] > 1e-3 || dst[2] > 1e-3 {
+                        any_ink = true;
+                    }
+                }
+                _ if color_ch >= 3 => {
+                    dst[0] = r;
+                    dst[1] = g;
+                    dst[2] = b;
+                    let l = (0.2126 * r + 0.7152 * g + 0.0722 * b).clamp(0.0, 1.0);
+                    if 1.0 - l > 1e-3 {
+                        any_ink = true;
+                    }
+                }
+                _ => {
+                    let l = 0.299 * r + 0.587 * g + 0.114 * b;
+                    dst[0] = l;
+                    if 1.0 - l.clamp(0.0, 1.0) > 1e-3 {
+                        any_ink = true;
+                    }
+                }
             }
-            _ if color_ch >= 3 => {
-                dst[0] = r;
-                dst[1] = g;
-                dst[2] = b;
-            }
-            _ => {
-                dst[0] = 0.299 * r + 0.587 * g + 0.114 * b;
+            if has_alpha {
+                dst[ch - 1] = 1.0;
             }
         }
-        if has_alpha {
-            dst[ch - 1] = 1.0;
-        }
-    }
-    out.write_region(rect, &buf);
-    has_source_ink(&out, rect).then_some(out)
+        out.write_region(comp.rect, &buf);
+        Ok(())
+    });
+    out.prune();
+    any_ink.then_some(out)
 }
 
 /// Ensures a screentone layer has its raster pixels baked into `st.surface` on the CPU
@@ -535,6 +616,36 @@ pub(crate) fn ensure_doc_screentones_baked(doc: &mut photocraft_doc::Document) {
     }
 }
 
+/// Bakes ONLY unbaked `Shading` (`use_source_luminance == true`) screentone layers band-by-band
+/// against their underlying document backdrop. Non-`Shading` screentones are skipped (0 full-canvas
+/// allocations) because `photocraft_compose::render_bands` evaluates them live on the fly.
+pub(crate) fn ensure_layer_shading_screentone_baked(doc: &photocraft_doc::Document, layer: &mut photocraft_doc::Layer) {
+    let is_unbaked_shading = matches!(
+        &layer.content,
+        LayerContent::Screentone(st) if st.surface.tile_count() == 0 && st.spec.mode == ScreentoneMode::Shading && st.spec.use_source_luminance
+    );
+    if !is_unbaked_shading {
+        return;
+    }
+    let snapshot = layer.clone();
+    if let LayerContent::Screentone(st) = &mut layer.content {
+        let fmt = st.surface.format();
+        st.surface = photocraft_compose::screentone::render_unbaked_for_export(doc, &snapshot, st, fmt);
+    }
+}
+
+/// Recursively bakes only unbaked `Shading` screentones inside a layer/group tree (band-by-band),
+/// leaving Sheet/non-Shading screentones unbaked for live banded evaluation during merges.
+pub(crate) fn ensure_layer_tree_shading_screentones_baked(doc: &photocraft_doc::Document, layer: &mut photocraft_doc::Layer) {
+    if let LayerContent::Group(g) = &mut layer.content {
+        for c in &mut g.children {
+            ensure_layer_tree_shading_screentones_baked(doc, c);
+        }
+    } else {
+        ensure_layer_shading_screentone_baked(doc, layer);
+    }
+}
+
 pub(crate) fn ensure_layer_tree_screentones_baked(doc: &photocraft_doc::Document, layer: &mut photocraft_doc::Layer) {
     if let LayerContent::Group(g) = &mut layer.content {
         for c in &mut g.children {
@@ -542,6 +653,16 @@ pub(crate) fn ensure_layer_tree_screentones_baked(doc: &photocraft_doc::Document
         }
     } else if matches!(layer.content, LayerContent::Screentone(_)) {
         ensure_layer_screentone_baked(doc, layer);
+    }
+}
+
+fn screentone_layer_blend(spec: &ScreentoneSpec) -> photocraft_color::BlendMode {
+    let opaque_paper = spec.background[3] >= 0.99;
+    let fg_luma = 0.299 * spec.foreground[0] + 0.587 * spec.foreground[1] + 0.114 * spec.foreground[2];
+    if opaque_paper || fg_luma > 0.35 {
+        photocraft_color::BlendMode::Normal
+    } else {
+        photocraft_color::BlendMode::Multiply
     }
 }
 
@@ -566,7 +687,7 @@ fn create_layer(s: &mut Session, p: &Value) -> Result<Value> {
             spec.use_source_luminance = prev.spec.use_source_luminance;
             spec.mode = prev.spec.mode;
         }
-        return restyle_layer(s, photocraft_doc::LayerId(id), FilterParams::Screentone { spec });
+        return restyle_layer(s, photocraft_doc::LayerId(id), FilterParams::Screentone { spec }, p.get("clipped").and_then(Value::as_bool));
     }
 
     let st = s.active().ok_or(EngineError::NoDocument)?;
@@ -581,7 +702,7 @@ fn create_layer(s: &mut Session, p: &Value) -> Result<Value> {
     // equivalent document-space anchor so its lattice stays put when the frame changes.
     let origin = algo::screentone::origin_doc(&spec, bounds);
     let sample_rect = bounds.inflate(spec.halo_radius()).intersect(&doc_bounds);
-    let is_gpu = spec.backend == ScreentoneBackend::Gpu || (spec.backend == ScreentoneBackend::Auto && bounds.width() >= 512 && bounds.height() >= 512);
+    let is_gpu = algo::screentone::screentone_prefers_gpu(spec.backend, st.doc.mode, bounds);
     let skip_cpu_bake = is_gpu;
     log::info!(
         "[SCREENTONE:CMD] create_screentone: bounds={:?}, mode={:?}, backend={:?}, use_source_lum={}, is_gpu={}, skip_cpu_bake={}",
@@ -628,14 +749,16 @@ fn create_layer(s: &mut Session, p: &Value) -> Result<Value> {
         mask.surface.prune();
         mask
     });
-    let opaque_paper = spec.background[3] >= 0.99;
+    let clipped = b_any(p, &["clipped"], false);
+    let blend = screentone_layer_blend(&spec);
     let content = ScreentoneLayer::new(spec, origin, rendered);
     let id = s.edit("Screentone", |doc, active| {
         let mut l = Layer::new(doc.next_layer_name(&name), LayerContent::Screentone(content));
         l.mask = mask;
-        // Opaque paper shading layers sit in Normal blend mode so clean white paper covers the
-        // reference drawing underneath; transparent film sheets darken via Multiply.
-        l.blend = if opaque_paper { photocraft_color::BlendMode::Normal } else { photocraft_color::BlendMode::Multiply };
+        l.clipped = clipped;
+        // Opaque paper or light foreground tones sit in Normal blend mode so clean paper or
+        // white/bright dots cover what is underneath; dark transparent sheets darken via Multiply.
+        l.blend = blend;
         let id = doc.insert_above(*active, l);
         *active = Some(id);
         Ok(id)
@@ -689,17 +812,24 @@ fn revealed_bounds(mask: &LayerMask, canvas: Rect) -> Option<Rect> {
         return Some(Rect::new(canvas.x0, canvas.y0, 0, 0));
     }
     let ch = mask.surface.channels().max(1);
-    let buf = mask.surface.read_region(scan);
-    let w = scan.width() as usize;
+    let mut tile_buf = Vec::new();
     let (mut x0, mut y0, mut x1, mut y1) = (scan.x1, scan.y1, scan.x0, scan.y0);
-    for (i, px) in buf.chunks_exact(ch).enumerate() {
-        if px[0] > 0.0 {
-            let x = scan.x0 + (i % w) as i32;
-            let y = scan.y0 + (i / w) as i32;
-            x0 = x0.min(x);
-            y0 = y0.min(y);
-            x1 = x1.max(x + 1);
-            y1 = y1.max(y + 1);
+    for (tc, _) in mask.surface.tiles() {
+        let tr = tc.rect().intersect(&scan);
+        if tr.is_empty() {
+            continue;
+        }
+        mask.surface.read_region_into(tr, &mut tile_buf);
+        let tw = tr.width() as usize;
+        for (i, px) in tile_buf.chunks_exact(ch).enumerate() {
+            if px[0] > 0.0 {
+                let x = tr.x0 + (i % tw) as i32;
+                let y = tr.y0 + (i / tw) as i32;
+                x0 = x0.min(x);
+                y0 = y0.min(y);
+                x1 = x1.max(x + 1);
+                y1 = y1.max(y + 1);
+            }
         }
     }
     (x1 > x0 && y1 > y0).then(|| Rect::new(x0, y0, x1, y1))
@@ -709,7 +839,7 @@ fn revealed_bounds(mask: &LayerMask, canvas: Rect) -> Option<Rect> {
 /// layer's content in place. The layer id, name and mask survive — only the pixels change — and
 /// the swap is a single journalled edit, so a drag undoes as exactly one step. Covers
 /// [`sheet_bounds`] with the target; the mask is never re-derived from the selection.
-fn restyle_layer(s: &mut Session, id: photocraft_doc::LayerId, mut params: FilterParams) -> Result<Value> {
+fn restyle_layer(s: &mut Session, id: photocraft_doc::LayerId, mut params: FilterParams, clipped: Option<bool>) -> Result<Value> {
     let FilterParams::Screentone { spec } = &mut params else {
         return Err(EngineError::Other("restyle expects screentone parameters".into()));
     };
@@ -724,7 +854,7 @@ fn restyle_layer(s: &mut Session, id: photocraft_doc::LayerId, mut params: Filte
     };
     let origin = algo::screentone::origin_doc(spec, bounds);
     let sample_rect = bounds.inflate(spec.halo_radius()).intersect(&st.doc.bounds());
-    let is_gpu = spec.backend == ScreentoneBackend::Gpu || (spec.backend == ScreentoneBackend::Auto && bounds.width() >= 512 && bounds.height() >= 512);
+    let is_gpu = algo::screentone::screentone_prefers_gpu(spec.backend, st.doc.mode, bounds);
     let skip_cpu_bake = is_gpu;
     log::info!(
         "[SCREENTONE:CMD] restyle_layer: layer={}, bounds={:?}, mode={:?}, backend={:?}, use_source_lum={}, is_gpu={}, skip_cpu_bake={}",
@@ -762,10 +892,13 @@ fn restyle_layer(s: &mut Session, id: photocraft_doc::LayerId, mut params: Filte
     s.edit("Screentone", |doc, _| {
         let layer = doc.layer_mut(id).ok_or_else(|| EngineError::Other("the layer to restyle is gone".into()))?;
         if let LayerContent::Screentone(previous) = &mut layer.content {
-            let was_opaque = previous.spec.background[3] >= 0.99;
-            let now_opaque = spec.background[3] >= 0.99;
-            if was_opaque != now_opaque {
-                layer.blend = if now_opaque { photocraft_color::BlendMode::Normal } else { photocraft_color::BlendMode::Multiply };
+            let prev_auto_blend = screentone_layer_blend(&previous.spec);
+            let next_auto_blend = screentone_layer_blend(&spec);
+            if layer.blend == prev_auto_blend {
+                layer.blend = next_auto_blend;
+            }
+            if let Some(clipped) = clipped {
+                layer.clipped = clipped;
             }
             previous.spec = spec;
             previous.origin = origin;
@@ -1488,5 +1621,154 @@ mod tests {
         let active_id = s.active().unwrap().active_layer.unwrap().0;
         let px = read_layer(&s, active_id);
         assert!(px.as_chunks::<4>().0.iter().any(|p| p[0] < 0.95 || p[1] < 0.95 || p[2] < 0.95), "Flattened image must contain screentone dots");
+    }
+
+    #[test]
+    fn test_merge_layers_and_merge_group_preserve_unbaked_gpu_screentone() {
+        // Merge Layers (`layer.mergeLayers`) on an unbaked GPU screentone + lower layer.
+        let mut s = session(8);
+        let base_id = s.active().unwrap().active_layer.unwrap();
+        let r = s
+            .execute(
+                LAYER,
+                json!({
+                    "backend": "gpu",
+                    "patternType": "dots",
+                    "dotSize": 6.0,
+                    "spacingX": 16.0,
+                    "spacingY": 16.0
+                }),
+            )
+            .unwrap();
+        let tone_id = photocraft_doc::LayerId(r["layer"].as_u64().unwrap());
+        s.active_mut().unwrap().selected_layers = [base_id, tone_id].into_iter().collect();
+        s.execute("layer.mergeLayers", json!({})).unwrap();
+        let merged_id = s.active().unwrap().active_layer.unwrap().0;
+        let px = read_layer(&s, merged_id);
+        assert!(px.as_chunks::<4>().0.iter().any(|p| p[3] > 0.0), "Merged layers must keep unbaked screentone ink");
+
+        // Merge Group (`layer.mergeGroup`) containing an unbaked GPU screentone layer.
+        let mut s2 = session(8);
+        let r2 = s2
+            .execute(
+                LAYER,
+                json!({
+                    "backend": "gpu",
+                    "patternType": "dots",
+                    "dotSize": 6.0,
+                    "spacingX": 16.0,
+                    "spacingY": 16.0
+                }),
+            )
+            .unwrap();
+        let tone_id2 = photocraft_doc::LayerId(r2["layer"].as_u64().unwrap());
+        s2.active_mut().unwrap().selected_layers = [tone_id2].into_iter().collect();
+        let g = s2.execute("layer.groupLayers", json!({})).unwrap();
+        let gid = g["layer"].as_u64().unwrap();
+        s2.execute("layer.mergeGroup", json!({"layer": gid})).unwrap();
+        let merged_group_id = s2.active().unwrap().active_layer.unwrap().0;
+        let px2 = read_layer(&s2, merged_group_id);
+        assert!(px2.as_chunks::<4>().0.iter().any(|p| p[3] > 0.0), "Merged group must keep unbaked screentone ink");
+    }
+
+    #[test]
+    fn white_foreground_screentone_uses_normal_blend_and_clipped_option() {
+        let mut s = session(8);
+        let r = s
+            .execute(
+                LAYER,
+                json!({
+                    "patternType": "dots",
+                    "foreground": "#ffffff",
+                    "clipped": true
+                }),
+            )
+            .unwrap();
+        let id = photocraft_doc::LayerId(r["layer"].as_u64().unwrap());
+        let layer = s.active().unwrap().doc.layer(id).unwrap();
+        assert_eq!(layer.blend, photocraft_color::BlendMode::Normal, "white ink must not use invisible Multiply");
+        assert!(layer.clipped, "clipped option attaches screentone to the base layer");
+    }
+
+    #[test]
+    fn merge_down_and_flatten_preserve_sheet_and_shading_screentones() {
+        // 1. Unbaked Sheet + unbaked Shading (useSourceLuminance=true) through Merge Down.
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
+        let bg_id = s.active().unwrap().active_layer.unwrap();
+        s.edit("Paint gray", |doc, _| {
+            if let Some(LayerContent::Raster(surf)) = doc.layer_mut(bg_id).map(|l| &mut l.content) {
+                surf.fill_rect(Rect::new(0, 0, 32, 64), &[0.2, 0.2, 0.2, 1.0]);
+                surf.fill_rect(Rect::new(32, 0, 64, 64), &[1.0, 1.0, 1.0, 1.0]);
+            }
+            Ok(())
+        })
+        .unwrap();
+        let r = s
+            .execute(
+                LAYER,
+                json!({
+                    "backend": "gpu",
+                    "mode": "shading",
+                    "useSourceLuminance": true,
+                    "patternType": "dots",
+                    "dotSize": 3.5,
+                    "spacingX": 8.0,
+                    "spacingY": 8.0,
+                    "preserveLines": false
+                }),
+            )
+            .unwrap();
+        let tone_id = photocraft_doc::LayerId(r["layer"].as_u64().unwrap());
+        assert_eq!(s.active().unwrap().doc.layer(tone_id).unwrap().surface().unwrap().tile_count(), 0);
+        s.execute("layer.mergeDown", json!({"layer": tone_id.0})).unwrap();
+        let merged = s.active().unwrap().doc.layer(bg_id).unwrap().surface().unwrap();
+        let left_dark = merged.read_region(Rect::new(0, 0, 32, 64)).chunks_exact(4).filter(|p| p[0] < 0.05).count();
+        let right_dark = merged.read_region(Rect::new(32, 0, 64, 64)).chunks_exact(4).filter(|p| p[0] < 0.05).count();
+        assert!(left_dark > 50, "merged Shading screentone must keep dark-side dots, got {left_dark}");
+        assert_eq!(right_dark, 0, "merged Shading screentone must keep white half clean, got {right_dark}");
+
+        // 2. Flatten Image with an unbaked Sheet screentone (no pre-bake required).
+        let mut s2 = Session::new();
+        s2.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
+        s2.execute(
+            LAYER,
+            json!({
+                "backend": "gpu",
+                "mode": "sheet",
+                "patternType": "dots",
+                "dotSize": 4.0,
+                "spacingX": 10.0,
+                "spacingY": 10.0
+            }),
+        )
+        .unwrap();
+        s2.execute("layer.flattenImage", json!({})).unwrap();
+        let flat_id = s2.active().unwrap().active_layer.unwrap();
+        let flat = s2.active().unwrap().doc.layer(flat_id).unwrap().surface().unwrap();
+        let flat_dark = flat.read_region(Rect::new(0, 0, 64, 64)).chunks_exact(4).filter(|p| p[0] < 0.1).count();
+        assert!(flat_dark > 100, "Flatten Image must keep unbaked Sheet screentone ink, got {flat_dark}");
+    }
+
+    #[test]
+    fn auto_narrow_strip_2000x300_uses_gpu_in_engine() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 2000, "height": 300})).unwrap();
+        let r = s
+            .execute(
+                LAYER,
+                json!({
+                    "backend": "auto",
+                    "mode": "sheet",
+                    "patternType": "dots",
+                    "dotSize": 3.0,
+                    "spacingX": 12.0,
+                    "spacingY": 12.0
+                }),
+            )
+            .unwrap();
+        let id = photocraft_doc::LayerId(r["layer"].as_u64().unwrap());
+        let surf = s.active().unwrap().doc.layer(id).unwrap().surface().unwrap();
+        assert_eq!(surf.tile_count(), 0, "2000x300 Auto strip must take GPU path (skip CPU bake)");
     }
 }

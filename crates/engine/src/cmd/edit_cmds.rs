@@ -765,9 +765,9 @@ fn merge_visible(s: &mut Session) -> Result<Value> {
         let base = doc.layers[lowest].clone();
         let is_background = lowest == 0 && doc.is_background(base.id);
         // Composite of visible layers only (hidden ones stay where they are).
+        // `composite_layers` evaluates unbaked Sheet & Shading screentones live band-by-band.
         let mut solo = doc.clone();
         solo.layers.retain(|l| l.visible);
-        crate::manga_cmds::comic_screentone::ensure_doc_screentones_baked(&mut solo);
         let fmt = doc.pixel_format();
         let fmt = if is_background { fmt } else { PixelFormat::new(fmt.mode, fmt.sample, true) };
         let mut merged = Layer::raster(base.name.clone(), fmt);

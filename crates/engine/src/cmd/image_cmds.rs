@@ -514,30 +514,6 @@ fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
 }
 
-/// The flattened document, or an error when the canvas is over the compositor's render cap
-/// ([`photocraft_compose::MAX_RENDER_PIXELS`]; `flatten` returns an empty buffer then).
-fn flatten_whole(doc: &Document, cmd: &str) -> Result<photocraft_compose::Buffer> {
-    let (w, h) = (doc.size.width, doc.size.height);
-    let count = u64::from(w) * u64::from(h);
-    let operation = if cmd == "image.trim" {
-        "trim"
-    } else if cmd == "image.duplicate" {
-        "duplicate merged"
-    } else {
-        "flatten"
-    };
-    let too_large =
-        || bad(cmd, format!("the document ({w} x {h} px) is too large to {operation} (flatten limit {} pixels)", photocraft_compose::MAX_RENDER_PIXELS));
-    if count > photocraft_compose::MAX_RENDER_PIXELS {
-        return Err(too_large());
-    }
-    let buf = photocraft_compose::flatten(doc);
-    if buf.px.len() as u64 != count {
-        return Err(too_large());
-    }
-    Ok(buf)
-}
-
 /// Moves every surface, channel, selection and guide by `(dx, dy)`.
 ///
 /// Fails, before moving anything, when some pixels would land outside the i32 coordinate
@@ -1134,12 +1110,13 @@ fn turned_crop_source(old: Size, new: Size, angle: f64, target: Rect) -> Rect {
 fn trim(s: &mut Session, p: &Value) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let canvas = d.doc.bounds();
-    let buf = flatten_whole(&d.doc, "image.trim")?;
+    if canvas.is_empty() {
+        return Err(EngineError::Other("nothing to trim to".into()));
+    }
     let based = p.get("basedOn").and_then(Value::as_str).unwrap_or("transparent");
-    let w = canvas.width() as usize;
     let reference = match based {
-        "topLeft" => buf.px.first().copied(),
-        "bottomRight" => buf.px.last().copied(),
+        "topLeft" => photocraft_compose::render(&d.doc, Rect::new(canvas.x0, canvas.y0, canvas.x0 + 1, canvas.y0 + 1)).px.first().copied(),
+        "bottomRight" => photocraft_compose::render(&d.doc, Rect::new(canvas.x1 - 1, canvas.y1 - 1, canvas.x1, canvas.y1)).px.first().copied(),
         _ => None,
     };
     // Transparency is judged on the image as stored at its depth: alpha under half a step rounds to 0.
@@ -1152,13 +1129,23 @@ fn trim(s: &mut Session, p: &Value) -> Result<Value> {
         None => half_step.map_or(q[3] > 0.0, |h| q[3] >= h),
         Some(r) => (0..4).any(|c| (q[c] * q[3] - r[c] * r[3]).abs() > 0.5 / 255.0 || (c == 3 && (q[3] - r[3]).abs() > 0.5 / 255.0)),
     };
+    // Stream horizontal bands (~140 MB peak) instead of flattening the entire canvas into RAM.
     let mut b = Rect::EMPTY;
-    for (i, q) in buf.px.iter().enumerate() {
-        if differs(*q) {
-            let (x, y) = ((i % w) as i32, (i / w) as i32);
-            b = if b.is_empty() { Rect::new(x, y, x + 1, y + 1) } else { b.union(&Rect::new(x, y, x + 1, y + 1)) };
+    let _ = photocraft_compose::render_bands(&d.doc, canvas, 0, |band| -> std::result::Result<(), ()> {
+        let bw = band.rect.width() as usize;
+        if bw == 0 {
+            return Ok(());
         }
-    }
+        for (i, q) in band.px.iter().enumerate() {
+            if differs(*q) {
+                let x = band.rect.x0 + (i % bw) as i32;
+                let y = band.rect.y0 + (i / bw) as i32;
+                let px_rect = Rect::new(x, y, x + 1, y + 1);
+                b = if b.is_empty() { px_rect } else { b.union(&px_rect) };
+            }
+        }
+        Ok(())
+    });
     if b.is_empty() {
         return Err(EngineError::Other("nothing to trim to".into()));
     }
@@ -1228,12 +1215,8 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
     doc.id = photocraft_doc::DocId::fresh();
     doc.name = p.get("name").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| format!("{} copy", d.doc.name));
     if p.get("mergedOnly").and_then(Value::as_bool).unwrap_or(false) {
-        let buf = flatten_whole(&doc, "image.duplicate")?;
         let fmt = doc.pixel_format();
-        let mut surf = Surface::new(fmt);
-        let vals: Vec<f32> = buf.px.iter().flat_map(|q| photocraft_raster::from_rgba(&fmt, *q)).collect();
-        surf.write_region(doc.bounds(), &vals);
-        surf.prune();
+        let surf = photocraft_compose::flatten_to_surface(&doc, fmt, None);
         // As Photoshop: a source with a Background gives one (opaque, locked); otherwise a plain
         // "Layer 1" that keeps the composite's transparency.
         let has_background = doc.background().is_some();
@@ -1342,3 +1325,35 @@ mod tests;
 #[cfg(test)]
 #[path = "image_size_drops_selection_tests.rs"]
 mod image_size_drops_selection_tests;
+
+#[cfg(test)]
+mod banded_trim_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn banded_trim_and_duplicate_merged_preserve_expected_bounds() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 320, "height": 320, "background": "transparent"})).unwrap();
+        let lid = s.active().unwrap().active_layer.unwrap();
+        s.edit("Draw box", |doc, _| {
+            if let Some(LayerContent::Raster(surf)) = doc.layer_mut(lid).map(|l| &mut l.content) {
+                surf.fill_rect(Rect::new(40, 270, 290, 300), &[0.8, 0.2, 0.1, 1.0]);
+            }
+            Ok(())
+        })
+        .unwrap();
+
+        let dup = s.execute("image.duplicate", json!({"mergedOnly": true})).unwrap();
+        let dup_idx = dup["document"].as_u64().unwrap() as usize;
+        let dup_surf = s.documents()[dup_idx].doc.layers[0].surface().unwrap();
+        assert_eq!(dup_surf.pixel(100, 280)[3], 1.0);
+        assert_eq!(dup_surf.pixel(10, 10)[3], 0.0);
+
+        let res = s.execute("image.trim", json!({"basedOn": "transparent"})).unwrap();
+        assert_eq!(res["x"], 40);
+        assert_eq!(res["y"], 270);
+        assert_eq!(res["width"], 250);
+        assert_eq!(res["height"], 30);
+    }
+}

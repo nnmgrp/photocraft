@@ -86,6 +86,7 @@ fn export_supported_document(
     let big = doc.size.width > 30_000 || doc.size.height > 30_000;
     let version = psd_version(doc, opts.force_psb);
     let mut ex = Ex {
+        doc,
         ctl: *ctl,
         fmt,
         dpi: doc.resolution_dpi,

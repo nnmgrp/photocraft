@@ -173,6 +173,9 @@ pub(super) fn merge_layers(s: &mut Session) -> Result<Value> {
         if solo.layers.is_empty() {
             return Err(EngineError::Other("the selected layers are all hidden".into()));
         }
+        for l in &mut solo.layers {
+            crate::manga_cmds::comic_screentone::ensure_layer_tree_shading_screentones_baked(doc, l);
+        }
 
         if is_background {
             let base = doc.layer(lowest_id).ok_or(EngineError::NoLayer(lowest_id))?.clone();

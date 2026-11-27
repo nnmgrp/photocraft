@@ -195,6 +195,34 @@ fn default_52() -> f32 {
     52.0
 }
 
+fn default_74() -> f32 {
+    74.0
+}
+
+fn default_38() -> f32 {
+    38.0
+}
+
+fn default_110() -> f32 {
+    110.0
+}
+
+fn default_50() -> f32 {
+    50.0
+}
+
+fn default_34() -> f32 {
+    34.0
+}
+
+fn default_48() -> f32 {
+    48.0
+}
+
+fn default_58() -> f32 {
+    58.0
+}
+
 fn finite_f64(v: f64, fallback: f64) -> f64 {
     if v.is_finite() { v } else { fallback }
 }
@@ -243,7 +271,7 @@ pub enum SfxMeshInterpolation {
     Bicubic,
 }
 
-/// 6 stylized manga ink outline / line modes from the SFX mockup.
+/// Stylized manga ink outline / line modes (`Clean`..`Shtack` + SFX v3 `ShibufudeV3`, `SugomiV3`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SfxLineStyle {
@@ -254,6 +282,45 @@ pub enum SfxLineStyle {
     GPenNib,
     BrushStroke,
     Shtack,
+    /// Style 1 — しぶふでペン (`shibufude_v3.py`, rev 2): clean `Kado`/`Maru` band + 2D SDF roughness + clustered しぶき splatter.
+    ShibufudeV3,
+    /// Style 2 — 凄みベタ (`sugomi_v3.py`, rev 5): continuous jagged `fude`/`tate`/`yoko` ring + `Solid`/`Hollow` + compact inner teeth.
+    SugomiV3,
+}
+
+/// Base band corner profile for [`SfxLineStyle::ShibufudeV3`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SfxShibufudeProfile {
+    /// Angular miter-clip stroke band (`角`).
+    #[default]
+    Kado,
+    /// Rounded analytical SDF band (`丸`).
+    Maru,
+}
+
+/// Edge finish mode shared by SFX v3 styles (`ShibufudeV3` and `SugomiV3`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SfxV3EdgeMode {
+    /// Crisp binary 1-bit ink with hard edge paper tooth.
+    #[default]
+    OneBit,
+    /// Rough Pencil / Dry Edge kasure breakup with core protection.
+    Rough,
+}
+
+/// Spike orientation strategy for [`SfxLineStyle::SugomiV3`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SfxSugomiDirection {
+    /// Continuous contour-following brush wedges (`fude`).
+    #[default]
+    Fude,
+    /// Vertical comb needles (`tate`).
+    Tate,
+    /// Horizontal comb needles (`yoko`).
+    Yoko,
 }
 
 /// Geometric shape of contour spikes in [`SfxLineStyle::Spikes`].
@@ -410,6 +477,51 @@ pub struct SfxLineEffect {
     /// so outlines visually fuse with `Dry Brush` fills on the same paper tooth.
     #[serde(default)]
     pub line_grain_pct: f32,
+
+    // --- Style 1: Shibufude v3 (しぶふでペン, rev 2) ---
+    #[serde(default)]
+    pub shibufude_profile: SfxShibufudeProfile,
+    #[serde(default)]
+    pub shibufude_edge_mode: SfxV3EdgeMode,
+    #[serde(default = "default_74")]
+    pub shibufude_roughness_pct: f32,
+    #[serde(default = "default_62")]
+    pub shibufude_splatter_pct: f32,
+    /// Cluster spread distance for しぶき droplets in document pixels (scaled once by `scale_sfx_pixel_effects`).
+    #[serde(default = "default_38")]
+    pub shibufude_spread_px: f32,
+    #[serde(default = "default_110")]
+    pub shibufude_splat_size_pct: f32,
+    #[serde(default = "default_60")]
+    pub shibufude_dryness_pct: f32,
+    #[serde(default = "default_50")]
+    pub shibufude_sharpness_pct: f32,
+    /// Knockout (`抜き`) mode: tightens band width by `0.84` for crisp white-on-black ink.
+    #[serde(default)]
+    pub shibufude_knockout: bool,
+    #[serde(default = "default_seed_one")]
+    pub shibufude_seed: u32,
+
+    // --- Style 2: Sugomi Spiky Ink v3 (凄みベタ, rev 5) ---
+    #[serde(default)]
+    pub sugomi_direction: SfxSugomiDirection,
+    #[serde(default)]
+    pub sugomi_edge_mode: SfxV3EdgeMode,
+    /// `false` = Solid spiky silhouette; `true` = Hollow band (`band_w <= 0.55 * stroke_w`) + inward teeth.
+    #[serde(default)]
+    pub sugomi_hollow: bool,
+    /// Spike amplitude as a PERCENT of local glyph stroke width (`10..=160%`, default `78%`).
+    #[serde(default = "default_78")]
+    pub sugomi_spike_amp_pct: f32,
+    /// Co-axial V-cleft dip depth as a PERCENT of local glyph stroke width (`0..=80%`, default `34%`).
+    #[serde(default = "default_34")]
+    pub sugomi_cleft_dip_pct: f32,
+    #[serde(default = "default_48")]
+    pub sugomi_dryness_pct: f32,
+    #[serde(default = "default_58")]
+    pub sugomi_sharpness_pct: f32,
+    #[serde(default = "default_seed_one")]
+    pub sugomi_seed: u32,
 }
 
 impl Default for SfxLineEffect {
@@ -452,6 +564,24 @@ impl Default for SfxLineEffect {
             shtack_grain_sharpness_pct: 100.0,
             shtack_fill_interior: false,
             line_grain_pct: 0.0,
+            shibufude_profile: SfxShibufudeProfile::Kado,
+            shibufude_edge_mode: SfxV3EdgeMode::OneBit,
+            shibufude_roughness_pct: 74.0,
+            shibufude_splatter_pct: 62.0,
+            shibufude_spread_px: 38.0,
+            shibufude_splat_size_pct: 110.0,
+            shibufude_dryness_pct: 60.0,
+            shibufude_sharpness_pct: 50.0,
+            shibufude_knockout: false,
+            shibufude_seed: 1,
+            sugomi_direction: SfxSugomiDirection::Fude,
+            sugomi_edge_mode: SfxV3EdgeMode::OneBit,
+            sugomi_hollow: false,
+            sugomi_spike_amp_pct: 78.0,
+            sugomi_cleft_dip_pct: 34.0,
+            sugomi_dryness_pct: 48.0,
+            sugomi_sharpness_pct: 58.0,
+            sugomi_seed: 1,
         }
     }
 }
@@ -493,6 +623,18 @@ impl SfxLineEffect {
         self.shtack_dryness_pct = finite_f32(self.shtack_dryness_pct, 26.0).clamp(0.0, 100.0);
         self.shtack_grain_sharpness_pct = finite_f32(self.shtack_grain_sharpness_pct, 100.0).clamp(0.0, 100.0);
         self.line_grain_pct = finite_f32(self.line_grain_pct, 0.0).clamp(0.0, 100.0);
+
+        self.shibufude_roughness_pct = finite_f32(self.shibufude_roughness_pct, 74.0).clamp(0.0, 100.0);
+        self.shibufude_splatter_pct = finite_f32(self.shibufude_splatter_pct, 62.0).clamp(0.0, 100.0);
+        self.shibufude_spread_px = finite_f32(self.shibufude_spread_px, 38.0).clamp(4.0, MAX_SFX_EFFECT_PX);
+        self.shibufude_splat_size_pct = finite_f32(self.shibufude_splat_size_pct, 110.0).clamp(30.0, 250.0);
+        self.shibufude_dryness_pct = finite_f32(self.shibufude_dryness_pct, 60.0).clamp(0.0, 100.0);
+        self.shibufude_sharpness_pct = finite_f32(self.shibufude_sharpness_pct, 50.0).clamp(0.0, 100.0);
+
+        self.sugomi_spike_amp_pct = finite_f32(self.sugomi_spike_amp_pct, 78.0).clamp(10.0, 160.0);
+        self.sugomi_cleft_dip_pct = finite_f32(self.sugomi_cleft_dip_pct, 34.0).clamp(0.0, 80.0);
+        self.sugomi_dryness_pct = finite_f32(self.sugomi_dryness_pct, 48.0).clamp(0.0, 100.0);
+        self.sugomi_sharpness_pct = finite_f32(self.sugomi_sharpness_pct, 58.0).clamp(0.0, 100.0);
     }
 }
 
@@ -1933,8 +2075,9 @@ fn scale_sfx_pixel_effects(data: &mut SfxData, scale: f64) {
     data.line_effect.spike_size_px = scaled(data.line_effect.spike_size_px).max(2.0);
     data.line_effect.gpen_overshoot_px = scaled(data.line_effect.gpen_overshoot_px);
     data.line_effect.ink_brush_overshoot_px = scaled(data.line_effect.ink_brush_overshoot_px);
-    // `shtack_overshoot_px` and `shtack_thickness_px` are percentages of glyph height, so they
-    // must NEVER be scaled here (large documents / presets used to double-scale them).
+    data.line_effect.shibufude_spread_px = scaled(data.line_effect.shibufude_spread_px).max(4.0);
+    // `shtack_overshoot_px`, `shtack_thickness_px`, `sugomi_spike_amp_pct`, `sugomi_cleft_dip_pct`,
+    // and all percentage fields scale naturally with glyph geometry and must NEVER be double-scaled here.
     data.dry_brush.lic_length_px = scaled(data.dry_brush.lic_length_px).max(4.0);
     data.vector_shadow.distance_px = scaled(data.vector_shadow.distance_px);
     data.vector_shadow.extrude_depth_px = scaled(data.vector_shadow.extrude_depth_px);

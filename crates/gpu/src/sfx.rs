@@ -16,8 +16,8 @@ use photocraft_color::Color;
 #[cfg(not(target_arch = "wasm32"))]
 use photocraft_color::PixelFormat;
 use photocraft_doc::sfx::{
-    SfxBlendEffect, SfxChannelBlend, SfxData, SfxDryBrushEngine, SfxDryBrushSpec, SfxFillSource, SfxLineStyle, SfxShtackFillMode,
-    SfxShtackFillSpec, SfxShtackVariant, SfxStrokePosition,
+    SfxBlendEffect, SfxChannelBlend, SfxData, SfxDryBrushEngine, SfxDryBrushSpec, SfxFillSource, SfxLineEffect, SfxLineStyle,
+    SfxShibufudeProfile, SfxShtackFillMode, SfxShtackFillSpec, SfxShtackVariant, SfxStrokePosition, SfxV3EdgeMode,
 };
 use photocraft_geom::Rect;
 #[cfg(not(target_arch = "wasm32"))]
@@ -74,6 +74,16 @@ pub struct SfxGpuScene<'a> {
     pub primary_dry_vector_cuts: &'a [SfxGpuPolyRing],
     /// Per-effect `DryBrushEngine::Vector` cut polygons keyed by `data.blending.effects` index.
     pub effect_dry_vector_cuts: &'a [(usize, Vec<SfxGpuPolyRing>)],
+    /// Style 1 (`Shibufude v3`) clustered しぶき splatter polygons (direct `BlendOperation::Max`).
+    pub shibufude_splatter_polygons: &'a [SfxGpuPolyRing],
+    /// Style 2 (`Sugomi v3`) jagged interior counter-hole cutout polygons.
+    pub sugomi_hole_polygons: &'a [SfxGpuPolyRing],
+    /// Style 2 (`Sugomi v3`) inward hollow mini-teeth polygons (direct `BlendOperation::Max`).
+    pub sugomi_inner_teeth_polygons: &'a [SfxGpuPolyRing],
+    /// Style 2 (`Sugomi v3`) guarded hollow `band_w` in document pixels (`<= 0.55 * stroke_w`).
+    pub sugomi_band_w_px: f32,
+    /// Style 2 (`Sugomi v3`) inner cutout inset `hw_in` in document pixels (`band_w * 0.36`).
+    pub sugomi_hw_in_px: f32,
 }
 
 #[repr(C)]
@@ -160,8 +170,9 @@ impl AuxUsage {
                     u.mark_slot(dst);
                 }
                 GpuCmd::ClearMask(MaskSlot::ScratchC)
-                | GpuCmd::RasterPolys { target: MaskSlot::ScratchC, .. } => u.scratch_c = true,
-                GpuCmd::ClearMask(_) | GpuCmd::RasterPolys { .. } => {}
+                | GpuCmd::RasterPolys { target: MaskSlot::ScratchC, .. }
+                | GpuCmd::RasterTrianglesMax { target: MaskSlot::ScratchC, .. } => u.scratch_c = true,
+                GpuCmd::ClearMask(_) | GpuCmd::RasterPolys { .. } | GpuCmd::RasterTrianglesMax { .. } => {}
             }
         }
         u
@@ -329,6 +340,7 @@ pub struct SfxGpuRenderer {
     raster_bgl: wgpu::BindGroupLayout,
     stencil_pipe: wgpu::RenderPipeline,
     cover_pipe: wgpu::RenderPipeline,
+    tri_max_pipe: wgpu::RenderPipeline,
     seg_seed_pipe: wgpu::RenderPipeline,
     union_pipe: wgpu::RenderPipeline,
     mul_pipe: wgpu::RenderPipeline,
@@ -346,6 +358,8 @@ pub struct SfxGpuRenderer {
     etf_seed_pipe: wgpu::RenderPipeline,
     dry_etf_lic_pipe: wgpu::RenderPipeline,
     dry_grain_pipe: wgpu::RenderPipeline,
+    shibufude_perturb_pipe: wgpu::RenderPipeline,
+    sugomi_hollow_cut_pipe: wgpu::RenderPipeline,
     composite_pipe: wgpu::RenderPipeline,
     blit_pipes: Vec<(wgpu::TextureFormat, wgpu::RenderPipeline)>,
     blit_uni: wgpu::Buffer,
@@ -555,6 +569,87 @@ fn build_stencil_pipelines(
     (stencil_pipe, cover_pipe)
 }
 
+/// Direct triangle rasterizer with `BlendOperation::Max` and NO stencil buffer.
+/// Used for overlapping convex/star shapes (`Shibufude` kado quads/joins & splatter, `Sugomi`
+/// inward hollow mini-teeth) so overlaps never self-cancel regardless of winding.
+fn build_tri_max_pipeline(
+    device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
+    raster_layout: &wgpu::PipelineLayout,
+    msaa_samples: u32,
+) -> wgpu::RenderPipeline {
+    let max_blend = wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::One,
+        dst_factor: wgpu::BlendFactor::One,
+        operation: wgpu::BlendOperation::Max,
+    };
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("sfx-tri-max"),
+        layout: Some(raster_layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_poly"),
+            buffers: &[Some(wgpu::VertexBufferLayout {
+                array_stride: std::mem::size_of::<PolyVert>() as u64,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &[wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 0, shader_location: 0 }],
+            })],
+            compilation_options: Default::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fs_cover_solid"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: MASK_FMT,
+                blend: Some(wgpu::BlendState { color: max_blend, alpha: max_blend }),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: Default::default(),
+        }),
+        primitive: wgpu::PrimitiveState { cull_mode: None, ..Default::default() },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState { count: msaa_samples, ..Default::default() },
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+/// Triangulates convex or star-shaped closed rings from their centroid for `BlendOperation::Max`
+/// direct rasterization (handles both CW and CCW rings without self-cancellation).
+fn polygons_to_centroid_fan_verts(polys: &[Vec<(f64, f64)>]) -> Vec<PolyVert> {
+    let total_tris: usize = polys.iter().map(Vec::len).sum();
+    let mut out = Vec::with_capacity(total_tris * 3);
+    for poly in polys {
+        let n = poly.len();
+        if n < 3 {
+            continue;
+        }
+        let mut cx = 0.0_f64;
+        let mut cy = 0.0_f64;
+        let mut finite = true;
+        for &(x, y) in poly {
+            if !x.is_finite() || !y.is_finite() {
+                finite = false;
+                break;
+            }
+            cx += x;
+            cy += y;
+        }
+        if !finite {
+            continue;
+        }
+        let c = [(cx / n as f64) as f32, (cy / n as f64) as f32];
+        for i in 0..n {
+            let a = poly[i];
+            let b = poly[(i + 1) % n];
+            out.push(PolyVert { pos: c });
+            out.push(PolyVert { pos: [a.0 as f32, a.1 as f32] });
+            out.push(PolyVert { pos: [b.0 as f32, b.1 as f32] });
+        }
+    }
+    out
+}
+
 fn polygons_to_fan_verts(polys: &[Vec<(f64, f64)>]) -> Vec<PolyVert> {
     let total_tris: usize = polys.iter().map(|p| p.len().saturating_sub(2)).sum();
     let mut out = Vec::with_capacity(total_tris * 3);
@@ -642,6 +737,7 @@ impl RegionInfo {
 enum GpuCmd {
     ClearMask(MaskSlot),
     RasterPolys { target: MaskSlot, v_off: u64, v_count: u32, uni_off: u32 },
+    RasterTrianglesMax { target: MaskSlot, v_off: u64, v_count: u32, uni_off: u32 },
     RasterSegSeed { v_off: u64, v_count: u32, uni_off: u32 },
     Quad { pipe: QuadPipe, a: TexSlot, b: TexSlot, c: TexSlot, dst: TexSlot, uni_off: u32 },
     CopyTex { src: TexSlot, dst: TexSlot },
@@ -695,6 +791,8 @@ enum QuadPipe {
     EtfSeed,
     DryEtfLic,
     DryGrain,
+    ShibufudePerturb,
+    SugomiHollowCut,
     Composite,
 }
 
@@ -794,14 +892,30 @@ impl<'a> CmdRecorder<'a> {
         self.cmds.push(GpuCmd::RasterPolys { target, v_off, v_count, uni_off });
     }
 
+    fn raster_tris_max(&mut self, target: MaskSlot, polys: &[Vec<(f64, f64)>]) {
+        let verts = polygons_to_centroid_fan_verts(polys);
+        if verts.is_empty() {
+            self.cmds.push(GpuCmd::ClearMask(target));
+            return;
+        }
+        let (v_off, v_count) = self.bufs.push_verts(&verts);
+        let uni_off = self.bufs.push_uniform(self.region.raster_params());
+        self.cmds.push(GpuCmd::RasterTrianglesMax { target, v_off, v_count, uni_off });
+    }
+
+    /// Runs Jump Flooding from `src_mask` (`invert_mode`: `0` exterior, `1` interior + border, `2` interior only).
+    fn run_jfa_from_mask_mode(&mut self, src_mask: TexSlot, invert_mode: u32, max_radius_px: f32, dst_jfa: Option<TexSlot>) -> TexSlot {
+        let mut init_p = self.region.base_params();
+        init_p.u0[0] = invert_mode;
+        self.push_quad(QuadPipe::JfaInit, src_mask, TexSlot::Dummy, TexSlot::Dummy, TexSlot::JfaA, init_p);
+        self.run_jfa_steps(max_radius_px, dst_jfa)
+    }
+
     /// Runs Jump Flooding from `src_mask` and returns the exact `TexSlot` containing the final JFA.
     /// Pass `dst_jfa = None` to keep the result in whichever of `JfaA`/`JfaB` does not alias the
     /// final step's input (used by `UkiyoBrush` to avoid `JfaB -> JfaB` on odd step counts).
     fn run_jfa_from_mask(&mut self, src_mask: TexSlot, invert: bool, max_radius_px: f32, dst_jfa: Option<TexSlot>) -> TexSlot {
-        let mut init_p = self.region.base_params();
-        init_p.u0[0] = u32::from(invert);
-        self.push_quad(QuadPipe::JfaInit, src_mask, TexSlot::Dummy, TexSlot::Dummy, TexSlot::JfaA, init_p);
-        self.run_jfa_steps(max_radius_px, dst_jfa)
+        self.run_jfa_from_mask_mode(src_mask, u32::from(invert), max_radius_px, dst_jfa)
     }
 
     fn run_jfa_steps(&mut self, max_radius_px: f32, dst_jfa: Option<TexSlot>) -> TexSlot {
@@ -1195,6 +1309,7 @@ impl SfxGpuRenderer {
             });
 
             let (stencil_pipe, cover_pipe) = build_stencil_pipelines(device, &shader, &raster_layout, &empty_layout, msaa_samples);
+            let tri_max_pipe = build_tri_max_pipeline(device, &shader, &raster_layout, msaa_samples);
 
             let seg_seed_pipe = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("sfx-seg-seed"),
@@ -1257,6 +1372,8 @@ impl SfxGpuRenderer {
                 etf_seed_pipe: qp("sfx-etf-seed", "fs_etf_seed", JFA_FMT),
                 dry_etf_lic_pipe: qp("sfx-dry-lic", "fs_dry_etf_lic", MASK_FMT),
                 dry_grain_pipe: qp("sfx-dry-grain", "fs_dry_grain_breakup", MASK_FMT),
+                shibufude_perturb_pipe: qp("sfx-shibufude-perturb", "fs_shibufude_perturb", MASK_FMT),
+                sugomi_hollow_cut_pipe: qp("sfx-sugomi-hollow-cut", "fs_sugomi_hollow_cut", MASK_FMT),
                 composite_pipe: qp("sfx-composite", "fs_composite_fill", RGBA_FMT),
                 blit_pipes: Vec::new(),
                 blit_uni,
@@ -1266,6 +1383,7 @@ impl SfxGpuRenderer {
                 raster_bgl,
                 stencil_pipe,
                 cover_pipe,
+                tri_max_pipe,
                 seg_seed_pipe,
                 dummy_tex,
                 rec_bufs,
@@ -1700,6 +1818,32 @@ impl SfxGpuRenderer {
                     rp.set_pipeline(&self.cover_pipe);
                     rp.draw(0..3, 0..1);
                 }
+                GpuCmd::RasterTrianglesMax { target, v_off, v_count, uni_off } => {
+                    let dst = mask_tex(target);
+                    let (color_view, resolve_target) = match &t.msaa_mask {
+                        Some(ms) => (&ms.view, Some(&dst.view)),
+                        None => (&dst.view, None),
+                    };
+                    let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("sfx-tri-max"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: color_view,
+                            depth_slice: None,
+                            resolve_target,
+                            ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
+                    rp.set_viewport(0.0, 0.0, w as f32, h as f32, 0.0, 1.0);
+                    rp.set_scissor_rect(0, 0, w, h);
+                    rp.set_pipeline(&self.tri_max_pipe);
+                    rp.set_bind_group(0, &raster_bg, &[uni_off]);
+                    rp.set_vertex_buffer(0, self.vbuf.buf.slice(v_off..));
+                    rp.draw(0..v_count, 0..1);
+                }
                 GpuCmd::RasterSegSeed { v_off, v_count, uni_off } => {
                     let Some(jfa_a) = t.jfa_a.as_ref() else { continue };
                     let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1753,6 +1897,8 @@ impl SfxGpuRenderer {
                         QuadPipe::EtfSeed => &self.etf_seed_pipe,
                         QuadPipe::DryEtfLic => &self.dry_etf_lic_pipe,
                         QuadPipe::DryGrain => &self.dry_grain_pipe,
+                        QuadPipe::ShibufudePerturb => &self.shibufude_perturb_pipe,
+                        QuadPipe::SugomiHollowCut => &self.sugomi_hollow_cut_pipe,
                         QuadPipe::Composite => &self.composite_pipe,
                     };
                     let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -2030,8 +2176,24 @@ impl SfxGpuRenderer {
     }
 }
 
+fn effective_shibufude_line_w_gpu(le: &SfxLineEffect) -> f32 {
+    let base = if le.line_width_px > 0.5 { le.line_width_px } else { 13.5 };
+    let scaled = if le.shibufude_knockout { base * 0.84 } else { base };
+    scaled.max(2.0)
+}
+
 fn max_tile_apron_px(data: &SfxData) -> u32 {
     let mut pad = data.line_effect.halo_width_px.max(0.0);
+    match data.line_effect.style {
+        SfxLineStyle::ShibufudeV3 => {
+            let lw = effective_shibufude_line_w_gpu(&data.line_effect);
+            pad = pad.max(lw * 1.25 + 16.0);
+        }
+        SfxLineStyle::SugomiV3 => {
+            pad = pad.max(48.0);
+        }
+        _ => {}
+    }
     if data.vector_shadow.enabled {
         pad = pad.max(data.vector_shadow.distance_px.max(data.vector_shadow.extrude_depth_px));
     }
@@ -2302,6 +2464,154 @@ fn record_outer_passes(rec: &mut CmdRecorder<'_>, scene: &SfxGpuScene<'_>, is_bi
     }
 }
 
+fn apply_v3_edge_kasure_pass(
+    rec: &mut CmdRecorder<'_>,
+    dry_pct: f32,
+    sharp_pct: f32,
+    seed: u32,
+    core_protect_px: f32,
+    one_bit: bool,
+) {
+    let px_per_doc = rec.region.px_per_doc();
+    if dry_pct > 0.5 {
+        let reach_doc = 2.8 + (dry_pct / 100.0) * 5.0 + core_protect_px + 2.0;
+        let jfa_slot = rec.run_jfa_from_mask_mode(TexSlot::Line, 1, (reach_doc * px_per_doc).max(4.0), None);
+        let mut gp = rec.region.base_params();
+        gp.p1[2] = (dry_pct / 100.0).clamp(0.0, 1.0);
+        gp.p1[3] = (sharp_pct / 100.0).clamp(0.0, 1.0);
+        gp.p2[0] = core_protect_px;
+        gp.p3[2] = 1.0;
+        gp.u0 = [1, seed, u32::from(one_bit), 0];
+        rec.push_quad(QuadPipe::DryGrain, TexSlot::Line, jfa_slot, TexSlot::Dummy, TexSlot::ScratchA, gp);
+        rec.push_copy(TexSlot::ScratchA, TexSlot::Line);
+    } else if one_bit {
+        let mut gp = rec.region.base_params();
+        gp.p1[2] = 0.0;
+        gp.p3[2] = 1.0;
+        gp.u0 = [1, seed, 1, 0];
+        rec.push_quad(QuadPipe::DryGrain, TexSlot::Line, TexSlot::Dummy, TexSlot::Dummy, TexSlot::ScratchA, gp);
+        rec.push_copy(TexSlot::ScratchA, TexSlot::Line);
+    }
+}
+
+/// Style 1 (`Shibufude v3`): Kado/Maru band SDF perturbation + direct `Max` splatter + edge kasure.
+fn record_shibufude_v3_passes(rec: &mut CmdRecorder<'_>, scene: &SfxGpuScene<'_>) -> bool {
+    let le = &scene.data.line_effect;
+    let px_per_doc = rec.region.px_per_doc();
+    let line_w = effective_shibufude_line_w_gpu(le);
+    let hw_out = line_w * 0.60;
+    let hw_in = line_w * 0.40;
+    let c_off = (hw_out - hw_in) * 0.5;
+    let hw = (hw_out + hw_in) * 0.5;
+
+    let base_slot = match le.shibufude_profile {
+        SfxShibufudeProfile::Maru => {
+            let reach_out = ((hw_out + line_w * 0.55 + 8.0) * px_per_doc).max(4.0);
+            let reach_in = ((hw_in + line_w * 0.55 + 8.0) * px_per_doc).max(4.0);
+            let _ = rec.run_jfa_from_mask_mode(TexSlot::Face, 0, reach_out, Some(TexSlot::JfaExt));
+            let _ = rec.run_jfa_from_mask_mode(TexSlot::Face, 2, reach_in, Some(TexSlot::JfaInt));
+            TexSlot::Face
+        }
+        SfxShibufudeProfile::Kado => {
+            rec.raster_tris_max(MaskSlot::ScratchA, scene.line_polygons);
+            let reach = ((line_w * 0.60 + 8.0) * px_per_doc).max(4.0);
+            let _ = rec.run_jfa_from_mask_mode(TexSlot::ScratchA, 0, reach, Some(TexSlot::JfaExt));
+            let _ = rec.run_jfa_from_mask_mode(TexSlot::ScratchA, 2, reach, Some(TexSlot::JfaInt));
+            TexSlot::ScratchA
+        }
+    };
+
+    let mut pp = rec.region.base_params();
+    pp.p1[2] = line_w;
+    pp.p1[3] = (le.shibufude_roughness_pct / 100.0).clamp(0.0, 1.0);
+    pp.p2[0] = c_off;
+    pp.p2[1] = hw;
+    pp.u0 = [u32::from(le.shibufude_profile == SfxShibufudeProfile::Maru), le.shibufude_seed, 0, 0];
+    rec.push_quad(QuadPipe::ShibufudePerturb, base_slot, TexSlot::JfaExt, TexSlot::JfaInt, TexSlot::Line, pp);
+
+    if !scene.shibufude_splatter_polygons.is_empty() {
+        rec.raster_tris_max(MaskSlot::ScratchA, scene.shibufude_splatter_polygons);
+        rec.push_quad(QuadPipe::Union, TexSlot::Line, TexSlot::ScratchA, TexSlot::Dummy, TexSlot::ScratchB, rec.region.base_params());
+        rec.push_copy(TexSlot::ScratchB, TexSlot::Line);
+    }
+
+    match le.shibufude_edge_mode {
+        SfxV3EdgeMode::OneBit => {
+            let grain_pct = if le.line_grain_pct > 0.5 { le.line_grain_pct } else { 28.0 };
+            apply_v3_edge_kasure_pass(rec, grain_pct, 100.0, le.shibufude_seed, 1.8, true);
+        }
+        SfxV3EdgeMode::Rough => {
+            let dry = le.shibufude_dryness_pct.max(le.line_grain_pct);
+            apply_v3_edge_kasure_pass(rec, dry, le.shibufude_sharpness_pct, le.shibufude_seed, 2.9, false);
+        }
+    }
+    true
+}
+
+/// Style 2 (`Sugomi v3`): jagged outer rings - (hollow torn cutout ∪ counter holes) ∪ `Max` inner teeth + unified kasure.
+fn record_sugomi_v3_passes(rec: &mut CmdRecorder<'_>, scene: &SfxGpuScene<'_>) -> bool {
+    let le = &scene.data.line_effect;
+    let px_per_doc = rec.region.px_per_doc();
+    if scene.line_polygons.is_empty() {
+        return false;
+    }
+    rec.raster_polys(MaskSlot::Line, scene.line_polygons);
+
+    let mut has_cut = false;
+    if le.sugomi_hollow {
+        let band_w = scene.sugomi_band_w_px.max(3.0);
+        let hw_in = if scene.sugomi_hw_in_px > 0.1 { scene.sugomi_hw_in_px } else { band_w * 0.36 };
+        let reach_out = ((band_w * 0.25 + 6.0) * px_per_doc).max(4.0);
+        let reach_in = ((hw_in + band_w * 0.25 + 8.0) * px_per_doc).max(4.0);
+        let _ = rec.run_jfa_from_mask_mode(TexSlot::Face, 0, reach_out, Some(TexSlot::JfaExt));
+        let _ = rec.run_jfa_from_mask_mode(TexSlot::Face, 2, reach_in, Some(TexSlot::JfaInt));
+        let mut hp = rec.region.base_params();
+        hp.p1[2] = band_w;
+        hp.p1[3] = hw_in;
+        hp.p2[0] = 0.82;
+        hp.u0 = [1, le.sugomi_seed.wrapping_add(53), 0, 0];
+        rec.push_quad(QuadPipe::SugomiHollowCut, TexSlot::Face, TexSlot::JfaExt, TexSlot::JfaInt, TexSlot::ScratchA, hp);
+        has_cut = true;
+    }
+
+    if !scene.sugomi_hole_polygons.is_empty() {
+        if has_cut {
+            rec.raster_polys(MaskSlot::ScratchB, scene.sugomi_hole_polygons);
+            rec.push_quad(QuadPipe::Union, TexSlot::ScratchA, TexSlot::ScratchB, TexSlot::Dummy, TexSlot::ScratchC, rec.region.base_params());
+            rec.push_copy(TexSlot::ScratchC, TexSlot::ScratchA);
+        } else {
+            rec.raster_polys(MaskSlot::ScratchA, scene.sugomi_hole_polygons);
+            has_cut = true;
+        }
+    }
+
+    if has_cut {
+        let mut mp = rec.region.base_params();
+        mp.u0[0] = 2; // linear subtract: clamp(cov - cut_cov, 0, 1)
+        rec.push_quad(QuadPipe::Mul, TexSlot::Line, TexSlot::ScratchA, TexSlot::Dummy, TexSlot::ScratchB, mp);
+        rec.push_copy(TexSlot::ScratchB, TexSlot::Line);
+    }
+
+    if !scene.sugomi_inner_teeth_polygons.is_empty() {
+        rec.raster_tris_max(MaskSlot::ScratchA, scene.sugomi_inner_teeth_polygons);
+        rec.push_quad(QuadPipe::Union, TexSlot::Line, TexSlot::ScratchA, TexSlot::Dummy, TexSlot::ScratchB, rec.region.base_params());
+        rec.push_copy(TexSlot::ScratchB, TexSlot::Line);
+    }
+
+    let grain_seed = le.sugomi_seed.wrapping_add(37);
+    match le.sugomi_edge_mode {
+        SfxV3EdgeMode::OneBit => {
+            let grain_pct = if le.line_grain_pct > 0.5 { le.line_grain_pct } else { 18.0 };
+            apply_v3_edge_kasure_pass(rec, grain_pct, 100.0, grain_seed, 1.6, true);
+        }
+        SfxV3EdgeMode::Rough => {
+            let dry = le.sugomi_dryness_pct.max(le.line_grain_pct);
+            apply_v3_edge_kasure_pass(rec, dry, le.sugomi_sharpness_pct, grain_seed, 2.2, false);
+        }
+    }
+    true
+}
+
 fn record_scene_passes(rec: &mut CmdRecorder<'_>, scene: &SfxGpuScene<'_>) {
     let data = scene.data;
     let le = &data.line_effect;
@@ -2318,7 +2628,11 @@ fn record_scene_passes(rec: &mut CmdRecorder<'_>, scene: &SfxGpuScene<'_>) {
         rec.push_copy(TexSlot::ScratchA, TexSlot::Face);
     }
 
-    let has_line = if is_binary {
+    let has_line = if le.style == SfxLineStyle::ShibufudeV3 {
+        record_shibufude_v3_passes(rec, scene)
+    } else if le.style == SfxLineStyle::SugomiV3 {
+        record_sugomi_v3_passes(rec, scene)
+    } else if is_binary {
         if le.line_width_px > 0.05 {
             let _ = rec.run_jfa_from_mask(TexSlot::Face, false, (le.line_width_px * 0.5 * px_per_doc).max(2.0), Some(TexSlot::JfaExt));
             let mut lp = rec.region.base_params();
@@ -2496,6 +2810,11 @@ mod tests {
             seg_contours: Vec::new(),
             primary_dry_vector_cuts: &[],
             effect_dry_vector_cuts: &[],
+            shibufude_splatter_polygons: &[],
+            sugomi_hole_polygons: &[],
+            sugomi_inner_teeth_polygons: &[],
+            sugomi_band_w_px: 0.0,
+            sugomi_hw_in_px: 0.0,
         };
         for (px_dim, auto_scale) in [(128, 1.0_f32), (256, 1.0), (512, 1.0), (512, 2.0), (1024, 2.0)] {
             bufs.reset();
@@ -2585,6 +2904,11 @@ mod tests {
                         seg_contours: Vec::new(),
                         primary_dry_vector_cuts: &[],
                         effect_dry_vector_cuts: &eff_cuts,
+                        shibufude_splatter_polygons: &[],
+                        sugomi_hole_polygons: &[],
+                        sugomi_inner_teeth_polygons: &[],
+                        sugomi_band_w_px: 0.0,
+                        sugomi_hw_in_px: 0.0,
                     };
                     bufs.reset();
                     let mut rec = CmdRecorder {
@@ -2642,5 +2966,109 @@ mod tests {
         rec.composite_fill_paint(&SfxFillSource::None, TexSlot::Face, 1.0, SfxChannelBlend::Normal);
         assert_eq!(rec.accum_is_a, after_solid, "SfxFillSource::None must not flip accum_is_a");
         assert_eq!(rec.cmds.len(), cmd_count, "SfxFillSource::None must emit zero commands");
+    }
+
+    #[test]
+    fn sfx_v3_shibufude_and_sugomi_never_alias_slots_across_all_modes() {
+        let mut bufs = CpuRecordBuffers::new(256);
+        let poly = unit_square();
+        let splat = vec![vec![(12.0, 12.0), (18.0, 12.0), (18.0, 18.0), (12.0, 18.0)]];
+        let hole = vec![vec![(96.0, 96.0), (160.0, 96.0), (160.0, 160.0), (96.0, 160.0)]];
+
+        // Style 1: Shibufude v3 (Kado/Maru × OneBit/Rough × knockout)
+        for profile in [SfxShibufudeProfile::Kado, SfxShibufudeProfile::Maru] {
+            for edge_mode in [SfxV3EdgeMode::OneBit, SfxV3EdgeMode::Rough] {
+                let mut data = SfxData { fill: SfxFillSource::None, ..SfxData::default() };
+                data.line_effect.style = SfxLineStyle::ShibufudeV3;
+                data.line_effect.line_width_px = 14.0;
+                data.line_effect.shibufude_profile = profile;
+                data.line_effect.shibufude_edge_mode = edge_mode;
+                data.line_effect.halo_width_px = 6.0;
+                let scene = SfxGpuScene {
+                    data: &data,
+                    full_bounds: Rect::from_xywh(0, 0, 256, 256),
+                    glyph_em_px: 180.0,
+                    face_contours: &poly,
+                    line_polygons: &poly,
+                    primary_shtack_polygons: &[],
+                    secondary_shtack_polygons: &[],
+                    effect_shtack_polygons: &[],
+                    seg_contours: Vec::new(),
+                    primary_dry_vector_cuts: &[],
+                    effect_dry_vector_cuts: &[],
+                    shibufude_splatter_polygons: &splat,
+                    sugomi_hole_polygons: &[],
+                    sugomi_inner_teeth_polygons: &[],
+                    sugomi_band_w_px: 0.0,
+                    sugomi_hw_in_px: 0.0,
+                };
+                bufs.reset();
+                let mut rec = CmdRecorder {
+                    bufs: &mut bufs,
+                    cmds: Vec::new(),
+                    accum_is_a: true,
+                    region: test_region(512, 512),
+                    full_bounds: scene.full_bounds,
+                    auto_scale: 1.5,
+                };
+                record_scene_passes(&mut rec, &scene);
+                assert_no_cmd_aliasing(&rec.cmds);
+                assert!(
+                    rec.cmds.iter().any(|c| matches!(c, GpuCmd::Quad { pipe: QuadPipe::ShibufudePerturb, .. })),
+                    "expected ShibufudePerturb for {profile:?}/{edge_mode:?}"
+                );
+                assert!(
+                    rec.cmds.iter().any(|c| matches!(c, GpuCmd::RasterTrianglesMax { .. })),
+                    "expected direct BlendOperation::Max triangle pass for splatter/kado"
+                );
+            }
+        }
+
+        // Style 2: Sugomi v3 (Solid/Hollow × OneBit/Rough with holes & inner teeth)
+        for hollow in [false, true] {
+            for edge_mode in [SfxV3EdgeMode::OneBit, SfxV3EdgeMode::Rough] {
+                let mut data = SfxData { fill: SfxFillSource::None, ..SfxData::default() };
+                data.line_effect.style = SfxLineStyle::SugomiV3;
+                data.line_effect.sugomi_hollow = hollow;
+                data.line_effect.sugomi_edge_mode = edge_mode;
+                data.line_effect.halo_width_px = 6.0;
+                let scene = SfxGpuScene {
+                    data: &data,
+                    full_bounds: Rect::from_xywh(0, 0, 256, 256),
+                    glyph_em_px: 180.0,
+                    face_contours: &poly,
+                    line_polygons: &poly,
+                    primary_shtack_polygons: &[],
+                    secondary_shtack_polygons: &[],
+                    effect_shtack_polygons: &[],
+                    seg_contours: Vec::new(),
+                    primary_dry_vector_cuts: &[],
+                    effect_dry_vector_cuts: &[],
+                    shibufude_splatter_polygons: &[],
+                    sugomi_hole_polygons: &hole,
+                    sugomi_inner_teeth_polygons: if hollow { &splat } else { &[] },
+                    sugomi_band_w_px: 14.0,
+                    sugomi_hw_in_px: 5.0,
+                };
+                bufs.reset();
+                let mut rec = CmdRecorder {
+                    bufs: &mut bufs,
+                    cmds: Vec::new(),
+                    accum_is_a: true,
+                    region: test_region(512, 512),
+                    full_bounds: scene.full_bounds,
+                    auto_scale: 1.5,
+                };
+                record_scene_passes(&mut rec, &scene);
+                assert_no_cmd_aliasing(&rec.cmds);
+                if hollow {
+                    assert!(
+                        rec.cmds.iter().any(|c| matches!(c, GpuCmd::Quad { pipe: QuadPipe::SugomiHollowCut, .. })),
+                        "expected SugomiHollowCut for hollow/{edge_mode:?}"
+                    );
+                    assert!(AuxUsage::from_cmds(&rec.cmds).scratch_c, "hollow + holes must mark lazy ScratchC");
+                }
+            }
+        }
     }
 }

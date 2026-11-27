@@ -14,7 +14,7 @@ use photocraft_color::{Color, PixelFormat};
 use photocraft_doc::Rect;
 use photocraft_doc::sfx::{
     SfxBlendEffect, SfxChannelBlend, SfxData, SfxDryBrushEngine, SfxDryBrushSpec, SfxFillSource, SfxLineJoin, SfxLineStyle,
-    SfxShtackFillMode, SfxShtackFillSpec, SfxStrokePosition,
+    SfxShibufudeProfile, SfxShtackFillMode, SfxShtackFillSpec, SfxStrokePosition, SfxSugomiDirection, SfxV3EdgeMode,
 };
 use photocraft_gpu::{DeviceHealth, SFX_SHADER, SfxGpuRenderer, SfxGpuScene, SfxGpuSegContour};
 
@@ -66,7 +66,7 @@ fn sfx_shader_validates_without_a_gpu() {
     wgpu::naga::valid::Validator::new(wgpu::naga::valid::ValidationFlags::all(), wgpu::naga::valid::Capabilities::empty())
         .validate(&module)
         .unwrap_or_else(|e| panic!("{}", e.emit_to_string(SFX_SHADER)));
-    assert!(module.entry_points.len() >= 18, "expected all SFX vertex/fragment entry points");
+    assert!(module.entry_points.len() >= 20, "expected all SFX vertex/fragment entry points");
 }
 
 /// Builds a synthetic holed square glyph ("O") with opposite-winding hole for NonZero winding tests.
@@ -121,6 +121,11 @@ fn gpu_stencil_cover_handles_holed_glyph_and_halo() {
         effect_shtack_polygons: &[],
         effect_dry_vector_cuts: &[],
         seg_contours: Vec::new(),
+        shibufude_splatter_polygons: &[],
+        sugomi_hole_polygons: &[],
+        sugomi_inner_teeth_polygons: &[],
+        sugomi_band_w_px: 0.0,
+        sugomi_hw_in_px: 0.0,
     };
     let surf = g.renderer.render_tiled_to_surface(&g.device, &g.queue, &scene, PixelFormat::RGBA8).expect("GPU render");
 
@@ -232,6 +237,11 @@ fn gpu_dry_brush_all_four_engines_screentone_and_blending_stack() {
             effect_shtack_polygons: &[],
             effect_dry_vector_cuts: &[],
             seg_contours,
+            shibufude_splatter_polygons: &[],
+            sugomi_hole_polygons: &[],
+            sugomi_inner_teeth_polygons: &[],
+            sugomi_band_w_px: 0.0,
+            sugomi_hw_in_px: 0.0,
         };
         let surf = g.renderer.render_tiled_to_surface(&g.device, &g.queue, &scene, PixelFormat::RGBA8).expect("GPU render");
         assert!(!surf.content_bounds().is_empty(), "DryBrush {engine:?} + Blending stack produced empty surface");
@@ -286,6 +296,11 @@ fn gpu_tiled_render_large_sfx_is_seamless_and_fast() {
         effect_shtack_polygons: &[],
         effect_dry_vector_cuts: &[],
         seg_contours,
+        shibufude_splatter_polygons: &[],
+        sugomi_hole_polygons: &[],
+        sugomi_inner_teeth_polygons: &[],
+        sugomi_band_w_px: 0.0,
+        sugomi_hw_in_px: 0.0,
     };
 
     // Warm-up one viewport preview pass (1280x720, zero readback) to measure live interactive drag FPS.
@@ -354,6 +369,11 @@ fn gpu_work_targets_reuse_subviewport_without_realloc_or_edge_leakage() {
         effect_shtack_polygons: &[],
         effect_dry_vector_cuts: &[],
         seg_contours: vec![SfxGpuSegContour { pts: &seg_pts, total_len: seg_len, phase: 0.0 }],
+        shibufude_splatter_polygons: &[],
+        sugomi_hole_polygons: &[],
+        sugomi_inner_teeth_polygons: &[],
+        sugomi_band_w_px: 0.0,
+        sugomi_hw_in_px: 0.0,
     };
 
     // 1. Prime capacity at 512x512 with full-area content so pixels at x>=300, y>=260 are populated.
@@ -531,6 +551,11 @@ fn gpu_ukiyo_brush_and_stroke_shtack_render_cleanly_across_zooms() {
             seg_contours: Vec::new(),
             primary_dry_vector_cuts: &[],
             effect_dry_vector_cuts: &eff_cuts,
+            shibufude_splatter_polygons: &[],
+            sugomi_hole_polygons: &[],
+            sugomi_inner_teeth_polygons: &[],
+            sugomi_band_w_px: 0.0,
+            sugomi_hw_in_px: 0.0,
         };
         let _ = g
             .renderer
@@ -555,6 +580,11 @@ fn gpu_ukiyo_brush_and_stroke_shtack_render_cleanly_across_zooms() {
         seg_contours: Vec::new(),
         primary_dry_vector_cuts: &[],
         effect_dry_vector_cuts: &eff_cuts,
+        shibufude_splatter_polygons: &[],
+        sugomi_hole_polygons: &[],
+        sugomi_inner_teeth_polygons: &[],
+        sugomi_band_w_px: 0.0,
+        sugomi_hw_in_px: 0.0,
     };
     let surf = g
         .renderer
@@ -588,6 +618,11 @@ fn gpu_ukiyo_brush_and_stroke_shtack_render_cleanly_across_zooms() {
         seg_contours: Vec::new(),
         primary_dry_vector_cuts: &[],
         effect_dry_vector_cuts: &[],
+        shibufude_splatter_polygons: &[],
+        sugomi_hole_polygons: &[],
+        sugomi_inner_teeth_polygons: &[],
+        sugomi_band_w_px: 0.0,
+        sugomi_hw_in_px: 0.0,
     };
     let hollow_surf = g
         .renderer
@@ -595,6 +630,255 @@ fn gpu_ukiyo_brush_and_stroke_shtack_render_cleanly_across_zooms() {
         .expect("GPU hollow stroke render");
     assert!(!hollow_surf.content_bounds().is_empty(), "hollow fill + inside stroke rendered empty");
 
+    assert_eq!(health.errors(), 0, "expected 0 uncaptured wgpu errors");
+    assert!(health.fault().is_none(), "expected healthy device, got {:?}", health.fault());
+}
+
+fn read_last_rgba(renderer: &SfxGpuRenderer, device: &wgpu::Device, queue: &wgpu::Queue) -> Vec<u8> {
+    let (buf, padded_row, rw, rh) = renderer.copy_last_output_to_buffer(device, queue).expect("copy");
+    let slice = buf.slice(..);
+    let (tx, rx) = std::sync::mpsc::channel();
+    slice.map_async(wgpu::MapMode::Read, move |res| {
+        let _ = tx.send(res);
+    });
+    let _ = device.poll(wgpu::PollType::wait_indefinitely());
+    rx.recv().unwrap().unwrap();
+    let mapped = slice.get_mapped_range().expect("mapped range");
+    let mut out = vec![0u8; (rw * rh * 4) as usize];
+    for row in 0..rh as usize {
+        let s = row * padded_row as usize;
+        let d = row * (rw as usize * 4);
+        out[d..d + rw as usize * 4].copy_from_slice(&mapped[s..s + rw as usize * 4]);
+    }
+    drop(mapped);
+    buf.unmap();
+    buf.destroy();
+    out
+}
+
+#[test]
+fn gpu_shibufude_v3_kado_maru_modes_and_subviewport_grain_invariance() {
+    let Some(mut g) = gpu() else { return };
+    let health = DeviceHealth::watch(&g.device);
+    g.renderer.set_health(health.clone());
+
+    let face = holed_square_contours(64.0, 64.0, 128.0);
+    // Overlapping Kado quads with MIXED windings (CCW + CW) at top-left corner (64, 64)
+    // to prove BlendOperation::Max never punches stencil holes on overlap!
+    let kado_quads = vec![
+        vec![(56.0, 56.0), (200.0, 56.0), (200.0, 70.0), (56.0, 70.0)],
+        // Intentionally reversed (CW) overlapping vertical quad at x=56..70, y=56..200:
+        vec![(56.0, 56.0), (56.0, 200.0), (70.0, 200.0), (70.0, 56.0)],
+        vec![(186.0, 56.0), (200.0, 56.0), (200.0, 200.0), (186.0, 200.0)],
+        vec![(56.0, 186.0), (200.0, 186.0), (200.0, 200.0), (56.0, 200.0)],
+    ];
+    let splatter = vec![
+        vec![(30.0, 44.0), (40.0, 44.0), (40.0, 54.0), (30.0, 54.0)],
+        vec![(212.0, 110.0), (224.0, 110.0), (224.0, 122.0), (212.0, 122.0)],
+    ];
+
+    for profile in [SfxShibufudeProfile::Kado, SfxShibufudeProfile::Maru] {
+        for edge_mode in [SfxV3EdgeMode::OneBit, SfxV3EdgeMode::Rough] {
+            for knockout in [false, true] {
+                let mut data = SfxData { fill: SfxFillSource::None, ..SfxData::default() };
+                data.line_effect.style = SfxLineStyle::ShibufudeV3;
+                data.line_effect.line_width_px = 14.0;
+                data.line_effect.line_color = Color::rgb(0.05, 0.05, 0.08);
+                data.line_effect.halo_width_px = 0.0;
+                data.line_effect.shibufude_profile = profile;
+                data.line_effect.shibufude_edge_mode = edge_mode;
+                data.line_effect.shibufude_knockout = knockout;
+                data.line_effect.shibufude_seed = 7;
+                data.validate();
+
+                let scene = SfxGpuScene {
+                    data: &data,
+                    full_bounds: Rect::from_xywh(16, 16, 224, 224),
+                    glyph_em_px: 128.0,
+                    face_contours: &face,
+                    line_polygons: if profile == SfxShibufudeProfile::Kado { &kado_quads } else { &[] },
+                    primary_shtack_polygons: &[],
+                    secondary_shtack_polygons: &[],
+                    effect_shtack_polygons: &[],
+                    seg_contours: Vec::new(),
+                    primary_dry_vector_cuts: &[],
+                    effect_dry_vector_cuts: &[],
+                    shibufude_splatter_polygons: &splatter,
+                    sugomi_hole_polygons: &[],
+                    sugomi_inner_teeth_polygons: &[],
+                    sugomi_band_w_px: 0.0,
+                    sugomi_hw_in_px: 0.0,
+                };
+                let surf = g
+                    .renderer
+                    .render_tiled_to_surface(&g.device, &g.queue, &scene, PixelFormat::RGBA8)
+                    .unwrap_or_else(|e| panic!("Shibufude {profile:?}/{edge_mode:?}/ko={knockout} failed: {}", e.0));
+                assert!(!surf.content_bounds().is_empty(), "Shibufude {profile:?}/{edge_mode:?} empty");
+                // Center of hole (128, 128) must stay open.
+                assert!(surf.pixel(128, 128)[3] < 0.05, "hole center should stay transparent");
+                // Splatter blob at (35, 49) must be visible!
+                assert!(surf.pixel(35, 49)[3] > 0.5, "splatter blob missing in {profile:?}/{edge_mode:?}");
+                if profile == SfxShibufudeProfile::Kado && !knockout {
+                    // Overlap corner of CCW + CW quads at (63, 63) must remain SOLID (BlendOperation::Max)!
+                    assert!(
+                        surf.pixel(63, 63)[3] > 0.7,
+                        "Kado overlapping mixed-winding corner punched a hole (got {:?})",
+                        surf.pixel(63, 63)
+                    );
+                }
+            }
+        }
+    }
+
+    // Verify document-coordinate grain invariance across shifted sub-viewports (zero pan drift!).
+    let mut inv_data = SfxData { fill: SfxFillSource::None, ..SfxData::default() };
+    inv_data.line_effect.style = SfxLineStyle::ShibufudeV3;
+    inv_data.line_effect.line_width_px = 14.0;
+    inv_data.line_effect.halo_width_px = 0.0;
+    inv_data.line_effect.shibufude_profile = SfxShibufudeProfile::Maru;
+    inv_data.line_effect.shibufude_edge_mode = SfxV3EdgeMode::Rough;
+    inv_data.line_effect.shibufude_seed = 19;
+    inv_data.validate();
+    let inv_scene = SfxGpuScene {
+        data: &inv_data,
+        full_bounds: Rect::from_xywh(16, 16, 224, 224),
+        glyph_em_px: 128.0,
+        face_contours: &face,
+        line_polygons: &[],
+        primary_shtack_polygons: &[],
+        secondary_shtack_polygons: &[],
+        effect_shtack_polygons: &[],
+        seg_contours: Vec::new(),
+        primary_dry_vector_cuts: &[],
+        effect_dry_vector_cuts: &[],
+        shibufude_splatter_polygons: &splatter,
+        sugomi_hole_polygons: &[],
+        sugomi_inner_teeth_polygons: &[],
+        sugomi_band_w_px: 0.0,
+        sugomi_hw_in_px: 0.0,
+    };
+    let _ = g
+        .renderer
+        .render_region(&g.device, &g.queue, &inv_scene, [16.0, 16.0, 240.0, 240.0], [224, 224])
+        .expect("full region");
+    let full_px = read_last_rgba(&g.renderer, &g.device, &g.queue);
+    let _ = g
+        .renderer
+        .render_region(&g.device, &g.queue, &inv_scene, [32.0, 32.0, 224.0, 224.0], [192, 192])
+        .expect("shifted sub-viewport");
+    let sub_px = read_last_rgba(&g.renderer, &g.device, &g.queue);
+
+    // Compare interior overlap doc [56..200, 56..200] -> well away from JFA viewport apron.
+    let mut max_diff = 0u8;
+    for dy in 56usize..200 {
+        for dx in 56usize..200 {
+            let fi = ((dy - 16) * 224 + (dx - 16)) * 4;
+            let si = ((dy - 32) * 192 + (dx - 32)) * 4;
+            for ch in 0..4 {
+                max_diff = max_diff.max(full_px[fi + ch].abs_diff(sub_px[si + ch]));
+            }
+        }
+    }
+    assert!(max_diff <= 2, "Shibufude v3 grain drifted across sub-viewport shift (max_diff={max_diff})");
+    assert_eq!(health.errors(), 0, "expected 0 uncaptured wgpu errors");
+    assert!(health.fault().is_none(), "expected healthy device, got {:?}", health.fault());
+}
+
+#[test]
+fn gpu_sugomi_v3_solid_hollow_modes_and_direct_max_inner_teeth() {
+    let Some(mut g) = gpu() else { return };
+    let health = DeviceHealth::watch(&g.device);
+    g.renderer.set_health(health.clone());
+
+    let face = holed_square_contours(48.0, 48.0, 160.0);
+    // Spiky outer contour around (48..208, 48..208)
+    let outer_spiky = vec![vec![
+        (36.0, 36.0),
+        (128.0, 24.0),
+        (220.0, 36.0),
+        (232.0, 128.0),
+        (220.0, 220.0),
+        (128.0, 232.0),
+        (36.0, 220.0),
+        (24.0, 128.0),
+    ]];
+    let hole_cut = vec![vec![(98.0, 98.0), (158.0, 98.0), (158.0, 158.0), (98.0, 158.0)]];
+    // Overlapping inward teeth (one CCW, one CW) inside top hollow band wall
+    let inner_teeth = vec![
+        vec![(62.0, 62.0), (84.0, 62.0), (80.0, 74.0), (73.0, 82.0), (66.0, 74.0)],
+        vec![(70.0, 62.0), (74.0, 74.0), (81.0, 82.0), (88.0, 74.0), (92.0, 62.0)],
+    ];
+
+    let mut solid_ink = 0usize;
+    let mut hollow_ink = 0usize;
+
+    for dir in [SfxSugomiDirection::Fude, SfxSugomiDirection::Tate, SfxSugomiDirection::Yoko] {
+        for hollow in [false, true] {
+            for edge_mode in [SfxV3EdgeMode::OneBit, SfxV3EdgeMode::Rough] {
+                let mut data = SfxData { fill: SfxFillSource::None, ..SfxData::default() };
+                data.line_effect.style = SfxLineStyle::SugomiV3;
+                data.line_effect.line_color = Color::rgb(0.04, 0.04, 0.06);
+                data.line_effect.halo_width_px = 0.0;
+                data.line_effect.sugomi_direction = dir;
+                data.line_effect.sugomi_hollow = hollow;
+                data.line_effect.sugomi_edge_mode = edge_mode;
+                data.line_effect.sugomi_seed = 11;
+                data.validate();
+
+                let scene = SfxGpuScene {
+                    data: &data,
+                    full_bounds: Rect::from_xywh(16, 16, 224, 224),
+                    glyph_em_px: 160.0,
+                    face_contours: &face,
+                    line_polygons: &outer_spiky,
+                    primary_shtack_polygons: &[],
+                    secondary_shtack_polygons: &[],
+                    effect_shtack_polygons: &[],
+                    seg_contours: Vec::new(),
+                    primary_dry_vector_cuts: &[],
+                    effect_dry_vector_cuts: &[],
+                    shibufude_splatter_polygons: &[],
+                    sugomi_hole_polygons: &hole_cut,
+                    sugomi_inner_teeth_polygons: if hollow { &inner_teeth } else { &[] },
+                    sugomi_band_w_px: 16.0,
+                    sugomi_hw_in_px: 6.0,
+                };
+                let surf = g
+                    .renderer
+                    .render_tiled_to_surface(&g.device, &g.queue, &scene, PixelFormat::RGBA8)
+                    .unwrap_or_else(|e| panic!("Sugomi {dir:?}/hollow={hollow}/{edge_mode:?} failed: {}", e.0));
+                assert!(!surf.content_bounds().is_empty(), "Sugomi {dir:?}/hollow={hollow} empty");
+                // Center of counter hole must remain open.
+                assert!(surf.pixel(128, 128)[3] < 0.05, "Sugomi hole center must stay open");
+
+                if dir == SfxSugomiDirection::Fude && edge_mode == SfxV3EdgeMode::OneBit {
+                    let mut count = 0usize;
+                    for y in 16..240 {
+                        for x in 16..240 {
+                            if surf.pixel(x, y)[3] > 0.5 {
+                                count += 1;
+                            }
+                        }
+                    }
+                    if hollow {
+                        hollow_ink = count;
+                        // Overlapping inner teeth at (76, 68) must remain SOLID (BlendOperation::Max)!
+                        assert!(
+                            surf.pixel(76, 68)[3] > 0.5,
+                            "Sugomi overlapping inner teeth punched a hole (got {:?})",
+                            surf.pixel(76, 68)
+                        );
+                    } else {
+                        solid_ink = count;
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        hollow_ink > 0 && hollow_ink < solid_ink,
+        "Sugomi hollow ({hollow_ink} px) must carve out interior relative to solid ({solid_ink} px)"
+    );
     assert_eq!(health.errors(), 0, "expected 0 uncaptured wgpu errors");
     assert!(health.fault().is_none(), "expected healthy device, got {:?}", health.fault());
 }

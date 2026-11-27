@@ -171,6 +171,11 @@ fn build_gpu_scene<'a>(data: &'a SfxData, vec_scene: &'a SfxVectorScene) -> SfxG
         effect_shtack_polygons: &vec_scene.effect_shtack_polygons,
         effect_dry_vector_cuts: &vec_scene.effect_dry_vector_cuts,
         seg_contours,
+        shibufude_splatter_polygons: &vec_scene.shibufude_splatter_polygons,
+        sugomi_hole_polygons: &vec_scene.sugomi_hole_polygons,
+        sugomi_inner_teeth_polygons: &vec_scene.sugomi_inner_teeth_polygons,
+        sugomi_band_w_px: vec_scene.sugomi_band_w_px,
+        sugomi_hw_in_px: vec_scene.sugomi_hw_in_px,
     }
 }
 
@@ -291,6 +296,11 @@ fn collect_scene_content_boxes(vec_scene: &SfxVectorScene) -> Vec<[f64; 4]> {
         boxes.push(g.warped_bounds);
     }
     for p in &vec_scene.line_polygons {
+        if let Some(b) = poly_aabb(p) {
+            boxes.push(b);
+        }
+    }
+    for p in &vec_scene.shibufude_splatter_polygons {
         if let Some(b) = poly_aabb(p) {
             boxes.push(b);
         }

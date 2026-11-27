@@ -8,9 +8,9 @@ use egui::{Color32, RichText, Stroke, Ui, vec2};
 use photocraft_algo::{DotShape, PatternType};
 use photocraft_doc::sfx::{
     MAX_SFX_BLEND_EFFECTS, MAX_SFX_SPLINE_POINTS, ScreentoneSpec, SfxBlendEffect, SfxBlending, SfxChannelBlend, SfxData, SfxDistress,
-    SfxDryBrushEngine, SfxDryBrushSpec, SfxFillSource, SfxFreeTransform, SfxGlyphTransform, SfxLineJoin, SfxLineStyle, SfxMeshInterpolation,
-    SfxPreset, SfxShtackFillMode, SfxShtackFillSpec, SfxShtackFlowOvershoot, SfxShtackOvershootMode, SfxShtackVariant, SfxSpikeShape,
-    SfxStrokePosition, SfxStylePass, SfxWarpMode,
+    SfxDryBrushEngine, SfxDryBrushSpec, SfxFillSource, SfxFreeTransform, SfxGlyphTransform, SfxLineEffect, SfxLineJoin, SfxLineStyle,
+    SfxMeshInterpolation, SfxPreset, SfxShibufudeProfile, SfxShtackFillMode, SfxShtackFillSpec, SfxShtackFlowOvershoot,
+    SfxShtackOvershootMode, SfxShtackVariant, SfxSpikeShape, SfxStrokePosition, SfxStylePass, SfxSugomiDirection, SfxV3EdgeMode, SfxWarpMode,
 };
 use photocraft_doc::{Color, LayerId};
 use photocraft_manga_core::sfx_geom::{PreparedSfx, sample_catmull_rom};
@@ -367,6 +367,15 @@ fn line_style_badge(draft: &SfxData) -> &'static str {
             SfxShtackVariant::SaiPenSketch => "SHTACK (SAI Pen)",
             SfxShtackVariant::DryPencil => "SHTACK (Dry Pencil)",
         },
+        SfxLineStyle::ShibufudeV3 => match draft.line_effect.shibufude_profile {
+            SfxShibufudeProfile::Kado => "Shibufude v3 (角)",
+            SfxShibufudeProfile::Maru => "Shibufude v3 (丸)",
+        },
+        SfxLineStyle::SugomiV3 => match draft.line_effect.sugomi_direction {
+            SfxSugomiDirection::Fude => "Sugomi v3 (筆)",
+            SfxSugomiDirection::Tate => "Sugomi v3 (縦)",
+            SfxSugomiDirection::Yoko => "Sugomi v3 (横)",
+        },
     }
 }
 
@@ -412,8 +421,8 @@ fn preset_title_color(preset: &SfxPreset, t: Tokens) -> Color32 {
     match preset.line_effect.style {
         SfxLineStyle::Shtack => TEXT_AMBER,
         SfxLineStyle::GPenNib => TEXT_SKY,
-        SfxLineStyle::BrushStroke => TEXT_EMERALD,
-        SfxLineStyle::Spikes => TEXT_ROSE,
+        SfxLineStyle::BrushStroke | SfxLineStyle::ShibufudeV3 => TEXT_EMERALD,
+        SfxLineStyle::Spikes | SfxLineStyle::SugomiV3 => TEXT_ROSE,
         SfxLineStyle::Clean | SfxLineStyle::OneBit => t.text,
     }
 }
@@ -585,6 +594,39 @@ fn draw_presets_card(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens, target: &Sf
             ui.add_space(2.0);
         }
 
+        egui::CollapsingHeader::new(RichText::new("SFX v3 (Shibufude / Sugomi)").size(10.0).strong().color(TEXT_EMERALD))
+            .id_salt("sfx-v3-starter-presets")
+            .default_open(true)
+            .show(ui, |ui| {
+                let starters = sfx_v3_starter_presets();
+                for pair in starters.chunks(2) {
+                    ui.columns(2, |cols| {
+                        for (i, preset) in pair.iter().enumerate() {
+                            let title_col = preset_title_color(preset, t);
+                            let card_resp = egui::Frame::group(cols[i].style())
+                                .fill(t.field)
+                                .stroke(Stroke::new(1.0, t.card_border))
+                                .corner_radius(t.radius_sm)
+                                .inner_margin(egui::Margin::symmetric(6, 4))
+                                .show(&mut cols[i], |ui| {
+                                    ui.set_width(ui.available_width().max(1.0));
+                                    ui.label(RichText::new(&preset.name).strong().size(10.0).color(title_col));
+                                    ui.label(RichText::new(&preset.description).size(9.0).color(t.text_dim));
+                                })
+                                .response
+                                .interact(egui::Sense::click());
+                            if card_resp.hovered() {
+                                cols[i].ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                            }
+                            if card_resp.clicked() {
+                                st.draft.apply_preset(preset);
+                            }
+                        }
+                    });
+                    ui.add_space(2.0);
+                }
+            });
+
         egui::CollapsingHeader::new(RichText::new("Сохранить / удалить пресет").size(10.0).color(t.text_dim))
             .id_salt("sfx-preset-manage")
             .default_open(false)
@@ -603,6 +645,76 @@ fn draw_presets_card(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens, target: &Sf
                 });
             });
     });
+}
+
+fn sfx_v3_starter_presets() -> [SfxPreset; 4] {
+    let ink = Color::rgb(0.05, 0.05, 0.07);
+    [
+        SfxPreset {
+            name: "Shibufude · 角 1-Bit".to_owned(),
+            description: "Угловая кисть + しぶき".to_owned(),
+            fill: SfxFillSource::None,
+            line_effect: SfxLineEffect {
+                style: SfxLineStyle::ShibufudeV3,
+                halo_width_px: 8.0,
+                halo_color: Color::WHITE,
+                line_width_px: 13.5,
+                line_color: ink,
+                shibufude_profile: SfxShibufudeProfile::Kado,
+                shibufude_edge_mode: SfxV3EdgeMode::OneBit,
+                ..SfxLineEffect::default()
+            },
+            ..SfxPreset::default()
+        },
+        SfxPreset {
+            name: "Shibufude · 丸 Rough".to_owned(),
+            description: "Мягкая кисть + касурэ".to_owned(),
+            fill: SfxFillSource::None,
+            line_effect: SfxLineEffect {
+                style: SfxLineStyle::ShibufudeV3,
+                halo_width_px: 8.0,
+                halo_color: Color::WHITE,
+                line_width_px: 14.0,
+                line_color: ink,
+                shibufude_profile: SfxShibufudeProfile::Maru,
+                shibufude_edge_mode: SfxV3EdgeMode::Rough,
+                ..SfxLineEffect::default()
+            },
+            ..SfxPreset::default()
+        },
+        SfxPreset {
+            name: "Sugomi · 筆 Solid".to_owned(),
+            description: "Залитый шипастый удар".to_owned(),
+            fill: SfxFillSource::None,
+            line_effect: SfxLineEffect {
+                style: SfxLineStyle::SugomiV3,
+                halo_width_px: 10.0,
+                halo_color: Color::WHITE,
+                line_color: ink,
+                sugomi_direction: SfxSugomiDirection::Fude,
+                sugomi_hollow: false,
+                sugomi_edge_mode: SfxV3EdgeMode::OneBit,
+                ..SfxLineEffect::default()
+            },
+            ..SfxPreset::default()
+        },
+        SfxPreset {
+            name: "Sugomi · Полый Rough".to_owned(),
+            description: "Полый контур + зубцы".to_owned(),
+            fill: SfxFillSource::None,
+            line_effect: SfxLineEffect {
+                style: SfxLineStyle::SugomiV3,
+                halo_width_px: 8.0,
+                halo_color: Color::WHITE,
+                line_color: ink,
+                sugomi_direction: SfxSugomiDirection::Fude,
+                sugomi_hollow: true,
+                sugomi_edge_mode: SfxV3EdgeMode::Rough,
+                ..SfxLineEffect::default()
+            },
+            ..SfxPreset::default()
+        },
+    ]
 }
 
 fn draw_gizmo_card(ui: &mut Ui, st: &mut SfxPanelState, gizmo: &mut SfxGizmoState, t: Tokens) {
@@ -854,6 +966,20 @@ fn draw_line_effect_card(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens) {
                 ensure_visible_line_width(&mut st.draft.line_effect, scale);
             }
         });
+        ui.add_space(2.0);
+        ui.columns(2, |cols| {
+            if seg_button(&mut cols[0], cur == SfxLineStyle::ShibufudeV3, ACCENT_AMBER, "🖌 Shibufude v3", t).clicked() {
+                st.draft.line_effect.style = SfxLineStyle::ShibufudeV3;
+                st.draft.fill = SfxFillSource::None;
+                if st.draft.line_effect.line_width_px < 4.0 {
+                    st.draft.line_effect.line_width_px = (13.5 * scale.sqrt()).round().clamp(8.0, 96.0);
+                }
+            }
+            if seg_button(&mut cols[1], cur == SfxLineStyle::SugomiV3, ACCENT_AMBER, "⚡ Sugomi v3", t).clicked() {
+                st.draft.line_effect.style = SfxLineStyle::SugomiV3;
+                st.draft.fill = SfxFillSource::None;
+            }
+        });
 
         ui.add_space(4.0);
         let le = &mut st.draft.line_effect;
@@ -964,11 +1090,94 @@ fn draw_line_effect_card(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens) {
                 }
                 ui.label(RichText::new("Внутренность буквы настраивается отдельно в секции «Заливка» (Полый / Solid / Shtack Fill).").size(9.5).color(t.text_dim));
             }
+            SfxLineStyle::ShibufudeV3 => {
+                draw_shibufude_v3_controls(ui, le, scale, t);
+            }
+            SfxLineStyle::SugomiV3 => {
+                draw_sugomi_v3_controls(ui, le, t);
+            }
         }
-        if le.style != SfxLineStyle::Shtack && (le.line_width_px > 0.05 || le.style != SfxLineStyle::Clean) {
+        if !matches!(le.style, SfxLineStyle::Shtack | SfxLineStyle::ShibufudeV3 | SfxLineStyle::SugomiV3)
+            && (le.line_width_px > 0.05 || le.style != SfxLineStyle::Clean)
+        {
             slider_row_f32(ui, t, "Зерно бумаги на лайне:", &mut le.line_grain_pct, 0.0..=100.0, "%");
         }
     });
+}
+
+fn draw_shibufude_v3_controls(ui: &mut Ui, le: &mut SfxLineEffect, scale: f32, t: Tokens) {
+    row_with_reroll(ui, 22.0, &mut le.shibufude_seed, "Новый Seed Shibufude v3", |ui| {
+        ui.columns(2, |cols| {
+            if seg_button(&mut cols[0], le.shibufude_profile == SfxShibufudeProfile::Kado, ACCENT_SKY, "角 Kado", t).clicked() {
+                le.shibufude_profile = SfxShibufudeProfile::Kado;
+            }
+            if seg_button(&mut cols[1], le.shibufude_profile == SfxShibufudeProfile::Maru, ACCENT_SKY, "丸 Maru", t).clicked() {
+                le.shibufude_profile = SfxShibufudeProfile::Maru;
+            }
+        });
+    });
+    ui.add_space(2.0);
+    ui.columns(2, |cols| {
+        if seg_button(&mut cols[0], le.shibufude_edge_mode == SfxV3EdgeMode::OneBit, ACCENT_SKY, "1-Bit", t).clicked() {
+            le.shibufude_edge_mode = SfxV3EdgeMode::OneBit;
+        }
+        if seg_button(&mut cols[1], le.shibufude_edge_mode == SfxV3EdgeMode::Rough, ACCENT_AMBER, "Rough (Касурэ)", t).clicked() {
+            le.shibufude_edge_mode = SfxV3EdgeMode::Rough;
+        }
+    });
+    ui.checkbox(&mut le.shibufude_knockout, "Выворотка (抜き · ×0.84)");
+    slider_row_f32(ui, t, "Шероховатость:", &mut le.shibufude_roughness_pct, 0.0..=100.0, "%");
+    slider_row_f32(ui, t, "Брызги (しぶき):", &mut le.shibufude_splatter_pct, 0.0..=100.0, "%");
+    slider_row_f32(ui, t, "Разлёт брызг:", &mut le.shibufude_spread_px, 4.0..=120.0 * scale, "px");
+    slider_row_f32(ui, t, "Размер капель:", &mut le.shibufude_splat_size_pct, 25.0..=250.0, "%");
+    if le.shibufude_edge_mode == SfxV3EdgeMode::Rough {
+        slider_row_f32(ui, t, "Сухость края:", &mut le.shibufude_dryness_pct, 0.0..=100.0, "%");
+        slider_row_f32(ui, t, "Чёткость зерна:", &mut le.shibufude_sharpness_pct, 0.0..=100.0, "%");
+    } else {
+        slider_row_f32(ui, t, "Зерно 1-Bit:", &mut le.line_grain_pct, 0.0..=100.0, "%");
+    }
+}
+
+fn draw_sugomi_v3_controls(ui: &mut Ui, le: &mut SfxLineEffect, t: Tokens) {
+    row_with_reroll(ui, 22.0, &mut le.sugomi_seed, "Новый Seed Sugomi v3", |ui| {
+        ui.columns(3, |cols| {
+            if seg_button(&mut cols[0], le.sugomi_direction == SfxSugomiDirection::Fude, ACCENT_SKY, "筆 Fude", t).clicked() {
+                le.sugomi_direction = SfxSugomiDirection::Fude;
+            }
+            if seg_button(&mut cols[1], le.sugomi_direction == SfxSugomiDirection::Tate, ACCENT_SKY, "縦 Tate", t).clicked() {
+                le.sugomi_direction = SfxSugomiDirection::Tate;
+            }
+            if seg_button(&mut cols[2], le.sugomi_direction == SfxSugomiDirection::Yoko, ACCENT_SKY, "横 Yoko", t).clicked() {
+                le.sugomi_direction = SfxSugomiDirection::Yoko;
+            }
+        });
+    });
+    ui.add_space(2.0);
+    ui.columns(2, |cols| {
+        if seg_button(&mut cols[0], !le.sugomi_hollow, ACCENT_SKY, "Залитый (Solid)", t).clicked() {
+            le.sugomi_hollow = false;
+        }
+        if seg_button(&mut cols[1], le.sugomi_hollow, ACCENT_AMBER, "Полый (Hollow)", t).clicked() {
+            le.sugomi_hollow = true;
+        }
+    });
+    ui.add_space(2.0);
+    ui.columns(2, |cols| {
+        if seg_button(&mut cols[0], le.sugomi_edge_mode == SfxV3EdgeMode::OneBit, ACCENT_SKY, "1-Bit", t).clicked() {
+            le.sugomi_edge_mode = SfxV3EdgeMode::OneBit;
+        }
+        if seg_button(&mut cols[1], le.sugomi_edge_mode == SfxV3EdgeMode::Rough, ACCENT_AMBER, "Rough (Касурэ)", t).clicked() {
+            le.sugomi_edge_mode = SfxV3EdgeMode::Rough;
+        }
+    });
+    slider_row_f32(ui, t, "Амплитуда шипов:", &mut le.sugomi_spike_amp_pct, 10.0..=160.0, "%");
+    slider_row_f32(ui, t, "Глубина расщелин:", &mut le.sugomi_cleft_dip_pct, 0.0..=80.0, "%");
+    if le.sugomi_edge_mode == SfxV3EdgeMode::Rough {
+        slider_row_f32(ui, t, "Сухость края:", &mut le.sugomi_dryness_pct, 0.0..=100.0, "%");
+        slider_row_f32(ui, t, "Чёткость зерна:", &mut le.sugomi_sharpness_pct, 0.0..=100.0, "%");
+    } else {
+        slider_row_f32(ui, t, "Зерно 1-Bit:", &mut le.line_grain_pct, 0.0..=100.0, "%");
+    }
 }
 
 fn default_sfx_screentone() -> SfxFillSource {
@@ -2148,6 +2357,8 @@ mod tests {
                 SfxLineStyle::GPenNib,
                 SfxLineStyle::BrushStroke,
                 SfxLineStyle::Shtack,
+                SfxLineStyle::ShibufudeV3,
+                SfxLineStyle::SugomiV3,
             ] {
                 let mut data = SfxData::default();
                 data.line_effect.style = style;

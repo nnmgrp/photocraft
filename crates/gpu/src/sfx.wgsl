@@ -253,10 +253,14 @@ fn fs_mul_mask(inp: QuadOut) -> @location(0) vec4<f32> {
     let p = vec2<i32>(floor(inp.pos.xy));
     let a = load_clamped(tex_a, p).r;
     let b = load_clamped(tex_b, p).r;
-    // u0.x == 1 -> subtract (a * (1 - b)); else multiply (a * b).
+    // u0.x == 1 -> multiply-subtract (a * (1 - b))
+    // u0.x == 2 -> linear subtract (clamp(a - b, 0.0, 1.0))
+    // else -> multiply (a * b)
     var v = a * b;
     if fx.u0.x == 1u {
         v = clamp(a * (1.0 - b), 0.0, 1.0);
+    } else if fx.u0.x == 2u {
+        v = clamp(a - b, 0.0, 1.0);
     }
     if fx.u0.z == 1u {
         v = select(0.0, 1.0, v >= 0.5);
@@ -280,10 +284,15 @@ fn fs_jfa_init_mask(inp: QuadOut) -> @location(0) vec4<f32> {
     let p = vec2<i32>(floor(inp.pos.xy));
     let d = active_dims();
     let m = load_clamped(tex_a, p).r;
-    let invert = fx.u0.x; // 0 = seed inside (exterior dist), 1 = seed outside/border (interior SDF)
+    // 0 = seed inside (exterior dist)
+    // 1 = seed outside/border (interior SDF with border guard)
+    // 2 = seed outside only (exact interior SDF without artificial viewport-border edge)
+    let invert = fx.u0.x;
     var is_seed = false;
     if invert == 0u {
         is_seed = m >= 0.45;
+    } else if invert == 2u {
+        is_seed = m < 0.45;
     } else {
         let on_border = p.x == 0 || p.y == 0 || p.x + 1 >= d.x || p.y + 1 >= d.y;
         is_seed = (m < 0.45) || on_border;
@@ -664,14 +673,23 @@ fn fs_dry_grain_breakup(inp: QuadOut) -> @location(0) vec4<f32> {
     let dp = pixel_doc_pos(pf) * inv_gs;
 
     if fx.u0.x == 1u {
-        // Ukiyo-e Washi kasure (edge-weighted via interior JFA SDF)
+        // Edge-weighted Washi kasure (Ukiyo-e & SFX v3 `apply_edge_kasure_breakup_doc`).
+        // p2.x = core_protect_px (0.0 for legacy UkiyoBrush), u0.z = 1 for binary 1-bit snap.
+        let one_bit = fx.u0.z == 1u;
+        var base_cv = cv;
+        if one_bit {
+            base_cv = select(0.0, 1.0, base_cv >= 0.5);
+        }
+        if base_cv <= 1e-4 || dryness <= 0.005 {
+            return vec4<f32>(base_cv, 0.0, 0.0, 1.0);
+        }
         let s_in = load_clamped(tex_b, p);
         let d_in = select(0.0, length(s_in.xy - pf) * fx.p0.z * inv_gs, s_in.x > -1e6);
         let edge_weight = pow(1.0 - clamp((d_in - 1.0) / (2.8 + dryness * 5.0), 0.0, 1.0), 0.85);
         let core_skip = clamp((dryness - 0.55) / 0.45, 0.0, 1.0) * 0.45;
         let local_dry = clamp(dryness * (edge_weight * 1.15 + core_skip), 0.0, 1.0);
         if local_dry <= 0.02 {
-            return vec4<f32>(cv, 0.0, 0.0, 1.0);
+            return vec4<f32>(base_cv, 0.0, 0.0, 1.0);
         }
         let grain = crisp_paper_grain(dp.x, dp.y, seed);
         let streak = value_noise_2d(dp.x * 0.16, dp.y * 0.72, seed + 47u);
@@ -684,7 +702,16 @@ fn fs_dry_grain_breakup(inp: QuadOut) -> @location(0) vec4<f32> {
             let slope = 3.0 + sharp * sharp * 55.0;
             keep = clamp((ink_score - thresh) * slope + 0.5, 0.0, 1.0);
         }
-        return vec4<f32>(cv * keep, 0.0, 0.0, 1.0);
+        let core_protect = fx.p2.x;
+        if core_protect > 0.0 {
+            let ramp = pow(clamp((d_in - 1.0) / core_protect, 0.0, 1.0), 0.8);
+            keep = max(keep, ramp);
+        }
+        var out_cov = base_cv * keep;
+        if one_bit {
+            out_cov = select(0.0, 1.0, out_cov >= 0.5);
+        }
+        return vec4<f32>(out_cov, 0.0, 0.0, 1.0);
     }
 
     // Dry Pencil / Shtack Fill grain breakup
@@ -709,6 +736,119 @@ fn fs_dry_grain_breakup(inp: QuadOut) -> @location(0) vec4<f32> {
         out_cov = select(0.0, 1.0, out_cov >= 0.5);
     }
     return vec4<f32>(out_cov, 0.0, 0.0, 1.0);
+}
+
+// =============================================================================
+// 9B. SFX V3 — SHIBUFUDE V3 SDF PERTURBATION & SUGOMI V3 HOLLOW CUTOUT
+// =============================================================================
+
+fn rot_noise_2d(x_in: f32, y_in: f32, ang: f32, freq: f32, seed: u32) -> f32 {
+    let ca = cos(ang);
+    let sa = sin(ang);
+    return value_noise_2d((x_in * ca - y_in * sa) * freq, (x_in * sa + y_in * ca) * freq, seed);
+}
+
+fn signed_dist_doc(base_cov: f32, s_ext: vec4<f32>, s_int: vec4<f32>, pf: vec2<f32>) -> f32 {
+    let doc_per_px = fx.p0.z;
+    if base_cov >= 0.45 {
+        let d_in = select(1e6, length(s_int.xy - pf) * doc_per_px, s_int.x > -1e6);
+        return -d_in;
+    }
+    let d_out = select(1e6, length(s_ext.xy - pf) * doc_per_px, s_ext.x > -1e6);
+    return d_out;
+}
+
+@fragment
+fn fs_shibufude_perturb(inp: QuadOut) -> @location(0) vec4<f32> {
+    // tex_a = base mask (Face for Maru, Kado band for Kado)
+    // tex_b = JfaExt of tex_a, tex_c = JfaInt of tex_a
+    // p1.z = eff_line_w_doc, p1.w = roughness (0..1), p2.x = c_off_doc, p2.y = hw_doc
+    // u0.x = profile (0 = Kado, 1 = Maru), u0.y = seed
+    let p = vec2<i32>(floor(inp.pos.xy));
+    let pf = vec2<f32>(p);
+    let base_cov = load_clamped(tex_a, p).r;
+    let s_ext = load_clamped(tex_b, p);
+    let s_int = load_clamped(tex_c, p);
+    let raw_sdf = signed_dist_doc(base_cov, s_ext, s_int, pf);
+
+    var band_sdf = raw_sdf;
+    if fx.u0.x == 1u {
+        band_sdf = abs(raw_sdf - fx.p2.x) - fx.p2.y;
+    }
+
+    let rough = clamp(fx.p1.w, 0.0, 1.0);
+    if rough <= 1e-4 {
+        return vec4<f32>(clamp(0.5 - band_sdf, 0.0, 1.0), 0.0, 0.0, 1.0);
+    }
+
+    let lw = max(fx.p1.z, 4.0);
+    let inv_w = 1.0 / lw;
+    let wf = 0.32 * inv_w;
+    let warp_amp = lw * 0.45 * rough;
+    let r_amp = 0.36 + 0.64 * rough;
+    let seed = fx.u0.y;
+    let s_warp1 = seed * 97u + 11u;
+    let s_warp2 = seed * 97u + 29u;
+    let s_mul = seed * 131u;
+
+    let dp = pixel_doc_pos(pf);
+    let wx = (value_noise_2d(dp.x * wf, dp.y * wf, s_warp1) - 0.5) * warp_amp;
+    let wy = (value_noise_2d(dp.x * wf + 13.7, dp.y * wf - 7.3, s_warp2) - 0.5) * warp_amp;
+    let px = dp.x + wx;
+    let py = dp.y + wy;
+
+    let n_low = (rot_noise_2d(dp.x, dp.y, 0.37, 0.18 * inv_w, s_mul + 17u) - 0.5) * 2.0;
+    let n_mid = (rot_noise_2d(px, py, 1.09, 0.54 * inv_w, s_mul + 41u) - 0.5) * 2.0;
+    let n_fine = (rot_noise_2d(px, py, 1.93, 1.38 * inv_w, s_mul + 89u) - 0.5) * 2.0;
+    let n_micro = (rot_noise_2d(dp.x, dp.y, 2.61, 2.85 * inv_w, s_mul + 151u) - 0.5) * 2.0;
+
+    let c1 = rot_noise_2d(px, py, 0.73, 0.78 * inv_w, s_mul + 211u);
+    let c2 = rot_noise_2d(px, py, 2.29, 1.72 * inv_w, s_mul + 277u);
+    let c_mix = c1 * 0.62 + c2 * 0.38;
+    let chip = max(c_mix - 0.65, 0.0) / 0.35;
+    let bump = max(0.30 - c_mix, 0.0) / 0.30;
+
+    let disp = clamp(
+        (n_low * 0.26 + n_mid * 0.21 + n_fine * 0.125 + n_micro * 0.065) * lw * r_amp
+            + pow(bump, 1.7) * (lw * 0.24 * rough)
+            - pow(chip, 1.6) * (lw * 0.40 * rough),
+        -lw * 0.36,
+        lw * 0.42,
+    );
+    let eff_sdf = band_sdf - disp;
+    return vec4<f32>(clamp(0.5 - eff_sdf, 0.0, 1.0), 0.0, 0.0, 1.0);
+}
+
+@fragment
+fn fs_sugomi_hollow_cut(inp: QuadOut) -> @location(0) vec4<f32> {
+    // tex_a = Face mask, tex_b = JfaExt of Face, tex_c = JfaInt of Face
+    // p1.z = band_w_doc, p1.w = hw_in_doc, p2.x = rough_mul (0.82)
+    // u0.x = hollow (1), u0.y = seed + 53
+    let p = vec2<i32>(floor(inp.pos.xy));
+    let pf = vec2<f32>(p);
+    let base_cov = load_clamped(tex_a, p).r;
+    let s_ext = load_clamped(tex_b, p);
+    let s_int = load_clamped(tex_c, p);
+    let inner_sdf = signed_dist_doc(base_cov, s_ext, s_int, pf) + fx.p1.w;
+
+    let sc = max(fx.p1.z, 8.0);
+    let inv = 1.0 / sc;
+    let s_mul = fx.u0.y * 137u;
+    let amp = fx.p2.x * sc;
+    let hollow = fx.u0.x == 1u;
+    let lo = -sc * select(0.12, 0.14, hollow);
+    let hi = sc * select(0.11, 0.14, hollow);
+
+    let dp = pixel_doc_pos(pf);
+    let n_low = (rot_noise_2d(dp.x, dp.y, 0.41, 0.22 * inv, s_mul + 13u) - 0.5) * 2.0;
+    let n_mid = (rot_noise_2d(dp.x, dp.y, 1.17, 0.68 * inv, s_mul + 37u) - 0.5) * 2.0;
+    let n_fine = (rot_noise_2d(dp.x, dp.y, 2.03, 1.65 * inv, s_mul + 79u) - 0.5) * 2.0;
+    let c_mix = rot_noise_2d(dp.x, dp.y, 0.83, 1.05 * inv, s_mul + 131u) * 0.6
+        + rot_noise_2d(dp.x, dp.y, 2.39, 2.15 * inv, s_mul + 193u) * 0.4;
+    let chip = max(c_mix - 0.67, 0.0) / 0.33;
+    let disp = clamp((n_low * 0.10 + n_mid * 0.09 + n_fine * 0.06) * amp - chip * chip * (amp * 0.18), lo, hi);
+    let eff_inner = inner_sdf - disp;
+    return vec4<f32>(clamp(0.5 - eff_inner, 0.0, 1.0), 0.0, 0.0, 1.0);
 }
 
 // =============================================================================

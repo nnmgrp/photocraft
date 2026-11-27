@@ -27,9 +27,12 @@ use photocraft_vector::{Polyline, Rasterizer, StrokeStyle, stroke_polygons};
 use web_time::Instant;
 
 use crate::sfx_geom::{PreparedSfx, build_sfx_geometry};
+use crate::sfx_shibufude::{build_shibufude_v3_vector, effective_shibufude_line_w, render_shibufude_v3_cpu};
 use crate::sfx_stroke_flow::{
     FlowEndKind, FlowStroke, catmull_rom_resample_flow, catmull_rom_sample_closed_sweep, extract_glyph_flow_strokes,
 };
+use crate::sfx_sugomi::{build_sugomi_v3_vector, render_sugomi_v3_cpu};
+use crate::sfx_v3_common::normalize_glyph_winding_by_depth;
 
 /// A closed ink polygon in document space.
 type InkPolygon = Vec<(f64, f64)>;
@@ -80,6 +83,16 @@ pub struct SfxVectorScene {
     pub primary_dry_vector_cuts: Vec<SfxPolyRing>,
     /// Per-effect `DryBrushEngine::Vector` cut polygons indexed by `data.blending.effects` index.
     pub effect_dry_vector_cuts: Vec<(usize, Vec<SfxPolyRing>)>,
+    /// Style 1 (`Shibufude v3`) clustered しぶき splatter polygons (direct `BlendOperation::Max`).
+    pub shibufude_splatter_polygons: Vec<SfxPolyRing>,
+    /// Style 2 (`Sugomi v3`) jagged interior counter-hole cutout polygons.
+    pub sugomi_hole_polygons: Vec<SfxPolyRing>,
+    /// Style 2 (`Sugomi v3`) inward hollow mini-teeth polygons (direct `BlendOperation::Max`).
+    pub sugomi_inner_teeth_polygons: Vec<SfxPolyRing>,
+    /// Style 2 (`Sugomi v3`) guarded hollow `band_w` in document pixels (`<= 0.55 * stroke_w`).
+    pub sugomi_band_w_px: f32,
+    /// Style 2 (`Sugomi v3`) inner cutout inset `hw_in` in document pixels (`band_w * 0.36`).
+    pub sugomi_hw_in_px: f32,
 }
 
 /// Output of rendering an [`SfxData`] stack into document-space surfaces.
@@ -511,6 +524,15 @@ pub fn compute_render_bounds(data: &SfxData, geom: &PreparedSfx) -> Rect {
             // with half that on each side of the spine plus the taper/whisker lateral offsets.
             let thickness_pct = f64::from(le.shtack_thickness_px).clamp(0.5, 8.0);
             needle * 1.6 + gh * (thickness_pct / 100.0) + 6.0
+        }
+        SfxLineStyle::ShibufudeV3 => {
+            let lw = f64::from(effective_shibufude_line_w(le));
+            lw * 1.25 + f64::from(le.shibufude_spread_px.max(0.0)) + 16.0
+        }
+        SfxLineStyle::SugomiV3 => {
+            let gh = (geom.warped_box[3] - geom.warped_box[1]).abs().max(24.0);
+            let amp = (f64::from(le.sugomi_spike_amp_pct).clamp(0.0, 200.0) / 100.0).max(0.8);
+            gh * 0.45 * amp + 32.0
         }
     };
     let gh_box = (geom.warped_box[3] - geom.warped_box[1]).abs().max(24.0);
@@ -1082,6 +1104,7 @@ fn proxy_scaled_data(data: &SfxData, scale: f64) -> SfxData {
         le.spike_size_px = px(le.spike_size_px);
         le.gpen_overshoot_px = px(le.gpen_overshoot_px);
         le.ink_brush_overshoot_px = px(le.ink_brush_overshoot_px);
+        le.shibufude_spread_px = px(le.shibufude_spread_px);
         // `shtack_overshoot_px` and `shtack_thickness_px` are PERCENTAGES of the glyph height.
         // The proxy geometry already scales that height, so scaling either percentage here
         // would shrink the needles (and the stroke weight) a second time.
@@ -4383,6 +4406,25 @@ fn sfx_stage_key(data: &SfxData, dpi: f32, preview: bool) -> Vec<u8> {
     k.push("shtack_grain_sharpness_pct", &le.shtack_grain_sharpness_pct.to_bits());
     k.push("line_grain_pct", &le.line_grain_pct.to_bits());
     k.push("shtack_seed", &le.shtack_seed);
+    // SFX v3 Style 1 (Shibufude v3) & Style 2 (Sugomi v3) parameters.
+    k.push("shibufude_profile", &format!("{:?}", le.shibufude_profile));
+    k.push("shibufude_edge_mode", &format!("{:?}", le.shibufude_edge_mode));
+    k.push("shibufude_knockout", &le.shibufude_knockout);
+    k.push("shibufude_roughness_pct", &le.shibufude_roughness_pct.to_bits());
+    k.push("shibufude_splatter_pct", &le.shibufude_splatter_pct.to_bits());
+    k.push("shibufude_spread_px", &le.shibufude_spread_px.to_bits());
+    k.push("shibufude_splat_size_pct", &le.shibufude_splat_size_pct.to_bits());
+    k.push("shibufude_dryness_pct", &le.shibufude_dryness_pct.to_bits());
+    k.push("shibufude_sharpness_pct", &le.shibufude_sharpness_pct.to_bits());
+    k.push("shibufude_seed", &le.shibufude_seed);
+    k.push("sugomi_direction", &format!("{:?}", le.sugomi_direction));
+    k.push("sugomi_hollow", &le.sugomi_hollow);
+    k.push("sugomi_edge_mode", &format!("{:?}", le.sugomi_edge_mode));
+    k.push("sugomi_spike_amp_pct", &le.sugomi_spike_amp_pct.to_bits());
+    k.push("sugomi_cleft_dip_pct", &le.sugomi_cleft_dip_pct.to_bits());
+    k.push("sugomi_dryness_pct", &le.sugomi_dryness_pct.to_bits());
+    k.push("sugomi_sharpness_pct", &le.sugomi_sharpness_pct.to_bits());
+    k.push("sugomi_seed", &le.sugomi_seed);
     k.finish()
 }
 
@@ -4531,8 +4573,19 @@ fn rasterize_uncached_stages(geom: &PreparedSfx, le: &SfxLineEffect, cache_bound
             }
             line = Some(shtack_cov);
         }
+        SfxLineStyle::ShibufudeV3 => {
+            let t = Instant::now();
+            line = Some(render_shibufude_v3_cpu(geom, &raw, cache_bounds, le));
+            dry_ms += t.elapsed().as_secs_f64() * 1000.0;
+        }
+        SfxLineStyle::SugomiV3 => {
+            let t = Instant::now();
+            let em = geom_em_px(geom);
+            line = Some(render_sugomi_v3_cpu(geom, &raw, cache_bounds, em, le));
+            dry_ms += t.elapsed().as_secs_f64() * 1000.0;
+        }
     }
-    if le.style != SfxLineStyle::Shtack
+    if !matches!(le.style, SfxLineStyle::Shtack | SfxLineStyle::ShibufudeV3 | SfxLineStyle::SugomiV3)
         && le.line_grain_pct > 0.5
         && let Some(lcov) = line.as_mut()
     {
@@ -4984,6 +5037,7 @@ fn build_line_effect_polygons(geom: &PreparedSfx, le: &SfxLineEffect) -> Vec<Ink
         SfxLineStyle::GPenNib => build_gpen_polygons(geom, le),
         SfxLineStyle::BrushStroke => build_brush_stroke_polygons(geom, le),
         SfxLineStyle::Shtack => build_shtack_contour_polygons(geom, le),
+        SfxLineStyle::ShibufudeV3 | SfxLineStyle::SugomiV3 => Vec::new(),
     };
     normalize_positive_winding(&mut polys);
     polys
@@ -5027,11 +5081,49 @@ pub fn extract_sfx_vector_scene(data: &SfxData, engine: &mut TextEngine, dpi: f3
             seg_contours: Vec::new(),
             primary_dry_vector_cuts: Vec::new(),
             effect_dry_vector_cuts: Vec::new(),
+            shibufude_splatter_polygons: Vec::new(),
+            sugomi_hole_polygons: Vec::new(),
+            sugomi_inner_teeth_polygons: Vec::new(),
+            sugomi_band_w_px: 0.0,
+            sugomi_hw_in_px: 0.0,
         };
     }
 
-    let face_contours: Vec<InkPolygon> = geom.polylines.iter().map(|pl| pl.pts.clone()).collect();
-    let line_polygons = build_line_effect_polygons(&geom, &data.line_effect);
+    // Normalize per-glyph contour winding by nesting-depth parity so 3-level nested glyphs
+    // (`回`, `目`, `◎`) keep their inner islands solid under NonZero Stencil-then-Cover.
+    let mut face_contours: Vec<InkPolygon> = Vec::with_capacity(geom.polylines.len());
+    for g in &geom.glyphs {
+        let mut rings: Vec<InkPolygon> = g.polylines.iter().map(|pl| pl.pts.clone()).collect();
+        normalize_glyph_winding_by_depth(&mut rings);
+        face_contours.extend(rings);
+    }
+    if face_contours.is_empty() && !geom.polylines.is_empty() {
+        face_contours = geom.polylines.iter().map(|pl| pl.pts.clone()).collect();
+    }
+
+    let mut shibufude_splatter_polygons = Vec::new();
+    let mut sugomi_hole_polygons = Vec::new();
+    let mut sugomi_inner_teeth_polygons = Vec::new();
+    let mut sugomi_band_w_px = 0.0_f32;
+    let mut sugomi_hw_in_px = 0.0_f32;
+    let line_polygons = match data.line_effect.style {
+        SfxLineStyle::ShibufudeV3 => {
+            let (band_polys, splat_polys) = build_shibufude_v3_vector(&geom, &data.line_effect);
+            shibufude_splatter_polygons = splat_polys;
+            band_polys
+        }
+        SfxLineStyle::SugomiV3 => {
+            let mut sg = build_sugomi_v3_vector(&geom, glyph_em_px, &data.line_effect);
+            normalize_positive_winding(&mut sg.outer_spiky_polys);
+            normalize_positive_winding(&mut sg.hole_jagged_polys);
+            sugomi_hole_polygons = sg.hole_jagged_polys;
+            sugomi_inner_teeth_polygons = sg.inner_teeth_polys;
+            sugomi_band_w_px = sg.band_w;
+            sugomi_hw_in_px = sg.hw_in;
+            sg.outer_spiky_polys
+        }
+        _ => build_line_effect_polygons(&geom, &data.line_effect),
+    };
     let primary_shtack_polygons = match &data.fill {
         SfxFillSource::ShtackHatch { spec } => build_shtack_fill_polygons(&geom, spec),
         _ => Vec::new(),
@@ -5096,6 +5188,11 @@ pub fn extract_sfx_vector_scene(data: &SfxData, engine: &mut TextEngine, dpi: f3
         seg_contours,
         primary_dry_vector_cuts,
         effect_dry_vector_cuts,
+        shibufude_splatter_polygons,
+        sugomi_hole_polygons,
+        sugomi_inner_teeth_polygons,
+        sugomi_band_w_px,
+        sugomi_hw_in_px,
     }
 }
 
@@ -5174,7 +5271,20 @@ fn sfx_line_vec_sig(le: &SfxLineEffect) -> u64 {
         // DryPencil uses dryness for contour jitter_amp; SaiPenSketch does not.
         if le.shtack_variant == SfxShtackVariant::DryPencil { le.shtack_dryness_pct.to_bits() } else { 0 },
     );
-    hash_serialize(&(base_part, pen_part, brush_part, shtack_part))
+    let v3_part = (
+        le.shibufude_profile,
+        le.shibufude_knockout,
+        le.shibufude_splatter_pct.to_bits(),
+        le.shibufude_spread_px.to_bits(),
+        le.shibufude_splat_size_pct.to_bits(),
+        le.shibufude_seed,
+        le.sugomi_direction,
+        le.sugomi_hollow,
+        le.sugomi_spike_amp_pct.to_bits(),
+        le.sugomi_cleft_dip_pct.to_bits(),
+        le.sugomi_seed,
+    );
+    hash_serialize(&(base_part, pen_part, brush_part, shtack_part, v3_part))
 }
 
 fn fill_vector_only_sig(fill: &SfxFillSource) -> u64 {

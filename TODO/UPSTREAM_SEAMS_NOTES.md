@@ -91,6 +91,17 @@
 
 ---
 
+## Фаза 2B-1 — Общая инфраструктура SFX v3 + Style 1 (`Shibufude v3`) и Style 2 (`Sugomi v3`)
+
+| Файл upstream | Суть правки | Причина | Риск конфликта при rebase |
+|---|---|---|---|
+| `crates/doc/src/sfx.rs` | Расширен `SfxLineStyle` вариантами `ShibufudeV3` и `SugomiV3`, добавлены enum `SfxShibufudeProfile` (`Kado`/`Maru`), `SfxV3EdgeMode` (`OneBit`/`Rough`), `SfxSugomiDirection` (`Fude`/`Tate`/`Yoko`), `#[serde(default)]`-поля `shibufude_*` и `sugomi_*` на `SfxLineEffect`, валидация и одноразовое масштабирование `shibufude_spread_px` в `scale_sfx_pixel_effects`. | Модель данных SFX v3 с 100% обратной совместимостью `.pcraft` и пресетов | **Отсутствует** (файл добавлен форком) |
+| `crates/manga-core/src/{lib.rs, sfx_v3_common.rs, sfx_shibufude.rs, sfx_sugomi.rs, sfx_render.rs}` | Новые модули `sfx_v3_common` (классификация контуров по чётности глубины вложенности для `回`/`目`/`◎`, аналитический `VectorGlyphSdf` с точным `probe_ray` и `estimate_stroke_w`, document-space `apply_edge_kasure_breakup_doc`, 2-pass Felzenszwalb `exact_sdf`), `sfx_shibufude` (`Kado` miter-clip `2.8` + защита `bl < 1e-5` / `Maru` аналитический band + 2D-SDF пертурбация + CPU-брызги しぶき с клиренсом `hw_out + 0.30*line_w` без GPU readback + `knockout ×0.84`), `sfx_sugomi` (`Fude`/`Tate`/`Yoko`, `Solid`/`Hollow` с защитой тонких шрифтов `band_w <= 0.55 * stroke_w`, защитой вогнутых углов `turn_val < -0.2`, мини-зубцами дыр `<= 0.24 * void_chord`, внутренними зубцами и единым проходом касурэ). Подключено к `SfxVectorScene`, `extract_sfx_vector_scene`, `compute_render_bounds`, `proxy_scaled_data`, `sfx_stage_key`, `rasterize_uncached_stages`. | CPU-оракул и O(vertices) векторная экстракция SFX v3 | **Отсутствует** (файлы добавлены форком) |
+| `crates/gpu/src/{sfx.wgsl, sfx.rs}`, `crates/gpu/tests/it/sfx.rs` | Добавлен прямой `BlendOperation::Max` треугольный пайплайн (`tri_max_pipe`, без stencil — перекрытия `kado`-квадов, брызг и внутренних зубцов никогда не выбивают дыры), шейдеры `fs_shibufude_perturb` и `fs_sugomi_hollow_cut` в документных координатах (`pixel_doc_pos`, `active_dims()`), режим `u0.x == 2` в `fs_mul_mask` (линейное вычитание `clamp(a - b, 0, 1)`) и `fs_jfa_init_mask` (точный interior SDF без ложной границы вьюпорта), `core_protect_px` + `one_bit` в `fs_dry_grain_breakup`, проходы `record_shibufude_v3_passes` и `record_sugomi_v3_passes` с нулевым алиасингом слотов и полные GPU-тесты (включая `DeviceHealth` и инвариантность зерна при сдвиге `sub_viewport`). | Аппаратный GPU-рендеринг SFX v3 на WebGPU/WebGL2/DX12/Vulkan/Metal | **Отсутствует** (файлы добавлены форком) |
+| `crates/ui-egui/src/canvas/sfx_gpu_preview.rs`, `crates/manga-ui/src/sfx_panel.rs` | Проброс полей `shibufude_splatter_polygons`, `sugomi_hole_polygons`, `sugomi_inner_teeth_polygons`, `sugomi_band_w_px`, `sugomi_hw_in_px` в `SfxGpuScene`; кнопки выбора `🖌 Shibufude v3` и `⚡ Sugomi v3`, полные контролы режимов и 4 стартовых пресета SFX v3. | UI и живой 60 FPS GPU-превью SFX v3 | **Отсутствует** (файлы добавлены форком) |
+
+---
+
 ## Примечания по локальной «чемоданной» части (для полноты контекста)
 * `crates/manga-core/src/comic_screentone.rs` — дедупликация в пользу `crates/algo/src/comic_screentone.rs`.
 * `crates/manga-ui/src/comic_screentone_gizmo.rs`, `comic_screentone_panel.rs`, `i18n/ru.tsv` — единый `screentone_prefers_gpu` и UI для 5 типов градиентов.

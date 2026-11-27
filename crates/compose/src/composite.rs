@@ -313,7 +313,7 @@ fn composite_artboard(layer: &Layer, ab: &photocraft_doc::Artboard, clipped: &[L
 /// The surface `render_content` reads `layer`'s pixels from, when that is all it draws.
 pub(crate) fn pixel_surface(layer: &Layer) -> Option<&Surface> {
     if matches!(layer.content, LayerContent::Group(_) | LayerContent::Fill(_) | LayerContent::Adjustment(_) | LayerContent::Kakeami(_))
-        || matches!(&layer.content, LayerContent::Screentone(st) if st.surface.tile_count() == 0)
+        || crate::screentone::needs_live_eval(layer)
     {
         return None;
     }
@@ -672,7 +672,7 @@ fn composite_atop_any(layer: &Layer, base: &mut Buffer, cx: &Ctx) {
         return;
     }
     let Some(content) = render_content(layer, rect, cx) else { return };
-    let opacity = layer.opacity * layer.fill_opacity;
+    let opacity = crate::screentone::effective_blend_opacity(layer) * layer.fill_opacity;
     let gamma = text_gamma(layer);
     for (i, p) in base.px.iter_mut().enumerate() {
         let alpha = p[3];
@@ -709,7 +709,7 @@ pub(crate) fn blend_into(backdrop: &mut Buffer, src: &Buffer, mode: BlendMode, o
 /// an opaque one at Fill `a × f`, covering the backdrop with Opacity × masks only. Other modes
 /// look the same either way (#5692).
 fn blend_layer_into(backdrop: &mut Buffer, src: &Buffer, layer: &Layer, cx: &Ctx, gamma: f32) {
-    let (mode, opacity, fill) = (layer.blend, layer.opacity, layer.fill_opacity);
+    let (mode, opacity, fill) = (layer.blend, crate::screentone::effective_blend_opacity(layer), layer.fill_opacity);
     if layer.advanced.transparency_shapes || !psblend::fill_is_special(mode) {
         return blend_into_fill(backdrop, src, mode, opacity, fill, gamma);
     }

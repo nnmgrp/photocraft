@@ -409,7 +409,7 @@ pub fn mode_index(m: BlendMode) -> i32 {
 
 /// Whether `Planner::content` draws `layer` as one `Planner::content_pass`: not a group's stack,
 /// an adjustment, or a pattern fill painted in passes.
-/// Index of [`PatternType`] (0..=12) for `Kernel::Screentone`.
+/// Index of [`PatternType`] (0..=14) for `Kernel::Screentone`.
 pub fn screentone_pattern_index(p: photocraft_doc::PatternType) -> i32 {
     use photocraft_doc::PatternType;
     match p {
@@ -426,10 +426,12 @@ pub fn screentone_pattern_index(p: photocraft_doc::PatternType) -> i32 {
         PatternType::Hearts => 10,
         PatternType::Triangles => 11,
         PatternType::FocusLines => 12,
+        PatternType::SandNoise => 13,
+        PatternType::CustomTexture => 14,
     }
 }
 
-/// Index of [`DotShape`] (0..=3) for `Kernel::Screentone`.
+/// Index of [`DotShape`] (0..=4) for `Kernel::Screentone`.
 pub fn screentone_shape_index(s: photocraft_doc::DotShape) -> u32 {
     use photocraft_doc::DotShape;
     match s {
@@ -437,6 +439,7 @@ pub fn screentone_shape_index(s: photocraft_doc::DotShape) -> u32 {
         DotShape::Square => 1,
         DotShape::Diamond => 2,
         DotShape::Hexagon => 3,
+        DotShape::Euclidean => 4,
     }
 }
 
@@ -453,9 +456,16 @@ pub fn screentone_grad_index(g: photocraft_doc::ScreentoneGradientType) -> u32 {
     }
 }
 
-/// Pack [`ScreentoneSpec`], render `bounds`, and document-space `origin` into the 256-byte `Op`
-/// uniform fields of `Pass` for `Kernel::Screentone` (`fs_screentone` in `compose.wgsl`).
-pub fn pack_screentone_pass(p: &mut super::types::Pass<'_>, spec: &photocraft_doc::ScreentoneSpec, bounds: super::Rect, origin: (f32, f32)) {
+/// Pack [`ScreentoneSpec`], render `bounds`, document-space `origin`, `layer_opacity`, and optional
+/// `custom_pat` into `Pass` for `Kernel::Screentone` (`fs_screentone` in `compose.wgsl`).
+pub fn pack_screentone_pass<'a>(
+    p: &mut super::types::Pass<'a>,
+    spec: &photocraft_doc::ScreentoneSpec,
+    bounds: super::Rect,
+    origin: (f32, f32),
+    layer_opacity: f32,
+    custom_pat: Option<&'a photocraft_doc::Pattern>,
+) {
     p.kernel = super::types::Kernel::Screentone;
     p.adjust_kind = screentone_pattern_index(spec.pattern_type);
     p.fill = f32::from_bits(spec.seed);
@@ -477,9 +487,13 @@ pub fn pack_screentone_pass(p: &mut super::types::Pass<'_>, spec: &photocraft_do
     let spacing_x = spec.spacing_x.clamp(1.0, 2000.0);
     let spacing_y = spec.spacing_y.clamp(1.0, 2000.0);
 
-    // Pack discrete enums and booleans into an exact integer (< 8192, exact in f32).
-    let shape_bits = screentone_shape_index(spec.dot_shape)
-        | (screentone_shape_index(spec.satellite_dot_shape) << 2)
+    // Pack discrete enums and booleans into an exact integer (< 16384, exact in f32).
+    // Mask `dot_shape` and `sat_shape` to 2 bits so `DotShape::Euclidean (4)` NEVER overflows
+    // into `sat_shape` (bits 2..3); the full `dot_shape` index (0..=4) is carried in `lut_at(48)`.
+    let dot_idx = screentone_shape_index(spec.dot_shape);
+    let sat_idx = screentone_shape_index(spec.satellite_dot_shape) & 0x3;
+    let shape_bits = (dot_idx & 0x3)
+        | (sat_idx << 2)
         | (u32::from(spec.satellite_enabled) << 4)
         | ((spec.satellite_count.clamp(1, 4) & 0x7) << 5)
         | (screentone_grad_index(spec.grad_type) << 8)
@@ -534,13 +548,29 @@ pub fn pack_screentone_pass(p: &mut super::types::Pass<'_>, spec: &photocraft_do
     row[36] = if spec.line_progressive { 1.0 } else { 0.0 };
     row[37] = spec.focus_inner_radius.clamp(0.0, 2000.0);
     row[38] = spec.scrape_angle.to_radians();
+    // Block C parameters strictly within `lut_at(48..=63)` (`0..=47` untouched).
+    row[48] = dot_idx as f32;
+    row[49] = spec.sand_aspect_x.clamp(0.1, 10.0);
+    row[50] = spec.sand_aspect_y.clamp(0.1, 10.0);
+    row[51] = spec.sand_octaves_mix.clamp(0.0, 1.0);
+    row[52] = spec.custom_texture_scale.clamp(0.05, 20.0);
+    row[53] = if spec.reflect_layer_opacity { layer_opacity.clamp(0.0, 1.0) } else { 1.0 };
+    if let Some(pat) = custom_pat {
+        p.pattern = Some(pat);
+        row[54] = pat.width as f32;
+        row[55] = pat.height as f32;
+    }
     p.lut = Some(vec![row]);
 }
 
 pub(super) fn single_content_pass(layer: &Layer) -> bool {
     match &layer.content {
         LayerContent::Group(_) | LayerContent::Adjustment(_) => false,
-        LayerContent::Screentone(tone) => tone.spec.backend == photocraft_doc::ScreentoneBackend::Cpu,
+        LayerContent::Screentone(tone) => {
+            tone.spec.backend == photocraft_doc::ScreentoneBackend::Cpu
+                && !(tone.spec.reflect_layer_opacity && layer.opacity < 1.0)
+                && tone.spec.pattern_type != photocraft_doc::PatternType::CustomTexture
+        }
         LayerContent::Fill(f @ Fill::Pattern { .. }) => layer.fill_cache.as_ref().is_some_and(|c| c.fill == *f),
         _ => true,
     }

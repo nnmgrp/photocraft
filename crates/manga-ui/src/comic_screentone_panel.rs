@@ -31,7 +31,7 @@ pub const CMD_PATTERN: &str = "pattern.screentone";
 pub const COLOR_TAB: usize = 4;
 
 /// The pattern types the panel offers, in the commands' own notation.
-const PATTERNS: [&str; 13] = [
+const PATTERNS: [&str; 15] = [
     "dots",
     "lines",
     "crosshatch",
@@ -45,9 +45,13 @@ const PATTERNS: [&str; 13] = [
     "hearts",
     "triangles",
     "focusLines",
+    "sandNoise",
+    "customTexture",
 ];
-/// The dot shapes the panel offers (the dots' and the satellites').
-const SHAPES: [&str; 4] = ["circle", "square", "diamond", "hexagon"];
+/// The dot shapes the main panel offers (includes print-grade `euclidean`).
+const SHAPES: [&str; 5] = ["circle", "square", "diamond", "hexagon", "euclidean"];
+/// The 4 basic dot shapes used by satellites and the isolated SFX panel (`sfx.wgsl`).
+const SAT_SHAPES: [&str; 4] = ["circle", "square", "diamond", "hexagon"];
 /// The gradient types the panel offers for modulation.
 const GRADIENTS: [&str; 6] = ["none", "linear", "radial", "angle", "reflected", "diamond"];
 
@@ -61,6 +65,9 @@ pub struct ScreentoneUi {
     pub preset: String,
     /// The new layer's name; empty = the preset's name, or "Screentone".
     pub name: String,
+    /// Host-supplied pattern library entries `(id, display_name)` for `PatternType::CustomTexture`.
+    #[serde(skip)]
+    pub available_patterns: Vec<(String, String)>,
 }
 
 impl Default for ScreentoneUi {
@@ -82,6 +89,7 @@ impl Default for ScreentoneUi {
             },
             preset: String::new(),
             name: String::new(),
+            available_patterns: Vec::new(),
         }
     }
 }
@@ -376,6 +384,11 @@ fn draw_core_grid(ui: &mut egui::Ui, st: &mut ScreentoneUi, t: Tokens) {
         }
         ui.end_row();
 
+        row(ui, t, "");
+        crate::widgets::checkbox(ui, &mut st.spec.reflect_layer_opacity, tl!("Reflect Layer Opacity"))
+            .on_hover_text(tl!("Layer opacity shrinks dot size while keeping ink 100% black"));
+        ui.end_row();
+
         if st.spec.mode == ScreentoneMode::Shading {
             draw_shading_rows(ui, st, t);
         }
@@ -404,6 +417,33 @@ fn draw_block_b_line_rows(ui: &mut egui::Ui, st: &mut ScreentoneUi, t: Tokens) {
     if st.spec.pattern_type == PatternType::FocusLines {
         row(ui, t, tl!("Inner Radius:"));
         crate::widgets::value_field(ui, &mut st.spec.focus_inner_radius, 0.0..=2000.0, "px", 76.0);
+        ui.end_row();
+    }
+    if st.spec.pattern_type == PatternType::SandNoise {
+        row(ui, t, tl!("Sand Aspect X:"));
+        crate::widgets::value_field(ui, &mut st.spec.sand_aspect_x, 0.1..=10.0, "", 76.0);
+        ui.end_row();
+
+        row(ui, t, tl!("Sand Aspect Y:"));
+        crate::widgets::value_field(ui, &mut st.spec.sand_aspect_y, 0.1..=10.0, "", 76.0);
+        ui.end_row();
+
+        row(ui, t, tl!("Octaves Mix:"));
+        crate::widgets::value_field(ui, &mut st.spec.sand_octaves_mix, 0.0..=1.0, "", 76.0);
+        ui.end_row();
+    }
+    if st.spec.pattern_type == PatternType::CustomTexture {
+        row(ui, t, tl!("Texture:"));
+        let mut cur = st.spec.custom_pattern_id.clone().unwrap_or_default();
+        let mut opts: Vec<(String, &str)> = std::iter::once((String::new(), tl!("None"))).collect();
+        opts.extend(st.available_patterns.iter().map(|(id, label)| (id.clone(), label.as_str())));
+        if crate::widgets::dropdown_literal(ui, "screentone-custom-pat", &mut cur, &opts, 176.0) {
+            st.spec.custom_pattern_id = if cur.is_empty() { None } else { Some(cur) };
+        }
+        ui.end_row();
+
+        row(ui, t, tl!("Texture Scale:"));
+        crate::widgets::value_field(ui, &mut st.spec.custom_texture_scale, 0.05..=20.0, "", 76.0);
         ui.end_row();
     }
 }
@@ -485,8 +525,8 @@ fn draw_satellites(ui: &mut egui::Ui, st: &mut ScreentoneUi, t: Tokens) {
 
             row(ui, t, tl!("Shape:"));
             let mut cur = id_of(&st.spec.satellite_dot_shape);
-            let labels: Vec<String> = SHAPES.iter().map(|s| crate::i18n::source_label(s)).collect();
-            let opts: Vec<(String, &str)> = SHAPES.iter().map(|s| s.to_string()).zip(labels.iter().map(String::as_str)).collect();
+            let labels: Vec<String> = SAT_SHAPES.iter().map(|s| crate::i18n::source_label(s)).collect();
+            let opts: Vec<(String, &str)> = SAT_SHAPES.iter().map(|s| s.to_string()).zip(labels.iter().map(String::as_str)).collect();
             if crate::widgets::dropdown(ui, "screentone-sat-shape", &mut cur, &opts, 176.0)
                 && let Some(s) = from_id(&cur)
             {
@@ -622,6 +662,9 @@ fn draw_sfx_grid(ui: &mut egui::Ui, st: &mut ScreentoneUi, t: Tokens) {
     if !matches!(st.spec.pattern_type, PatternType::Dots | PatternType::Lines | PatternType::Crosshatch | PatternType::Noise) {
         st.spec.pattern_type = PatternType::Dots;
     }
+    if st.spec.dot_shape == photocraft_algo::DotShape::Euclidean {
+        st.spec.dot_shape = photocraft_algo::DotShape::Circle;
+    }
     egui::Grid::new("comic_screentone_sfx_grid").num_columns(2).spacing([8.0, 5.0]).show(ui, |ui| {
         row(ui, t, &crate::i18n::param_label("patternType"));
         let mut cur = id_of(&st.spec.pattern_type);
@@ -637,8 +680,8 @@ fn draw_sfx_grid(ui: &mut egui::Ui, st: &mut ScreentoneUi, t: Tokens) {
         if st.spec.pattern_type == PatternType::Dots {
             row(ui, t, &crate::i18n::param_label("dotShape"));
             let mut cur = id_of(&st.spec.dot_shape);
-            let labels: Vec<String> = SHAPES.iter().map(|s| crate::i18n::source_label(s)).collect();
-            let opts: Vec<(String, &str)> = SHAPES.iter().map(|s| s.to_string()).zip(labels.iter().map(String::as_str)).collect();
+            let labels: Vec<String> = SAT_SHAPES.iter().map(|s| crate::i18n::source_label(s)).collect();
+            let opts: Vec<(String, &str)> = SAT_SHAPES.iter().map(|s| s.to_string()).zip(labels.iter().map(String::as_str)).collect();
             if crate::widgets::dropdown(ui, "comic_screentone_sfx_shape", &mut cur, &opts, 176.0)
                 && let Some(s) = from_id(&cur)
             {
@@ -962,6 +1005,68 @@ mod tests {
             .join("\n");
         for forbidden in ["Line Wobble", "Wave Freq", "Line Dash", "Progressive", "Inner Radius", "Scrape Angle", "Focus Lines"] {
             assert!(!rendered_text.contains(forbidden), "panel_for_sfx must not expose Block B control `{forbidden}`");
+        }
+    }
+
+    #[test]
+    fn block_c_controls_roundtrip_and_sfx_panel_excludes_block_c() {
+        let mut st = ScreentoneUi::default();
+        st.available_patterns = vec![("pat-1".into(), "Paper Grain".into())];
+        st.spec.pattern_type = PatternType::SandNoise;
+        st.spec.dot_shape = DotShape::Euclidean;
+        st.spec.sand_aspect_x = 3.2;
+        st.spec.sand_aspect_y = 0.6;
+        st.spec.sand_octaves_mix = 0.45;
+        st.spec.custom_pattern_id = Some("pat-1".into());
+        st.spec.custom_texture_scale = 1.8;
+        st.spec.reflect_layer_opacity = true;
+
+        let p = params(&st);
+        assert_eq!(p["patternType"], json!("sandNoise"));
+        assert_eq!(p["dotShape"], json!("euclidean"));
+        assert_eq!(p["sandAspectX"], json!(3.2_f32));
+        assert_eq!(p["sandAspectY"], json!(0.6_f32));
+        assert_eq!(p["sandOctavesMix"], json!(0.45_f32));
+        assert_eq!(p["customPatternId"], json!("pat-1"));
+        assert_eq!(p["customTextureScale"], json!(1.8_f32));
+        assert_eq!(p["reflectLayerOpacity"], json!(true));
+
+        // Main panel renders Dots+Euclidean, SandNoise, and CustomTexture without panicking.
+        let ctx = egui::Context::default();
+        let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 1200.0))), ..Default::default() };
+        for pat in [PatternType::Dots, PatternType::SandNoise, PatternType::CustomTexture] {
+            st.spec.pattern_type = pat;
+            let mut out = ctx.run_ui(input.clone(), |ui| {
+                let _ = egui::CentralPanel::default().show(ui, |ui| panel(ui, &mut st, None));
+            });
+            out.textures_delta.clear();
+        }
+
+        // `panel_for_sfx` MUST exclude all Block C patterns, Euclidean shape, and Reflect Layer Opacity.
+        assert!(!super::SFX_PATTERNS.contains(&"sandNoise"));
+        assert!(!super::SFX_PATTERNS.contains(&"customTexture"));
+        assert!(!super::SAT_SHAPES.contains(&"euclidean"));
+        let mut sfx_st = ScreentoneUi::default();
+        sfx_st.spec.pattern_type = PatternType::SandNoise;
+        sfx_st.spec.dot_shape = DotShape::Euclidean;
+        let banner = super::SfxScreentoneBanner { layer_name: "SFX: BAM!", is_secondary: false };
+        let mut out = ctx.run_ui(input, |ui| {
+            let _ = egui::CentralPanel::default().show(ui, |ui| super::panel_for_sfx(ui, &mut sfx_st, &banner));
+        });
+        out.textures_delta.clear();
+        assert_eq!(sfx_st.spec.pattern_type, PatternType::Dots, "panel_for_sfx must clamp SandNoise back to Dots");
+        assert_eq!(sfx_st.spec.dot_shape, DotShape::Circle, "panel_for_sfx must clamp Euclidean back to Circle");
+        let rendered_text: String = out
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                egui::epaint::Shape::Text(t) => Some(t.galley.job.text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        for forbidden in ["Sand Noise", "Custom Texture", "Euclidean", "Reflect Layer Opacity", "Sand Aspect X", "Texture Scale"] {
+            assert!(!rendered_text.contains(forbidden), "panel_for_sfx must not expose Block C control `{forbidden}`");
         }
     }
 }

@@ -2254,6 +2254,118 @@ fn st_delined_luma(loc: vec2<i32>, dims: vec2<i32>, center_luma: f32, line_thres
     return vec2<f32>(0.0, best_luma);
 }
 
+// Smooth deterministic 2D value noise in `[0.0, 1.0]` (`st_value_noise_2d` mirror).
+fn st_value_noise_2d(x: f32, y: f32, seed: u32) -> f32 {
+    let ix = i32(floor(x));
+    let iy = i32(floor(y));
+    let fx = x - f32(ix);
+    let fy = y - f32(iy);
+    let ux = fx * fx * (3.0 - 2.0 * fx);
+    let uy = fy * fy * (3.0 - 2.0 * fy);
+    let a = hash_coord(ix, iy, seed);
+    let b = hash_coord(ix + 1, iy, seed);
+    let c = hash_coord(ix, iy + 1, seed);
+    let d = hash_coord(ix + 1, iy + 1, seed);
+    return mix(mix(a, b, ux), mix(c, d, ux), uy);
+}
+
+// Area-calibrated Euclidean spot threshold (`st_euclidean_threshold` mirror, max err < 0.002).
+fn st_euclidean_threshold(t: f32) -> f32 {
+    let z = 1.0 - 2.0 * clamp(t, 0.0, 1.0);
+    let az = abs(z);
+    let mag = (((0.1719886 * az - 0.3788174) * az + 0.8266632) * az + 0.3801656) * az;
+    return select(-mag, mag, z >= 0.0);
+}
+
+// Bilinear wrapping premultiplied tap on `pat_tex` with explicit dimensions `(tw, th)`
+// (exact mirror of `sample_custom_tex` in `crates/algo/src/comic_screentone.rs`).
+fn st_sample_custom_tex(u0: f32, v0: f32, tw: i32, th: i32) -> vec4<f32> {
+    if (tw <= 0 || th <= 0) {
+        return vec4<f32>(0.0);
+    }
+    let u = u0 - 0.5;
+    let v = v0 - 0.5;
+    let x0 = floor(u);
+    let y0 = floor(v);
+    let fx = u - x0;
+    let fy = v - y0;
+    let ix = i32(x0);
+    let iy = i32(y0);
+    var acc = vec4<f32>(0.0);
+    let wy = array<f32, 2>(1.0 - fy, fy);
+    let wx = array<f32, 2>(1.0 - fx, fx);
+    for (var j = 0; j < 2; j = j + 1) {
+        if (wy[j] == 0.0) { continue; }
+        for (var i = 0; i < 2; i = i + 1) {
+            if (wx[i] == 0.0) { continue; }
+            acc = acc + textureLoad(pat_tex, vec2<i32>(wrap(ix + i, tw), wrap(iy + j, th)), 0) * (wx[i] * wy[j]);
+        }
+    }
+    return acc;
+}
+
+// 2-octave CSP sand/fiber noise (`eval_sand_noise` mirror).
+fn st_eval_sand_noise(
+    grid_x: f32,
+    grid_y: f32,
+    spacing_x: f32,
+    spacing_y: f32,
+    sand_aspect_x: f32,
+    sand_aspect_y: f32,
+    octaves_mix: f32,
+    target: f32,
+    smoothness: f32,
+    seed: u32,
+) -> f32 {
+    if (target <= 1e-5) { return 0.0; }
+    if (target >= 1.0 - 1e-5) { return 1.0; }
+    let gx = max(spacing_x * 0.25 * clamp(sand_aspect_x, 0.1, 10.0), 0.5);
+    let gy = max(spacing_y * 0.25 * clamp(sand_aspect_y, 0.1, 10.0), 0.5);
+    let n1 = st_value_noise_2d(grid_x / gx, grid_y / gy, seed + 1901u);
+    let n2 = st_value_noise_2d(grid_x / (gx * 0.43), grid_y / (gy * 0.43), seed + 4723u);
+    let mix_w = clamp(octaves_mix, 0.0, 1.0);
+    let val = mix(n1, n2, mix_w);
+    if (smoothness < 0.05) {
+        return select(0.0, 1.0, val <= target);
+    }
+    return clamp((target - val) / (0.12 * smoothness) + 0.5, 0.0, 1.0);
+}
+
+// Tiled custom texture halftone via `pat_tex` (`eval_custom_texture` mirror).
+fn st_eval_custom_texture(
+    grid_x: f32,
+    grid_y: f32,
+    spacing_x: f32,
+    custom_tex_scale: f32,
+    mod_size: f32,
+    mod_aspect_x: f32,
+    mod_aspect_y: f32,
+    target: f32,
+    smoothness: f32,
+    pat_w: f32,
+    pat_h: f32,
+) -> f32 {
+    if (pat_w < 1.0 || pat_h < 1.0 || target <= 1e-5) {
+        return 0.0;
+    }
+    let tex_scale = max((spacing_x / 16.0) * clamp(custom_tex_scale, 0.05, 20.0) * max(mod_size, 0.01), 0.05);
+    let u = grid_x / (tex_scale * max(mod_aspect_x, 0.05));
+    let v = grid_y / (tex_scale * max(mod_aspect_y, 0.05));
+    let s = st_sample_custom_tex(u, v, i32(pat_w), i32(pat_h));
+    let a = clamp(s.a, 0.0, 1.0);
+    let r = clamp(s.r + (1.0 - a), 0.0, 1.0);
+    let g = clamp(s.g + (1.0 - a), 0.0, 1.0);
+    let b = clamp(s.b + (1.0 - a), 0.0, 1.0);
+    let luma = clamp(0.299 * r + 0.587 * g + 0.114 * b, 0.0, 1.0);
+    let dark = 1.0 - luma;
+    let thresh = 1.0 - clamp(target, 0.0, 1.0) * 0.99;
+    if (smoothness < 0.05) {
+        return select(0.0, 1.0, dark >= thresh);
+    }
+    let aa = max(0.15 * smoothness, 1e-4);
+    return clamp((dark - thresh) / aa + 0.5, 0.0, 1.0) * clamp(dark / 0.01, 0.0, 1.0);
+}
+
 // Smooth deterministic 1D value noise in `[-1.0, 1.0]` anchored to document coordinates
 // (exact mirror of `st_value_noise_1d` in `crates/algo/src/comic_screentone.rs`).
 fn st_value_noise_1d(t: f32, line_idx: i32, seed: u32) -> f32 {
@@ -2514,6 +2626,15 @@ fn screentone_tone(d: vec2<i32>, loc: vec2<i32>) -> vec4<f32> {
     let line_progressive = select(0.0, lut_at(36), has_ext) > 0.5;
     let focus_inner_radius = clamp(select(0.0, lut_at(37), has_ext), 0.0, 2000.0);
     let scrape_angle_rad = select(0.0, lut_at(38), has_ext);
+    // Block C extended parameters strictly within `lut_at(48..=63)` (`0..=47` untouched).
+    let dot_shape_ext = select(dot_shape, u32(round(max(lut_at(48), 0.0))), has_ext);
+    let sand_aspect_x = clamp(select(1.0, lut_at(49), has_ext), 0.1, 10.0);
+    let sand_aspect_y = clamp(select(1.0, lut_at(50), has_ext), 0.1, 10.0);
+    let sand_octaves_mix = clamp(select(0.35, lut_at(51), has_ext), 0.0, 1.0);
+    let custom_tex_scale = clamp(select(1.0, lut_at(52), has_ext), 0.05, 20.0);
+    let ink_opacity = clamp(select(1.0, lut_at(53), has_ext), 0.0, 1.0);
+    let pat_w = select(0.0, lut_at(54), has_ext);
+    let pat_h = select(0.0, lut_at(55), has_ext);
     sat_count = select(sat_count, clamp(i32(lut_at(28)), 1, 8), has_ext);
 
     // 1. Relative coordinate from bounds center in canvas-rotated frame
@@ -2590,6 +2711,10 @@ fn screentone_tone(d: vec2<i32>, loc: vec2<i32>) -> vec4<f32> {
         }
     }
 
+    if (!solid_line) {
+        ink = clamp(ink * ink_opacity, 0.0, 1.0);
+    }
+
     if (!solid_line && ink > 1e-5) {
         switch op.kind {
             case 1: { // PatternType::Lines
@@ -2655,6 +2780,20 @@ fn screentone_tone(d: vec2<i32>, loc: vec2<i32>) -> vec4<f32> {
                 cov = st_eval_focus_lines(
                     grid_x, grid_y, spacing_x, spacing_y, base_w, smoothness,
                     focus_inner_radius, line_wobble, line_wave_freq, line_dash, jitter_pos, jitter_size, seed,
+                );
+            }
+            case 13: { // PatternType::SandNoise
+                let target = clamp(ink * density * mod_size, 0.0, 1.0);
+                cov = st_eval_sand_noise(
+                    grid_x, grid_y, spacing_x, spacing_y,
+                    sand_aspect_x, sand_aspect_y, sand_octaves_mix, target, smoothness, seed,
+                );
+            }
+            case 14: { // PatternType::CustomTexture
+                let target = clamp(ink * density, 0.0, 1.0);
+                cov = st_eval_custom_texture(
+                    grid_x, grid_y, spacing_x, custom_tex_scale, mod_size,
+                    mod_aspect_x, mod_aspect_y, target, smoothness, pat_w, pat_h,
                 );
             }
         case 3: { // PatternType::Noise
@@ -2821,10 +2960,70 @@ fn screentone_tone(d: vec2<i32>, loc: vec2<i32>) -> vec4<f32> {
             }
         }
         default: { // PatternType::Dots (0) + Orbital Satellites
+            if (dot_shape_ext == 4u) { // DotShape::Euclidean (O(1) analytical SDF)
+                let t = clamp(ink * density * mod_size, 0.0, 1.0);
+                if (t <= 1e-5) {
+                    cov = 0.0;
+                } else if (t >= 1.0 - 1e-5) {
+                    cov = 1.0;
+                } else {
+                    let sp_x = max(spacing_x, 1.0);
+                    let sp_y = max(spacing_y, 1.0);
+                    let u = grid_x / sp_x;
+                    let v = grid_y / sp_y;
+                    let tau = 2.0 * ST_PI;
+                    let e = 0.5 * (cos(u * tau) + cos(v * tau));
+                    let thresh = st_euclidean_threshold(t);
+                    let de_dx = -(ST_PI / sp_x) * sin(u * tau);
+                    let de_dy = -(ST_PI / sp_y) * sin(v * tau);
+                    let grad = max(length(vec2<f32>(de_dx, de_dy)), (ST_PI / max(sp_x, sp_y)) * 0.25);
+                    var min_d = (thresh - e) / grad;
+                    if (sat_enabled) {
+                        let calibrated = st_area_ink(ink, equalize_area, auto_dot_size);
+                        let merge = clamp(merge_factor, 0.0, 1.0);
+                        let k_scale = select(density * calibrated, sqrt(t), auto_dot_size > 0.5);
+                        let ssize = max((sat_size * k_scale + merge * sp_x * 0.4 * k_scale) * mod_size, 0.0);
+                        if (ssize > 0.05) {
+                            let sdist = sat_distance * (1.0 - merge * 0.6);
+                            let smooth_k = merge * min(sp_x, sp_y) * 0.35;
+                            let dot_cx = round(u) * sp_x;
+                            let dot_cy = round(v) * sp_y;
+                            let sin_sat = sin(sat_angle_rad);
+                            let cos_sat = cos(sat_angle_rad);
+                            var cross_dirs = array<vec2<f32>, 4>(
+                                vec2<f32>(0.0, -1.0), vec2<f32>(0.0, 1.0), vec2<f32>(1.0, 0.0), vec2<f32>(-1.0, 0.0)
+                            );
+                            for (var si = 0; si < sat_count; si = si + 1) {
+                                var dir = vec2<f32>(0.0, 0.0);
+                                if (sat_even) {
+                                    let th = sat_angle_rad + 6.283185307 * f32(si) / f32(max(sat_count, 1));
+                                    dir = vec2<f32>(sin(th), -cos(th));
+                                } else {
+                                    let c = cross_dirs[min(si, 3)];
+                                    dir = vec2<f32>(c.x * cos_sat - c.y * sin_sat, c.x * sin_sat + c.y * cos_sat);
+                                }
+                                var sp = grid_p - (vec2<f32>(dot_cx, dot_cy) + dir * sdist);
+                                if (sat_stretch > 0.0) {
+                                    let rot_sx = sp.x * dir.x + sp.y * dir.y;
+                                    let rot_sy = -sp.x * dir.y + sp.y * dir.x;
+                                    let scaled = rot_sx / max(1.0 + sat_stretch, 0.01);
+                                    sp = vec2<f32>(scaled * dir.x - rot_sy * dir.y, scaled * dir.y + rot_sy * dir.x);
+                                }
+                                let ds = eval_shape_sdf(
+                                    sp, sat_shape, ssize,
+                                    mod_aspect_x, mod_aspect_y, roundness, rot_pattern_rad,
+                                );
+                                min_d = sdf_smooth_min(min_d, ds, smooth_k);
+                            }
+                        }
+                    }
+                    cov = coverage_from_sdf(min_d, smoothness);
+                }
+            } else {
             let eff_ink = ink;
             let cov_target = clamp(eff_ink * density, 0.0, 1.0);
             let calibrated = st_area_ink(eff_ink, equalize_area, auto_dot_size);
-            let k_main = st_area_k(0, dot_shape);
+            let k_main = st_area_k(0, dot_shape_ext);
             let k_sat = st_area_k(0, sat_shape);
             var base_rad = 0.0;
             var ssize_base = 0.0;
@@ -2881,7 +3080,7 @@ fn screentone_tone(d: vec2<i32>, loc: vec2<i32>) -> vec4<f32> {
                         final_size = final_size * max(1.0 + (jval - 0.5) * jitter_size * 0.02, 0.0);
                     }
                     var cell_d = eval_shape_sdf(
-                        grid_p - vec2<f32>(dot_cx, dot_cy), dot_shape, final_size,
+                        grid_p - vec2<f32>(dot_cx, dot_cy), dot_shape_ext, final_size,
                         mod_aspect_x, mod_aspect_y, roundness, rot_pattern_rad,
                     );
                     if (sat_enabled && ssize > 0.05) {
@@ -2912,6 +3111,7 @@ fn screentone_tone(d: vec2<i32>, loc: vec2<i32>) -> vec4<f32> {
                 }
             }
             cov = coverage_from_sdf(min_d, smoothness);
+            }
         }
         }
         cov = st_apply_kezuri(cov, vec2<f32>(local_x, local_y), ink, scrape_strength, scrape_angle_rad, seed);

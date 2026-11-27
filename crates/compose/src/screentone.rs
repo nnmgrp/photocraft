@@ -5,7 +5,7 @@
 //! thumbnails, and `render_bands` evaluate those unbaked screentone layers per tile or band on the
 //! fly through this module instead of reading empty surfaces.
 
-use photocraft_algo::comic_screentone::{ScreentoneMode, ScreentoneSpec, screentone, sheet_spec};
+use photocraft_algo::comic_screentone::{CustomTextureSampler, PatternType, ScreentoneMode, ScreentoneSpec, screentone_with_options, sheet_spec};
 use photocraft_algo::{Ctx as AlgoCtx, Image};
 use photocraft_color::{ColorMode, PixelFormat};
 use photocraft_doc::{Document, Layer, LayerContent, LayerId, Rect, ScreentoneLayer};
@@ -16,23 +16,60 @@ use super::content::fill_frame;
 use super::ctx::Ctx;
 use super::extents::{mask_vals, recycle_mask};
 
+/// Whether `layer` is a live `Screentone` layer whose pixels must be evaluated procedurally
+/// (either unbaked with 0 tiles, `reflect_layer_opacity` at `< 1.0`, or `CustomTexture`).
+pub(crate) fn needs_live_eval(layer: &Layer) -> bool {
+    matches!(
+        &layer.content,
+        LayerContent::Screentone(st)
+            if st.surface.tile_count() == 0
+                || (st.spec.reflect_layer_opacity && layer.opacity < 1.0)
+                || st.spec.pattern_type == PatternType::CustomTexture
+    )
+}
+
+/// Effective compositing opacity for `layer`: `1.0` when `reflect_layer_opacity` folds
+/// `layer.opacity` into halftone dot density (and `layer.opacity > 0.0`), else `layer.opacity`.
+pub(crate) fn effective_blend_opacity(layer: &Layer) -> f32 {
+    if matches!(&layer.content, LayerContent::Screentone(st) if st.spec.reflect_layer_opacity) && layer.opacity > 0.0 {
+        1.0
+    } else {
+        layer.opacity
+    }
+}
+
 /// Whether `layer` is an unbaked `Shading` screentone whose luminance comes from underlying layers.
 pub(crate) fn is_unbaked_shading(layer: &Layer) -> bool {
     matches!(
         &layer.content,
-        LayerContent::Screentone(st) if st.surface.tile_count() == 0 && st.spec.mode == ScreentoneMode::Shading && st.spec.use_source_luminance
+        LayerContent::Screentone(st)
+            if needs_live_eval(layer) && st.spec.mode == ScreentoneMode::Shading && st.spec.use_source_luminance
     )
 }
 
 /// Renders an unbaked `ScreentoneLayer` into straight-alpha RGBA over `rect` without applying
 /// layer masks. When `backdrop` is supplied and `st` uses source luminance in `Shading` mode,
 /// `backdrop`'s pixels drive dot/halftone density.
-pub(crate) fn render_unmasked(layer: &Layer, st: &ScreentoneLayer, rect: Rect, canvas: Rect, backdrop: Option<&Buffer>) -> Buffer {
+pub(crate) fn render_unmasked(
+    layer: &Layer,
+    st: &ScreentoneLayer,
+    rect: Rect,
+    canvas: Rect,
+    backdrop: Option<&Buffer>,
+    patterns: &crate::pattern::PreparedPatterns<'_>,
+) -> Buffer {
     if rect.is_empty() {
         return Buffer::transparent(rect);
     }
     let frame = fill_frame(layer, canvas);
-    eval_rgba(&st.spec, st.origin, rect, frame, backdrop)
+    let ink_opacity = if st.spec.reflect_layer_opacity { layer.opacity.clamp(0.0, 1.0) } else { 1.0 };
+    let custom_tile = if st.spec.pattern_type == PatternType::CustomTexture {
+        st.spec.custom_pattern_id.as_deref().filter(|id| !id.is_empty()).and_then(|id| patterns.get(id, id))
+    } else {
+        None
+    };
+    let sampler: Option<&dyn CustomTextureSampler> = custom_tile.as_deref().map(|t| t as &dyn CustomTextureSampler);
+    eval_rgba(&st.spec, st.origin, rect, frame, backdrop, sampler, ink_opacity)
 }
 
 /// Same as [`render_unmasked`], plus multiplies the layer's pixel/vector masks into alpha.
@@ -57,7 +94,7 @@ pub(crate) fn render_masked(layer: &Layer, st: &ScreentoneLayer, rect: Rect, cx:
     } else {
         None
     };
-    let mut buf = render_unmasked(layer, st, rect, cx.canvas, padded.as_ref().or(backdrop));
+    let mut buf = render_unmasked(layer, st, rect, cx.canvas, padded.as_ref().or(backdrop), cx.patterns);
     if let Some(m) = mask_vals(layer, rect, cx) {
         for (p, k) in buf.px.iter_mut().zip(&m) {
             p[3] *= k;
@@ -67,7 +104,15 @@ pub(crate) fn render_masked(layer: &Layer, st: &ScreentoneLayer, rect: Rect, cx:
     buf
 }
 
-fn eval_rgba(spec_in: &ScreentoneSpec, origin: (f32, f32), rect: Rect, frame: Rect, backdrop: Option<&Buffer>) -> Buffer {
+fn eval_rgba(
+    spec_in: &ScreentoneSpec,
+    origin: (f32, f32),
+    rect: Rect,
+    frame: Rect,
+    backdrop: Option<&Buffer>,
+    custom_tex: Option<&dyn CustomTextureSampler>,
+    ink_opacity: f32,
+) -> Buffer {
     let mut spec = sheet_spec(spec_in, frame, origin);
     let src_img = match backdrop.filter(|b| spec.mode == ScreentoneMode::Shading && spec.use_source_luminance && !b.rect.is_empty()) {
         Some(bd) => {
@@ -83,7 +128,7 @@ fn eval_rgba(spec_in: &ScreentoneSpec, origin: (f32, f32), rect: Rect, frame: Re
         }
     };
     let algo_ctx = AlgoCtx { bounds: frame, mode: ColorMode::Rgb, alpha: true };
-    let out = screentone(&src_img, rect, &algo_ctx, &spec);
+    let out = screentone_with_options(&src_img, rect, &algo_ctx, &spec, custom_tex, ink_opacity);
     let mut buf = Buffer::transparent(rect);
     for (dst, src) in buf.px.iter_mut().zip(out.chunks_exact(4)) {
         *dst = [src[0], src[1], src[2], src[3]];
@@ -245,6 +290,15 @@ pub fn render_unbaked_for_export(doc: &Document, layer: &Layer, st: &ScreentoneL
         None
     };
 
+    let prepared = crate::pattern::PreparedPatterns::new(&doc.patterns, crate::pattern::PREPARED_PATTERN_BYTES).in_mode(doc.pixel_format().mode);
+    let custom_tile = if st.spec.pattern_type == PatternType::CustomTexture {
+        st.spec.custom_pattern_id.as_deref().filter(|id| !id.is_empty()).and_then(|id| prepared.get(id, id))
+    } else {
+        None
+    };
+    let sampler: Option<&dyn CustomTextureSampler> = custom_tile.as_deref().map(|t| t as &dyn CustomTextureSampler);
+    let ink_opacity = if st.spec.reflect_layer_opacity { layer.opacity.clamp(0.0, 1.0) } else { 1.0 };
+
     let band_h = crate::render::band_rows_for(frame.width(), 0).max(1);
     let ch = fmt.channels();
     let mut raw = Vec::new();
@@ -256,7 +310,7 @@ pub fn render_unbaked_for_export(doc: &Document, layer: &Layer, st: &ScreentoneL
             let sample_rect = band.inflate(st.spec.halo_radius()).intersect(&canvas);
             (!sample_rect.is_empty()).then(|| crate::render(d, sample_rect))
         });
-        let rgba = eval_rgba(&st.spec, st.origin, band, frame, backdrop.as_ref());
+        let rgba = eval_rgba(&st.spec, st.origin, band, frame, backdrop.as_ref(), sampler, ink_opacity);
         raw.resize(rgba.px.len() * ch, 0.0);
         for (dst, &px) in raw.chunks_exact_mut(ch).zip(&rgba.px) {
             photocraft_raster::from_rgba_into(&fmt, px, dst);
@@ -477,6 +531,107 @@ mod tests {
         }
         assert_eq!(seam_diff, 0, "Block B render_bands seam diff at x=256/y=256: {seam_diff}");
         assert_eq!(total_diff, 0, "Block B render_bands must match monolithic bit-for-bit, got {total_diff}");
+    }
+
+    #[test]
+    fn block_c_sand_noise_render_bands_zero_seam_at_256() {
+        let mut doc = Document::new("block_c_sand_seam", Size::new(512, 512), ColorMode::Rgb, SampleType::U8);
+        let bounds = doc.bounds();
+        let spec = ScreentoneSpec {
+            pattern_type: PatternType::SandNoise,
+            spacing_x: 12.0,
+            spacing_y: 12.0,
+            angle: 21.0,
+            density: 0.58,
+            smoothness: 0.45,
+            sand_aspect_x: 3.2,
+            sand_aspect_y: 0.65,
+            sand_octaves_mix: 0.4,
+            scrape_strength: 0.3,
+            scrape_angle: 35.0,
+            mode: ScreentoneMode::Sheet,
+            use_source_luminance: false,
+            backend: ScreentoneBackend::Gpu,
+            foreground: [0.0, 0.0, 0.0, 1.0],
+            background: [1.0, 1.0, 1.0, 0.0],
+            seed: 4040,
+            ..Default::default()
+        };
+        let origin = photocraft_algo::comic_screentone::origin_doc(&spec, bounds);
+        let unbaked = ScreentoneLayer::new(spec, origin, Surface::new(PixelFormat::RGBA8));
+        doc.layers.push(Layer::new("sand_c", LayerContent::Screentone(unbaked)));
+
+        let mono = crate::render_tiled(&doc, bounds, 512);
+        let mut banded_px = vec![[0.0f32; 4]; 512 * 512];
+        crate::render_bands(&doc, bounds, 256, |band| -> Result<(), ()> {
+            let bw = band.rect.width() as usize;
+            for ry in 0..band.rect.height() as usize {
+                let dst_y = (band.rect.y0 as usize + ry) * 512 + band.rect.x0 as usize;
+                let src_y = ry * bw;
+                banded_px[dst_y..dst_y + bw].copy_from_slice(&band.px[src_y..src_y + bw]);
+            }
+            Ok(())
+        })
+        .unwrap();
+
+        let mut seam_diff = 0usize;
+        let mut total_diff = 0usize;
+        for y in 0..512usize {
+            for x in 0..512usize {
+                let idx = y * 512 + x;
+                if (0..4).any(|c| mono.px[idx][c].to_bits() != banded_px[idx][c].to_bits()) {
+                    total_diff += 1;
+                    if (254..=258).contains(&x) || (254..=258).contains(&y) {
+                        seam_diff += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(seam_diff, 0, "Block C SandNoise render_bands seam diff at x=256/y=256: {seam_diff}");
+        assert_eq!(total_diff, 0, "Block C SandNoise render_bands must match monolithic bit-for-bit, got {total_diff}");
+    }
+
+    #[test]
+    fn block_c_reflect_layer_opacity_keeps_full_black_ink_and_shrinks_dots() {
+        let make_doc = |opacity: f32, reflect: bool| {
+            let mut doc = Document::new("reflect_opacity", Size::new(96, 96), ColorMode::Rgb, SampleType::U8);
+            let bounds = doc.bounds();
+            let spec = ScreentoneSpec {
+                pattern_type: PatternType::Dots,
+                dot_shape: photocraft_doc::DotShape::Euclidean,
+                spacing_x: 12.0,
+                spacing_y: 12.0,
+                density: 0.75,
+                smoothness: 0.0,
+                reflect_layer_opacity: reflect,
+                mode: ScreentoneMode::Sheet,
+                use_source_luminance: false,
+                backend: ScreentoneBackend::Gpu,
+                foreground: [0.0, 0.0, 0.0, 1.0],
+                background: [1.0, 1.0, 1.0, 0.0],
+                ..Default::default()
+            };
+            let origin = photocraft_algo::comic_screentone::origin_doc(&spec, bounds);
+            let mut layer = Layer::new("tone", LayerContent::Screentone(ScreentoneLayer::new(spec, origin, Surface::new(PixelFormat::RGBA8))));
+            layer.opacity = opacity;
+            doc.layers.push(layer);
+            doc
+        };
+
+        let bounds = Rect::new(0, 0, 96, 96);
+        let full = crate::render(&make_doc(1.0, true), bounds);
+        let reflected = crate::render(&make_doc(0.35, true), bounds);
+        let normal = crate::render(&make_doc(0.35, false), bounds);
+
+        let full_ink = full.px.iter().filter(|p| p[3] > 0.99).count();
+        let refl_ink = reflected.px.iter().filter(|p| p[3] > 0.99).count();
+        let refl_translucent = reflected.px.iter().filter(|p| p[3] > 0.01 && p[3] < 0.99).count();
+        let normal_translucent = normal.px.iter().filter(|p| p[3] > 0.25 && p[3] < 0.45).count();
+
+        assert_eq!(refl_translucent, 0, "reflect_layer_opacity=true must have ZERO translucent ~0.35 ink pixels");
+        assert!(refl_ink > 500, "reflect_layer_opacity=true at 35% must still draw solid black dots, got {refl_ink}");
+        assert!(refl_ink * 2 < full_ink, "reflect_layer_opacity=true at 35% must shrink dot coverage vs 100%: {refl_ink} vs {full_ink}");
+        assert!(normal_translucent > 500, "reflect_layer_opacity=false at 35% must composite translucent ~0.35 pixels, got {normal_translucent}");
     }
 }
 

@@ -30,6 +30,36 @@ pub(super) fn has_pixel_or_channel(s: &Session) -> std::result::Result<(), Strin
     has_pixel_layer(s)
 }
 
+/// Whether a brush/eraser stroke targeting `"pixels"` on `layer` automatically redirects to the
+/// layer's `GRAY8` pixel mask (creating a white `reveal_all` mask if absent, in the same undo
+/// step):
+/// * `Screentone` & `Kakeami`: Eraser always redirects (auto-creating a mask if absent); Brush and
+///   Pencil redirect when a mask already exists so erased tone can be restored non-destructively.
+/// * `Shape` (including manga balloons): only Eraser auto-redirects (Brush still requires explicit
+///   mask focus or rasterization).
+pub(crate) fn auto_mask_layer_kind(layer: &photocraft_doc::Layer, erase: bool) -> bool {
+    match &layer.content {
+        LayerContent::Screentone(_) | LayerContent::Kakeami(_) => erase || layer.mask.is_some(),
+        LayerContent::Shape(_) => erase,
+        _ => false,
+    }
+}
+
+/// A layer that can accept a `paint.stroke` / `paint.pencil` command: everything [`has_paintable`]
+/// allows, plus live procedural manga layers (`Screentone`, `Kakeami`) and vector shapes (`Shape`
+/// / balloons) where the Eraser non-destructively auto-creates and paints a `GRAY8` mask.
+pub(crate) fn has_stroke_paintable(s: &Session) -> std::result::Result<(), String> {
+    if has_paintable(s).is_ok() {
+        return Ok(());
+    }
+    let l = crate::active_layer_of(s)?;
+    if matches!(l.content, LayerContent::Screentone(_) | LayerContent::Kakeami(_) | LayerContent::Shape(_)) {
+        Ok(())
+    } else {
+        Err(format!("active layer is {} {} layer without a mask", l.content.article(), l.content.kind_name()))
+    }
+}
+
 /// A layer that can be painted: pixels, or any layer with a mask (paint with `"target":"mask"`).
 pub(crate) fn has_paintable(s: &Session) -> std::result::Result<(), String> {
     if crate::channel_cmds::edits_channel(s) {

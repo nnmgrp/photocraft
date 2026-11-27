@@ -593,7 +593,8 @@ impl<'a> Planner<'a> {
         };
         p.a = Some(if clip.is_some() { self.retain(backdrop) } else { backdrop });
         p.mode = layer.blend;
-        p.opacity = layer.opacity;
+        let reflect_op = matches!(&layer.content, LayerContent::Screentone(tone) if tone.spec.reflect_layer_opacity) && layer.opacity > 0.0;
+        p.opacity = if reflect_op { 1.0 } else { layer.opacity };
         p.fill = layer.fill_opacity;
         p.flags |= gamma_flag(layer);
         p.extra[3] = photocraft_compose::text_gamma(layer);
@@ -711,7 +712,20 @@ impl<'a> Planner<'a> {
             LayerContent::Screentone(tone) => {
                 if self.screentone_on_gpu(layer, tone) {
                     let frame = self.screentone_frame(layer, tone);
-                    pack_screentone_pass(&mut p, &tone.spec, frame, tone.origin);
+                    let custom_pat = if tone.spec.pattern_type == photocraft_doc::PatternType::CustomTexture {
+                        tone.spec
+                            .custom_pattern_id
+                            .as_deref()
+                            .filter(|id| !id.is_empty())
+                            .and_then(|id| photocraft_doc::pattern::find(self.cx.patterns, id, id).filter(|pat| pat.is_paintable()))
+                    } else {
+                        None
+                    };
+                    pack_screentone_pass(&mut p, &tone.spec, frame, tone.origin, layer.opacity, custom_pat);
+                } else if (tone.spec.reflect_layer_opacity && layer.opacity < 1.0)
+                    || tone.spec.pattern_type == photocraft_doc::PatternType::CustomTexture
+                {
+                    return Err(Unsupported("live CPU screentone opacity/custom texture (composited on CPU)".into()));
                 } else {
                     self.surface_tex(&mut p, layer.id, &tone.surface);
                 }
@@ -835,7 +849,8 @@ impl<'a> Planner<'a> {
         p.a = Some(base);
         p.b = Some(content);
         p.mode = layer.blend;
-        p.opacity = opacity;
+        let reflect_op = matches!(&layer.content, LayerContent::Screentone(tone) if tone.spec.reflect_layer_opacity) && layer.opacity > 0.0;
+        p.opacity = if reflect_op { layer.fill_opacity } else { opacity };
         p.flags = gamma_flag(layer);
         p.extra[3] = photocraft_compose::text_gamma(layer);
         Ok(self.emit(p))

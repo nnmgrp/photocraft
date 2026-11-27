@@ -704,7 +704,7 @@ pub fn area_k_for(pattern: PatternType, dot: DotShape) -> f32 {
         PatternType::Triangles => AREA_K_TRIANGLE,
         PatternType::Hexgrid => AREA_K_HEXAGON,
         _ => match dot {
-            DotShape::Circle => AREA_K_CIRCLE,
+            DotShape::Circle | DotShape::Euclidean => AREA_K_CIRCLE,
             DotShape::Square => AREA_K_SQUARE,
             DotShape::Diamond => AREA_K_DIAMOND,
             DotShape::Hexagon => AREA_K_HEXAGON,
@@ -756,7 +756,7 @@ fn eval_shape_sdf(px: f32, py: f32, shape: DotShape, size: f32, xf: ShapeXform) 
         return sdist2(sx, sy) - size;
     }
     match shape {
-        DotShape::Circle => sdist2(sx, sy) - size,
+        DotShape::Circle | DotShape::Euclidean => sdist2(sx, sy) - size,
         DotShape::Square => sdf_square(sx, sy, size, xf.roundness),
         DotShape::Diamond => sdf_diamond(sx, sy, size, xf.roundness),
         // The legacy hexagon is pointy-top; the IQ formula is flat-top, so swap the axes.
@@ -1167,6 +1167,85 @@ fn build_sat_dirs(spec: &ScreentoneSpec, sin_sat: f32, cos_sat: f32) -> ([(f32, 
     }
 }
 
+/// Borrowed premultiplied RGBA32F tile sampler for `PatternType::CustomTexture`
+/// (exact CPU mirror of `pat_tex` in `crates/gpu/src/compose.wgsl`).
+pub trait CustomTextureSampler {
+    fn width(&self) -> u32;
+    fn height(&self) -> u32;
+    fn texel_premul(&self, x: i32, y: i32) -> [f32; 4];
+}
+
+/// Smooth deterministic 2D value noise in `[0.0, 1.0]` anchored to document coordinates
+/// (exact mirror of `st_value_noise_2d` in `crates/gpu/src/compose.wgsl`).
+#[inline]
+fn st_value_noise_2d(x: f32, y: f32, seed: u32) -> f32 {
+    let ix = x.floor() as i32;
+    let iy = y.floor() as i32;
+    let fx = x - ix as f32;
+    let fy = y - iy as f32;
+    let ux = fx * fx * (3.0 - 2.0 * fx);
+    let uy = fy * fy * (3.0 - 2.0 * fy);
+    let a = hash_coord(ix, iy, seed);
+    let b = hash_coord(ix.wrapping_add(1), iy, seed);
+    let c = hash_coord(ix, iy.wrapping_add(1), seed);
+    let d = hash_coord(ix.wrapping_add(1), iy.wrapping_add(1), seed);
+    let ab = a + (b - a) * ux;
+    let cd = c + (d - c) * ux;
+    ab + (cd - ab) * uy
+}
+
+/// Exact area-calibrated threshold `c(t)` for the Euclidean spot function
+/// `E(u, v) = 0.5 * (cos(2πu) + cos(2πv))` (max area error < 0.002 over `[0, 1]`).
+/// Exact mirror of `st_euclidean_threshold` in `crates/gpu/src/compose.wgsl`.
+#[inline]
+fn st_euclidean_threshold(t: f32) -> f32 {
+    let z = 1.0 - 2.0 * t.clamp(0.0, 1.0);
+    let az = z.abs();
+    let mag = (((0.171_988_6 * az - 0.378_817_4) * az + 0.826_663_2) * az + 0.380_165_6) * az;
+    if z >= 0.0 { mag } else { -mag }
+}
+
+/// Bilinear wrapping premultiplied tap on a [`CustomTextureSampler`], bit-equivalent to
+/// `st_sample_custom_tex` in `crates/gpu/src/compose.wgsl`.
+#[inline]
+fn sample_custom_tex(tex: &dyn CustomTextureSampler, u0: f32, v0: f32) -> [f32; 4] {
+    let tw = tex.width() as i32;
+    let th = tex.height() as i32;
+    if tw <= 0 || th <= 0 {
+        return [0.0; 4];
+    }
+    let u = u0 - 0.5;
+    let v = v0 - 0.5;
+    let x0 = u.floor();
+    let y0 = v.floor();
+    let fx = u - x0;
+    let fy = v - y0;
+    let ix = x0 as i32;
+    let iy = y0 as i32;
+    let wy = [1.0 - fy, fy];
+    let wx = [1.0 - fx, fx];
+    let mut acc = [0.0f32; 4];
+    for (j, &wj) in wy.iter().enumerate() {
+        if wj == 0.0 {
+            continue;
+        }
+        let yy = (iy + j as i32).rem_euclid(th);
+        for (i, &wi) in wx.iter().enumerate() {
+            if wi == 0.0 {
+                continue;
+            }
+            let xx = (ix + i as i32).rem_euclid(tw);
+            let p = tex.texel_premul(xx, yy);
+            let w = wi * wj;
+            acc[0] += p[0] * w;
+            acc[1] += p[1] * w;
+            acc[2] += p[2] * w;
+            acc[3] += p[3] * w;
+        }
+    }
+    acc
+}
+
 /// Smooth deterministic 1D value noise in `[-1.0, 1.0]` anchored to document coordinates.
 /// Bit-equivalent to `st_value_noise_1d` in `crates/gpu/src/compose.wgsl`.
 #[inline]
@@ -1239,6 +1318,7 @@ struct PatternEvalCtx<'a> {
     cos_x: f32,
     sin_b: f32,
     cos_b: f32,
+    custom_tex: Option<&'a dyn CustomTextureSampler>,
 }
 
 impl PatternEvalCtx<'_> {
@@ -1363,7 +1443,114 @@ impl PatternEvalCtx<'_> {
         cov
     }
 
+    /// O(1) analytical print-grade Euclidean halftone (`DotShape::Euclidean`):
+    /// 0–50% black circular dots -> 50% diamond checkerboard -> 50–100% white circular holes.
+    fn eval_euclidean_dots(&self, grid_x: f32, grid_y: f32, mod_size: f32, ink: f32) -> f32 {
+        let t = (ink * self.spec.density * mod_size).clamp(0.0, 1.0);
+        if t <= 1e-5 {
+            return 0.0;
+        }
+        if t >= 1.0 - 1e-5 {
+            return 1.0;
+        }
+        let sp_x = self.spacing_x.max(1.0);
+        let sp_y = self.spacing_y.max(1.0);
+        let u = grid_x / sp_x;
+        let v = grid_y / sp_y;
+        let tau = std::f32::consts::TAU;
+        let pi = std::f32::consts::PI;
+        let e = 0.5 * ((u * tau).cos() + (v * tau).cos());
+        let thresh = st_euclidean_threshold(t);
+        let de_dx = -(pi / sp_x) * (u * tau).sin();
+        let de_dy = -(pi / sp_y) * (v * tau).sin();
+        let grad = sdist2(de_dx, de_dy).max((pi / sp_x.max(sp_y)) * 0.25);
+        let mut min_dist = (thresh - e) / grad;
+        if self.spec.satellite_enabled {
+            let eff_ink = if self.spec.auto_dot_size { ink } else { area_ink(self.spec, ink) };
+            let merge = self.spec.merge_factor.clamp(0.0, 1.0);
+            let k_scale = if self.spec.auto_dot_size { t.sqrt() } else { self.spec.density * eff_ink };
+            let ssize = ((self.spec.satellite_size * k_scale + merge * sp_x * 0.4 * k_scale) * mod_size).max(0.0);
+            if ssize > 0.05 {
+                let sdist = self.spec.satellite_distance * (1.0 - merge * 0.6);
+                let smooth_k = merge * sp_x.min(sp_y) * 0.35;
+                let dot_cx = u.round() * sp_x;
+                let dot_cy = v.round() * sp_y;
+                for k in 0..self.sat_n {
+                    let (ux, uy) = self.sat_dirs[k];
+                    let mut spx = grid_x - (dot_cx + ux * sdist);
+                    let mut spy = grid_y - (dot_cy + uy * sdist);
+                    if self.spec.satellite_stretch > 0.0 {
+                        let rot_sx = spx * ux + spy * uy;
+                        let rot_sy = -spx * uy + spy * ux;
+                        let scaled = rot_sx * self.inv_sat_stretch;
+                        spx = scaled * ux - rot_sy * uy;
+                        spy = scaled * uy + rot_sy * ux;
+                    }
+                    let dist_sat = eval_shape_sdf(spx, spy, self.spec.satellite_dot_shape, ssize, self.xf);
+                    min_dist = sdf_smooth_min(min_dist, dist_sat, smooth_k);
+                }
+            }
+        }
+        coverage_from_sdf(min_dist, self.spec.smoothness)
+    }
+
+    /// 2-octave CSP sand/fiber noise in document coordinates (`PatternType::SandNoise`).
+    fn eval_sand_noise(&self, grid_x: f32, grid_y: f32, mod_size: f32, ink: f32) -> f32 {
+        let target = (ink * self.spec.density * mod_size).clamp(0.0, 1.0);
+        if target <= 1e-5 {
+            return 0.0;
+        }
+        if target >= 1.0 - 1e-5 {
+            return 1.0;
+        }
+        let gx = (self.spacing_x * 0.25 * self.spec.sand_aspect_x.clamp(0.1, 10.0)).max(0.5);
+        let gy = (self.spacing_y * 0.25 * self.spec.sand_aspect_y.clamp(0.1, 10.0)).max(0.5);
+        let n1 = st_value_noise_2d(grid_x / gx, grid_y / gy, self.spec.seed.wrapping_add(1901));
+        let n2 = st_value_noise_2d(grid_x / (gx * 0.43), grid_y / (gy * 0.43), self.spec.seed.wrapping_add(4723));
+        let mix_w = self.spec.sand_octaves_mix.clamp(0.0, 1.0);
+        let val = n1 * (1.0 - mix_w) + n2 * mix_w;
+        if self.spec.smoothness < 0.05 {
+            if val <= target { 1.0 } else { 0.0 }
+        } else {
+            ((target - val) / (0.12 * self.spec.smoothness) + 0.5).clamp(0.0, 1.0)
+        }
+    }
+
+    /// Tiled custom pattern texture halftone (`PatternType::CustomTexture`).
+    fn eval_custom_texture(&self, grid_x: f32, grid_y: f32, mod_size: f32, ink: f32) -> f32 {
+        let Some(tex) = self.custom_tex else {
+            return 0.0;
+        };
+        if tex.width() == 0 || tex.height() == 0 {
+            return 0.0;
+        }
+        let target = (ink * self.spec.density).clamp(0.0, 1.0);
+        if target <= 1e-5 {
+            return 0.0;
+        }
+        let tex_scale = ((self.spacing_x / 16.0) * self.spec.custom_texture_scale.clamp(0.05, 20.0) * mod_size.max(0.01)).max(0.05);
+        let u = grid_x / (tex_scale * self.xf.stretch_x.max(0.05));
+        let v = grid_y / (tex_scale * self.xf.stretch_y.max(0.05));
+        let s = sample_custom_tex(tex, u, v);
+        let a = s[3].clamp(0.0, 1.0);
+        let r = (s[0] + (1.0 - a)).clamp(0.0, 1.0);
+        let g = (s[1] + (1.0 - a)).clamp(0.0, 1.0);
+        let b = (s[2] + (1.0 - a)).clamp(0.0, 1.0);
+        let luma = (0.299 * r + 0.587 * g + 0.114 * b).clamp(0.0, 1.0);
+        let dark = 1.0 - luma;
+        let thresh = 1.0 - target * 0.99;
+        if self.spec.smoothness < 0.05 {
+            if dark >= thresh { 1.0 } else { 0.0 }
+        } else {
+            let aa = (0.15 * self.spec.smoothness).max(1e-4);
+            ((dark - thresh) / aa + 0.5).clamp(0.0, 1.0) * (dark / 0.01).clamp(0.0, 1.0)
+        }
+    }
+
     fn eval_dots(&self, grid_x: f32, grid_y: f32, mod_size: f32, ink: f32) -> f32 {
+        if self.spec.dot_shape == DotShape::Euclidean {
+            return self.eval_euclidean_dots(grid_x, grid_y, mod_size, ink);
+        }
         let eff_ink = ink;
         let cov_target = (eff_ink * self.spec.density).clamp(0.0, 1.0);
         let auto = self.spec.auto_dot_size;
@@ -1602,6 +1789,8 @@ impl PatternEvalCtx<'_> {
             }
             PatternType::Crosshatch => self.eval_crosshatch(local, grid, mod_size, ink),
             PatternType::FocusLines => self.eval_focus_lines(grid_x, grid_y, mod_size, ink),
+            PatternType::SandNoise => self.eval_sand_noise(grid_x, grid_y, mod_size, ink),
+            PatternType::CustomTexture => self.eval_custom_texture(grid_x, grid_y, mod_size, ink),
             PatternType::Concentric => {
                 let width = (self.spec.line_width * mod_size * self.spec.density * ink).max(0.0);
                 if width <= 1e-4 {
@@ -1635,6 +1824,19 @@ impl PatternEvalCtx<'_> {
 
 /// Core screentone rendering kernel over tile `out`.
 pub fn screentone(src: &Image, out: Rect, ctx: &Ctx, spec: &ScreentoneSpec) -> Vec<f32> {
+    screentone_with_options(src, out, ctx, spec, None, 1.0)
+}
+
+/// Core screentone rendering kernel over tile `out` with optional custom pattern texture
+/// (`PatternType::CustomTexture`) and `ink_opacity` multiplier (`reflect_layer_opacity`).
+pub fn screentone_with_options(
+    src: &Image,
+    out: Rect,
+    ctx: &Ctx,
+    spec: &ScreentoneSpec,
+    custom_tex: Option<&dyn CustomTextureSampler>,
+    ink_opacity: f32,
+) -> Vec<f32> {
     let mut res = src.crop(out);
     let b = ctx.bounds;
     let (bw, bh) = (b.width().max(1) as f32, b.height().max(1) as f32);
@@ -1680,10 +1882,11 @@ pub fn screentone(src: &Image, out: Rect, ctx: &Ctx, spec: &ScreentoneSpec) -> V
         {
             1.0
         } else {
-            let ink = match &grids {
+            let base_ink = match &grids {
                 Some(g) => g.sample_ink(src, ctx, tone, spec, doc_x, doc_y),
                 None => 1.0,
             };
+            let ink = (base_ink * ink_opacity.clamp(0.0, 1.0)).clamp(0.0, 1.0);
             if ink > 1e-5 {
                 let eval_ctx = PatternEvalCtx {
                     spec,
@@ -1697,6 +1900,7 @@ pub fn screentone(src: &Image, out: Rect, ctx: &Ctx, spec: &ScreentoneSpec) -> V
                     cos_x,
                     sin_b,
                     cos_b,
+                    custom_tex,
                 };
                 let raw_cov = eval_ctx.eval((local_x, local_y), grid, mod_size, ink);
                 apply_kezuri(raw_cov, (local_x, local_y), ink, scrape_strength, (sin_scrape, cos_scrape), spec.seed).clamp(0.0, 1.0)
@@ -2859,5 +3063,120 @@ mod tests {
         }
         assert_eq!(seam_diff, 0, "Block B wobble+dash+kezuri seam diff at x=256/y=256: {seam_diff}");
         assert_eq!(total_diff, 0, "Block B tiled render must match monolithic bit-for-bit, got {total_diff}");
+    }
+
+    #[test]
+    fn block_c_euclidean_area_conservation_and_circle_unchanged() {
+        let bounds = Rect::new(0, 0, 128, 128);
+        let origin = (0.0, 0.0);
+        let ctx = Ctx { bounds, mode: photocraft_color::ColorMode::Rgb, alpha: true };
+        let empty = Image { rect: Rect::EMPTY, ch: 4, data: Vec::new() };
+
+        let mut prev_cov = -1.0_f32;
+        for target_ink in [0.10_f32, 0.25, 0.50, 0.75, 0.90] {
+            let spec = ScreentoneSpec {
+                pattern_type: PatternType::Dots,
+                dot_shape: DotShape::Euclidean,
+                spacing_x: 16.0,
+                spacing_y: 16.0,
+                density: target_ink,
+                smoothness: 0.0,
+                mode: ScreentoneMode::Sheet,
+                use_source_luminance: false,
+                foreground: [0.0, 0.0, 0.0, 1.0],
+                background: [1.0, 1.0, 1.0, 0.0],
+                ..Default::default()
+            };
+            let s = sheet_spec(&spec, bounds, origin);
+            let px = screentone(&empty, bounds, &ctx, &s);
+            let ink_px = px.chunks_exact(4).filter(|p| p[3] > 0.5).count();
+            let cov = ink_px as f32 / (128.0 * 128.0);
+            assert!(cov > prev_cov, "Euclidean coverage must increase monotonically: {cov} <= {prev_cov} at ink={target_ink}");
+            assert!(
+                (cov - target_ink).abs() < 0.035,
+                "Euclidean area conservation at ink={target_ink}: got cov={cov:.4} (err={:.4})",
+                (cov - target_ink).abs()
+            );
+            prev_cov = cov;
+        }
+
+        // At 0.80 ink (>50%), Euclidean must invert to white circular holes at cell corners
+        // ((ix+0.5)*16, (iy+0.5)*16) and black ink at cell centers (ix*16, iy*16).
+        let spec_hi = ScreentoneSpec {
+            pattern_type: PatternType::Dots,
+            dot_shape: DotShape::Euclidean,
+            spacing_x: 16.0,
+            spacing_y: 16.0,
+            density: 0.80,
+            smoothness: 0.0,
+            mode: ScreentoneMode::Sheet,
+            use_source_luminance: false,
+            foreground: [0.0, 0.0, 0.0, 1.0],
+            background: [1.0, 1.0, 1.0, 0.0],
+            ..Default::default()
+        };
+        let px_hi = screentone(&empty, bounds, &ctx, &sheet_spec(&spec_hi, bounds, origin));
+        let alpha_at = |buf: &[f32], x: usize, y: usize| buf[(y * 128 + x) * 4 + 3];
+        assert!(alpha_at(&px_hi, 16, 16) > 0.5, "Euclidean >50%: cell center must be black ink");
+        assert!(alpha_at(&px_hi, 24, 24) < 0.5, "Euclidean >50%: cell corner must be a white circular hole");
+
+        // Legacy DotShape::Circle must remain 100% distinct from Euclidean (unchanged!).
+        let spec_circle = ScreentoneSpec { dot_shape: DotShape::Circle, dot_size: 4.5, ..spec_hi };
+        let px_circle = screentone(&empty, bounds, &ctx, &sheet_spec(&spec_circle, bounds, origin));
+        let diff = px_hi.chunks_exact(4).zip(px_circle.chunks_exact(4)).filter(|(a, b)| (a[3] - b[3]).abs() > 0.5).count();
+        assert!(diff > 500, "DotShape::Circle must stay distinct from DotShape::Euclidean, got {diff} diff px");
+    }
+
+    #[test]
+    fn block_c_sand_noise_tiled_zero_seam_at_256() {
+        let bounds = Rect::new(0, 0, 512, 512);
+        let spec = ScreentoneSpec {
+            pattern_type: PatternType::SandNoise,
+            spacing_x: 14.0,
+            spacing_y: 14.0,
+            angle: 17.0,
+            density: 0.55,
+            smoothness: 0.4,
+            sand_aspect_x: 3.5,
+            sand_aspect_y: 0.6,
+            sand_octaves_mix: 0.45,
+            scrape_strength: 0.35,
+            scrape_angle: 28.0,
+            mode: ScreentoneMode::Sheet,
+            use_source_luminance: false,
+            foreground: [0.0, 0.0, 0.0, 1.0],
+            background: [1.0, 1.0, 1.0, 0.0],
+            seed: 2026,
+            ..Default::default()
+        };
+        let origin = origin_doc(&spec, bounds);
+
+        let empty = Image { rect: Rect::EMPTY, ch: 4, data: Vec::new() };
+        let mono_spec = sheet_spec(&spec, bounds, origin);
+        let ctx = Ctx { bounds, mode: photocraft_color::ColorMode::Rgb, alpha: true };
+        let mono_f32 = screentone(&empty, bounds, &ctx, &mono_spec);
+        let mut mono_surf = Surface::new(photocraft_color::PixelFormat::RGBA8);
+        mono_surf.write_region(bounds, &mono_f32);
+        let mono_px = mono_surf.read_region(bounds);
+
+        let mut tiled_surf = Surface::new(photocraft_color::PixelFormat::RGBA8);
+        let _ = render_screentone_to_surface(&mut tiled_surf, bounds, &spec, origin);
+        let tiled_px = tiled_surf.read_region(bounds);
+
+        let mut seam_diff = 0usize;
+        let mut total_diff = 0usize;
+        for y in 0..512usize {
+            for x in 0..512usize {
+                let off = (y * 512 + x) * 4;
+                if (0..4).any(|c| mono_px[off + c].to_bits() != tiled_px[off + c].to_bits()) {
+                    total_diff += 1;
+                    if (254..=258).contains(&x) || (254..=258).contains(&y) {
+                        seam_diff += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(seam_diff, 0, "Block C SandNoise seam diff at x=256/y=256: {seam_diff}");
+        assert_eq!(total_diff, 0, "Block C SandNoise tiled render must match monolithic bit-for-bit, got {total_diff}");
     }
 }

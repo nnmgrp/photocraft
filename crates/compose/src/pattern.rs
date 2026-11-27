@@ -325,6 +325,23 @@ impl Tile {
     pub fn sample(&self, u: f64, v: f64) -> [f32; 4] {
         unpremultiply(self.sample_premul(u, v))
     }
+}
+
+impl photocraft_algo::comic_screentone::CustomTextureSampler for Tile {
+    fn width(&self) -> u32 {
+        self.w as u32
+    }
+
+    fn height(&self) -> u32 {
+        self.h as u32
+    }
+
+    fn texel_premul(&self, x: i32, y: i32) -> [f32; 4] {
+        self.at(i64::from(x), i64::from(y))
+    }
+}
+
+impl Tile {
 
     /// The pattern at the centre `(x, y)` of a document pixel, filtered over the pixel's
     /// footprint in the tile when the placement shrinks it. Returns straight alpha.

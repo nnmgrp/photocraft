@@ -563,3 +563,13 @@ Line Dash:	Штрих / пунктир:
 Progressive:	Прогрессивный:
 3-stage kakeami	3-ступенчатый какеами
 Inner Radius:	Внутр. радиус:
+Euclidean	Евклидов (CSP)
+Sand Noise	Песок / волокно
+Custom Texture	Своя текстура
+Sand Aspect X:	Растяж. песка X:
+Sand Aspect Y:	Растяж. песка Y:
+Octaves Mix:	Смесь октав:
+Texture:	Текстура:
+Texture Scale:	Масштаб текстуры:
+Reflect Layer Opacity	Прозрачность слоя → размер точек
+Layer opacity shrinks dot size while keeping ink 100% black	Прозрачность слоя уменьшает точки, сохраняя тушь на 100% чёрной

@@ -49,7 +49,9 @@ pub(crate) fn render_content(layer: &Layer, rect: Rect, cx: &Ctx) -> Option<Buff
             }
             _ => render_fill(f, rect, fill_frame(layer, cx.canvas), cx.patterns, adjustment_quantum(cx.depth)),
         },
-        LayerContent::Screentone(st) if st.surface.tile_count() == 0 => crate::screentone::render_unmasked(layer, st, rect, cx.canvas, None),
+        LayerContent::Screentone(st) if crate::screentone::needs_live_eval(layer) => {
+            crate::screentone::render_unmasked(layer, st, rect, cx.canvas, None, cx.patterns)
+        }
         LayerContent::Kakeami(k) => crate::kakeami::render_unmasked(layer, k, rect, cx.canvas, cx.doc.map_or(600.0, |d| d.resolution_dpi)),
         LayerContent::Adjustment(_) => return None,
         _ => match layer.surface() {
@@ -175,7 +177,7 @@ pub(crate) fn empty_in(layer: &Layer, rect: Rect) -> bool {
         return transparent_outside(layer) && bounds.inflate(effects::margin(layer)).intersect(&rect).is_empty();
     }
     match &layer.content {
-        LayerContent::Screentone(st) if st.surface.tile_count() == 0 => false,
+        LayerContent::Screentone(_) if crate::screentone::needs_live_eval(layer) => false,
         LayerContent::Kakeami(k) => {
             if let Some(f) = k.fill_frame {
                 f.intersect(&rect).is_empty()

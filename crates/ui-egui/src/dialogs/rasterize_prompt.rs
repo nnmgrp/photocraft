@@ -113,6 +113,12 @@ pub fn intercept(app: &mut PhotocraftApp, tool: Tool, x: f64, y: f64, pressure: 
     if tool == Tool::Remove && kind == Kind::Type {
         return true;
     }
+    // Non-destructive CSP Eraser on shapes/balloons auto-creates and erases into a GRAY8 mask
+    // instead of prompting to rasterize the vector shape.
+    let erasing = tool == Tool::Eraser || app.held_erase || crate::paint_mouse::clears(app, tool);
+    if erasing && kind == Kind::Shape {
+        return false;
+    }
     if !app.ui.dialogs.iter().any(|d| owns(&d.fields)) {
         open(app, kind, layer, tool, [x, y, f64::from(pressure)]);
     }

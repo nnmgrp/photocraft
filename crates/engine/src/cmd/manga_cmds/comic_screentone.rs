@@ -34,19 +34,20 @@ pub const LAYER: &str = "layer.screentone";
 /// Renders the same sheet straight into the pattern library (`Save as Pattern` on the panel).
 pub const PATTERN: &str = "pattern.screentone";
 
-const PATTERNS: &str = "dots|lines|crosshatch|noise|gaussianNoise|stipple|hexgrid|checker|concentric|stars|hearts|triangles|focusLines";
-const SHAPES: &str = "circle|square|diamond|hexagon";
+const PATTERNS: &str = "dots|lines|crosshatch|noise|gaussianNoise|stipple|hexgrid|checker|concentric|stars|hearts|triangles|focusLines|sandNoise|customTexture";
+const DOT_SHAPES: &str = "circle|square|diamond|hexagon|euclidean";
+const SAT_SHAPES: &str = "circle|square|diamond|hexagon";
 const GRADIENTS: &str = "none|linear|radial|angle|reflected|diamond";
 const MODES: &str = "shading|sheet";
 
 /// The flat parameter notation for [`FILTER`] (Photoshop-style dialog units).
-const FILTER_PARAMS: &str = r##"{"mode":"shading|sheet","patternType":"dots|lines|crosshatch|noise|gaussianNoise|stipple|hexgrid|checker|concentric|stars|hearts|triangles|focusLines","dotShape":"circle|square|diamond|hexagon","dotSize":0..500=6,"spacingX":1..2000=16,"spacingY":1..2000=16,"density":0..1=0.5,"angle":-360..360=0,"lineWidth":0..200=1.5,"crossAngle":-360..360=45,"originX":-100000..100000=0,"originY":-100000..100000=0,"roundness":0..1=0,"smoothness":0..1=1,"brightness":-1..1=0,"contrast":0..4=1,"whiteThreshold":0..1=0.85,"blackThreshold":0..1=0.08,"toneGamma":0.01..10=1,"preserveLines":bool,"lineThreshold":0..1=0.24,"lineThickness":0.5..5=1,"useSourceLuminance":bool=true,"satelliteEnabled":bool,"satelliteSize":0..500=4,"satelliteDistance":0..2000=18,"satelliteCount":1..8=4,"satelliteAngle":-360..360=0,"satelliteShape":"circle|square|diamond|hexagon","satelliteStretch":0..10=0,"aspectX":0.05..20=1,"aspectY":0.05..20=1,"rowOffset":-1..1=0,"mergeFactor":0..1=0,"jitterPosition":0..100=0,"jitterSize":0..100=0,"gradientType":"none|linear|radial|angle|reflected|diamond","gradientAngle":-360..360=90,"gradientReverse":bool,"gradientMidpoint":0..1=0.5,"gradientSizeStart":0..10=1,"gradientSizeEnd":0..10=0,"gradientStretchStart":0..10=1,"gradientStretchEnd":0..10=1,"gradientColorTransition":bool,"foreground":color=#000000,"background":color,"rotateCanvas":-360..360=0,"rotatePattern":-360..360=0,"seed":u32=42,"equalizeArea":bool,"autoDotSize":bool,"posterizeSteps":0..8=0,"scrapeStrength":0..1=0,"scrapeAngle":-360..360=0,"lineWobble":0..1=0,"lineWaveFreq":0.1..10=1,"lineDash":0..1=0,"lineProgressive":bool,"focusInnerRadius":0..2000=0,"satelliteLayout":"cross|even"}"##;
+const FILTER_PARAMS: &str = r##"{"mode":"shading|sheet","patternType":"dots|lines|crosshatch|noise|gaussianNoise|stipple|hexgrid|checker|concentric|stars|hearts|triangles|focusLines|sandNoise|customTexture","dotShape":"circle|square|diamond|hexagon|euclidean","dotSize":0..500=6,"spacingX":1..2000=16,"spacingY":1..2000=16,"density":0..1=0.5,"angle":-360..360=0,"lineWidth":0..200=1.5,"crossAngle":-360..360=45,"originX":-100000..100000=0,"originY":-100000..100000=0,"roundness":0..1=0,"smoothness":0..1=1,"brightness":-1..1=0,"contrast":0..4=1,"whiteThreshold":0..1=0.85,"blackThreshold":0..1=0.08,"toneGamma":0.01..10=1,"preserveLines":bool,"lineThreshold":0..1=0.24,"lineThickness":0.5..5=1,"useSourceLuminance":bool=true,"satelliteEnabled":bool,"satelliteSize":0..500=4,"satelliteDistance":0..2000=18,"satelliteCount":1..8=4,"satelliteAngle":-360..360=0,"satelliteShape":"circle|square|diamond|hexagon","satelliteStretch":0..10=0,"aspectX":0.05..20=1,"aspectY":0.05..20=1,"rowOffset":-1..1=0,"mergeFactor":0..1=0,"jitterPosition":0..100=0,"jitterSize":0..100=0,"gradientType":"none|linear|radial|angle|reflected|diamond","gradientAngle":-360..360=90,"gradientReverse":bool,"gradientMidpoint":0..1=0.5,"gradientSizeStart":0..10=1,"gradientSizeEnd":0..10=0,"gradientStretchStart":0..10=1,"gradientStretchEnd":0..10=1,"gradientColorTransition":bool,"foreground":color=#000000,"background":color,"rotateCanvas":-360..360=0,"rotatePattern":-360..360=0,"seed":u32=42,"equalizeArea":bool,"autoDotSize":bool,"posterizeSteps":0..8=0,"scrapeStrength":0..1=0,"scrapeAngle":-360..360=0,"lineWobble":0..1=0,"lineWaveFreq":0.1..10=1,"lineDash":0..1=0,"lineProgressive":bool,"focusInnerRadius":0..2000=0,"sandAspectX":0.1..10=1,"sandAspectY":0.1..10=1,"sandOctavesMix":0..1=0.35,"customPatternId":text?,"customTextureScale":0.05..20=1,"reflectLayerOpacity":bool,"satelliteLayout":"cross|even"}"##;
 
 /// The flat parameter notation for [`LAYER`].
-const PARAMS: &str = r##"{"preset":text,"mode":"shading|sheet","patternType":"dots|lines|crosshatch|noise|gaussianNoise|stipple|hexgrid|checker|concentric|stars|hearts|triangles|focusLines","dotShape":"circle|square|diamond|hexagon","dotSize":0..500=6,"spacingX":1..2000=16,"spacingY":1..2000=16,"density":0..1=0.5,"angle":-360..360=0,"lineWidth":0..200=1.5,"crossAngle":-360..360=45,"originX":-100000..100000=0,"originY":-100000..100000=0,"roundness":0..1=0,"smoothness":0..1=1,"brightness":-1..1=0,"contrast":0..4=1,"whiteThreshold":0..1=0.85,"blackThreshold":0..1=0.08,"toneGamma":0.01..10=1,"preserveLines":bool,"lineThreshold":0..1=0.24,"lineThickness":0.5..5=1,"useSourceLuminance":bool=true,"satelliteEnabled":bool,"satelliteSize":0..500=4,"satelliteDistance":0..2000=18,"satelliteCount":1..8=4,"satelliteAngle":-360..360=0,"satelliteShape":"circle|square|diamond|hexagon","satelliteStretch":0..10=0,"aspectX":0.05..20=1,"aspectY":0.05..20=1,"rowOffset":-1..1=0,"mergeFactor":0..1=0,"jitterPosition":0..100=0,"jitterSize":0..100=0,"gradientType":"none|linear|radial|angle|reflected|diamond","gradientAngle":-360..360=90,"gradientReverse":bool,"gradientMidpoint":0..1=0.5,"gradientSizeStart":0..10=1,"gradientSizeEnd":0..10=0,"gradientStretchStart":0..10=1,"gradientStretchEnd":0..10=1,"gradientColorTransition":bool,"foreground":color=#000000,"background":color,"rotateCanvas":-360..360=0,"rotatePattern":-360..360=0,"seed":u32=42,"equalizeArea":bool,"autoDotSize":bool,"posterizeSteps":0..8=0,"scrapeStrength":0..1=0,"scrapeAngle":-360..360=0,"lineWobble":0..1=0,"lineWaveFreq":0.1..10=1,"lineDash":0..1=0,"lineProgressive":bool,"focusInnerRadius":0..2000=0,"satelliteLayout":"cross|even","clipped":bool?,"layer":id?,"name":text?} → {layer,bounds}"##;
+const PARAMS: &str = r##"{"preset":text,"mode":"shading|sheet","patternType":"dots|lines|crosshatch|noise|gaussianNoise|stipple|hexgrid|checker|concentric|stars|hearts|triangles|focusLines|sandNoise|customTexture","dotShape":"circle|square|diamond|hexagon|euclidean","dotSize":0..500=6,"spacingX":1..2000=16,"spacingY":1..2000=16,"density":0..1=0.5,"angle":-360..360=0,"lineWidth":0..200=1.5,"crossAngle":-360..360=45,"originX":-100000..100000=0,"originY":-100000..100000=0,"roundness":0..1=0,"smoothness":0..1=1,"brightness":-1..1=0,"contrast":0..4=1,"whiteThreshold":0..1=0.85,"blackThreshold":0..1=0.08,"toneGamma":0.01..10=1,"preserveLines":bool,"lineThreshold":0..1=0.24,"lineThickness":0.5..5=1,"useSourceLuminance":bool=true,"satelliteEnabled":bool,"satelliteSize":0..500=4,"satelliteDistance":0..2000=18,"satelliteCount":1..8=4,"satelliteAngle":-360..360=0,"satelliteShape":"circle|square|diamond|hexagon","satelliteStretch":0..10=0,"aspectX":0.05..20=1,"aspectY":0.05..20=1,"rowOffset":-1..1=0,"mergeFactor":0..1=0,"jitterPosition":0..100=0,"jitterSize":0..100=0,"gradientType":"none|linear|radial|angle|reflected|diamond","gradientAngle":-360..360=90,"gradientReverse":bool,"gradientMidpoint":0..1=0.5,"gradientSizeStart":0..10=1,"gradientSizeEnd":0..10=0,"gradientStretchStart":0..10=1,"gradientStretchEnd":0..10=1,"gradientColorTransition":bool,"foreground":color=#000000,"background":color,"rotateCanvas":-360..360=0,"rotatePattern":-360..360=0,"seed":u32=42,"equalizeArea":bool,"autoDotSize":bool,"posterizeSteps":0..8=0,"scrapeStrength":0..1=0,"scrapeAngle":-360..360=0,"lineWobble":0..1=0,"lineWaveFreq":0.1..10=1,"lineDash":0..1=0,"lineProgressive":bool,"focusInnerRadius":0..2000=0,"sandAspectX":0.1..10=1,"sandAspectY":0.1..10=1,"sandOctavesMix":0..1=0.35,"customPatternId":text?,"customTextureScale":0.05..20=1,"reflectLayerOpacity":bool,"satelliteLayout":"cross|even","clipped":bool?,"layer":id?,"name":text?} → {layer,bounds}"##;
 
 /// [PATTERN]'s notation: the same dialog fields, but the pattern library is the target.
-const PATTERN_PARAMS: &str = r##"{"preset":text,"mode":"shading|sheet","patternType":"dots|lines|crosshatch|noise|gaussianNoise|stipple|hexgrid|checker|concentric|stars|hearts|triangles|focusLines","dotShape":"circle|square|diamond|hexagon","dotSize":0..500=6,"spacingX":1..2000=16,"spacingY":1..2000=16,"density":0..1=0.5,"angle":-360..360=0,"lineWidth":0..200=1.5,"crossAngle":-360..360=45,"originX":-100000..100000=0,"originY":-100000..100000=0,"roundness":0..1=0,"smoothness":0..1=1,"brightness":-1..1=0,"contrast":0..4=1,"whiteThreshold":0..1=0.85,"blackThreshold":0..1=0.08,"toneGamma":0.01..10=1,"preserveLines":bool,"lineThreshold":0..1=0.24,"lineThickness":0.5..5=1,"useSourceLuminance":bool=true,"satelliteEnabled":bool,"satelliteSize":0..500=4,"satelliteDistance":0..2000=18,"satelliteCount":1..8=4,"satelliteAngle":-360..360=0,"satelliteShape":"circle|square|diamond|hexagon","satelliteStretch":0..10=0,"aspectX":0.05..20=1,"aspectY":0.05..20=1,"rowOffset":-1..1=0,"mergeFactor":0..1=0,"jitterPosition":0..100=0,"jitterSize":0..100=0,"gradientType":"none|linear|radial|angle|reflected|diamond","gradientAngle":-360..360=90,"gradientReverse":bool,"gradientMidpoint":0..1=0.5,"gradientSizeStart":0..10=1,"gradientSizeEnd":0..10=0,"gradientStretchStart":0..10=1,"gradientStretchEnd":0..10=1,"gradientColorTransition":bool,"foreground":color=#000000,"background":color,"rotateCanvas":-360..360=0,"rotatePattern":-360..360=0,"seed":u32=42,"equalizeArea":bool,"autoDotSize":bool,"posterizeSteps":0..8=0,"scrapeStrength":0..1=0,"scrapeAngle":-360..360=0,"lineWobble":0..1=0,"lineWaveFreq":0.1..10=1,"lineDash":0..1=0,"lineProgressive":bool,"focusInnerRadius":0..2000=0,"satelliteLayout":"cross|even","name":text?} → {pattern,bounds}"##;
+const PATTERN_PARAMS: &str = r##"{"preset":text,"mode":"shading|sheet","patternType":"dots|lines|crosshatch|noise|gaussianNoise|stipple|hexgrid|checker|concentric|stars|hearts|triangles|focusLines|sandNoise|customTexture","dotShape":"circle|square|diamond|hexagon|euclidean","dotSize":0..500=6,"spacingX":1..2000=16,"spacingY":1..2000=16,"density":0..1=0.5,"angle":-360..360=0,"lineWidth":0..200=1.5,"crossAngle":-360..360=45,"originX":-100000..100000=0,"originY":-100000..100000=0,"roundness":0..1=0,"smoothness":0..1=1,"brightness":-1..1=0,"contrast":0..4=1,"whiteThreshold":0..1=0.85,"blackThreshold":0..1=0.08,"toneGamma":0.01..10=1,"preserveLines":bool,"lineThreshold":0..1=0.24,"lineThickness":0.5..5=1,"useSourceLuminance":bool=true,"satelliteEnabled":bool,"satelliteSize":0..500=4,"satelliteDistance":0..2000=18,"satelliteCount":1..8=4,"satelliteAngle":-360..360=0,"satelliteShape":"circle|square|diamond|hexagon","satelliteStretch":0..10=0,"aspectX":0.05..20=1,"aspectY":0.05..20=1,"rowOffset":-1..1=0,"mergeFactor":0..1=0,"jitterPosition":0..100=0,"jitterSize":0..100=0,"gradientType":"none|linear|radial|angle|reflected|diamond","gradientAngle":-360..360=90,"gradientReverse":bool,"gradientMidpoint":0..1=0.5,"gradientSizeStart":0..10=1,"gradientSizeEnd":0..10=0,"gradientStretchStart":0..10=1,"gradientStretchEnd":0..10=1,"gradientColorTransition":bool,"foreground":color=#000000,"background":color,"rotateCanvas":-360..360=0,"rotatePattern":-360..360=0,"seed":u32=42,"equalizeArea":bool,"autoDotSize":bool,"posterizeSteps":0..8=0,"scrapeStrength":0..1=0,"scrapeAngle":-360..360=0,"lineWobble":0..1=0,"lineWaveFreq":0.1..10=1,"lineDash":0..1=0,"lineProgressive":bool,"focusInnerRadius":0..2000=0,"sandAspectX":0.1..10=1,"sandAspectY":0.1..10=1,"sandOctavesMix":0..1=0.35,"customPatternId":text?,"customTextureScale":0.05..20=1,"reflectLayerOpacity":bool,"satelliteLayout":"cross|even","name":text?} → {pattern,bounds}"##;
 
 fn f_any(p: &Value, keys: &[&str], d: f32) -> f32 {
     for &k in keys {
@@ -101,6 +102,8 @@ fn pattern(p: &Value, base: PatternType) -> PatternType {
         Some("hearts") => PatternType::Hearts,
         Some("triangles") => PatternType::Triangles,
         Some("focusLines" | "focus_lines") => PatternType::FocusLines,
+        Some("sandNoise" | "sand_noise") => PatternType::SandNoise,
+        Some("customTexture" | "custom_texture") => PatternType::CustomTexture,
         _ => base,
     }
 }
@@ -112,6 +115,7 @@ fn shape(p: &Value, k: &str, base: DotShape) -> DotShape {
         Some("square") => DotShape::Square,
         Some("diamond") => DotShape::Diamond,
         Some("hexagon") => DotShape::Hexagon,
+        Some("euclidean") => DotShape::Euclidean,
         _ => base,
     }
 }
@@ -257,6 +261,16 @@ pub fn spec(p: &Value) -> ScreentoneSpec {
         line_dash: f_any(p, &["lineDash"], base.line_dash).clamp(0.0, 1.0),
         line_progressive: b_any(p, &["lineProgressive"], base.line_progressive),
         focus_inner_radius: f_any(p, &["focusInnerRadius"], base.focus_inner_radius).clamp(0.0, 2000.0),
+        sand_aspect_x: f_any(p, &["sandAspectX"], base.sand_aspect_x).clamp(0.1, 10.0),
+        sand_aspect_y: f_any(p, &["sandAspectY"], base.sand_aspect_y).clamp(0.1, 10.0),
+        sand_octaves_mix: f_any(p, &["sandOctavesMix"], base.sand_octaves_mix).clamp(0.0, 1.0),
+        custom_pattern_id: match p.get("customPatternId") {
+            Some(Value::String(s)) if !s.trim().is_empty() => Some(s.trim().to_owned()),
+            Some(Value::Null) | Some(Value::String(_)) => None,
+            _ => base.custom_pattern_id,
+        },
+        custom_texture_scale: f_any(p, &["customTextureScale"], base.custom_texture_scale).clamp(0.05, 20.0),
+        reflect_layer_opacity: b_any(p, &["reflectLayerOpacity"], base.reflect_layer_opacity),
     }
 }
 
@@ -270,7 +284,8 @@ fn choices(key: &str) -> Option<&'static str> {
     match key {
         "mode" => Some(MODES),
         "patternType" => Some(PATTERNS),
-        "dotShape" | "satelliteShape" => Some(SHAPES),
+        "dotShape" => Some(DOT_SHAPES),
+        "satelliteShape" => Some(SAT_SHAPES),
         "gradientType" => Some(GRADIENTS),
         _ => None,
     }
@@ -756,10 +771,23 @@ fn create_layer(s: &mut Session, p: &Value) -> Result<Value> {
         mask.surface.prune();
         mask
     });
+    let extra_pat = spec
+        .custom_pattern_id
+        .as_deref()
+        .filter(|pid| !pid.is_empty() && spec.pattern_type == PatternType::CustomTexture)
+        .and_then(|pid| {
+            let in_doc = photocraft_doc::pattern::find(&st.doc.patterns, pid, pid).is_some();
+            if in_doc { None } else { s.patterns.items.iter().find(|pat| pat.id == pid || pat.name == pid).cloned() }
+        });
     let clipped = b_any(p, &["clipped"], false);
     let blend = screentone_layer_blend(&spec);
     let content = ScreentoneLayer::new(spec, origin, rendered);
     let id = s.edit("Screentone", |doc, active| {
+        if let Some(pat) = extra_pat.clone()
+            && photocraft_doc::pattern::find(&doc.patterns, &pat.id, &pat.name).is_none()
+        {
+            doc.patterns.push(pat);
+        }
         let mut l = Layer::new(doc.next_layer_name(&name), LayerContent::Screentone(content));
         l.mask = mask;
         l.clipped = clipped;
@@ -893,10 +921,23 @@ fn restyle_layer(s: &mut Session, id: photocraft_doc::LayerId, mut params: Filte
         return Err(EngineError::Other("nothing to render: the layer's area is empty".into()));
     }
     let spec = spec.clone();
+    let extra_pat = spec
+        .custom_pattern_id
+        .as_deref()
+        .filter(|pid| !pid.is_empty() && spec.pattern_type == PatternType::CustomTexture)
+        .and_then(|pid| {
+            let in_doc = photocraft_doc::pattern::find(&st.doc.patterns, pid, pid).is_some();
+            if in_doc { None } else { s.patterns.items.iter().find(|pat| pat.id == pid || pat.name == pid).cloned() }
+        });
     // Render a standalone sheet, then swap it for the layer's content in one edit. Live
     // screentone layers keep their parameters; older raster sheets stay raster (the legacy
     // in-place restyle the gizmo used before screentone content existed).
     s.edit("Screentone", |doc, _| {
+        if let Some(pat) = extra_pat.clone()
+            && photocraft_doc::pattern::find(&doc.patterns, &pat.id, &pat.name).is_none()
+        {
+            doc.patterns.push(pat);
+        }
         let layer = doc.layer_mut(id).ok_or_else(|| EngineError::Other("the layer to restyle is gone".into()))?;
         if let LayerContent::Screentone(previous) = &mut layer.content {
             let prev_auto_blend = screentone_layer_blend(&previous.spec);

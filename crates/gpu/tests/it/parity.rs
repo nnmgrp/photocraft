@@ -3990,3 +3990,154 @@ fn screentone_block_b_gpu_cpu_parity() {
         assert!(diff_px > 50, "unified Kezuri must visibly scrape {name}, got {diff_px} differing px");
     }
 }
+
+#[test]
+fn screentone_block_c_gpu_cpu_parity() {
+    use photocraft_doc::{DotShape, PatternType, ScreentoneBackend, ScreentoneLayer, ScreentoneMode, ScreentoneSpec};
+
+    let Some(mut g) = gpu() else { return };
+    let health = photocraft_gpu::DeviceHealth::watch(&g.device);
+    let bounds = Rect::from_xywh(0, 0, 96, 64);
+
+    // 1. DotShape::Euclidean + Diamond satellites (proves 2-bit dot_shape trap is fixed and sat_shape survives!)
+    {
+        let mut d = base_doc(96, 64);
+        let spec = ScreentoneSpec {
+            pattern_type: PatternType::Dots,
+            dot_shape: DotShape::Euclidean,
+            spacing_x: 14.0,
+            spacing_y: 14.0,
+            angle: 22.0,
+            density: 0.62,
+            smoothness: 0.5,
+            satellite_enabled: true,
+            satellite_dot_shape: DotShape::Diamond,
+            satellite_size: 2.2,
+            satellite_distance: 5.5,
+            satellite_count: 4,
+            mode: ScreentoneMode::Sheet,
+            use_source_luminance: false,
+            backend: ScreentoneBackend::Gpu,
+            ..Default::default()
+        };
+        let origin = (48.0, 32.0);
+        let tone = ScreentoneLayer::new(spec, origin, photocraft_raster::Surface::new(PixelFormat::RGBA8));
+        d.layers.push(Layer::new("euclid_sat", LayerContent::Screentone(tone)));
+        check(&mut g, &d, "Block C: DotShape::Euclidean + Diamond satellites");
+    }
+
+    // 2. PatternType::SandNoise with anisotropic stretch + 2-octave mix + Kezuri
+    {
+        let mut d = base_doc(96, 64);
+        let spec = ScreentoneSpec {
+            pattern_type: PatternType::SandNoise,
+            spacing_x: 12.0,
+            spacing_y: 12.0,
+            angle: 18.0,
+            density: 0.55,
+            smoothness: 0.45,
+            sand_aspect_x: 3.5,
+            sand_aspect_y: 0.6,
+            sand_octaves_mix: 0.4,
+            scrape_strength: 0.25,
+            scrape_angle: 30.0,
+            mode: ScreentoneMode::Sheet,
+            use_source_luminance: false,
+            backend: ScreentoneBackend::Gpu,
+            seed: 9191,
+            ..Default::default()
+        };
+        let origin = (48.0, 32.0);
+        let tone = ScreentoneLayer::new(spec, origin, photocraft_raster::Surface::new(PixelFormat::RGBA8));
+        d.layers.push(Layer::new("sand_noise", LayerContent::Screentone(tone)));
+        check(&mut g, &d, "Block C: PatternType::SandNoise + Kezuri");
+    }
+
+    // 3a. PatternType::CustomTexture bound through @binding(7) pat_tex
+    {
+        let mut d = base_doc(96, 64);
+        let pat = checker_pattern();
+        let pat_id = pat.id.clone();
+        d.patterns.push(pat);
+        let spec = ScreentoneSpec {
+            pattern_type: PatternType::CustomTexture,
+            spacing_x: 16.0,
+            spacing_y: 16.0,
+            angle: 12.0,
+            density: 0.65,
+            smoothness: 0.4,
+            custom_pattern_id: Some(pat_id),
+            custom_texture_scale: 1.35,
+            mode: ScreentoneMode::Sheet,
+            use_source_luminance: false,
+            backend: ScreentoneBackend::Gpu,
+            ..Default::default()
+        };
+        let origin = (48.0, 32.0);
+        let tone = ScreentoneLayer::new(spec, origin, photocraft_raster::Surface::new(PixelFormat::RGBA8));
+        d.layers.push(Layer::new("custom_tex", LayerContent::Screentone(tone)));
+        check(&mut g, &d, "Block C: PatternType::CustomTexture (pat_tex)");
+    }
+
+    // 3b. PatternType::CustomTexture with None pattern_id -> safe zero coverage, 0 GPU errors
+    {
+        let mut d = Document::new("custom_tex_none", Size::new(96, 64), ColorMode::Rgb, SampleType::U8);
+        let spec = ScreentoneSpec {
+            pattern_type: PatternType::CustomTexture,
+            custom_pattern_id: None,
+            density: 0.8,
+            mode: ScreentoneMode::Sheet,
+            use_source_luminance: false,
+            backend: ScreentoneBackend::Gpu,
+            foreground: [0.0, 0.0, 0.0, 1.0],
+            background: [1.0, 1.0, 1.0, 0.0],
+            ..Default::default()
+        };
+        let tone = ScreentoneLayer::new(spec, (48.0, 32.0), photocraft_raster::Surface::new(PixelFormat::RGBA8));
+        d.layers.push(Layer::new("custom_tex_none", LayerContent::Screentone(tone)));
+        check(&mut g, &d, "Block C: PatternType::CustomTexture (None fallback)");
+        let (gpu_out, _) = photocraft_gpu::render_to_vec_stats(&mut g.comp, &g.device, &g.queue, &d, bounds).unwrap();
+        let max_a = gpu_out.iter().map(|p| p[3]).fold(0.0_f32, f32::max);
+        assert!(max_a < 1e-4, "CustomTexture(None) must safely render 0 coverage, got max_a={max_a}");
+    }
+
+    // 4. Reflect Layer Opacity: opacity=0.4 shrinks dots while keeping ink 100% opaque black
+    {
+        let make_doc = |opacity: f32| {
+            let mut d = Document::new("reflect_op", Size::new(96, 64), ColorMode::Rgb, SampleType::U8);
+            let spec = ScreentoneSpec {
+                pattern_type: PatternType::Dots,
+                dot_shape: DotShape::Euclidean,
+                spacing_x: 12.0,
+                spacing_y: 12.0,
+                density: 0.75,
+                smoothness: 0.0,
+                reflect_layer_opacity: true,
+                mode: ScreentoneMode::Sheet,
+                use_source_luminance: false,
+                backend: ScreentoneBackend::Gpu,
+                foreground: [0.0, 0.0, 0.0, 1.0],
+                background: [1.0, 1.0, 1.0, 0.0],
+                ..Default::default()
+            };
+            let mut l = Layer::new("reflect", LayerContent::Screentone(ScreentoneLayer::new(spec, (48.0, 32.0), photocraft_raster::Surface::new(PixelFormat::RGBA8))));
+            l.opacity = opacity;
+            d.layers.push(l);
+            d
+        };
+        let d_40 = make_doc(0.4);
+        let d_100 = make_doc(1.0);
+        check(&mut g, &d_40, "Block C: reflect_layer_opacity at opacity=0.4");
+
+        let (gpu_40, _) = photocraft_gpu::render_to_vec_stats(&mut g.comp, &g.device, &g.queue, &d_40, bounds).unwrap();
+        let (gpu_100, _) = photocraft_gpu::render_to_vec_stats(&mut g.comp, &g.device, &g.queue, &d_100, bounds).unwrap();
+        let ink_40 = gpu_40.iter().filter(|p| p[3] > 0.99).count();
+        let ink_100 = gpu_100.iter().filter(|p| p[3] > 0.99).count();
+        let translucent = gpu_40.iter().filter(|p| p[3] > 0.01 && p[3] < 0.99).count();
+        assert_eq!(translucent, 0, "GPU reflect_layer_opacity must keep ink 100% opaque (0 translucent px), got {translucent}");
+        assert!(ink_40 > 300 && ink_40 * 2 < ink_100, "GPU reflect_layer_opacity at 0.4 must shrink dots vs 1.0: {ink_40} vs {ink_100}");
+    }
+
+    assert_eq!(health.errors(), 0, "Block C GPU parity must produce 0 wgpu errors: {:?}", health.fault());
+    assert!(health.fault().is_none(), "Block C GPU parity must produce no device fault: {:?}", health.fault());
+}

@@ -9,7 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// 13 pattern types supported by the comic screentone engine.
+/// 15 pattern types supported by the comic screentone engine.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum PatternType {
@@ -27,6 +27,8 @@ pub enum PatternType {
     Hearts,
     Triangles,
     FocusLines,
+    SandNoise,
+    CustomTexture,
 }
 
 /// Placement of orbit satellites around the main dot.
@@ -49,6 +51,8 @@ pub enum DotShape {
     Square,
     Diamond,
     Hexagon,
+    /// Print-grade Euclidean halftone: black dots (0–50%) -> checkerboard diamond (50%) -> white holes (50–100%).
+    Euclidean,
 }
 
 /// Gradient mapping type.
@@ -199,6 +203,20 @@ pub struct ScreentoneSpec {
     pub line_progressive: bool,
     /// Clear inner radius in document pixels around `origin` for `PatternType::FocusLines`.
     pub focus_inner_radius: f32,
+
+    // ---- Block C: SandNoise, CustomTexture & Reflect Layer Opacity ----
+    /// Horizontal grain stretch for `PatternType::SandNoise` (0.1..=10.0, default 1.0).
+    pub sand_aspect_x: f32,
+    /// Vertical grain stretch for `PatternType::SandNoise` (0.1..=10.0, default 1.0).
+    pub sand_aspect_y: f32,
+    /// Secondary fine octave blend for `PatternType::SandNoise` (0.0..=1.0, default 0.35).
+    pub sand_octaves_mix: f32,
+    /// Pattern library ID (or name) sampled by `PatternType::CustomTexture`.
+    pub custom_pattern_id: Option<String>,
+    /// Extra scale factor for `PatternType::CustomTexture` (0.05..=20.0, default 1.0).
+    pub custom_texture_scale: f32,
+    /// CSP print mode: layer opacity scales dot size/density instead of making ink translucent gray.
+    pub reflect_layer_opacity: bool,
 }
 
 impl Default for ScreentoneSpec {
@@ -272,6 +290,12 @@ impl Default for ScreentoneSpec {
             line_dash: 0.0,
             line_progressive: false,
             focus_inner_radius: 0.0,
+            sand_aspect_x: 1.0,
+            sand_aspect_y: 1.0,
+            sand_octaves_mix: 0.35,
+            custom_pattern_id: None,
+            custom_texture_scale: 1.0,
+            reflect_layer_opacity: false,
         }
     }
 }

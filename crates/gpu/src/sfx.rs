@@ -474,6 +474,7 @@ fn screentone_shape_code(s: DotShape) -> u32 {
         DotShape::Square => 1,
         DotShape::Diamond => 2,
         DotShape::Hexagon => 3,
+        DotShape::Euclidean => 0,
     }
 }
 

@@ -1493,12 +1493,159 @@ fn painting_can_target_the_layer_mask() {
     let m = |s: &Session, x, y| s.active().unwrap().doc.layer(id).unwrap().mask.as_ref().unwrap().surface.pixel(x, y)[0];
     assert!(m(&s, 20, 20) < 0.01, "painted black");
     assert!(m(&s, 2, 2) > 0.99, "rest still revealed");
-    // Eraser on a mask paints the background colour (white).
-    s.execute("paint.stroke", json!({"points": [[20, 20]], "size": 10, "hardness": 1.0, "erase": true, "target": "mask"})).unwrap();
-    assert!(m(&s, 20, 20) > 0.99);
+    // Eraser on a mask hides content by painting pure black (0.0) in Normal mode (CSP standard).
+    s.execute("paint.stroke", json!({"points": [[2, 2]], "size": 10, "hardness": 1.0, "erase": true, "target": "mask"})).unwrap();
+    assert!(m(&s, 2, 2) < 0.01, "erased mask pixel must hide content (black)");
     // Gradient into the mask.
     s.execute("paint.gradient", json!({"from": [0, 0], "to": [40, 0], "colors": ["#000000", "#ffffff"], "target": "mask"})).unwrap();
     assert!(m(&s, 2, 20) < 0.1 && m(&s, 38, 20) > 0.9);
+}
+
+#[test]
+fn eraser_hotfix_gray8_mask_uses_black_not_white_background() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 48, "height": 48, "background": "transparent"})).unwrap();
+    // Explicitly keep the default WHITE background swatch — previously Eraser painted white on GRAY8 masks!
+    s.tools.background = [1.0, 1.0, 1.0, 1.0];
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let id = s.active().unwrap().active_layer.unwrap();
+    s.edit("fill red + reveal mask", |doc, _| {
+        let l = doc.layer_mut(id).unwrap();
+        l.surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(0, 0, 48, 48), &[1.0, 0.0, 0.0, 1.0]);
+        l.mask = Some(photocraft_doc::LayerMask::reveal_all());
+        Ok(())
+    })
+    .unwrap();
+
+    // Erase directly into the active GRAY8 mask with 100% opacity at center, and 50% opacity off-center.
+    s.execute("paint.stroke", json!({"points": [[24, 24]], "size": 12, "hardness": 1.0, "erase": true, "target": "mask"})).unwrap();
+    s.execute("paint.stroke", json!({"points": [[8, 24]], "size": 8, "hardness": 1.0, "opacity": 0.5, "erase": true, "target": "mask"})).unwrap();
+
+    let st = s.active().unwrap();
+    let mask = &st.doc.layer(id).unwrap().mask.as_ref().unwrap().surface;
+    assert!(mask.pixel(24, 24)[0] < 0.01, "100% eraser on GRAY8 mask must write black (0.0), got {}", mask.pixel(24, 24)[0]);
+    let mid = mask.pixel(8, 24)[0];
+    assert!((mid - 0.5).abs() < 0.08, "50% opacity eraser on GRAY8 mask must blend ~0.5, got {mid}");
+    assert!(mask.pixel(42, 42)[0] > 0.99, "untouched mask pixel stays revealed (1.0)");
+
+    let rendered = photocraft_compose::render(&st.doc, st.doc.bounds());
+    assert!(rendered.px[24 * 48 + 24][3] < 0.01, "erased mask pixel must hide layer content in composite");
+    assert!(rendered.px[42 * 48 + 42][3] > 0.99, "untouched layer pixel must remain visible");
+}
+
+#[test]
+fn eraser_hotfix_auto_mask_on_screentone_kakeami_shape_and_single_undo() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 64, "height": 64, "background": "transparent"})).unwrap();
+    s.tools.background = [1.0, 1.0, 1.0, 1.0];
+
+    // 1. Screentone layer (no mask initially)
+    let tone_res = s
+        .execute(
+            "layer.screentone",
+            json!({"patternType": "dots", "mode": "sheet", "density": 1.0, "dotSize": 10, "spacingX": 8, "spacingY": 8, "foreground": "#000000", "background": "#000000"}),
+        )
+        .unwrap();
+    let tone_id = photocraft_doc::LayerId(tone_res["layer"].as_u64().unwrap());
+    assert!(s.active().unwrap().doc.layer(tone_id).unwrap().mask.is_none());
+
+    // Erase directly WITHOUT target="mask" -> auto-creates white mask and hides hole in 1 Undo step!
+    let steps_before = s.active().unwrap().history.entries().len();
+    s.execute("paint.stroke", json!({"points": [[32, 32]], "size": 16, "hardness": 1.0, "erase": true})).unwrap();
+    {
+        let st = s.active().unwrap();
+        let l = st.doc.layer(tone_id).unwrap();
+        assert!(matches!(l.content, photocraft_doc::LayerContent::Screentone(_)), "Screentone must stay live (not rasterized)");
+        let mask = l.mask.as_ref().expect("eraser must auto-create reveal-all mask on Screentone");
+        assert!(mask.surface.pixel(32, 32)[0] < 0.01, "erased center must be 0 in auto-mask");
+        assert!(mask.surface.pixel(4, 4)[0] > 0.99, "untouched area stays 1 in auto-mask");
+        let comp = photocraft_compose::render(&st.doc, st.doc.bounds());
+        assert!(comp.px[32 * 64 + 32][3] < 0.01, "composite must show erased hole on Screentone");
+        assert_eq!(st.history.entries().len(), steps_before + 1, "auto-mask + erase must be 1 history step");
+    }
+
+    // Brush with white on Screentone (still no explicit target="mask") restores the erased tone!
+    s.execute("paint.stroke", json!({"points": [[32, 32]], "size": 16, "hardness": 1.0, "color": "#ffffff"})).unwrap();
+    assert!(
+        s.active().unwrap().doc.layer(tone_id).unwrap().mask.as_ref().unwrap().surface.pixel(32, 32)[0] > 0.99,
+        "white brush on masked Screentone must restore erased tone"
+    );
+
+    // Undo brush, then 1 Undo of the eraser step must revert BOTH the stroke AND remove the auto-mask.
+    s.execute("edit.undo", json!({})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(s.active().unwrap().doc.layer(tone_id).unwrap().mask.is_none(), "single Undo must remove auto-created mask on Screentone");
+
+    // 2. Kakeami layer (no mask initially)
+    let kake_id = s
+        .edit("add kakeami", |doc, active| {
+            let l = photocraft_doc::Layer::new("Kakeami", photocraft_doc::LayerContent::Kakeami(photocraft_doc::KakeamiLayer::new(Default::default())));
+            let id = doc.insert_above(*active, l);
+            *active = Some(id);
+            Ok(id)
+        })
+        .unwrap();
+    s.execute("paint.stroke", json!({"points": [[24, 24]], "size": 12, "hardness": 1.0, "erase": true})).unwrap();
+    {
+        let l = s.active().unwrap().doc.layer(kake_id).unwrap();
+        assert!(matches!(l.content, photocraft_doc::LayerContent::Kakeami(_)), "Kakeami must stay procedural");
+        assert!(l.mask.as_ref().expect("auto-mask on Kakeami").surface.pixel(24, 24)[0] < 0.01);
+    }
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(s.active().unwrap().doc.layer(kake_id).unwrap().mask.is_none(), "single Undo must remove auto-created mask on Kakeami");
+
+    // 3. Shape / Speech Balloon layer (no mask initially; hide lower layers so composite checks Shape's hole)
+    s.edit("hide lower layers", |doc, _| {
+        for l in &mut doc.layers {
+            l.visible = false;
+        }
+        Ok(())
+    })
+    .unwrap();
+    s.execute("shape.create", json!({"kind": "rect", "rect": [0, 0, 64, 64], "fill": "#000000"})).unwrap();
+    let shape_id = s.active().unwrap().active_layer.unwrap();
+    assert!(matches!(s.active().unwrap().doc.layer(shape_id).unwrap().content, photocraft_doc::LayerContent::Shape(_)));
+    assert!(s.active().unwrap().doc.layer(shape_id).unwrap().mask.is_none());
+
+    s.execute("paint.stroke", json!({"points": [[32, 32]], "size": 14, "hardness": 1.0, "erase": true})).unwrap();
+    {
+        let st = s.active().unwrap();
+        let l = st.doc.layer(shape_id).unwrap();
+        assert!(matches!(l.content, photocraft_doc::LayerContent::Shape(_)), "Shape/Balloon must stay vector (not rasterized)");
+        assert!(l.mask.as_ref().expect("auto-mask on Shape").surface.pixel(32, 32)[0] < 0.01);
+        let comp = photocraft_compose::render(&st.doc, st.doc.bounds());
+        assert!(comp.px[32 * 64 + 32][3] < 0.01, "composite must show erased hole on Shape/Balloon");
+    }
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(s.active().unwrap().doc.layer(shape_id).unwrap().mask.is_none(), "single Undo must remove auto-created mask on Shape");
+}
+
+#[test]
+fn eraser_hotfix_live_stroke_on_unmasked_screentone_commits_from_live() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 48, "height": 48, "background": "transparent"})).unwrap();
+    let tone_res = s
+        .execute("layer.screentone", json!({"patternType": "dots", "mode": "sheet", "density": 0.9, "dotSize": 6, "spacingX": 10, "spacingY": 10}))
+        .unwrap();
+    let tone_id = photocraft_doc::LayerId(tone_res["layer"].as_u64().unwrap());
+    assert!(s.active().unwrap().doc.layer(tone_id).unwrap().mask.is_none());
+
+    let p = json!({"points": [[24.0, 24.0]], "size": 12.0, "hardness": 1.0, "erase": true});
+    let live = crate::commands::brush_cmds::LiveStroke::begin(&s, &p).unwrap();
+    // Live preview doc already carries the auto-created mask with the erased hole (60 FPS GPU Role::Mask update!).
+    let preview_mask = live.doc.layer(tone_id).unwrap().mask.as_ref().expect("live preview must attach auto-mask");
+    assert!(preview_mask.surface.pixel(24, 24)[0] < 0.01, "live preview mask must show erased pixel immediately");
+
+    let seed = live.seed;
+    s.live_commit = Some(live.into_commit().unwrap());
+    let mut commit_p = p;
+    commit_p["seed"] = json!(seed);
+    let res = s.execute("paint.stroke", commit_p).unwrap();
+    assert_eq!(res["fromLive"], json!(true), "pen-up commit on auto-masked Screentone must reuse LiveStroke pixels");
+    assert!(s.active().unwrap().doc.layer(tone_id).unwrap().mask.as_ref().unwrap().surface.pixel(24, 24)[0] < 0.01);
+
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(s.active().unwrap().doc.layer(tone_id).unwrap().mask.is_none(), "Undo after LiveStroke commit removes auto-mask in 1 step");
 }
 
 #[test]

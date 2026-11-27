@@ -17,7 +17,7 @@ use photocraft_paint::{
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
-use crate::commands::{CommandSpec, has_paintable, is_mask_target, paint_surface};
+use crate::commands::{CommandSpec, auto_mask_layer_kind, check_all_unlocked, has_paintable, has_stroke_paintable, is_mask_target, paint_surface};
 use crate::{EngineError, Result, Session};
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
@@ -250,14 +250,70 @@ fn damage_json(s: &mut Session, dmg: Rect) -> Value {
     json!({ "damage": [dmg.x0, dmg.y0, dmg.width(), dmg.height()] })
 }
 
-/// The target layer (`None` for a channel), brush and zoom of a stroke. On a mask or channel the
-/// eraser paints the background colour (Photoshop).
-fn stroke_target(s: &Session, p: &Value, brush: BrushSettings) -> Result<(Option<photocraft_doc::LayerId>, BrushSettings, f32)> {
-    let gray = is_mask_target(p) || crate::channel_cmds::is_channel_target(p) || crate::color_channels::target(s, p)?.is_some();
+/// Redirects strokes targeting `"pixels"` onto `"mask"` for procedural manga layers
+/// (`Screentone`, `Kakeami`) and erased vector shapes/balloons (`Shape`), so erasing is always
+/// non-destructive and never rasterizes the layer.
+fn resolve_auto_mask_params(doc: &photocraft_doc::Document, id: Option<photocraft_doc::LayerId>, p: &Value, erase: bool) -> (Value, bool) {
+    if !is_mask_target(p)
+        && !crate::channel_cmds::is_channel_target(p)
+        && id.and_then(|lid| doc.layer(lid)).is_some_and(|l| auto_mask_layer_kind(l, erase))
+    {
+        let mut out = p.clone();
+        if let Some(obj) = out.as_object_mut() {
+            obj.insert("target".into(), json!("mask"));
+        } else {
+            out = json!({ "target": "mask" });
+        }
+        return (out, true);
+    }
+    (p.clone(), false)
+}
+
+/// Ensures an auto-mask target layer has a white `GRAY8` `LayerMask::reveal_all()` (O(1), 0 tiles
+/// allocated) inside the active undo transaction.
+fn ensure_auto_mask(doc: &mut photocraft_doc::Document, id: Option<photocraft_doc::LayerId>, auto_mask: bool) -> Result<()> {
+    if !auto_mask {
+        return Ok(());
+    }
+    let lid = id.ok_or_else(|| EngineError::Other("no active layer".into()))?;
+    check_all_unlocked(doc, lid)?;
+    if let Some(layer) = doc.layer_mut(lid)
+        && layer.mask.is_none()
+    {
+        layer.mask = Some(photocraft_doc::LayerMask::reveal_all());
+    }
+    Ok(())
+}
+
+/// The target layer (`None` for a channel), brush, zoom, effective params and auto-mask flag.
+///
+/// * On any layer `GRAY8` mask (`"mask"`, `"secondMask"`, `"filterMask"`), the Eraser hides
+///   content by painting pure black (`0.0`) in `Normal` mode (CSP standard), honouring opacity,
+///   flow, hardness and pen pressure.
+/// * On saved/colour channels the Eraser keeps painting the background colour (Photoshop).
+fn stroke_target(s: &Session, p: &Value, brush: BrushSettings) -> Result<(Option<photocraft_doc::LayerId>, BrushSettings, f32, Value, bool)> {
     let id = if crate::channel_cmds::is_channel_target(p) { None } else { Some(layer_id(s, p)?) };
-    let brush =
-        if gray && brush.erase { BrushSettings { erase: false, color: crate::color_cmds::swatch_in_doc(s, s.tools.background), ..brush } } else { brush };
-    Ok((id, brush, num(p, "zoom").unwrap_or(1.0)))
+    let (eff_p, auto_mask) = match s.active() {
+        Some(st) => resolve_auto_mask_params(&st.doc, id, p, brush.erase),
+        None => (p.clone(), false),
+    };
+    let mask_target = is_mask_target(&eff_p);
+    let channel_gray = crate::channel_cmds::is_channel_target(&eff_p) || crate::color_channels::target(s, &eff_p)?.is_some();
+    let brush = if mask_target && brush.erase {
+        BrushSettings {
+            erase: false,
+            mode: photocraft_color::BlendMode::Normal,
+            behind: false,
+            color: [0.0, 0.0, 0.0, 1.0],
+            color_cmyk: None,
+            ..brush
+        }
+    } else if channel_gray && brush.erase {
+        BrushSettings { erase: false, color: crate::color_cmds::swatch_in_doc(s, s.tools.background), ..brush }
+    } else {
+        brush
+    };
+    Ok((id, brush, num(&eff_p, "zoom").unwrap_or(1.0), eff_p, auto_mask))
 }
 
 /// Erasing a layer with locked transparency (e.g. the Background) can't remove opacity, so it
@@ -282,7 +338,7 @@ fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS
     let bg = crate::color_cmds::swatch_in_doc(s, raw_bg);
     let fg = brush.color;
     let symmetry = s.active().and_then(|st| st.symmetry.clone());
-    let (id, brush, zoom) = stroke_target(s, p, brush)?;
+    let (id, brush, zoom, eff_p, auto_mask) = stroke_target(s, p, brush)?;
     let cmyk = doc_cmyk_space(s);
     // The live stroke the canvas already rendered for exactly these params: take its pixels
     // instead of rendering the whole stroke again (the hitch at pen-up).
@@ -290,15 +346,16 @@ fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS
     let from_live = live.is_some();
     let dmg = photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || {
         s.edit(label, |doc, _| {
+            ensure_auto_mask(doc, id, auto_mask)?;
             if let Some(l) = live {
-                let (surf, _) = crate::channel_cmds::target_surface(doc, id, p)?;
+                let (surf, _) = crate::channel_cmds::target_surface(doc, id, &eff_p)?;
                 *surf = l.surface;
                 return Ok(l.bounds);
             }
             let sel = doc.selection.clone();
-            let table = crate::mode_cmds::paint_color_table(doc, p);
+            let table = crate::mode_cmds::paint_color_table(doc, &eff_p);
             let canvas = doc.bounds();
-            let (surf, lock) = crate::channel_cmds::target_surface(doc, id, p)?;
+            let (surf, lock) = crate::channel_cmds::target_surface(doc, id, &eff_p)?;
             let clip = paintable_area(canvas, surf);
             let mut brush = brush;
             erase_locked(&mut brush, lock, bg);
@@ -483,7 +540,7 @@ fn fill_region(s: &mut Session, p: &Value, label: &str, brush: BrushSettings, pt
     if pts.len() < 3 {
         return Err(bad("paint.stroke", "\"fill\" needs at least three points (a closed region)"));
     }
-    let (id, brush, _zoom) = stroke_target(s, p, brush)?;
+    let (id, brush, _zoom, eff_p, auto_mask) = stroke_target(s, p, brush)?;
     // A hard brush (hardness 1) keeps the anti-aliased polygon edge; a soft one feathers it by half
     // the brush width, the way its tip fades.
     let feather_px = ((1.0 - brush.hardness.clamp(0.0, 1.0)) * brush.size * 0.5).max(0.0);
@@ -494,9 +551,10 @@ fn fill_region(s: &mut Session, p: &Value, label: &str, brush: BrushSettings, pt
     let cmyk = doc_cmyk_space(s);
     let dmg = photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || {
         s.edit(label, |doc, _| {
+            ensure_auto_mask(doc, id, auto_mask)?;
             let sel = doc.selection.clone();
             let canvas = doc.bounds();
-            let (surf, lock) = crate::channel_cmds::target_surface(doc, id, p)?;
+            let (surf, lock) = crate::channel_cmds::target_surface(doc, id, &eff_p)?;
             // The polygon's whole-pixel bounds, grown by the feather's reach (3σ) so a soft edge
             // fades out instead of being clipped.
             let (mut bx0, mut by0, mut bx1, mut by1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
@@ -570,6 +628,7 @@ pub struct LiveStroke {
     lock: bool,
     layer: Option<photocraft_doc::LayerId>,
     params: Value,
+    effective_params: Value,
     /// Where the doc shows the stroke's end as finishing it would draw it (see `push`).
     tail: Rect,
     /// The document's CMYK profile the commit enters (`stroke_with`), so the preview shows the
@@ -630,7 +689,7 @@ impl LiveStroke {
     pub fn begin_with(s: &Session, cmd: &str, p: &Value) -> Result<Self> {
         let captured = crate::channel_cmds::inject_target(s, cmd, p.clone());
         let p = &captured;
-        has_paintable(s).map_err(EngineError::Other)?;
+        has_stroke_paintable(s).map_err(EngineError::Other)?;
         let pts = parse_points(p, cmd)?;
         let pencil = match cmd {
             "paint.stroke" => false,
@@ -639,14 +698,15 @@ impl LiveStroke {
         };
         let brush = if pencil { pencil_brush(s, p)? } else { with_blend_mode(resolve_brush(s, p, cmd)?, p) };
         let (seed, fg) = (brush.seed, brush.color);
-        let (layer, mut brush, zoom) = stroke_target(s, p, brush)?;
+        let (layer, mut brush, zoom, eff_p, auto_mask) = stroke_target(s, p, brush)?;
         let st = s.active().ok_or(EngineError::NoDocument)?;
         let base = (st.doc.id, st.revision);
         let mut doc = (*st.doc).clone();
+        ensure_auto_mask(&mut doc, layer, auto_mask)?;
         let sel = doc.selection.clone();
-        let table = crate::mode_cmds::paint_color_table(&doc, p);
+        let table = crate::mode_cmds::paint_color_table(&doc, &eff_p);
         let canvas = doc.bounds();
-        let (surf, lock) = crate::channel_cmds::target_surface(&mut doc, layer, p)?;
+        let (surf, lock) = crate::channel_cmds::target_surface(&mut doc, layer, &eff_p)?;
         let clip = paintable_area(canvas, surf);
         let bg = crate::color_cmds::swatch_in_doc(s, s.tools.background);
         erase_locked(&mut brush, lock, bg);
@@ -670,11 +730,12 @@ impl LiveStroke {
             mirror_distinct,
             union_live: None,
             pre,
-            colors: crate::color_channels::target(s, p)?,
+            colors: crate::color_channels::target(s, &eff_p)?,
             sel,
             lock,
             layer,
             params: p.clone(),
+            effective_params: eff_p,
             tail: Rect::EMPTY,
             cmyk: doc_cmyk_space(s),
             points: Vec::new(),
@@ -687,7 +748,7 @@ impl LiveStroke {
     /// The stroke as its commit would take it over (see [`LiveCommit`]).
     pub fn into_commit(mut self) -> Result<LiveCommit> {
         let bounds = self.bounds();
-        let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.layer, &self.params)?;
+        let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.layer, &self.effective_params)?;
         Ok(LiveCommit {
             mixer: None,
             cmd: self.cmd,
@@ -735,7 +796,7 @@ impl LiveStroke {
                     mirror.push(&reflected);
                 }
             }
-            let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.layer, &self.params)?;
+            let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.layer, &self.effective_params)?;
             if self.mirror_distinct.iter().any(|d| *d) {
                 // The stroke and its distinct mirrors composite as one stroke, as the commit
                 // merges them; only the tiles that changed are redrawn.
@@ -771,8 +832,8 @@ impl LiveStroke {
             Ok(dmg)
         })?;
         // The preview shows the pixels the commit keeps (see `stroke_with`).
-        if let Some(table) = crate::mode_cmds::paint_color_table(&self.doc, &self.params) {
-            let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.layer, &self.params)?;
+        if let Some(table) = crate::mode_cmds::paint_color_table(&self.doc, &self.effective_params) {
+            let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.layer, &self.effective_params)?;
             crate::mode_cmds::keep_in_color_table(&table, &self.pre, surf, dmg);
         }
         Ok(dmg)
@@ -1390,7 +1451,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "paint.pencil",
             "Pencil",
             r##"{"points":[[x,y,pressure?,tiltX?,tiltY?,rotation?,timeMs?,wheel?],…],"brush":{…}?,"preset":name?,"size":0.5..5000 px?,"opacity":0..1?,"color":"#rrggbb"?=foreground,"mode":"normal|multiply|screen|…|behind (paints beneath existing pixels)|clear (erases with this brush)"="normal","erase":bool?,"block":bool=false (a hard 16×16 screen-px square, 16/zoom doc px; size, opacity, flow, hardness and dynamics ignored: the Eraser's Block mode),"zoom":view zoom=1,"autoErase":bool=false,"seed":u64?,"target":"pixels"|"mask"|"filterMask"|"quickMask"|{"channel":i}=Channels panel target}"##,
-            has_paintable,
+            has_stroke_paintable,
             pencil,
             true
         ),

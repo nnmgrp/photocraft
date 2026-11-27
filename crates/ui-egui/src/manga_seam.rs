@@ -661,6 +661,20 @@ mod native {
         }
         let target = active_screentone_info(app);
         app.manga.ui.screentone_gizmo.sync_active_layer(&mut app.manga.ui.screentone_ui, target.as_ref());
+        let mut pat_opts: Vec<(String, String)> = Vec::new();
+        for pat in &app.session.patterns.items {
+            if !pat_opts.iter().any(|(id, _)| id == &pat.id) {
+                pat_opts.push((pat.id.clone(), pat.display_name().to_owned()));
+            }
+        }
+        if let Some(st) = app.session.active() {
+            for pat in &st.doc.patterns {
+                if !pat_opts.iter().any(|(id, _)| id == &pat.id) {
+                    pat_opts.push((pat.id.clone(), pat.display_name().to_owned()));
+                }
+            }
+        }
+        app.manga.ui.screentone_ui.available_patterns = pat_opts;
         let out = comic_screentone_panel::panel(ui, &mut app.manga.ui.screentone_ui, target.as_ref());
         if out.detach_gizmo {
             app.manga.ui.screentone_gizmo.detach();

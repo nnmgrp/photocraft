@@ -178,6 +178,15 @@ pub(super) fn shift_layer(l: &mut Layer, dx: i32, dy: i32) {
             s.surface = mv(&s.surface);
             s.origin = (s.origin.0 + dx as f32, s.origin.1 + dy as f32);
         }
+        LayerContent::Kakeami(k) => {
+            k.origin = (k.origin.0 + dx as f32, k.origin.1 + dy as f32);
+            if let Some(f) = &mut k.fill_frame {
+                *f = f.translate(dx, dy);
+            }
+            if let Some(c) = &mut k.cache {
+                *c = mv(c);
+            }
+        }
         LayerContent::Group(g) => g.children.iter_mut().for_each(|c| shift_layer(c, dx, dy)),
         LayerContent::Adjustment(_) | LayerContent::Fill(_) => {}
     }

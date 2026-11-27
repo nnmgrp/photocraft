@@ -487,6 +487,7 @@ pub(crate) fn damage(old: &Tiles, s: &Surface) -> Rect {
 pub(crate) fn shape_sources(layer: &Layer) -> (Option<&Surface>, Option<&Surface>) {
     let content = match &layer.content {
         LayerContent::Fill(f) => layer.fill_cache.as_ref().filter(|c| c.fill == *f).map(|c| &c.surface),
+        LayerContent::Kakeami(k) => k.cache.as_ref(),
         _ => layer.surface(),
     };
     let mask = layer.mask.as_ref().filter(|m| m.enabled).map(|m| &m.surface);
@@ -525,6 +526,17 @@ pub(crate) fn shape_key(layer: &Layer, canvas: Rect) -> u64 {
                     }
                 }
                 format!("{outline:?}").hash(&mut h);
+            }
+        }
+        LayerContent::Kakeami(k) => {
+            std::mem::discriminant(&layer.content).hash(&mut h);
+            k.config.config_hash().hash(&mut h);
+            for c in k.color {
+                c.to_bits().hash(&mut h);
+            }
+            (k.origin.0.to_bits(), k.origin.1.to_bits(), k.dpi_sync).hash(&mut h);
+            if let Some(f) = k.fill_frame {
+                (f.x0, f.y0, f.x1, f.y1).hash(&mut h);
             }
         }
         other => std::mem::discriminant(other).hash(&mut h),

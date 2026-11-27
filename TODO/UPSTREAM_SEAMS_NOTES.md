@@ -1,11 +1,11 @@
-# Upstream Seam Notes (Блок A + Фаза 1A + Фаза 1B)
+# Upstream Seam Notes (Блок A + Фаза 1A + Фаза 1B + Фаза 1C + Фаза 2A)
 
 Ручная карта правок **внутри основной кодовой базы PhotoCraft (upstream)** с объяснением причины и риска конфликта при будущем rebase на `upstream/main`.
 
 Автоматически сгенерированная построчная карта всех швов и hunk-ов находится в [`TODO/UPSTREAM_SEAMS.md`](UPSTREAM_SEAMS.md) (обновляется командой `powershell -ExecutionPolicy Bypass -File scripts/seam_inspector.ps1`). Этот файл вынесен отдельно, чтобы автогенератор не затирал пояснения.
 
 > **Граница «чемодана» манги (не перечислены ниже как швы upstream):**
-> `crates/manga-core/*`, `crates/manga-ui/*`, `crates/manga-bridge/*`, `crates/tone/*`, `crates/engine/src/cmd/manga_cmds/*`, `crates/ui-egui/src/manga_seam.rs`, `TODO/*`.
+> `crates/manga-core/*`, `crates/manga-ui/*`, `crates/manga-bridge/*`, `crates/tone/*`, `crates/kakeami-core/*`, `crates/engine/src/cmd/manga_cmds/*`, `crates/ui-egui/src/manga_seam.rs`, `TODO/*`.
 
 ---
 
@@ -74,10 +74,29 @@
 
 ---
 
+## Фаза 2A — Интеграция `crates/kakeami-core` (`LayerContent::Kakeami` + `R8Direct` / `F_ALPHA_ONLY`)
+
+| Файл upstream | Суть правки | Причина | Риск конфликта при rebase |
+|---|---|---|---|
+| `Cargo.toml`, `Cargo.lock`, `xtask/src/layers.rs` | Зарегистрирован внутренний L0-крейт `kakeami-core` (`path = "crates/kakeami-core"`, `Class::Layer(0)`). | Интеграция движка Kakeami v8 / Nawa-ami / Shibufude v3 | **Низкий** (по 1 строке; `Cargo.lock` перегенерируется) |
+| `crates/doc/Cargo.toml`, `crates/doc/src/lib.rs` | Добавлена структура `KakeamiLayer` (`#[serde(default)]`, `#[serde(skip)] cache: Option<Surface>` в `GRAY8`) и вариант `LayerContent::Kakeami(KakeamiLayer)` + `Layer::is_kakeami`; `Layer::surface()` намеренно возвращает `None`, чтобы `GRAY8` alpha-кэш не путался с цветной поверхностью. | Модель документа для процедурного слоя Kakeami | **Низкий–Средний** (`LayerContent` — общий enum) |
+| `crates/format/Cargo.toml`, `crates/format/src/{manifest.rs, convert.rs}` | Добавлен `ContentM::Kakeami` (все поля `#[serde(default)]`, кэш не сериализуется) — старые `.pcraft` остаются полностью совместимыми. | Сериализация `.pcraft` | **Низкий** (отдельный вариант `ContentM`) |
+| `crates/compose/Cargo.toml`, `crates/compose/src/lib.rs`, `crates/compose/src/kakeami.rs` *(новый)* | Добавлен модуль `compose::kakeami`: потокобезопасный LRU-кэш `PreparedScene` (12 слотов), инверсия полярности `alpha = 255 - gray`, тайловый рендер `512² → 4×256²` в `GRAY8` без аллокации на весь холст, `render_unmasked`, `derived_gray8_for_gpu` и полосный `render_for_export` + юнит-тесты. | CPU-композитор, бесшовный `render_bands` и экспорт | **Отсутствует** (новый файл + 1 строка в `lib.rs` и `Cargo.toml`) |
+| `crates/compose/src/{content.rs, composite.rs, extents.rs, cmyk.rs, cmyk_split.rs, proxy.rs, viewport.rs, screentone.rs, fx_cache.rs}` | Exhaustive-ветки `LayerContent::Kakeami` (рендер, границы, прокси/вьюпорт, хэш эффектов, отказ от native CMYK-fastpath). | Интеграция `LayerContent::Kakeami` в CPU-композитор | **Низкий** (по 1–10 строк на ветку `match`) |
+| `crates/gpu/src/{plan/types.rs, plan/planner.rs, plan.rs, textures.rs, batch.rs, fx.rs, compose.wgsl}` | Минимальный шов `R8Direct` + `F_ALPHA_ONLY`: добавлен `Role::AlphaContent` (`GRAY8 → R8Direct`, 1 Б/px, без затрагивания обычного Grayscale `Role::Content`), флаг `F_ALPHA_ONLY = 4_194_304` (свободный бит 22), запрет `F_ALPHA_ONLY` как extra-слоя в `batch.rs`, ветка `layer_texel` (~6 строк straight-alpha) в `compose.wgsl`, хэширование `Kakeami` в `fx.rs`. `ScreentoneSpec`, `lut_tex` и `sfx.*` не тронуты. | GPU-рендер Kakeami через стандартные `Kernel::Content` / `LayerBlend` со всеми 34 режимами, масками и эффектами | **Низкий** (локальные 1–15 строчные правки) |
+| `crates/gpu/tests/it/parity.rs` | Добавлен интеграционный тест `kakeami_alpha_only_gpu_cpu_parity` (чёрный + цветной `Kakeami`, полупрозрачная маска, `Multiply`, кэшированный и `derived` `R8Direct` пути, допуск `<= 1/255`). | Верификация GPU/CPU паритета `F_ALPHA_ONLY` | **Низкий** (добавлен в конец файла) |
+| `crates/io/src/psd_export.rs` | Экспорт `LayerContent::Kakeami` через полосный `compose::kakeami::render_for_export` + юнит-тест `kakeami_psd_export_writes_nonempty_ink`. | Экспорт PSD без OOM | **Низкий** (локальная ветка `match`) |
+| `crates/engine/src/{canvas_geom.rs, cmd/extra_cmds.rs, cmd/image_cmds.rs, cmd/layer_menu_cmds.rs, cmd/layer_multi_cmds/{damage.rs, moves.rs}, cmd/ops.rs, cmd/smart_cmds/placing.rs, cmd/transform_cmds.rs}` | Exhaustive-ветки `LayerContent::Kakeami` (растеризация, сдвиг, трансформация, применение маски, расчёт damage, запекание при смене режима). | Совместимость команд `engine` с `LayerContent::Kakeami` | **Низкий** (по 1–15 строк в ветках `match`) |
+| `crates/ui-egui/src/panels/{layer_filter_ui.rs, layer_menu_ui.rs, props_layout.rs}` | Exhaustive-ветки `LayerContent::Kakeami` (фильтр слоёв, меню растрирования, иконка/действия Properties). | Совместимость панелей `ui-egui` | **Низкий** (по 1 строке в каждом файле) |
+
+---
+
 ## Примечания по локальной «чемоданной» части (для полноты контекста)
 * `crates/manga-core/src/comic_screentone.rs` — дедупликация в пользу `crates/algo/src/comic_screentone.rs`.
 * `crates/manga-ui/src/comic_screentone_gizmo.rs`, `comic_screentone_panel.rs`, `i18n/ru.tsv` — единый `screentone_prefers_gpu` и UI для 5 типов градиентов.
 * `crates/manga-ui/src/balloon_gizmo.rs` — отказ от `shape.balloon.update` на каждом `Move` (0 CPU-растеризаций `ShapeLayer::cache` при перетаскивании), живой векторный контур через `egui::Painter`, один коммит на `PointerUp`, чистый откат по `Esc` + юнит-тест.
 * `crates/engine/src/cmd/manga_cmds/comic_screentone.rs` — полосный `sample_source_surface`, потайловые `has_source_ink`/`revealed_bounds`, `ensure_*_shading_screentone*_baked`, единый `screentone_prefers_gpu`, регрессионные тесты.
-* `crates/ui-egui/src/manga_seam.rs` — локализация `st.last_damage` в `fill_frame` при live GPU-перетаскивании, обработчик `screentone_drag_finish`, включение `SfxGpuAsyncBake` на Native + `flush_pending_sfx_bake` + скрытие/отмена `BalloonGizmo` при драге.
+* `crates/manga-ui/src/comic_kakeami_panel.rs`, `crates/manga-ui/src/{lib.rs, layer_search.rs}` — стартовая панель Kakeami / Nawa-ami с 6 пресетами и переключением вкладки в доке скринтонов.
+* `crates/engine/src/cmd/manga_cmds/kakeami.rs` — команды `layer.kakeami.create` и `layer.kakeami.update` (Undo/Redo, `coalesce`, сброс кэша с сохранением маски) + тесты `Merge Down` / `Flatten Image`.
+* `crates/ui-egui/src/manga_seam.rs` — локализация `st.last_damage` в `fill_frame` при live GPU-перетаскивании, обработчик `screentone_drag_finish`, включение `SfxGpuAsyncBake` на Native + `flush_pending_sfx_bake` + скрытие/отмена `BalloonGizmo` при драге + подключение вкладки `Kakeami / Nawa-ami`.
 * `TODO/SCREENTONE_AND_MANGANAKAMA_ROADMAP.md` — актуализация статусов Блока A.

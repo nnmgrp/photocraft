@@ -506,6 +506,35 @@ fn apply_transform(
         }
     }
     let mut baked_screentone = None;
+    if let LayerContent::Kakeami(k) = &l.content {
+        let bounds = k
+            .fill_frame
+            .or_else(|| l.mask.as_ref().map(|m| m.surface.content_bounds()).filter(|b| !b.is_empty()))
+            .unwrap_or_else(|| Rect::new(0, 0, 1024, 1024));
+        let mut surf = Surface::new(photocraft_color::PixelFormat::RGBA8);
+        if !bounds.is_empty() {
+            let rgba = photocraft_compose::kakeami::render_unmasked(l, k, bounds, bounds, 600.0);
+            let mut raw = Vec::with_capacity(rgba.px.len() * 4);
+            for p in &rgba.px {
+                raw.extend_from_slice(p);
+            }
+            surf.write_region(bounds, &raw);
+            surf.prune();
+        }
+        baked_screentone = Some(match doc_sel {
+            Some(sel) => {
+                let (lifted, mut rest) = split_selected(&surf, sel)?;
+                let moved = warp_surface_with(&lifted, lifted.content_bounds(), h, interp, ctl)?.ok_or(EngineError::Cancelled)?;
+                composite_over(&mut rest, &moved);
+                rest.prune();
+                rest
+            }
+            None => {
+                let src = surf.content_bounds();
+                warp_surface_with(&surf, src, h, interp, ctl)?.ok_or(EngineError::Cancelled)?
+            }
+        });
+    } else {
     match &mut l.content {
         LayerContent::Group(g) => {
             for c in g.children.iter_mut() {
@@ -567,6 +596,7 @@ fn apply_transform(
                 }
             });
         }
+        LayerContent::Kakeami(_) => {}
         _ => {
             if let Some(surf) = l.surface_mut() {
                 *surf = match doc_sel {
@@ -586,6 +616,7 @@ fn apply_transform(
                 };
             }
         }
+    }
     }
     if let Some(surface) = baked_screentone {
         l.content = LayerContent::Raster(surface);

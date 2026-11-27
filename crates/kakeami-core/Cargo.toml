@@ -1,0 +1,13 @@
+[package]
+name = "kakeami-core"
+version = "0.1.0"
+edition = "2021"
+description = "Pure math, geometry and CPU rasterization core for the Kakeami 4K Tone Studio screentone generator"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lib]
+name = "kakeami_core"
+path = "src/lib.rs"

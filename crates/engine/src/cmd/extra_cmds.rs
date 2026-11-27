@@ -745,6 +745,7 @@ pub(crate) fn kind_of(s: &Session, id: LayerId) -> Option<&'static str> {
         LayerContent::Fill(_) => "fill",
         LayerContent::Smart(_) => "smart",
         LayerContent::Screentone(_) => "screentone",
+        LayerContent::Kakeami(_) => "kakeami",
         _ => return None,
     })
 }
@@ -817,6 +818,21 @@ fn rasterize_content(s: &mut Session, id: LayerId, only: Option<&str>, key: &str
                 };
                 let format = st.surface.format();
                 let surface = std::mem::replace(&mut st.surface, photocraft_raster::Surface::new(format));
+                l.content = LayerContent::Raster(surface);
+                Ok(())
+            });
+            s.coalesce_request = None;
+            r?;
+        }
+        "kakeami" => {
+            s.coalesce_request = Some(key.to_string());
+            let r = s.edit("Rasterize Kakeami", |doc, _| {
+                let snap = doc.layer(id).cloned().ok_or(EngineError::NoLayer(id))?;
+                let LayerContent::Kakeami(k) = &snap.content else {
+                    return Err(EngineError::Other(format!("layer {} is not a kakeami layer", id.0)));
+                };
+                let surface = photocraft_compose::kakeami::render_for_export(doc, &snap, k, doc.pixel_format());
+                let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
                 l.content = LayerContent::Raster(surface);
                 Ok(())
             });

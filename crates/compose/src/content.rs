@@ -50,6 +50,7 @@ pub(crate) fn render_content(layer: &Layer, rect: Rect, cx: &Ctx) -> Option<Buff
             _ => render_fill(f, rect, fill_frame(layer, cx.canvas), cx.patterns, adjustment_quantum(cx.depth)),
         },
         LayerContent::Screentone(st) if st.surface.tile_count() == 0 => crate::screentone::render_unmasked(layer, st, rect, cx.canvas, None),
+        LayerContent::Kakeami(k) => crate::kakeami::render_unmasked(layer, k, rect, cx.canvas, cx.doc.map_or(600.0, |d| d.resolution_dpi)),
         LayerContent::Adjustment(_) => return None,
         _ => match layer.surface() {
             Some(s) => surface_to_scratch(s, rect),
@@ -175,6 +176,13 @@ pub(crate) fn empty_in(layer: &Layer, rect: Rect) -> bool {
     }
     match &layer.content {
         LayerContent::Screentone(st) if st.surface.tile_count() == 0 => false,
+        LayerContent::Kakeami(k) => {
+            if let Some(f) = k.fill_frame {
+                f.intersect(&rect).is_empty()
+            } else {
+                false
+            }
+        }
         LayerContent::Raster(_) | LayerContent::Text(_) | LayerContent::Shape(_) | LayerContent::Smart(_) | LayerContent::Screentone(_) => {
             match layer.surface() {
                 Some(s) => !s.has_tiles_in(rect) && s.default_pixel().last().is_some_and(|a| *a <= 0.0) && s.format().alpha,

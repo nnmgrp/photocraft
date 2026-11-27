@@ -3777,3 +3777,50 @@ fn screentone_layers() {
     d.layers.push(Layer::new("shade_tone", LayerContent::Screentone(tone)));
     check(&mut g, &d, "screentone shading mode");
 }
+
+#[test]
+fn kakeami_alpha_only_gpu_cpu_parity() {
+    let Some(mut g) = gpu() else { return };
+    let bounds = Rect::new(0, 0, 128, 128);
+
+    // 1. Black Kakeami v8 layer with semi-transparent user mask and Multiply blend mode.
+    let mut d = base_doc(128, 128);
+    d.resolution_dpi = 600.0;
+    let mut cfg_black = photocraft_doc::KakeamiConfig::default();
+    cfg_black.pattern_family = "kakeami-v8".into();
+    cfg_black.finish_mode = "clean".into();
+    cfg_black.one_bit_mode = true;
+    cfg_black.darken_cap = 85;
+
+    let mut k_black = photocraft_doc::KakeamiLayer::new(cfg_black);
+    k_black.color = [0.0, 0.0, 0.0, 1.0];
+    let lid_black = photocraft_doc::LayerId::fresh();
+    let gray8_black = photocraft_compose::kakeami::render_gray8_surface(lid_black, &k_black, bounds, 600.0, None).unwrap();
+    k_black.cache = Some(gray8_black);
+    let mut l_black = Layer::new("kake_black", LayerContent::Kakeami(k_black));
+    l_black.id = lid_black;
+    l_black.blend = BlendMode::Multiply;
+    l_black.opacity = 0.85;
+    l_black.mask = Some(mask(Rect::from_xywh(16, 16, 96, 96), 17, 0.35));
+    d.layers.push(l_black);
+
+    // 2. Colored Nawa-ami layer (8-bit AA pencil) over the black layer, testing both R8Direct + F_ALPHA_ONLY
+    //    tinting and uncached auto-derived GPU upload (cache = None) + non-Normal blend + independent user mask.
+    let mut cfg_color = photocraft_doc::KakeamiConfig::default();
+    cfg_color.pattern_family = "nawa-ami".into();
+    cfg_color.finish_mode = "pencil".into();
+    cfg_color.nawa_tone_style = "normal".into();
+    cfg_color.one_bit_mode = false;
+    cfg_color.seamless = true;
+
+    let mut k_color = photocraft_doc::KakeamiLayer::new(cfg_color);
+    k_color.color = [0.18, 0.32, 0.78, 0.9];
+    // Leave `k_color.cache = None` to also verify the derived R8Direct upload path.
+    let mut l_color = Layer::new("kake_color", LayerContent::Kakeami(k_color));
+    l_color.blend = BlendMode::Multiply;
+    l_color.opacity = 0.75;
+    l_color.mask = Some(mask(Rect::from_xywh(24, 12, 88, 100), 99, 0.5));
+    d.layers.push(l_color);
+
+    check(&mut g, &d, "kakeami R8Direct F_ALPHA_ONLY black+colored+mask+multiply");
+}

@@ -212,6 +212,7 @@ enum ContentKey {
     Adjustment(photocraft_doc::Adjustment),
     Fill(photocraft_doc::Fill),
     Screentone,
+    Kakeami(u32, [u32; 4], [u32; 2], bool, Option<Rect>),
 }
 
 /// Everything about a shown layer that the composite reads, except its pixels and its mask's.
@@ -296,6 +297,16 @@ fn reference_key(doc: &Document, area: Rect) -> Option<ReferenceKey> {
             LayerContent::Adjustment(a) => (ContentKey::Adjustment(a.clone()), None),
             LayerContent::Fill(f) => (ContentKey::Fill(f.clone()), None),
             LayerContent::Screentone(st) => (ContentKey::Screentone, Some(Tiles::of(&st.surface))),
+            LayerContent::Kakeami(k) => (
+                ContentKey::Kakeami(
+                    k.config.config_hash(),
+                    [k.color[0].to_bits(), k.color[1].to_bits(), k.color[2].to_bits(), k.color[3].to_bits()],
+                    [k.origin.0.to_bits(), k.origin.1.to_bits()],
+                    k.dpi_sync,
+                    k.fill_frame,
+                ),
+                k.cache.as_ref().map(Tiles::of),
+            ),
         };
         if l.video.is_some() {
             return None;

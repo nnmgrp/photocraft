@@ -225,6 +225,14 @@ pub(crate) fn transform_layer_geometry(l: &mut Layer, a: &Affine, content: bool,
             let p = map_pt(a, [f64::from(s.origin.0), f64::from(s.origin.1)]);
             s.origin = (p[0] as f32, p[1] as f32);
         }
+        LayerContent::Kakeami(k) if content => {
+            let p = map_pt(a, [f64::from(k.origin.0), f64::from(k.origin.1)]);
+            k.origin = (p[0] as f32, p[1] as f32);
+            if let Some(f) = &mut k.fill_frame {
+                *f = map_rect(a, *f);
+            }
+            k.cache = None;
+        }
         LayerContent::Group(g) => {
             if let Some(ab) = &mut g.artboard {
                 ab.rect = map_rect(a, ab.rect);
@@ -449,6 +457,7 @@ fn remap_pixels(doc: &mut Document, map: &dyn Fn(i32, i32) -> (i32, i32)) {
                     }
                 }
                 LayerContent::Screentone(s) => re(&mut s.surface),
+                LayerContent::Kakeami(k) => k.cache.iter_mut().for_each(re),
                 LayerContent::Group(g) => rec(&mut g.children, map),
                 _ => {}
             }

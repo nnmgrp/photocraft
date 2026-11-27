@@ -63,6 +63,11 @@ pub(crate) fn for_each_surface(layers: &mut [Layer], masks: bool, f: &mut dyn Fn
                 }
             }
             LayerContent::Screentone(s) => f(&mut s.surface, false),
+            LayerContent::Kakeami(k) => {
+                if let Some(c) = &mut k.cache {
+                    f(c, true);
+                }
+            }
             LayerContent::Group(g) => for_each_surface(&mut g.children, masks, f),
             _ => {}
         }
@@ -73,6 +78,24 @@ pub(crate) fn for_each_surface(layers: &mut [Layer], masks: bool, f: &mut dyn Fn
 /// (resampling, canvas turns, colour conversion, 32-bit boundary crossings).
 pub(crate) fn bake_procedural_layers(layers: &mut [Layer]) {
     for l in layers {
+        if let LayerContent::Kakeami(k) = &l.content {
+            let bounds = k
+                .fill_frame
+                .or_else(|| l.mask.as_ref().map(|m| m.surface.content_bounds()).filter(|b| !b.is_empty()))
+                .unwrap_or_else(|| Rect::new(0, 0, 1024, 1024));
+            let mut surf = Surface::new(photocraft_color::PixelFormat::RGBA8);
+            if !bounds.is_empty() {
+                let rgba = photocraft_compose::kakeami::render_unmasked(l, k, bounds, bounds, 600.0);
+                let mut raw = Vec::with_capacity(rgba.px.len() * 4);
+                for p in &rgba.px {
+                    raw.extend_from_slice(p);
+                }
+                surf.write_region(bounds, &raw);
+                surf.prune();
+            }
+            l.content = LayerContent::Raster(surf);
+            continue;
+        }
         let baked = match &mut l.content {
             LayerContent::Screentone(s) => {
                 let format = s.surface.format();

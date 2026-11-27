@@ -10,6 +10,7 @@ pub mod brush_preset_items;
 pub mod comic_screentone;
 pub mod fill_tool;
 pub mod gigapixel;
+pub mod kakeami;
 pub mod layer_extras;
 pub mod mask_transfer;
 pub mod second_mask;
@@ -39,6 +40,7 @@ pub fn specs() -> Vec<CommandSpec> {
     v.extend(layer_extras::specs());
     v.extend(brush_preset_items::specs());
     v.extend(comic_screentone::specs());
+    v.extend(kakeami::specs());
     v.extend(fill_tool::specs());
     v.extend(vector_brush::specs());
     v.extend(balloon::specs());

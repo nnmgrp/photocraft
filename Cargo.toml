@@ -21,6 +21,7 @@ craft-ai-agents = { git = "https://github.com/storytold/craft-ai-integrations", 
 photocraft-geom = { path = "crates/geom" }
 photocraft-manga-bridge = { path = "crates/manga-bridge" }
 photocraft-tone = { path = "crates/tone" }
+kakeami-core = { path = "crates/kakeami-core" }
 photocraft-manga-core = { path = "crates/manga-core" }
 photocraft-color = { path = "crates/color" }
 photocraft-raster = { path = "crates/raster" }

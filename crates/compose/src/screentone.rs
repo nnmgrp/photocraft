@@ -188,7 +188,7 @@ fn layer_has_backdrop_content(layer: &Layer) -> bool {
         return false;
     }
     match &layer.content {
-        LayerContent::Screentone(_) => false,
+        LayerContent::Screentone(_) | LayerContent::Kakeami(_) => false,
         LayerContent::Raster(s) => surface_has_tonal_ink(s),
         LayerContent::Group(g) => g.children.iter().any(layer_has_backdrop_content),
         LayerContent::Adjustment(_) => false,

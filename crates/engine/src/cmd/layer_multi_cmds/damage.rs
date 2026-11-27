@@ -202,6 +202,9 @@ fn layer_pixels_cmp(a: &Layer, b: &Layer, surf: SurfaceCmp) -> bool {
             (LayerContent::Shape(x), LayerContent::Shape(y)) => x == y,
             (LayerContent::Smart(x), LayerContent::Smart(y)) => smarts_cmp(x, y, &mut |_, _, _| true),
             (LayerContent::Screentone(x), LayerContent::Screentone(y)) => x.spec == y.spec && x.origin == y.origin,
+            (LayerContent::Kakeami(x), LayerContent::Kakeami(y)) => {
+                x.config == y.config && x.color == y.color && x.origin == y.origin && x.dpi_sync == y.dpi_sync && x.fill_frame == y.fill_frame
+            }
             _ => false,
         }
         // Every scalar is equal: now the surfaces.
@@ -212,6 +215,11 @@ fn layer_pixels_cmp(a: &Layer, b: &Layer, surf: SurfaceCmp) -> bool {
             (LayerContent::Text(x), LayerContent::Text(y)) => texts_cmp(x, y, surf),
             (LayerContent::Smart(x), LayerContent::Smart(y)) => smarts_cmp(x, y, surf),
             (LayerContent::Screentone(x), LayerContent::Screentone(y)) => surf(&x.surface, &y.surface, 0.0),
+            (LayerContent::Kakeami(x), LayerContent::Kakeami(y)) => match (&x.cache, &y.cache) {
+                (Some(a), Some(b)) => surf(a, b, 0.0),
+                (None, None) => true,
+                _ => false,
+            },
             _ => true,
         }
         && match (fill_cache, &b.fill_cache) {
@@ -323,7 +331,8 @@ fn patterns_pixels_equal(a: &Document, b: &Document) -> bool {
                 | LayerContent::Adjustment(_)
                 | LayerContent::Text(_)
                 | LayerContent::Smart(_)
-                | LayerContent::Screentone(_) => false,
+                | LayerContent::Screentone(_)
+                | LayerContent::Kakeami(_) => false,
             }
     };
     !any_layer(&b.layers, 0, &refers)

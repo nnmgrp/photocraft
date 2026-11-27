@@ -640,7 +640,7 @@ impl Ex<'_> {
             // Photoshop's) reopen the layer as that kind and discard the pixels. A shape stroke
             // (`vstk`) beside a vector mask makes a shape too; without one, Photoshop keeps it on
             // pixel layers, so it stays. A vector mask (`vmsk`/`vsms`, `vogk`) stays.
-            LayerContent::Raster(_) | LayerContent::Screentone(_) => {
+            LayerContent::Raster(_) | LayerContent::Screentone(_) | LayerContent::Kakeami(_) => {
                 let masked = l.vector_mask.is_some();
                 raw.retain(|(k, _)| !(RASTER_STALE_KEYS.contains(&k) || adjust_map::ADJUSTMENT_KEYS.contains(&k) || k == b"CgEd" || (k == b"vstk" && masked)));
             }
@@ -1185,6 +1185,12 @@ impl Ex<'_> {
                     let r = self.record(l, extra, Some(surface_ref));
                     self.records.push(r);
                 }
+                LayerContent::Kakeami(k) => {
+                    // PSD has no procedural kakeami object: export its banded rendered pixels.
+                    let px = photocraft_compose::kakeami::render_for_export(self.doc, l, k, self.fmt);
+                    let r = self.record(l, extra, Some(&px));
+                    self.records.push(r);
+                }
                 LayerContent::Adjustment(_) => {
                     let r = self.record(l, extra, None);
                     self.records.push(r);
@@ -1256,6 +1262,26 @@ mod mask_banded_tests {
         let dense_mask_ch = dense_psd.layer_info.as_ref().unwrap().layers[0].channels.iter().find(|c| c.id == -2).unwrap();
         let banded_mask_ch = banded_psd.layer_info.as_ref().unwrap().layers[0].channels.iter().find(|c| c.id == -2).unwrap();
         assert_eq!(banded_mask_ch.data, dense_mask_ch.data, "banded mask channel bytes must equal dense bit-for-bit");
+    }
+
+    #[test]
+    fn kakeami_psd_export_writes_nonempty_ink() {
+        let mut doc = Document::new("kake_psd", Size::new(128, 128), ColorMode::Rgb, SampleType::U8);
+        doc.resolution_dpi = 600.0;
+        let mut cfg = photocraft_doc::KakeamiConfig::default();
+        cfg.pattern_family = "kakeami-v8".into();
+        cfg.finish_mode = "clean".into();
+        cfg.darken_cap = 90;
+        cfg.grad_start = 80;
+        cfg.grad_end = 95;
+        let k = photocraft_doc::KakeamiLayer::new(cfg);
+        doc.layers.push(Layer::new("Kakeami", LayerContent::Kakeami(k)));
+
+        let psd = document_to_psd(&doc).unwrap();
+        let layer_rec = &psd.layer_info.as_ref().unwrap().layers[0];
+        let alpha_ch = layer_rec.channels.iter().find(|c| c.id == -1).expect("alpha channel");
+        let opaque_count = alpha_ch.data.iter().filter(|&&b| b > 127).count();
+        assert!(opaque_count > 100, "PSD export of Kakeami layer must contain non-zero ink alpha, got {opaque_count}");
     }
 }
 

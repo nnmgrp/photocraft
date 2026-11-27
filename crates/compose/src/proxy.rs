@@ -99,6 +99,10 @@ fn shrink_layer(l: &mut Layer, k: u32) {
                 crate::screentone::scale_spec_for_downsample(&mut s.spec, inv_k);
             }
         }
+        LayerContent::Kakeami(ka) => {
+            let ds = ka.cache.as_ref().map(|s| downsample(s, k));
+            crate::kakeami::scale_for_downsample(ka, k, ds);
+        }
         LayerContent::Adjustment(_) | LayerContent::Fill(_) => {}
     }
 }

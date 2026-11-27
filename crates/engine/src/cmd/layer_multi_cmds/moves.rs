@@ -416,6 +416,15 @@ fn shift_shown(doc: &Document, l: &mut Layer, dx: i32, dy: i32, wrap: Option<pho
             s.surface = move_surface(&s.surface, dx, dy, wrap);
             s.origin = (s.origin.0 + dx as f32, s.origin.1 + dy as f32);
         }
+        LayerContent::Kakeami(k) => {
+            k.origin = (k.origin.0 + dx as f32, k.origin.1 + dy as f32);
+            if let Some(f) = &mut k.fill_frame {
+                *f = f.translate(dx, dy);
+            }
+            if let Some(c) = &mut k.cache {
+                *c = move_surface(c, dx, dy, wrap);
+            }
+        }
         LayerContent::Group(g) => {
             if let Some(ab) = &mut g.artboard {
                 ab.rect = ab.rect.translate(dx, dy);
@@ -449,7 +458,7 @@ fn subtree_wraps_only(l: &Layer, depth: usize) -> bool {
     match &l.content {
         LayerContent::Raster(_) | LayerContent::Adjustment(_) | LayerContent::Fill(_) => true,
         LayerContent::Group(g) => g.artboard.is_none() && g.children.iter().all(|c| subtree_wraps_only(c, depth + 1)),
-        LayerContent::Text(_) | LayerContent::Shape(_) | LayerContent::Smart(_) | LayerContent::Screentone(_) => false,
+        LayerContent::Text(_) | LayerContent::Shape(_) | LayerContent::Smart(_) | LayerContent::Screentone(_) | LayerContent::Kakeami(_) => false,
     }
 }
 

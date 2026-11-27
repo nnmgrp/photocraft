@@ -69,9 +69,9 @@ impl TexKind {
             Role::Content | Role::Stroke if f == PixelFormat::RGBA8 => TexKind::Rgba8Direct,
             Role::Content | Role::Stroke if f.sample == SampleType::U8 => TexKind::Rgba8,
             Role::Content | Role::Stroke => TexKind::Rgba16F,
-            Role::Mask if f == PixelFormat::GRAY8 => TexKind::R8Direct,
-            Role::Mask if f.sample == SampleType::F32 => TexKind::R32F,
-            Role::Mask => TexKind::R16F,
+            Role::Mask | Role::AlphaContent if f == PixelFormat::GRAY8 => TexKind::R8Direct,
+            Role::Mask | Role::AlphaContent if f.sample == SampleType::F32 => TexKind::R32F,
+            Role::Mask | Role::AlphaContent => TexKind::R16F,
         }
     }
     pub(crate) fn format(self) -> wgpu::TextureFormat {

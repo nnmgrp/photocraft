@@ -45,6 +45,7 @@ pub use pattern::Pattern;
 pub use photocraft_color::{BlendMode, Color, ColorMode, PixelFormat, SampleType};
 pub use photocraft_geom::{Affine, Rect, Size};
 pub use photocraft_raster::Surface;
+pub use kakeami_core::KakeamiConfig;
 pub use photocraft_tone::{DotShape, PatternType, SatelliteLayout, ScreentoneBackend, ScreentoneGradientType, ScreentoneMode, ScreentoneSpec};
 use serde::{Deserialize, Serialize};
 pub use sfx::{
@@ -655,6 +656,49 @@ impl ScreentoneLayer {
     }
 }
 
+/// A live procedural Kakeami / Nawa-ami screentone layer backed by `kakeami-core`.
+///
+/// `config` holds the 74-key `KakeamiConfig` schema; `color` is the straight-alpha RGBA ink colour
+/// (default opaque black); `origin` is the document-space pattern anchor; `dpi_sync` scales
+/// `nawa_scale` proportionally to document DPI (relative to 600 DPI); `fill_frame` bounds tiled
+/// rendering (or the canvas when `None`); and `cache` is a lazy single-channel `PixelFormat::GRAY8`
+/// alpha mask (`0 = transparent`, `255 = ink`, 1 B/px) skipped during serialization.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct KakeamiLayer {
+    pub config: KakeamiConfig,
+    /// Straight-alpha RGBA ink colour.
+    pub color: [f32; 4],
+    /// Document-space anchor of the pattern origin.
+    pub origin: (f32, f32),
+    /// Scale `nawa_scale` proportionally to document DPI (relative to 600 DPI).
+    pub dpi_sync: bool,
+    /// Optional document-space bounding rect for rendering (`None` = canvas).
+    pub fill_frame: Option<Rect>,
+    /// Lazy single-channel (`GRAY8`, 1 B/px) alpha cache (`0 = transparent`, `255 = ink`).
+    #[serde(skip)]
+    pub cache: Option<Surface>,
+}
+
+impl Default for KakeamiLayer {
+    fn default() -> Self {
+        Self {
+            config: KakeamiConfig::default(),
+            color: [0.0, 0.0, 0.0, 1.0],
+            origin: (0.0, 0.0),
+            dpi_sync: true,
+            fill_frame: None,
+            cache: None,
+        }
+    }
+}
+
+impl KakeamiLayer {
+    pub fn new(config: KakeamiConfig) -> Self {
+        Self { config, ..Self::default() }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum LayerContent {
     Raster(Surface),
@@ -665,6 +709,7 @@ pub enum LayerContent {
     Shape(ShapeLayer),
     Smart(SmartObject),
     Screentone(ScreentoneLayer),
+    Kakeami(KakeamiLayer),
 }
 
 impl LayerContent {
@@ -678,12 +723,13 @@ impl LayerContent {
             LayerContent::Shape(_) => "Shape",
             LayerContent::Smart(_) => "Smart Object",
             LayerContent::Screentone(_) => "Screentone",
+            LayerContent::Kakeami(_) => "Kakeami",
         }
     }
 
     /// Whether the content is rendered from parameters rather than direct pixels.
     pub fn is_procedural(&self) -> bool {
-        matches!(self, LayerContent::Screentone(_))
+        matches!(self, LayerContent::Screentone(_) | LayerContent::Kakeami(_))
     }
 
     /// English indefinite article for this layer kind ("an" for Adjustment, "a" for all others).
@@ -860,6 +906,10 @@ impl Layer {
     /// Whether the layer is a live screentone (its pixels are rendered from `spec`).
     pub fn is_screentone(&self) -> bool {
         matches!(self.content, LayerContent::Screentone(_))
+    }
+    /// Whether the layer is a live procedural Kakeami / Nawa-ami tone layer.
+    pub fn is_kakeami(&self) -> bool {
+        matches!(self.content, LayerContent::Kakeami(_))
     }
     /// Deep copy with fresh ids (for Duplicate Layer).
     pub fn duplicate(&self) -> Layer {

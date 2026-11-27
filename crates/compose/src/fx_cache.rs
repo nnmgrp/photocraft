@@ -59,6 +59,19 @@ pub(crate) fn layer_identity(layer: &Layer, h: &mut std::collections::hash_map::
             }
         }
         LayerContent::Adjustment(a) => format!("{a:?}").hash(h),
+        LayerContent::Kakeami(k) => {
+            k.config.config_hash().hash(h);
+            for c in k.color {
+                c.to_bits().hash(h);
+            }
+            (k.origin.0.to_bits(), k.origin.1.to_bits(), k.dpi_sync).hash(h);
+            if let Some(f) = k.fill_frame {
+                (f.x0, f.y0, f.x1, f.y1).hash(h);
+            }
+            if let Some(s) = &k.cache {
+                surface_fp(s, pin).hash(h);
+            }
+        }
         _ => layer.surface().map_or(0, |s| surface_fp(s, pin)).hash(h),
     }
     if let Some(m) = &layer.mask {

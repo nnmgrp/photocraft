@@ -274,7 +274,7 @@ pub fn apply(ui: &mut UiState, f: Filter) {
 /// The kind filter's name for `l`'s content ("" for groups, which no kind matches).
 fn kind(l: &Layer) -> &'static str {
     match &l.content {
-        LayerContent::Raster(_) | LayerContent::Screentone(_) => "pixel",
+        LayerContent::Raster(_) | LayerContent::Screentone(_) | LayerContent::Kakeami(_) => "pixel",
         LayerContent::Adjustment(_) => "adjustment",
         // A fill layer (Layer › New Fill Layer) matches no Kind button, as in the reference
         // application, except a solid colour with a vector mask, which lists as a shape (#10878).

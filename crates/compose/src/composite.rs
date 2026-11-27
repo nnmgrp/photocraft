@@ -312,7 +312,7 @@ fn composite_artboard(layer: &Layer, ab: &photocraft_doc::Artboard, clipped: &[L
 
 /// The surface `render_content` reads `layer`'s pixels from, when that is all it draws.
 pub(crate) fn pixel_surface(layer: &Layer) -> Option<&Surface> {
-    if matches!(layer.content, LayerContent::Group(_) | LayerContent::Fill(_) | LayerContent::Adjustment(_))
+    if matches!(layer.content, LayerContent::Group(_) | LayerContent::Fill(_) | LayerContent::Adjustment(_) | LayerContent::Kakeami(_))
         || matches!(&layer.content, LayerContent::Screentone(st) if st.surface.tile_count() == 0)
     {
         return None;

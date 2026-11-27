@@ -385,6 +385,7 @@ fn build_hit(layer: &Layer, doc: &SearchDoc<'_>, query: &Query) -> Option<Hit> {
         LayerContent::Adjustment(_) => ("[Adj]", None),
         LayerContent::Fill(_) => ("[Fill]", None),
         LayerContent::Screentone(_) => ("[Tone]", None),
+        LayerContent::Kakeami(_) => ("[Kake]", None),
     };
     if query.text_only && !matches!(layer.content, LayerContent::Text(_)) {
         return None;

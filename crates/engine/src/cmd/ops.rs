@@ -216,6 +216,15 @@ pub(crate) fn translate_layer_wrapped(doc: &Document, l: &mut Layer, dx: i32, dy
             s.surface = move_px(&s.surface, wrap);
             s.origin = (s.origin.0 + dx as f32, s.origin.1 + dy as f32);
         }
+        LayerContent::Kakeami(k) => {
+            k.origin = (k.origin.0 + dx as f32, k.origin.1 + dy as f32);
+            if let Some(f) = &mut k.fill_frame {
+                *f = f.translate(dx, dy);
+            }
+            if let Some(c) = &mut k.cache {
+                *c = move_px(c, wrap);
+            }
+        }
         _ => {}
     }
 }

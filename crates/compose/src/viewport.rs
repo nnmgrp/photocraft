@@ -102,6 +102,13 @@ pub fn preview_page(doc: &Document, source: Rect, factor: u32, interrupt: Interr
                     crate::screentone::scale_spec_for_downsample(&mut s.spec, inv_k);
                 }
             }
+            LayerContent::Kakeami(ka) => {
+                let ds = match &ka.cache {
+                    Some(s) => Some(shrink(s, r, k, last, i)?),
+                    None => None,
+                };
+                crate::kakeami::scale_for_downsample(ka, k as u32, ds);
+            }
             _ => {}
         }
         Ok(())

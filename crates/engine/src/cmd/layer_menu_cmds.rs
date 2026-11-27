@@ -47,7 +47,7 @@ fn has_raster(s: &Session) -> Enabled {
 
 fn has_raster_with_mask(s: &Session) -> Enabled {
     let l = active_layer(s)?;
-    if !matches!(l.content, LayerContent::Raster(_) | LayerContent::Screentone(_)) {
+    if !matches!(l.content, LayerContent::Raster(_) | LayerContent::Screentone(_) | LayerContent::Kakeami(_)) {
         return Err(format!("active layer is {} {} layer, not a pixel layer", l.content.article(), l.content.kind_name()));
     }
     if l.mask.is_some() { Ok(()) } else { Err("the layer has no layer mask".into()) }
@@ -164,6 +164,13 @@ fn apply_mask(s: &mut Session, p: &Value) -> Result<Value> {
             let fmt = st.surface.format();
             let surface = std::mem::replace(&mut st.surface, Surface::new(fmt));
             l_mut.content = LayerContent::Raster(surface);
+        } else if let LayerContent::Kakeami(k) = &l_mut.content {
+            let k_clone = k.clone();
+            let snap = l_mut.clone();
+            let fmt = doc.pixel_format();
+            let surface = photocraft_compose::kakeami::render_for_export(doc, &snap, &k_clone, fmt);
+            let l_mut2 = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
+            l_mut2.content = LayerContent::Raster(surface);
         }
         let surf = crate::commands::paint_surface(doc, id, &Value::Null)?;
         let r = surf.content_bounds();

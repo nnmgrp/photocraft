@@ -12,6 +12,7 @@ photocraft-geom = { workspace = true }
 photocraft-color = { workspace = true }
 photocraft-raster = { workspace = true }
 photocraft-doc = { workspace = true }
+kakeami-core = { workspace = true }
 photocraft-vector = { workspace = true }
 photocraft-algo = { workspace = true }
 craft-cms = { workspace = true }

@@ -64,6 +64,7 @@ mod native {
     use photocraft_manga_ui::balloon_gizmo::{self, BalloonView};
     use photocraft_manga_ui::comic_balloon_panel::{self, BalloonHostContext, create_live_balloon_in_rect_commands};
     use photocraft_manga_ui::comic_canvas_capsule::{self, CapsuleCallbacks, CapsuleView};
+    use photocraft_manga_ui::comic_kakeami_panel::{self, KakeamiTargetInfo, ToneDockTab};
     use photocraft_manga_ui::comic_pages_panel::{
         PageItemInfo, PagesPanelAction, PagesViewInfo, natural_cmp_str, natural_sort_paths, parse_page_number_from_name,
     };
@@ -641,6 +642,23 @@ mod native {
         }
         app.manga.sfx_screentone_bound = None;
         app.manga.sfx_screentone_pending_full = false;
+        let kake_target = active_kakeami_info(app);
+        if kake_target.is_some()
+            && app.manga.ui.kakeami_ui.synced_layer != kake_target.as_ref().map(|t| (t.doc_id, t.layer_id))
+        {
+            app.manga.ui.kakeami_ui.active_tab = ToneDockTab::Kakeami;
+        }
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut app.manga.ui.kakeami_ui.active_tab, ToneDockTab::Screentones, "Screentones");
+            ui.selectable_value(&mut app.manga.ui.kakeami_ui.active_tab, ToneDockTab::Kakeami, "Kakeami / Nawa-ami");
+        });
+        ui.separator();
+        if app.manga.ui.kakeami_ui.active_tab == ToneDockTab::Kakeami {
+            comic_kakeami_panel::sync_from_target(&mut app.manga.ui.kakeami_ui, kake_target.as_ref());
+            let cmds = comic_kakeami_panel::panel(ui, &mut app.manga.ui.kakeami_ui, kake_target.as_ref());
+            let _ = dispatch_commands(app, cmds);
+            return;
+        }
         let target = active_screentone_info(app);
         app.manga.ui.screentone_gizmo.sync_active_layer(&mut app.manga.ui.screentone_ui, target.as_ref());
         let out = comic_screentone_panel::panel(ui, &mut app.manga.ui.screentone_ui, target.as_ref());
@@ -654,6 +672,21 @@ mod native {
         {
             app.manga.ui.screentone_gizmo.bind_layer(did, LayerId(lid));
         }
+    }
+
+    fn active_kakeami_info(app: &PhotocraftApp) -> Option<KakeamiTargetInfo> {
+        let st = app.session.active()?;
+        let lid = st.active_layer?;
+        let layer = st.doc.layer(lid)?;
+        let LayerContent::Kakeami(k) = &layer.content else {
+            return None;
+        };
+        Some(KakeamiTargetInfo {
+            doc_id: BridgeDocId(st.doc.id.0),
+            layer_id: lid,
+            layer: k.clone(),
+            clipped: layer.clipped,
+        })
     }
 
     fn render_balloon(app: &mut PhotocraftApp, ui: &mut egui::Ui) {

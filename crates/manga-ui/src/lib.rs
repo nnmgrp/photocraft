@@ -5,6 +5,7 @@ pub mod i18n;
 pub mod balloon_gizmo;
 pub mod comic_balloon_panel;
 pub mod comic_canvas_capsule;
+pub mod comic_kakeami_panel;
 pub mod comic_pages_panel;
 pub mod comic_sai_panel;
 pub mod comic_screentone_gizmo;
@@ -30,6 +31,7 @@ pub struct MangaUiState {
     pub linework_panel: comic_sai_panel::LineworkPanelState,
     pub screentone_ui: comic_screentone_panel::ScreentoneUi,
     pub screentone_gizmo: comic_screentone_gizmo::ScreentoneGizmoState,
+    pub kakeami_ui: comic_kakeami_panel::KakeamiPanelUi,
     pub pages_panel: comic_pages_panel::PagesPanelState,
     pub canvas_capsule: comic_canvas_capsule::CanvasCapsuleState,
     pub sfx_panel: sfx_panel::SfxPanelState,
@@ -49,6 +51,7 @@ impl Default for MangaUiState {
             linework_panel: comic_sai_panel::LineworkPanelState::default(),
             screentone_ui: comic_screentone_panel::ScreentoneUi::default(),
             screentone_gizmo: comic_screentone_gizmo::ScreentoneGizmoState::default(),
+            kakeami_ui: comic_kakeami_panel::KakeamiPanelUi::default(),
             pages_panel: comic_pages_panel::PagesPanelState::default(),
             canvas_capsule: comic_canvas_capsule::CanvasCapsuleState::default(),
             sfx_panel: sfx_panel::SfxPanelState::default(),

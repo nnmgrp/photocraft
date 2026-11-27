@@ -120,7 +120,7 @@ fn layer_supported(l: &Layer, clipped: &[Layer], depth: u32) -> bool {
             cmyk_pixels(l) && separable(l.blend)
         }
         // The rendered screentone is display RGB; this path leaves it to the generic compositor.
-        LayerContent::Screentone(_) => false,
+        LayerContent::Screentone(_) | LayerContent::Kakeami(_) => false,
         LayerContent::Group(g) => {
             g.artboard.is_none()
                 && (separable(l.blend) || l.blend == BlendMode::PassThrough)

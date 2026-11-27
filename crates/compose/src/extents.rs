@@ -36,6 +36,7 @@ pub fn layer_bounds(layer: &Layer, canvas: Rect) -> Rect {
             let b = bounds::content_bounds(&st.surface);
             if !b.is_empty() { b } else { canvas }
         }
+        LayerContent::Kakeami(k) => crate::kakeami::effective_frame(layer, k, canvas),
         _ => {
             let b = layer.surface().map_or(Rect::EMPTY, bounds::content_bounds);
             let b = match &layer.content {
@@ -625,7 +626,7 @@ pub fn transparent_outside(layer: &Layer) -> bool {
     match &layer.content {
         LayerContent::Group(g) => g.children.iter().filter(|c| c.visible).all(transparent_outside),
         // Fill layers cover the canvas (their bounds); adjustments draw nothing of their own.
-        LayerContent::Fill(_) | LayerContent::Adjustment(_) | LayerContent::Screentone(_) => true,
+        LayerContent::Fill(_) | LayerContent::Adjustment(_) | LayerContent::Screentone(_) | LayerContent::Kakeami(_) => true,
         _ => layer.surface().is_none_or(|s| s.format().alpha && s.default_pixel().last().is_some_and(|a| *a <= 0.0)),
     }
 }

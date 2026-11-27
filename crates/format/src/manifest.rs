@@ -320,6 +320,18 @@ pub enum ContentM {
         /// Rendered cache in document coordinates.
         surface: SurfaceM,
     },
+    Kakeami {
+        #[serde(default)]
+        config: photocraft_doc::KakeamiConfig,
+        #[serde(default = "default_kakeami_color")]
+        color: [f32; 4],
+        #[serde(default)]
+        origin: (f32, f32),
+        #[serde(default = "yes")]
+        dpi_sync: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fill_frame: Option<photocraft_geom::Rect>,
+    },
     Smart {
         /// Shared source identity; older bundles did not record it.
         #[serde(default)]
@@ -358,6 +370,10 @@ fn full_density() -> f32 {
 
 fn yes() -> bool {
     true
+}
+
+fn default_kakeami_color() -> [f32; 4] {
+    [0.0, 0.0, 0.0, 1.0]
 }
 
 fn is_false(v: &bool) -> bool {

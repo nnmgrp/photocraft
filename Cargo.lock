@@ -4044,6 +4044,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "kakeami-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "keyboard-types"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5550,6 +5558,7 @@ version = "0.23.1"
 dependencies = [
  "craft-cms",
  "criterion",
+ "kakeami-core",
  "photocraft-algo",
  "photocraft-color",
  "photocraft-doc",
@@ -5565,6 +5574,7 @@ dependencies = [
 name = "photocraft-doc"
 version = "0.23.1"
 dependencies = [
+ "kakeami-core",
  "photocraft-color",
  "photocraft-geom",
  "photocraft-raster",
@@ -5633,6 +5643,7 @@ dependencies = [
  "crc32fast",
  "exacl",
  "flate2",
+ "kakeami-core",
  "libc",
  "photocraft-color",
  "photocraft-doc",

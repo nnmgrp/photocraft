@@ -124,6 +124,9 @@ pub const F_TEXT_GAMMA: u32 = 8192;
 /// `INIT_ALPHA` in the merge, for a layer with no interior effects between them.
 pub const F_LAYER_SHAPE: u32 = 1_048_576;
 
+/// `layer_texel`: `layer_tex` holds single-channel `R8Unorm` alpha tinted by straight-alpha `op.color`.
+pub const F_ALPHA_ONLY: u32 = 4_194_304;
+
 /// A layer's Blend If ranges for `F_BLEND_IF`: Gray, then the colour channels, each as
 /// [this layer, underlying layer]; every range as two floats, `black low × 256 + black high` and
 /// `white low × 256 + white high` (exact in f32), so entry `e`, side `s` starts at float
@@ -711,6 +714,21 @@ impl<'a> Planner<'a> {
                     pack_screentone_pass(&mut p, &tone.spec, frame, tone.origin);
                 } else {
                     self.surface_tex(&mut p, layer.id, &tone.surface);
+                }
+            }
+            LayerContent::Kakeami(k) => {
+                p.flags |= F_ALPHA_ONLY;
+                p.color = k.color;
+                if let Some(cache) = &k.cache {
+                    if cache.tile_count() > 0 {
+                        p.tex = Some(TexUse { layer: layer.id, role: Role::AlphaContent, surface: SurfaceRef::Doc(cache) });
+                    }
+                } else if !photocraft_compose::kakeami::effective_frame(layer, k, self.cx.canvas).is_empty() {
+                    let derived = photocraft_compose::kakeami::derived_gray8_for_gpu(layer, k, self.cx.canvas, self.cx.doc.resolution_dpi)
+                        .ok_or_else(|| Unsupported("oversized uncached kakeami layer (composited on CPU)".into()))?;
+                    if derived.tile_count() > 0 {
+                        p.tex = Some(TexUse { layer: layer.id, role: Role::AlphaContent, surface: SurfaceRef::Derived(derived) });
+                    }
                 }
             }
             _ => {

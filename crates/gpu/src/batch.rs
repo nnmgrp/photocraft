@@ -125,7 +125,9 @@ pub(crate) fn batch_runs(plan: &Plan<'_>) -> Vec<usize> {
         })
         .collect();
     let lead = |p: &plan::Pass<'_>| p.kernel == Kernel::LayerBlend && p.clip.is_none() && !p.gradient;
-    let extra = |p: &plan::Pass<'_>| lead(p) && p.mask.is_none() && p.flags & plan::F_TEXT_GAMMA == 0 && p.mode != photocraft_color::BlendMode::Dissolve;
+    let extra = |p: &plan::Pass<'_>| {
+        lead(p) && p.mask.is_none() && p.flags & (plan::F_TEXT_GAMMA | plan::F_ALPHA_ONLY) == 0 && p.mode != photocraft_color::BlendMode::Dissolve
+    };
     (0..n)
         .map(|i| {
             let Some(first) = passes.get(i).filter(|p| lead(p)) else { return 1 };

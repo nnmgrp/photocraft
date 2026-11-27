@@ -180,6 +180,13 @@ fn layer_m(l: &Layer, sink: &mut dyn Sink) -> LayerM {
             feather: s.feather,
         },
         LayerContent::Screentone(s) => ContentM::Screentone { spec: s.spec.clone(), origin: s.origin, surface: surface_m(&s.surface, sink) },
+        LayerContent::Kakeami(k) => ContentM::Kakeami {
+            config: k.config.clone(),
+            color: k.color,
+            origin: k.origin,
+            dpi_sync: k.dpi_sync,
+            fill_frame: k.fill_frame,
+        },
         LayerContent::Smart(s) => ContentM::Smart {
             contents_id: Some(s.contents_id.0),
             source: match &s.source {
@@ -539,6 +546,16 @@ impl Loader<'_> {
             }),
             ContentM::Screentone { spec, origin, surface } => {
                 LayerContent::Screentone(photocraft_doc::ScreentoneLayer { spec: spec.clone(), origin: *origin, surface: self.surface(surface)? })
+            }
+            ContentM::Kakeami { config, color, origin, dpi_sync, fill_frame } => {
+                LayerContent::Kakeami(photocraft_doc::KakeamiLayer {
+                    config: config.clone(),
+                    color: *color,
+                    origin: *origin,
+                    dpi_sync: *dpi_sync,
+                    fill_frame: *fill_frame,
+                    cache: None,
+                })
             }
             ContentM::Smart {
                 contents_id,

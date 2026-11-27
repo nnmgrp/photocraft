@@ -62,6 +62,7 @@ const F_BLEND_IF: u32 = 524288u; // lerp: B back towards A by the Blend If range
 const F_REPLACE: u32 = 2097152u; // effect paint: Normal inside/center stroke replaces A by its coverage
 const F_TEXT_GAMMA: u32 = 8192u; // blend / atop / fx merge: type layer, mix coverage at gamma p4.w
 const F_LAYER_SHAPE: u32 = 1048576u; // fx merge: B is the shape; layer = its colour at fill p0.x inside it × its alpha
+const F_ALPHA_ONLY: u32 = 4194304u;  // layer_texel: layer_tex is R8Unorm alpha, tinted by straight-alpha op.color
 
 @group(0) @binding(0) var<uniform> chunk: Chunk;
 @group(0) @binding(1) var<uniform> op: Op;
@@ -891,8 +892,15 @@ fn layer_texel(d: vec2<i32>) -> vec4<f32> {
     if ((op.flags & F_TEX) != 0u) {
         let q = d - op.tex_origin;
         if (inside(q, op.tex_size)) {
-            return textureLoad(layer_tex, q, 0);
+            let t = textureLoad(layer_tex, q, 0);
+            if ((op.flags & F_ALPHA_ONLY) != 0u) {
+                return vec4<f32>(op.color.rgb, op.color.a * t.r);
+            }
+            return t;
         }
+    }
+    if ((op.flags & F_ALPHA_ONLY) != 0u) {
+        return vec4<f32>(op.color.rgb, 0.0);
     }
     return op.color;
 }

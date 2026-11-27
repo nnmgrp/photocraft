@@ -132,6 +132,8 @@ impl Kernel {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Role {
     Content,
+    /// Single-channel alpha-only content (`GRAY8` -> `R8Direct`, 1 B/px, tinted via `F_ALPHA_ONLY`).
+    AlphaContent,
     Mask,
     /// A stroked shape's stroke alone (its fill uses `Content`).
     Stroke,

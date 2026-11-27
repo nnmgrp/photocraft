@@ -26,7 +26,7 @@ use photocraft_doc::{DocId, LayerId, Rect};
 use photocraft_gpu::MAX_SFX_TILE_DIM;
 #[cfg(target_arch = "wasm32")]
 use photocraft_gpu::MAX_SFX_TILE_DIM_WASM;
-use photocraft_gpu::{SfxGpuRenderer, SfxGpuScene, SfxGpuSegContour};
+use photocraft_gpu::{SfxGpuRenderer, SfxGpuRibbonStrip, SfxGpuScene, SfxGpuSegContour};
 use photocraft_manga_core::sfx_render::{SfxVectorCache, SfxVectorScene, extract_sfx_vector_scene};
 use photocraft_raster::{Surface, from_rgba_into};
 
@@ -159,6 +159,21 @@ fn build_gpu_scene<'a>(data: &'a SfxData, vec_scene: &'a SfxVectorScene) -> SfxG
         .iter()
         .map(|c| SfxGpuSegContour { pts: &c.pts, total_len: c.total_len, phase: c.phase })
         .collect();
+    let v3_body_ribbons = vec_scene
+        .v3_body_ribbons
+        .iter()
+        .map(|r| SfxGpuRibbonStrip { left: &r.left, right: &r.right })
+        .collect();
+    let heavy_tail_ribbons = vec_scene
+        .heavy_tail_ribbons
+        .iter()
+        .map(|r| SfxGpuRibbonStrip { left: &r.left, right: &r.right })
+        .collect();
+    let heavy_slit_ribbons = vec_scene
+        .heavy_slit_ribbons
+        .iter()
+        .map(|r| SfxGpuRibbonStrip { left: &r.left, right: &r.right })
+        .collect();
     SfxGpuScene {
         data,
         full_bounds: vec_scene.full_bounds,
@@ -176,6 +191,15 @@ fn build_gpu_scene<'a>(data: &'a SfxData, vec_scene: &'a SfxVectorScene) -> SfxG
         sugomi_inner_teeth_polygons: &vec_scene.sugomi_inner_teeth_polygons,
         sugomi_band_w_px: vec_scene.sugomi_band_w_px,
         sugomi_hw_in_px: vec_scene.sugomi_hw_in_px,
+        v3_body_ribbons,
+        heavy_bite_polygons: &vec_scene.heavy_bite_polygons,
+        heavy_tail_ribbons,
+        heavy_slit_ribbons,
+        v3_stroke_w_px: vec_scene.v3_stroke_w_px,
+        kakeami_w_scale: vec_scene.kakeami_w_scale,
+        kakeami_grad_axis: vec_scene.kakeami_grad_axis,
+        kakeami_grad_range: vec_scene.kakeami_grad_range,
+        kakeami_perp_range: vec_scene.kakeami_perp_range,
     }
 }
 
@@ -302,6 +326,11 @@ fn collect_scene_content_boxes(vec_scene: &SfxVectorScene) -> Vec<[f64; 4]> {
     }
     for p in &vec_scene.shibufude_splatter_polygons {
         if let Some(b) = poly_aabb(p) {
+            boxes.push(b);
+        }
+    }
+    for r in vec_scene.v3_body_ribbons.iter().chain(&vec_scene.heavy_tail_ribbons) {
+        if let Some(b) = r.aabb() {
             boxes.push(b);
         }
     }

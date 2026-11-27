@@ -1089,4 +1089,81 @@ mod tests {
         // Origin inside the cropped smart object document was shifted relative to the layer's bounds.
         assert!(child_sfx.origin[0] < 140.0 && child_sfx.origin[1] < 110.0, "origin shifted into smart doc space: {:?}", child_sfx.origin);
     }
+
+    #[test]
+    fn phase2_wiring_gate_pcraft_roundtrip_and_render_all_five_entities() {
+        use photocraft_doc::KakeamiConfig;
+        use photocraft_doc::sfx::{SfxHeavyStackMode, SfxKakeamiV4Mode, SfxShibufudeProfile, SfxSugomiDirection, SfxV3EdgeMode};
+
+        let mut s = Session::new();
+        s.execute("file.new", json!({ "width": 320, "height": 240, "background": "white" })).unwrap();
+
+        // 1. Create LayerContent::Kakeami via engine command
+        let mut kcfg = KakeamiConfig::default();
+        kcfg.pattern_family = "nawa-ami".to_owned();
+        kcfg.finish_mode = "pencil".to_owned();
+        kcfg.darken_cap = 86;
+        kcfg.seed = 313;
+        s.execute(
+            crate::cmd::manga_cmds::kakeami::CREATE,
+            json!({ "name": "WG-Kakeami", "config": kcfg, "color": [0.1, 0.2, 0.3, 1.0], "dpiSync": true }),
+        )
+        .unwrap();
+
+        // 2..5. Create all 4 SFX v3 styles via sfx.create
+        let make_sfx = |text: &str, style: SfxLineStyle| -> SfxData {
+            let mut d = SfxData { text: text.to_owned(), origin: [40.0, 40.0], size_pt: 54.0, fill: SfxFillSource::None, ..SfxData::default() };
+            d.line_effect.style = style;
+            d
+        };
+        let mut shib = make_sfx("B!", SfxLineStyle::ShibufudeV3);
+        shib.line_effect.shibufude_profile = SfxShibufudeProfile::Maru;
+        shib.line_effect.shibufude_edge_mode = SfxV3EdgeMode::Rough;
+        shib.line_effect.shibufude_knockout = true;
+
+        let mut sugo = make_sfx("G!", SfxLineStyle::SugomiV3);
+        sugo.line_effect.sugomi_direction = SfxSugomiDirection::Tate;
+        sugo.line_effect.sugomi_hollow = true;
+
+        let mut heavy = make_sfx("M!", SfxLineStyle::HeavyStackV3);
+        heavy.line_effect.heavy_stack_mode = SfxHeavyStackMode::FgsfdsStack;
+        heavy.line_effect.heavy_stack_edge_bite_pct = 65.0;
+
+        let mut kake = make_sfx("K!", SfxLineStyle::KakeamiV4);
+        kake.line_effect.kakeami_mode = SfxKakeamiV4Mode::KakeEdge;
+        kake.line_effect.kakeami_gradient_angle_deg = 37.5;
+
+        for (label, data) in [("Shib", &shib), ("Sugo", &sugo), ("Heavy", &heavy), ("Kake", &kake)] {
+            s.execute("sfx.create", json!({ "sfx": data })).unwrap_or_else(|e| panic!("sfx.create {label} failed: {e}"));
+        }
+
+        // Save to .pcraft and reload
+        let bytes = photocraft_format::save_to_bytes(&s.active().unwrap().doc, &photocraft_format::SaveOptions::default()).unwrap();
+        let loaded = photocraft_format::load_from_bytes(&bytes).unwrap();
+
+        // Verify bit-exact roundtrip & non-empty render of every reloaded entity
+        let mut seen_styles = Vec::new();
+        let mut text = photocraft_text::TextEngine::new();
+        for layer in &loaded.layers {
+            if let Some(sfx) = layer.sfx.as_deref() {
+                seen_styles.push(sfx.line_effect.style);
+                let out = photocraft_manga_core::sfx_render::render_sfx(sfx, &mut text, PixelFormat::RGBA8, 72.0);
+                assert!(!out.bounds().is_empty(), "reloaded SFX {:?} rendered empty", sfx.line_effect.style);
+                if sfx.line_effect.style == SfxLineStyle::HeavyStackV3 {
+                    assert_eq!(sfx.line_effect.heavy_stack_edge_bite_pct.to_bits(), 65.0_f32.to_bits());
+                }
+                if sfx.line_effect.style == SfxLineStyle::KakeamiV4 {
+                    assert_eq!(sfx.line_effect.kakeami_gradient_angle_deg.to_bits(), 37.5_f32.to_bits());
+                }
+            }
+        }
+        assert!(seen_styles.contains(&SfxLineStyle::ShibufudeV3));
+        assert!(seen_styles.contains(&SfxLineStyle::SugomiV3));
+        assert!(seen_styles.contains(&SfxLineStyle::HeavyStackV3));
+        assert!(seen_styles.contains(&SfxLineStyle::KakeamiV4));
+
+        // Composite the full reloaded document (including LayerContent::Kakeami) without panic
+        let composite = photocraft_compose::flatten_to_surface(&loaded, PixelFormat::RGBA8, None);
+        assert!(!composite.content_bounds().is_empty(), "reloaded document composite must be non-empty");
+    }
 }

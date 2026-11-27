@@ -16,8 +16,9 @@ use photocraft_color::Color;
 #[cfg(not(target_arch = "wasm32"))]
 use photocraft_color::PixelFormat;
 use photocraft_doc::sfx::{
-    SfxBlendEffect, SfxChannelBlend, SfxData, SfxDryBrushEngine, SfxDryBrushSpec, SfxFillSource, SfxLineEffect, SfxLineStyle,
-    SfxShibufudeProfile, SfxShtackFillMode, SfxShtackFillSpec, SfxShtackVariant, SfxStrokePosition, SfxV3EdgeMode,
+    SfxBlendEffect, SfxChannelBlend, SfxData, SfxDryBrushEngine, SfxDryBrushSpec, SfxFillSource, SfxHeavyStackMode, SfxKakeamiV4Mode,
+    SfxLineEffect, SfxLineStyle, SfxShibufudeProfile, SfxShtackFillMode, SfxShtackFillSpec, SfxShtackVariant, SfxStrokePosition,
+    SfxV3EdgeMode,
 };
 use photocraft_geom::Rect;
 #[cfg(not(target_arch = "wasm32"))]
@@ -52,6 +53,14 @@ pub struct SfxGpuSegContour<'a> {
 /// Document-space closed polygon ring `(x, y)`.
 pub type SfxGpuPolyRing = Vec<(f64, f64)>;
 
+/// Paired `(left, right)` boundary chains of an open or closed ribbon strip for direct quad-strip
+/// GPU triangulation (`BlendOperation::Max`, zero centroid-fan chord artifacts on arcs/loops).
+#[derive(Clone, Copy, Debug)]
+pub struct SfxGpuRibbonStrip<'a> {
+    pub left: &'a [[f32; 2]],
+    pub right: &'a [[f32; 2]],
+}
+
 /// Pure vector scene description handed to [`SfxGpuRenderer`] (zero pixel buffers, O(vertices)).
 pub struct SfxGpuScene<'a> {
     pub data: &'a SfxData,
@@ -84,6 +93,24 @@ pub struct SfxGpuScene<'a> {
     pub sugomi_band_w_px: f32,
     /// Style 2 (`Sugomi v3`) inner cutout inset `hw_in` in document pixels (`band_w * 0.36`).
     pub sugomi_hw_in_px: f32,
+    /// Quad-strip ribbons for Style 3 (`HeavyStackV3` body) and Style 4 (`KakeamiV4` hatch lanes).
+    pub v3_body_ribbons: Vec<SfxGpuRibbonStrip<'a>>,
+    /// Style 3 (`HeavyStackV3`) focal dry-ink edge bite pentagons (subtracted BEFORE `heavy_tail_ribbons`).
+    pub heavy_bite_polygons: &'a [SfxGpuPolyRing],
+    /// Style 3 (`HeavyStackV3`) tangential tails / outer curve flicks (quad-strip ribbons).
+    pub heavy_tail_ribbons: Vec<SfxGpuRibbonStrip<'a>>,
+    /// Style 3 (`HeavyStackV3`) interior dry slits (quad-strip ribbons).
+    pub heavy_slit_ribbons: Vec<SfxGpuRibbonStrip<'a>>,
+    /// Estimated glyph stroke width in document pixels for `HeavyStackV3` / `KakeamiV4` shaders.
+    pub v3_stroke_w_px: f32,
+    /// Style 4 (`KakeamiV4`) uncapped DPI-safe width scale `max(0.75, stroke_w / 28.0)`.
+    pub kakeami_w_scale: f32,
+    /// Style 4 (`KakeamiV4::KakeEdge`) directional gradient unit axis `(cos, sin)`.
+    pub kakeami_grad_axis: [f32; 2],
+    /// Style 4 (`KakeamiV4::KakeEdge`) `[g_min, g_span]` along `kakeami_grad_axis`.
+    pub kakeami_grad_range: [f32; 2],
+    /// Style 4 (`KakeamiV4::KakeEdge`) `[p_min, p_span]` along perpendicular axis.
+    pub kakeami_perp_range: [f32; 2],
 }
 
 #[repr(C)]
@@ -360,6 +387,8 @@ pub struct SfxGpuRenderer {
     dry_grain_pipe: wgpu::RenderPipeline,
     shibufude_perturb_pipe: wgpu::RenderPipeline,
     sugomi_hollow_cut_pipe: wgpu::RenderPipeline,
+    heavy_stack_perturb_pipe: wgpu::RenderPipeline,
+    kakeami_beta_mask_pipe: wgpu::RenderPipeline,
     composite_pipe: wgpu::RenderPipeline,
     blit_pipes: Vec<(wgpu::TextureFormat, wgpu::RenderPipeline)>,
     blit_uni: wgpu::Buffer,
@@ -650,6 +679,43 @@ fn polygons_to_centroid_fan_verts(polys: &[Vec<(f64, f64)>]) -> Vec<PolyVert> {
     out
 }
 
+/// Triangulates paired `(left, right)` ribbon strips into a direct quad strip (`2` triangles per
+/// segment: `(L[i], R[i], L[i+1])`, `(R[i], R[i+1], L[i+1])`) for `BlendOperation::Max`.
+/// Eliminates concave centroid-fan chord artifacts on curved arcs and closed rings.
+fn ribbons_to_quad_strip_verts(ribbons: &[SfxGpuRibbonStrip<'_>]) -> Vec<PolyVert> {
+    let total_segs: usize = ribbons.iter().map(|r| r.left.len().min(r.right.len()).saturating_sub(1)).sum();
+    let mut out = Vec::with_capacity(total_segs * 6);
+    for r in ribbons {
+        let n = r.left.len().min(r.right.len());
+        if n < 2 {
+            continue;
+        }
+        for i in 0..(n - 1) {
+            let l0 = r.left[i];
+            let r0 = r.right[i];
+            let l1 = r.left[i + 1];
+            let r1 = r.right[i + 1];
+            if l0[0].is_finite()
+                && l0[1].is_finite()
+                && r0[0].is_finite()
+                && r0[1].is_finite()
+                && l1[0].is_finite()
+                && l1[1].is_finite()
+                && r1[0].is_finite()
+                && r1[1].is_finite()
+            {
+                out.push(PolyVert { pos: l0 });
+                out.push(PolyVert { pos: r0 });
+                out.push(PolyVert { pos: l1 });
+                out.push(PolyVert { pos: r0 });
+                out.push(PolyVert { pos: r1 });
+                out.push(PolyVert { pos: l1 });
+            }
+        }
+    }
+    out
+}
+
 fn polygons_to_fan_verts(polys: &[Vec<(f64, f64)>]) -> Vec<PolyVert> {
     let total_tris: usize = polys.iter().map(|p| p.len().saturating_sub(2)).sum();
     let mut out = Vec::with_capacity(total_tris * 3);
@@ -793,6 +859,8 @@ enum QuadPipe {
     DryGrain,
     ShibufudePerturb,
     SugomiHollowCut,
+    HeavyStackPerturb,
+    KakeamiBetaMask,
     Composite,
 }
 
@@ -894,6 +962,17 @@ impl<'a> CmdRecorder<'a> {
 
     fn raster_tris_max(&mut self, target: MaskSlot, polys: &[Vec<(f64, f64)>]) {
         let verts = polygons_to_centroid_fan_verts(polys);
+        if verts.is_empty() {
+            self.cmds.push(GpuCmd::ClearMask(target));
+            return;
+        }
+        let (v_off, v_count) = self.bufs.push_verts(&verts);
+        let uni_off = self.bufs.push_uniform(self.region.raster_params());
+        self.cmds.push(GpuCmd::RasterTrianglesMax { target, v_off, v_count, uni_off });
+    }
+
+    fn raster_ribbons_max(&mut self, target: MaskSlot, ribbons: &[SfxGpuRibbonStrip<'_>]) {
+        let verts = ribbons_to_quad_strip_verts(ribbons);
         if verts.is_empty() {
             self.cmds.push(GpuCmd::ClearMask(target));
             return;
@@ -1374,6 +1453,8 @@ impl SfxGpuRenderer {
                 dry_grain_pipe: qp("sfx-dry-grain", "fs_dry_grain_breakup", MASK_FMT),
                 shibufude_perturb_pipe: qp("sfx-shibufude-perturb", "fs_shibufude_perturb", MASK_FMT),
                 sugomi_hollow_cut_pipe: qp("sfx-sugomi-hollow-cut", "fs_sugomi_hollow_cut", MASK_FMT),
+                heavy_stack_perturb_pipe: qp("sfx-heavy-stack-perturb", "fs_heavy_stack_perturb", MASK_FMT),
+                kakeami_beta_mask_pipe: qp("sfx-kakeami-beta-mask", "fs_kakeami_beta_mask", MASK_FMT),
                 composite_pipe: qp("sfx-composite", "fs_composite_fill", RGBA_FMT),
                 blit_pipes: Vec::new(),
                 blit_uni,
@@ -1899,6 +1980,8 @@ impl SfxGpuRenderer {
                         QuadPipe::DryGrain => &self.dry_grain_pipe,
                         QuadPipe::ShibufudePerturb => &self.shibufude_perturb_pipe,
                         QuadPipe::SugomiHollowCut => &self.sugomi_hollow_cut_pipe,
+                        QuadPipe::HeavyStackPerturb => &self.heavy_stack_perturb_pipe,
+                        QuadPipe::KakeamiBetaMask => &self.kakeami_beta_mask_pipe,
                         QuadPipe::Composite => &self.composite_pipe,
                     };
                     let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -2191,6 +2274,12 @@ fn max_tile_apron_px(data: &SfxData) -> u32 {
         }
         SfxLineStyle::SugomiV3 => {
             pad = pad.max(48.0);
+        }
+        SfxLineStyle::HeavyStackV3 => {
+            pad = pad.max(36.0);
+        }
+        SfxLineStyle::KakeamiV4 => {
+            pad = pad.max(40.0);
         }
         _ => {}
     }
@@ -2612,6 +2701,113 @@ fn record_sugomi_v3_passes(rec: &mut CmdRecorder<'_>, scene: &SfxGpuScene<'_>) -
     true
 }
 
+/// Style 3 (`Heavy Stack v3`): body (Fude SDF / quad-strip stack/Kin/Fence) - `edge_bite`
+/// -> union `tails`/`flicks` -> subtract `slits` -> unified edge kasure.
+fn record_heavy_stack_v3_passes(rec: &mut CmdRecorder<'_>, scene: &SfxGpuScene<'_>) -> bool {
+    let le = &scene.data.line_effect;
+    let px_per_doc = rec.region.px_per_doc();
+
+    match le.heavy_stack_mode {
+        SfxHeavyStackMode::Fude => {
+            let sc = (scene.v3_stroke_w_px.max(14.0) * 0.68).max(8.0);
+            let reach = ((sc * 0.25 + 8.0) * px_per_doc).max(4.0);
+            let _ = rec.run_jfa_from_mask_mode(TexSlot::Face, 0, reach, Some(TexSlot::JfaExt));
+            let _ = rec.run_jfa_from_mask_mode(TexSlot::Face, 2, reach, Some(TexSlot::JfaInt));
+            let mut hp = rec.region.base_params();
+            hp.p1[2] = sc;
+            hp.p1[3] = 0.85;
+            hp.u0 = [0, le.heavy_stack_seed, 0, 0];
+            rec.push_quad(QuadPipe::HeavyStackPerturb, TexSlot::Face, TexSlot::JfaExt, TexSlot::JfaInt, TexSlot::Line, hp);
+        }
+        SfxHeavyStackMode::FgsfdsStack | SfxHeavyStackMode::Kin | SfxHeavyStackMode::FgsfdsFence => {
+            rec.raster_ribbons_max(MaskSlot::Line, &scene.v3_body_ribbons);
+        }
+    }
+
+    // 1. Subtract focal edge bites STRICTLY BEFORE unioning tails/flicks!
+    if !scene.heavy_bite_polygons.is_empty() {
+        rec.raster_tris_max(MaskSlot::ScratchA, scene.heavy_bite_polygons);
+        let mut mp = rec.region.base_params();
+        mp.u0[0] = 2; // linear subtract: clamp(cov - bite, 0, 1)
+        rec.push_quad(QuadPipe::Mul, TexSlot::Line, TexSlot::ScratchA, TexSlot::Dummy, TexSlot::ScratchB, mp);
+        rec.push_copy(TexSlot::ScratchB, TexSlot::Line);
+    }
+
+    // 2. Union tangential tails / outer curve flicks (immune to edge_bite!)
+    if !scene.heavy_tail_ribbons.is_empty() {
+        rec.raster_ribbons_max(MaskSlot::ScratchA, &scene.heavy_tail_ribbons);
+        rec.push_quad(QuadPipe::Union, TexSlot::Line, TexSlot::ScratchA, TexSlot::Dummy, TexSlot::ScratchB, rec.region.base_params());
+        rec.push_copy(TexSlot::ScratchB, TexSlot::Line);
+    }
+
+    // 3. Subtract interior dry slits
+    if !scene.heavy_slit_ribbons.is_empty() {
+        rec.raster_ribbons_max(MaskSlot::ScratchA, &scene.heavy_slit_ribbons);
+        let mut mp = rec.region.base_params();
+        mp.u0[0] = 2;
+        rec.push_quad(QuadPipe::Mul, TexSlot::Line, TexSlot::ScratchA, TexSlot::Dummy, TexSlot::ScratchB, mp);
+        rec.push_copy(TexSlot::ScratchB, TexSlot::Line);
+    }
+
+    let grain_seed = le.heavy_stack_seed.wrapping_add(41);
+    match le.heavy_stack_edge_mode {
+        SfxV3EdgeMode::OneBit => {
+            let grain_pct = if le.line_grain_pct > 0.5 { le.line_grain_pct } else { 14.0 };
+            apply_v3_edge_kasure_pass(rec, grain_pct, 100.0, grain_seed, 1.4, true);
+        }
+        SfxV3EdgeMode::Rough => {
+            let dry = le.heavy_stack_dryness_pct.max(le.line_grain_pct);
+            apply_v3_edge_kasure_pass(rec, dry, le.heavy_stack_sharpness_pct, grain_seed, 2.0, false);
+        }
+    }
+    true
+}
+
+/// Style 4 (`Kakeami v4`): direct quad-strip unsegmented hatch lanes + optional `KakeEdge` beta
+/// ink core + unified edge kasure.
+fn record_kakeami_v4_passes(rec: &mut CmdRecorder<'_>, scene: &SfxGpuScene<'_>) -> bool {
+    let le = &scene.data.line_effect;
+    let px_per_doc = rec.region.px_per_doc();
+    rec.raster_ribbons_max(MaskSlot::Line, &scene.v3_body_ribbons);
+
+    if le.kakeami_mode == SfxKakeamiV4Mode::KakeEdge {
+        let stroke_w = scene.v3_stroke_w_px.max(12.0);
+        let w_scale = scene.kakeami_w_scale.max(0.75);
+        let reach_out = (4.0 * px_per_doc).max(4.0);
+        let reach_in = ((stroke_w * 0.55 + 2.5 * w_scale + 8.0) * px_per_doc).max(4.0);
+        let _ = rec.run_jfa_from_mask_mode(TexSlot::Face, 0, reach_out, Some(TexSlot::JfaExt));
+        let _ = rec.run_jfa_from_mask_mode(TexSlot::Face, 2, reach_in, Some(TexSlot::JfaInt));
+        let mut bp = rec.region.base_params();
+        bp.p1[2] = stroke_w;
+        bp.p1[3] = w_scale;
+        bp.p2 = [
+            scene.kakeami_grad_axis[0],
+            scene.kakeami_grad_axis[1],
+            scene.kakeami_grad_range[0],
+            scene.kakeami_grad_range[1].max(32.0),
+        ];
+        bp.p3[0] = scene.kakeami_perp_range[0];
+        bp.p3[1] = scene.kakeami_perp_range[1].max(32.0);
+        bp.u0 = [0, le.kakeami_seed, 0, 0];
+        rec.push_quad(QuadPipe::KakeamiBetaMask, TexSlot::Face, TexSlot::JfaExt, TexSlot::JfaInt, TexSlot::ScratchA, bp);
+        rec.push_quad(QuadPipe::Union, TexSlot::Line, TexSlot::ScratchA, TexSlot::Dummy, TexSlot::ScratchB, rec.region.base_params());
+        rec.push_copy(TexSlot::ScratchB, TexSlot::Line);
+    }
+
+    let grain_seed = le.kakeami_seed.wrapping_add(53);
+    match le.kakeami_edge_mode {
+        SfxV3EdgeMode::OneBit => {
+            let grain_pct = if le.line_grain_pct > 0.5 { le.line_grain_pct } else { 10.0 };
+            apply_v3_edge_kasure_pass(rec, grain_pct, 100.0, grain_seed, 0.9, true);
+        }
+        SfxV3EdgeMode::Rough => {
+            let dry = le.kakeami_dryness_pct.max(le.line_grain_pct);
+            apply_v3_edge_kasure_pass(rec, dry, le.kakeami_sharpness_pct, grain_seed, 0.85, false);
+        }
+    }
+    true
+}
+
 fn record_scene_passes(rec: &mut CmdRecorder<'_>, scene: &SfxGpuScene<'_>) {
     let data = scene.data;
     let le = &data.line_effect;
@@ -2632,6 +2828,10 @@ fn record_scene_passes(rec: &mut CmdRecorder<'_>, scene: &SfxGpuScene<'_>) {
         record_shibufude_v3_passes(rec, scene)
     } else if le.style == SfxLineStyle::SugomiV3 {
         record_sugomi_v3_passes(rec, scene)
+    } else if le.style == SfxLineStyle::HeavyStackV3 {
+        record_heavy_stack_v3_passes(rec, scene)
+    } else if le.style == SfxLineStyle::KakeamiV4 {
+        record_kakeami_v4_passes(rec, scene)
     } else if is_binary {
         if le.line_width_px > 0.05 {
             let _ = rec.run_jfa_from_mask(TexSlot::Face, false, (le.line_width_px * 0.5 * px_per_doc).max(2.0), Some(TexSlot::JfaExt));
@@ -2815,6 +3015,15 @@ mod tests {
             sugomi_inner_teeth_polygons: &[],
             sugomi_band_w_px: 0.0,
             sugomi_hw_in_px: 0.0,
+            v3_body_ribbons: Vec::new(),
+            heavy_bite_polygons: &[],
+            heavy_tail_ribbons: Vec::new(),
+            heavy_slit_ribbons: Vec::new(),
+            v3_stroke_w_px: 0.0,
+            kakeami_w_scale: 1.0,
+            kakeami_grad_axis: [0.0, 1.0],
+            kakeami_grad_range: [0.0, 32.0],
+            kakeami_perp_range: [0.0, 32.0],
         };
         for (px_dim, auto_scale) in [(128, 1.0_f32), (256, 1.0), (512, 1.0), (512, 2.0), (1024, 2.0)] {
             bufs.reset();
@@ -2909,6 +3118,15 @@ mod tests {
                         sugomi_inner_teeth_polygons: &[],
                         sugomi_band_w_px: 0.0,
                         sugomi_hw_in_px: 0.0,
+                        v3_body_ribbons: Vec::new(),
+                        heavy_bite_polygons: &[],
+                        heavy_tail_ribbons: Vec::new(),
+                        heavy_slit_ribbons: Vec::new(),
+                        v3_stroke_w_px: 0.0,
+                        kakeami_w_scale: 1.0,
+                        kakeami_grad_axis: [0.0, 1.0],
+                        kakeami_grad_range: [0.0, 32.0],
+                        kakeami_perp_range: [0.0, 32.0],
                     };
                     bufs.reset();
                     let mut rec = CmdRecorder {
@@ -3001,6 +3219,15 @@ mod tests {
                     sugomi_inner_teeth_polygons: &[],
                     sugomi_band_w_px: 0.0,
                     sugomi_hw_in_px: 0.0,
+                    v3_body_ribbons: Vec::new(),
+                    heavy_bite_polygons: &[],
+                    heavy_tail_ribbons: Vec::new(),
+                    heavy_slit_ribbons: Vec::new(),
+                    v3_stroke_w_px: 0.0,
+                    kakeami_w_scale: 1.0,
+                    kakeami_grad_axis: [0.0, 1.0],
+                    kakeami_grad_range: [0.0, 32.0],
+                    kakeami_perp_range: [0.0, 32.0],
                 };
                 bufs.reset();
                 let mut rec = CmdRecorder {
@@ -3049,6 +3276,15 @@ mod tests {
                     sugomi_inner_teeth_polygons: if hollow { &splat } else { &[] },
                     sugomi_band_w_px: 14.0,
                     sugomi_hw_in_px: 5.0,
+                    v3_body_ribbons: Vec::new(),
+                    heavy_bite_polygons: &[],
+                    heavy_tail_ribbons: Vec::new(),
+                    heavy_slit_ribbons: Vec::new(),
+                    v3_stroke_w_px: 0.0,
+                    kakeami_w_scale: 1.0,
+                    kakeami_grad_axis: [0.0, 1.0],
+                    kakeami_grad_range: [0.0, 32.0],
+                    kakeami_perp_range: [0.0, 32.0],
                 };
                 bufs.reset();
                 let mut rec = CmdRecorder {
@@ -3067,6 +3303,128 @@ mod tests {
                         "expected SugomiHollowCut for hollow/{edge_mode:?}"
                     );
                     assert!(AuxUsage::from_cmds(&rec.cmds).scratch_c, "hollow + holes must mark lazy ScratchC");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn sfx_v3_heavy_stack_and_kakeami_never_alias_slots_across_all_modes() {
+        let mut bufs = CpuRecordBuffers::new(256);
+        let poly = unit_square();
+        let bite = vec![vec![(30.0, 100.0), (42.0, 100.0), (44.0, 110.0), (36.0, 118.0), (28.0, 110.0)]];
+        let strip_l = [[40.0_f32, 40.0], [120.0, 40.0], [180.0, 80.0]];
+        let strip_r = [[40.0_f32, 52.0], [120.0, 52.0], [180.0, 92.0]];
+        let rib = [SfxGpuRibbonStrip { left: &strip_l, right: &strip_r }];
+
+        // Style 3: HeavyStackV3 (all 4 modes × edge_bite 0/65 × OneBit/Rough)
+        for mode in [
+            SfxHeavyStackMode::Fude,
+            SfxHeavyStackMode::FgsfdsStack,
+            SfxHeavyStackMode::Kin,
+            SfxHeavyStackMode::FgsfdsFence,
+        ] {
+            for edge_bite_pct in [0.0_f32, 65.0] {
+                for edge_mode in [SfxV3EdgeMode::OneBit, SfxV3EdgeMode::Rough] {
+                    let mut data = SfxData { fill: SfxFillSource::None, ..SfxData::default() };
+                    data.line_effect.style = SfxLineStyle::HeavyStackV3;
+                    data.line_effect.heavy_stack_mode = mode;
+                    data.line_effect.heavy_stack_edge_bite_pct = edge_bite_pct;
+                    data.line_effect.heavy_stack_edge_mode = edge_mode;
+                    data.line_effect.halo_width_px = 6.0;
+                    let scene = SfxGpuScene {
+                        data: &data,
+                        full_bounds: Rect::from_xywh(0, 0, 256, 256),
+                        glyph_em_px: 180.0,
+                        face_contours: &poly,
+                        line_polygons: &[],
+                        primary_shtack_polygons: &[],
+                        secondary_shtack_polygons: &[],
+                        effect_shtack_polygons: &[],
+                        seg_contours: Vec::new(),
+                        primary_dry_vector_cuts: &[],
+                        effect_dry_vector_cuts: &[],
+                        shibufude_splatter_polygons: &[],
+                        sugomi_hole_polygons: &[],
+                        sugomi_inner_teeth_polygons: &[],
+                        sugomi_band_w_px: 0.0,
+                        sugomi_hw_in_px: 0.0,
+                        v3_body_ribbons: if mode == SfxHeavyStackMode::Fude { Vec::new() } else { rib.to_vec() },
+                        heavy_bite_polygons: if edge_bite_pct > 0.0 && mode != SfxHeavyStackMode::FgsfdsFence { &bite } else { &[] },
+                        heavy_tail_ribbons: if matches!(mode, SfxHeavyStackMode::Fude | SfxHeavyStackMode::FgsfdsStack) { rib.to_vec() } else { Vec::new() },
+                        heavy_slit_ribbons: if mode != SfxHeavyStackMode::FgsfdsFence { rib.to_vec() } else { Vec::new() },
+                        v3_stroke_w_px: 28.0,
+                        kakeami_w_scale: 1.0,
+                        kakeami_grad_axis: [0.0, 1.0],
+                        kakeami_grad_range: [0.0, 200.0],
+                        kakeami_perp_range: [0.0, 200.0],
+                    };
+                    bufs.reset();
+                    let mut rec = CmdRecorder {
+                        bufs: &mut bufs,
+                        cmds: Vec::new(),
+                        accum_is_a: true,
+                        region: test_region(512, 512),
+                        full_bounds: scene.full_bounds,
+                        auto_scale: 1.5,
+                    };
+                    record_scene_passes(&mut rec, &scene);
+                    assert_no_cmd_aliasing(&rec.cmds);
+                }
+            }
+        }
+
+        // Style 4: KakeamiV4 (Kake2 / Kake4 / KakeEdge × OneBit / Rough)
+        for mode in [SfxKakeamiV4Mode::Kake2, SfxKakeamiV4Mode::Kake4, SfxKakeamiV4Mode::KakeEdge] {
+            for edge_mode in [SfxV3EdgeMode::OneBit, SfxV3EdgeMode::Rough] {
+                let mut data = SfxData { fill: SfxFillSource::None, ..SfxData::default() };
+                data.line_effect.style = SfxLineStyle::KakeamiV4;
+                data.line_effect.kakeami_mode = mode;
+                data.line_effect.kakeami_edge_mode = edge_mode;
+                data.line_effect.halo_width_px = 6.0;
+                let scene = SfxGpuScene {
+                    data: &data,
+                    full_bounds: Rect::from_xywh(0, 0, 256, 256),
+                    glyph_em_px: 180.0,
+                    face_contours: &poly,
+                    line_polygons: &[],
+                    primary_shtack_polygons: &[],
+                    secondary_shtack_polygons: &[],
+                    effect_shtack_polygons: &[],
+                    seg_contours: Vec::new(),
+                    primary_dry_vector_cuts: &[],
+                    effect_dry_vector_cuts: &[],
+                    shibufude_splatter_polygons: &[],
+                    sugomi_hole_polygons: &[],
+                    sugomi_inner_teeth_polygons: &[],
+                    sugomi_band_w_px: 0.0,
+                    sugomi_hw_in_px: 0.0,
+                    v3_body_ribbons: rib.to_vec(),
+                    heavy_bite_polygons: &[],
+                    heavy_tail_ribbons: Vec::new(),
+                    heavy_slit_ribbons: Vec::new(),
+                    v3_stroke_w_px: 30.0,
+                    kakeami_w_scale: 1.07,
+                    kakeami_grad_axis: [0.0, 1.0],
+                    kakeami_grad_range: [32.0, 192.0],
+                    kakeami_perp_range: [-224.0, 192.0],
+                };
+                bufs.reset();
+                let mut rec = CmdRecorder {
+                    bufs: &mut bufs,
+                    cmds: Vec::new(),
+                    accum_is_a: true,
+                    region: test_region(512, 512),
+                    full_bounds: scene.full_bounds,
+                    auto_scale: 1.5,
+                };
+                record_scene_passes(&mut rec, &scene);
+                assert_no_cmd_aliasing(&rec.cmds);
+                if mode == SfxKakeamiV4Mode::KakeEdge {
+                    assert!(
+                        rec.cmds.iter().any(|c| matches!(c, GpuCmd::Quad { pipe: QuadPipe::KakeamiBetaMask, .. })),
+                        "expected KakeamiBetaMask pass for KakeEdge"
+                    );
                 }
             }
         }

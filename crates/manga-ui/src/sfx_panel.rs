@@ -8,9 +8,10 @@ use egui::{Color32, RichText, Stroke, Ui, vec2};
 use photocraft_algo::{DotShape, PatternType};
 use photocraft_doc::sfx::{
     MAX_SFX_BLEND_EFFECTS, MAX_SFX_SPLINE_POINTS, ScreentoneSpec, SfxBlendEffect, SfxBlending, SfxChannelBlend, SfxData, SfxDistress,
-    SfxDryBrushEngine, SfxDryBrushSpec, SfxFillSource, SfxFreeTransform, SfxGlyphTransform, SfxLineEffect, SfxLineJoin, SfxLineStyle,
-    SfxMeshInterpolation, SfxPreset, SfxShibufudeProfile, SfxShtackFillMode, SfxShtackFillSpec, SfxShtackFlowOvershoot,
-    SfxShtackOvershootMode, SfxShtackVariant, SfxSpikeShape, SfxStrokePosition, SfxStylePass, SfxSugomiDirection, SfxV3EdgeMode, SfxWarpMode,
+    SfxDryBrushEngine, SfxDryBrushSpec, SfxFillSource, SfxFreeTransform, SfxGlyphTransform, SfxHeavyStackMode, SfxKakeamiV4Mode, SfxLineEffect,
+    SfxLineJoin, SfxLineStyle, SfxMeshInterpolation, SfxPreset, SfxShibufudeProfile, SfxShtackFillMode, SfxShtackFillSpec,
+    SfxShtackFlowOvershoot, SfxShtackOvershootMode, SfxShtackVariant, SfxSpikeShape, SfxStrokePosition, SfxStylePass, SfxSugomiDirection,
+    SfxV3EdgeMode, SfxWarpMode,
 };
 use photocraft_doc::{Color, LayerId};
 use photocraft_manga_core::sfx_geom::{PreparedSfx, sample_catmull_rom};
@@ -376,6 +377,17 @@ fn line_style_badge(draft: &SfxData) -> &'static str {
             SfxSugomiDirection::Tate => "Sugomi v3 (縦)",
             SfxSugomiDirection::Yoko => "Sugomi v3 (横)",
         },
+        SfxLineStyle::HeavyStackV3 => match draft.line_effect.heavy_stack_mode {
+            SfxHeavyStackMode::Fude => "Heavy v3 (筆)",
+            SfxHeavyStackMode::FgsfdsStack => "Heavy v3 (Stack)",
+            SfxHeavyStackMode::Kin => "Heavy v3 (均 Hollow)",
+            SfxHeavyStackMode::FgsfdsFence => "Heavy v3 (Fence)",
+        },
+        SfxLineStyle::KakeamiV4 => match draft.line_effect.kakeami_mode {
+            SfxKakeamiV4Mode::Kake2 => "Kakeami v4 (2L)",
+            SfxKakeamiV4Mode::Kake4 => "Kakeami v4 (4L)",
+            SfxKakeamiV4Mode::KakeEdge => "Kakeami v4 (Edge)",
+        },
     }
 }
 
@@ -419,8 +431,8 @@ fn preset_title_color(preset: &SfxPreset, t: Tokens) -> Color32 {
         return TEXT_AMBER;
     }
     match preset.line_effect.style {
-        SfxLineStyle::Shtack => TEXT_AMBER,
-        SfxLineStyle::GPenNib => TEXT_SKY,
+        SfxLineStyle::Shtack | SfxLineStyle::HeavyStackV3 => TEXT_AMBER,
+        SfxLineStyle::GPenNib | SfxLineStyle::KakeamiV4 => TEXT_SKY,
         SfxLineStyle::BrushStroke | SfxLineStyle::ShibufudeV3 => TEXT_EMERALD,
         SfxLineStyle::Spikes | SfxLineStyle::SugomiV3 => TEXT_ROSE,
         SfxLineStyle::Clean | SfxLineStyle::OneBit => t.text,
@@ -594,7 +606,7 @@ fn draw_presets_card(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens, target: &Sf
             ui.add_space(2.0);
         }
 
-        egui::CollapsingHeader::new(RichText::new("SFX v3 (Shibufude / Sugomi)").size(10.0).strong().color(TEXT_EMERALD))
+        egui::CollapsingHeader::new(RichText::new("SFX v3 (Shibufude / Sugomi / Heavy / Kakeami)").size(10.0).strong().color(TEXT_EMERALD))
             .id_salt("sfx-v3-starter-presets")
             .default_open(true)
             .show(ui, |ui| {
@@ -647,7 +659,7 @@ fn draw_presets_card(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens, target: &Sf
     });
 }
 
-fn sfx_v3_starter_presets() -> [SfxPreset; 4] {
+fn sfx_v3_starter_presets() -> [SfxPreset; 8] {
     let ink = Color::rgb(0.05, 0.05, 0.07);
     [
         SfxPreset {
@@ -710,6 +722,68 @@ fn sfx_v3_starter_presets() -> [SfxPreset; 4] {
                 sugomi_direction: SfxSugomiDirection::Fude,
                 sugomi_hollow: true,
                 sugomi_edge_mode: SfxV3EdgeMode::Rough,
+                ..SfxLineEffect::default()
+            },
+            ..SfxPreset::default()
+        },
+        SfxPreset {
+            name: "Heavy · 筆 1-Bit".to_owned(),
+            description: "Тяжёлая тушь + выкусы".to_owned(),
+            fill: SfxFillSource::None,
+            line_effect: SfxLineEffect {
+                style: SfxLineStyle::HeavyStackV3,
+                halo_width_px: 8.0,
+                halo_color: Color::WHITE,
+                line_color: ink,
+                heavy_stack_mode: SfxHeavyStackMode::Fude,
+                heavy_stack_edge_mode: SfxV3EdgeMode::OneBit,
+                heavy_stack_edge_bite_pct: 45.0,
+                ..SfxLineEffect::default()
+            },
+            ..SfxPreset::default()
+        },
+        SfxPreset {
+            name: "Heavy · FGSFDS Stack".to_owned(),
+            description: "Слоистые стволы + дуги".to_owned(),
+            fill: SfxFillSource::None,
+            line_effect: SfxLineEffect {
+                style: SfxLineStyle::HeavyStackV3,
+                halo_width_px: 8.0,
+                halo_color: Color::WHITE,
+                line_color: ink,
+                heavy_stack_mode: SfxHeavyStackMode::FgsfdsStack,
+                heavy_stack_edge_mode: SfxV3EdgeMode::Rough,
+                heavy_stack_edge_bite_pct: 35.0,
+                ..SfxLineEffect::default()
+            },
+            ..SfxPreset::default()
+        },
+        SfxPreset {
+            name: "Kakeami · 4L 1-Bit".to_owned(),
+            description: "4-слойная штриховка".to_owned(),
+            fill: SfxFillSource::None,
+            line_effect: SfxLineEffect {
+                style: SfxLineStyle::KakeamiV4,
+                halo_width_px: 8.0,
+                halo_color: Color::WHITE,
+                line_color: ink,
+                kakeami_mode: SfxKakeamiV4Mode::Kake4,
+                kakeami_edge_mode: SfxV3EdgeMode::OneBit,
+                ..SfxLineEffect::default()
+            },
+            ..SfxPreset::default()
+        },
+        SfxPreset {
+            name: "Kakeami · Edge Cascade".to_owned(),
+            description: "Каскад + бета-ядро".to_owned(),
+            fill: SfxFillSource::None,
+            line_effect: SfxLineEffect {
+                style: SfxLineStyle::KakeamiV4,
+                halo_width_px: 8.0,
+                halo_color: Color::WHITE,
+                line_color: ink,
+                kakeami_mode: SfxKakeamiV4Mode::KakeEdge,
+                kakeami_edge_mode: SfxV3EdgeMode::Rough,
                 ..SfxLineEffect::default()
             },
             ..SfxPreset::default()
@@ -980,6 +1054,17 @@ fn draw_line_effect_card(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens) {
                 st.draft.fill = SfxFillSource::None;
             }
         });
+        ui.add_space(2.0);
+        ui.columns(2, |cols| {
+            if seg_button(&mut cols[0], cur == SfxLineStyle::HeavyStackV3, ACCENT_AMBER, "🧱 Heavy Stack v3", t).clicked() {
+                st.draft.line_effect.style = SfxLineStyle::HeavyStackV3;
+                st.draft.fill = SfxFillSource::None;
+            }
+            if seg_button(&mut cols[1], cur == SfxLineStyle::KakeamiV4, ACCENT_AMBER, "🕸 Kakeami v4", t).clicked() {
+                st.draft.line_effect.style = SfxLineStyle::KakeamiV4;
+                st.draft.fill = SfxFillSource::None;
+            }
+        });
 
         ui.add_space(4.0);
         let le = &mut st.draft.line_effect;
@@ -1096,9 +1181,21 @@ fn draw_line_effect_card(ui: &mut Ui, st: &mut SfxPanelState, t: Tokens) {
             SfxLineStyle::SugomiV3 => {
                 draw_sugomi_v3_controls(ui, le, t);
             }
+            SfxLineStyle::HeavyStackV3 => {
+                draw_heavy_stack_v3_controls(ui, le, t);
+            }
+            SfxLineStyle::KakeamiV4 => {
+                draw_kakeami_v4_controls(ui, le, t);
+            }
         }
-        if !matches!(le.style, SfxLineStyle::Shtack | SfxLineStyle::ShibufudeV3 | SfxLineStyle::SugomiV3)
-            && (le.line_width_px > 0.05 || le.style != SfxLineStyle::Clean)
+        if !matches!(
+            le.style,
+            SfxLineStyle::Shtack
+                | SfxLineStyle::ShibufudeV3
+                | SfxLineStyle::SugomiV3
+                | SfxLineStyle::HeavyStackV3
+                | SfxLineStyle::KakeamiV4
+        ) && (le.line_width_px > 0.05 || le.style != SfxLineStyle::Clean)
         {
             slider_row_f32(ui, t, "Зерно бумаги на лайне:", &mut le.line_grain_pct, 0.0..=100.0, "%");
         }
@@ -1175,6 +1272,83 @@ fn draw_sugomi_v3_controls(ui: &mut Ui, le: &mut SfxLineEffect, t: Tokens) {
     if le.sugomi_edge_mode == SfxV3EdgeMode::Rough {
         slider_row_f32(ui, t, "Сухость края:", &mut le.sugomi_dryness_pct, 0.0..=100.0, "%");
         slider_row_f32(ui, t, "Чёткость зерна:", &mut le.sugomi_sharpness_pct, 0.0..=100.0, "%");
+    } else {
+        slider_row_f32(ui, t, "Зерно 1-Bit:", &mut le.line_grain_pct, 0.0..=100.0, "%");
+    }
+}
+
+fn draw_heavy_stack_v3_controls(ui: &mut Ui, le: &mut SfxLineEffect, t: Tokens) {
+    row_with_reroll(ui, 22.0, &mut le.heavy_stack_seed, "Новый Seed Heavy Stack v3", |ui| {
+        ui.columns(2, |cols| {
+            if seg_button(&mut cols[0], le.heavy_stack_mode == SfxHeavyStackMode::Fude, ACCENT_SKY, "筆 Fude", t).clicked() {
+                le.heavy_stack_mode = SfxHeavyStackMode::Fude;
+            }
+            if seg_button(&mut cols[1], le.heavy_stack_mode == SfxHeavyStackMode::FgsfdsStack, ACCENT_SKY, "Stack", t).clicked() {
+                le.heavy_stack_mode = SfxHeavyStackMode::FgsfdsStack;
+            }
+        });
+    });
+    ui.add_space(2.0);
+    ui.columns(2, |cols| {
+        if seg_button(&mut cols[0], le.heavy_stack_mode == SfxHeavyStackMode::Kin, ACCENT_AMBER, "均 Kin (Hollow)", t).clicked() {
+            le.heavy_stack_mode = SfxHeavyStackMode::Kin;
+        }
+        if seg_button(&mut cols[1], le.heavy_stack_mode == SfxHeavyStackMode::FgsfdsFence, ACCENT_AMBER, "Fence", t).clicked() {
+            le.heavy_stack_mode = SfxHeavyStackMode::FgsfdsFence;
+        }
+    });
+    ui.add_space(2.0);
+    ui.columns(2, |cols| {
+        if seg_button(&mut cols[0], le.heavy_stack_edge_mode == SfxV3EdgeMode::OneBit, ACCENT_SKY, "1-Bit", t).clicked() {
+            le.heavy_stack_edge_mode = SfxV3EdgeMode::OneBit;
+        }
+        if seg_button(&mut cols[1], le.heavy_stack_edge_mode == SfxV3EdgeMode::Rough, ACCENT_AMBER, "Rough (Касурэ)", t).clicked() {
+            le.heavy_stack_edge_mode = SfxV3EdgeMode::Rough;
+        }
+    });
+    slider_row_f32(ui, t, "Насыщенность:", &mut le.heavy_stack_intensity_pct, 0.0..=100.0, "%");
+    if le.heavy_stack_mode != SfxHeavyStackMode::FgsfdsFence {
+        slider_row_f32(ui, t, "Выкусы края:", &mut le.heavy_stack_edge_bite_pct, 0.0..=100.0, "%");
+    }
+    if le.heavy_stack_edge_mode == SfxV3EdgeMode::Rough {
+        slider_row_f32(ui, t, "Сухость края:", &mut le.heavy_stack_dryness_pct, 0.0..=100.0, "%");
+        slider_row_f32(ui, t, "Чёткость зерна:", &mut le.heavy_stack_sharpness_pct, 0.0..=100.0, "%");
+    } else {
+        slider_row_f32(ui, t, "Зерно 1-Bit:", &mut le.line_grain_pct, 0.0..=100.0, "%");
+    }
+}
+
+fn draw_kakeami_v4_controls(ui: &mut Ui, le: &mut SfxLineEffect, t: Tokens) {
+    row_with_reroll(ui, 22.0, &mut le.kakeami_seed, "Новый Seed Kakeami v4", |ui| {
+        ui.columns(3, |cols| {
+            if seg_button(&mut cols[0], le.kakeami_mode == SfxKakeamiV4Mode::Kake2, ACCENT_SKY, "2L", t).clicked() {
+                le.kakeami_mode = SfxKakeamiV4Mode::Kake2;
+            }
+            if seg_button(&mut cols[1], le.kakeami_mode == SfxKakeamiV4Mode::Kake4, ACCENT_SKY, "4L", t).clicked() {
+                le.kakeami_mode = SfxKakeamiV4Mode::Kake4;
+            }
+            if seg_button(&mut cols[2], le.kakeami_mode == SfxKakeamiV4Mode::KakeEdge, ACCENT_AMBER, "Edge", t).clicked() {
+                le.kakeami_mode = SfxKakeamiV4Mode::KakeEdge;
+            }
+        });
+    });
+    ui.add_space(2.0);
+    ui.columns(2, |cols| {
+        if seg_button(&mut cols[0], le.kakeami_edge_mode == SfxV3EdgeMode::OneBit, ACCENT_SKY, "1-Bit", t).clicked() {
+            le.kakeami_edge_mode = SfxV3EdgeMode::OneBit;
+        }
+        if seg_button(&mut cols[1], le.kakeami_edge_mode == SfxV3EdgeMode::Rough, ACCENT_AMBER, "Rough (Касурэ)", t).clicked() {
+            le.kakeami_edge_mode = SfxV3EdgeMode::Rough;
+        }
+    });
+    slider_row_f32(ui, t, "Угол штрихов:", &mut le.kakeami_angle_offset_deg, -90.0..=90.0, "°");
+    if le.kakeami_mode == SfxKakeamiV4Mode::KakeEdge {
+        slider_row_f32(ui, t, "Ось градиента:", &mut le.kakeami_gradient_angle_deg, -180.0..=180.0, "°");
+    }
+    slider_row_f32(ui, t, "Вылет краёв:", &mut le.kakeami_feather_pct, 0.0..=200.0, "%");
+    if le.kakeami_edge_mode == SfxV3EdgeMode::Rough {
+        slider_row_f32(ui, t, "Сухость края:", &mut le.kakeami_dryness_pct, 0.0..=100.0, "%");
+        slider_row_f32(ui, t, "Чёткость зерна:", &mut le.kakeami_sharpness_pct, 0.0..=100.0, "%");
     } else {
         slider_row_f32(ui, t, "Зерно 1-Bit:", &mut le.line_grain_pct, 0.0..=100.0, "%");
     }
@@ -2359,6 +2533,8 @@ mod tests {
                 SfxLineStyle::Shtack,
                 SfxLineStyle::ShibufudeV3,
                 SfxLineStyle::SugomiV3,
+                SfxLineStyle::HeavyStackV3,
+                SfxLineStyle::KakeamiV4,
             ] {
                 let mut data = SfxData::default();
                 data.line_effect.style = style;

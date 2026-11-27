@@ -13,10 +13,10 @@ use photocraft_algo::{PatternType, ScreentoneSpec};
 use photocraft_color::{Color, PixelFormat};
 use photocraft_doc::Rect;
 use photocraft_doc::sfx::{
-    SfxBlendEffect, SfxChannelBlend, SfxData, SfxDryBrushEngine, SfxDryBrushSpec, SfxFillSource, SfxLineJoin, SfxLineStyle,
-    SfxShibufudeProfile, SfxShtackFillMode, SfxShtackFillSpec, SfxStrokePosition, SfxSugomiDirection, SfxV3EdgeMode,
+    SfxBlendEffect, SfxChannelBlend, SfxData, SfxDryBrushEngine, SfxDryBrushSpec, SfxFillSource, SfxHeavyStackMode, SfxKakeamiV4Mode,
+    SfxLineJoin, SfxLineStyle, SfxShibufudeProfile, SfxShtackFillMode, SfxShtackFillSpec, SfxStrokePosition, SfxSugomiDirection, SfxV3EdgeMode,
 };
-use photocraft_gpu::{DeviceHealth, SFX_SHADER, SfxGpuRenderer, SfxGpuScene, SfxGpuSegContour};
+use photocraft_gpu::{DeviceHealth, SFX_SHADER, SfxGpuRenderer, SfxGpuRibbonStrip, SfxGpuScene, SfxGpuSegContour};
 
 struct Gpu {
     device: wgpu::Device,
@@ -66,7 +66,7 @@ fn sfx_shader_validates_without_a_gpu() {
     wgpu::naga::valid::Validator::new(wgpu::naga::valid::ValidationFlags::all(), wgpu::naga::valid::Capabilities::empty())
         .validate(&module)
         .unwrap_or_else(|e| panic!("{}", e.emit_to_string(SFX_SHADER)));
-    assert!(module.entry_points.len() >= 20, "expected all SFX vertex/fragment entry points");
+    assert!(module.entry_points.len() >= 22, "expected all SFX vertex/fragment entry points");
 }
 
 /// Builds a synthetic holed square glyph ("O") with opposite-winding hole for NonZero winding tests.
@@ -126,6 +126,15 @@ fn gpu_stencil_cover_handles_holed_glyph_and_halo() {
         sugomi_inner_teeth_polygons: &[],
         sugomi_band_w_px: 0.0,
         sugomi_hw_in_px: 0.0,
+        v3_body_ribbons: Vec::new(),
+        heavy_bite_polygons: &[],
+        heavy_tail_ribbons: Vec::new(),
+        heavy_slit_ribbons: Vec::new(),
+        v3_stroke_w_px: 0.0,
+        kakeami_w_scale: 1.0,
+        kakeami_grad_axis: [0.0, 1.0],
+        kakeami_grad_range: [0.0, 32.0],
+        kakeami_perp_range: [0.0, 32.0],
     };
     let surf = g.renderer.render_tiled_to_surface(&g.device, &g.queue, &scene, PixelFormat::RGBA8).expect("GPU render");
 
@@ -242,6 +251,15 @@ fn gpu_dry_brush_all_four_engines_screentone_and_blending_stack() {
             sugomi_inner_teeth_polygons: &[],
             sugomi_band_w_px: 0.0,
             sugomi_hw_in_px: 0.0,
+            v3_body_ribbons: Vec::new(),
+            heavy_bite_polygons: &[],
+            heavy_tail_ribbons: Vec::new(),
+            heavy_slit_ribbons: Vec::new(),
+            v3_stroke_w_px: 0.0,
+            kakeami_w_scale: 1.0,
+            kakeami_grad_axis: [0.0, 1.0],
+            kakeami_grad_range: [0.0, 32.0],
+            kakeami_perp_range: [0.0, 32.0],
         };
         let surf = g.renderer.render_tiled_to_surface(&g.device, &g.queue, &scene, PixelFormat::RGBA8).expect("GPU render");
         assert!(!surf.content_bounds().is_empty(), "DryBrush {engine:?} + Blending stack produced empty surface");
@@ -301,6 +319,15 @@ fn gpu_tiled_render_large_sfx_is_seamless_and_fast() {
         sugomi_inner_teeth_polygons: &[],
         sugomi_band_w_px: 0.0,
         sugomi_hw_in_px: 0.0,
+        v3_body_ribbons: Vec::new(),
+        heavy_bite_polygons: &[],
+        heavy_tail_ribbons: Vec::new(),
+        heavy_slit_ribbons: Vec::new(),
+        v3_stroke_w_px: 0.0,
+        kakeami_w_scale: 1.0,
+        kakeami_grad_axis: [0.0, 1.0],
+        kakeami_grad_range: [0.0, 32.0],
+        kakeami_perp_range: [0.0, 32.0],
     };
 
     // Warm-up one viewport preview pass (1280x720, zero readback) to measure live interactive drag FPS.
@@ -374,6 +401,15 @@ fn gpu_work_targets_reuse_subviewport_without_realloc_or_edge_leakage() {
         sugomi_inner_teeth_polygons: &[],
         sugomi_band_w_px: 0.0,
         sugomi_hw_in_px: 0.0,
+        v3_body_ribbons: Vec::new(),
+        heavy_bite_polygons: &[],
+        heavy_tail_ribbons: Vec::new(),
+        heavy_slit_ribbons: Vec::new(),
+        v3_stroke_w_px: 0.0,
+        kakeami_w_scale: 1.0,
+        kakeami_grad_axis: [0.0, 1.0],
+        kakeami_grad_range: [0.0, 32.0],
+        kakeami_perp_range: [0.0, 32.0],
     };
 
     // 1. Prime capacity at 512x512 with full-area content so pixels at x>=300, y>=260 are populated.
@@ -556,6 +592,15 @@ fn gpu_ukiyo_brush_and_stroke_shtack_render_cleanly_across_zooms() {
             sugomi_inner_teeth_polygons: &[],
             sugomi_band_w_px: 0.0,
             sugomi_hw_in_px: 0.0,
+            v3_body_ribbons: Vec::new(),
+            heavy_bite_polygons: &[],
+            heavy_tail_ribbons: Vec::new(),
+            heavy_slit_ribbons: Vec::new(),
+            v3_stroke_w_px: 0.0,
+            kakeami_w_scale: 1.0,
+            kakeami_grad_axis: [0.0, 1.0],
+            kakeami_grad_range: [0.0, 32.0],
+            kakeami_perp_range: [0.0, 32.0],
         };
         let _ = g
             .renderer
@@ -585,6 +630,15 @@ fn gpu_ukiyo_brush_and_stroke_shtack_render_cleanly_across_zooms() {
         sugomi_inner_teeth_polygons: &[],
         sugomi_band_w_px: 0.0,
         sugomi_hw_in_px: 0.0,
+        v3_body_ribbons: Vec::new(),
+        heavy_bite_polygons: &[],
+        heavy_tail_ribbons: Vec::new(),
+        heavy_slit_ribbons: Vec::new(),
+        v3_stroke_w_px: 0.0,
+        kakeami_w_scale: 1.0,
+        kakeami_grad_axis: [0.0, 1.0],
+        kakeami_grad_range: [0.0, 32.0],
+        kakeami_perp_range: [0.0, 32.0],
     };
     let surf = g
         .renderer
@@ -623,6 +677,15 @@ fn gpu_ukiyo_brush_and_stroke_shtack_render_cleanly_across_zooms() {
         sugomi_inner_teeth_polygons: &[],
         sugomi_band_w_px: 0.0,
         sugomi_hw_in_px: 0.0,
+        v3_body_ribbons: Vec::new(),
+        heavy_bite_polygons: &[],
+        heavy_tail_ribbons: Vec::new(),
+        heavy_slit_ribbons: Vec::new(),
+        v3_stroke_w_px: 0.0,
+        kakeami_w_scale: 1.0,
+        kakeami_grad_axis: [0.0, 1.0],
+        kakeami_grad_range: [0.0, 32.0],
+        kakeami_perp_range: [0.0, 32.0],
     };
     let hollow_surf = g
         .renderer
@@ -708,6 +771,15 @@ fn gpu_shibufude_v3_kado_maru_modes_and_subviewport_grain_invariance() {
                     sugomi_inner_teeth_polygons: &[],
                     sugomi_band_w_px: 0.0,
                     sugomi_hw_in_px: 0.0,
+                    v3_body_ribbons: Vec::new(),
+                    heavy_bite_polygons: &[],
+                    heavy_tail_ribbons: Vec::new(),
+                    heavy_slit_ribbons: Vec::new(),
+                    v3_stroke_w_px: 0.0,
+                    kakeami_w_scale: 1.0,
+                    kakeami_grad_axis: [0.0, 1.0],
+                    kakeami_grad_range: [0.0, 32.0],
+                    kakeami_perp_range: [0.0, 32.0],
                 };
                 let surf = g
                     .renderer
@@ -756,6 +828,15 @@ fn gpu_shibufude_v3_kado_maru_modes_and_subviewport_grain_invariance() {
         sugomi_inner_teeth_polygons: &[],
         sugomi_band_w_px: 0.0,
         sugomi_hw_in_px: 0.0,
+        v3_body_ribbons: Vec::new(),
+        heavy_bite_polygons: &[],
+        heavy_tail_ribbons: Vec::new(),
+        heavy_slit_ribbons: Vec::new(),
+        v3_stroke_w_px: 0.0,
+        kakeami_w_scale: 1.0,
+        kakeami_grad_axis: [0.0, 1.0],
+        kakeami_grad_range: [0.0, 32.0],
+        kakeami_perp_range: [0.0, 32.0],
     };
     let _ = g
         .renderer
@@ -842,6 +923,15 @@ fn gpu_sugomi_v3_solid_hollow_modes_and_direct_max_inner_teeth() {
                     sugomi_inner_teeth_polygons: if hollow { &inner_teeth } else { &[] },
                     sugomi_band_w_px: 16.0,
                     sugomi_hw_in_px: 6.0,
+                    v3_body_ribbons: Vec::new(),
+                    heavy_bite_polygons: &[],
+                    heavy_tail_ribbons: Vec::new(),
+                    heavy_slit_ribbons: Vec::new(),
+                    v3_stroke_w_px: 0.0,
+                    kakeami_w_scale: 1.0,
+                    kakeami_grad_axis: [0.0, 1.0],
+                    kakeami_grad_range: [0.0, 32.0],
+                    kakeami_perp_range: [0.0, 32.0],
                 };
                 let surf = g
                     .renderer
@@ -879,6 +969,325 @@ fn gpu_sugomi_v3_solid_hollow_modes_and_direct_max_inner_teeth() {
         hollow_ink > 0 && hollow_ink < solid_ink,
         "Sugomi hollow ({hollow_ink} px) must carve out interior relative to solid ({solid_ink} px)"
     );
+    assert_eq!(health.errors(), 0, "expected 0 uncaptured wgpu errors");
+    assert!(health.fault().is_none(), "expected healthy device, got {:?}", health.fault());
+}
+
+fn build_arc_ribbon(cx: f32, cy: f32, r_mid: f32, hw: f32, a0: f32, a1: f32, steps: usize) -> (Vec<[f32; 2]>, Vec<[f32; 2]>) {
+    let mut left = Vec::with_capacity(steps + 1);
+    let mut right = Vec::with_capacity(steps + 1);
+    for i in 0..=steps {
+        let t = i as f32 / steps as f32;
+        let a = a0 + (a1 - a0) * t;
+        let (s, c) = a.sin_cos();
+        left.push([cx + c * (r_mid + hw), cy + s * (r_mid + hw)]);
+        right.push([cx + c * (r_mid - hw), cy + s * (r_mid - hw)]);
+    }
+    (left, right)
+}
+
+#[test]
+fn gpu_quad_strip_curved_c_arc_and_closed_ring_leave_concave_interior_empty() {
+    let Some(mut g) = gpu() else { return };
+    let health = DeviceHealth::watch(&g.device);
+    g.renderer.set_health(health.clone());
+
+    // 1. Curved 270° C-shaped arc centered at (128, 128), radius 70, half-width 8.
+    // A naive centroid-fan would fill the concave interior cavity at (128, 128)!
+    let (c_left, c_right) = build_arc_ribbon(128.0, 128.0, 70.0, 8.0, 0.45, 5.83, 40);
+    // 2. Closed 360° ring centered at (128, 128), radius 70, half-width 8.
+    let (r_left, r_right) = build_arc_ribbon(128.0, 128.0, 70.0, 8.0, 0.0, std::f32::consts::TAU, 48);
+
+    for (label, left, right) in [("C-arc", &c_left, &c_right), ("closed-ring", &r_left, &r_right)] {
+        let mut data = SfxData { fill: SfxFillSource::None, ..SfxData::default() };
+        data.line_effect.style = SfxLineStyle::HeavyStackV3;
+        data.line_effect.heavy_stack_mode = SfxHeavyStackMode::Kin;
+        data.line_effect.heavy_stack_edge_mode = SfxV3EdgeMode::OneBit;
+        data.line_effect.line_grain_pct = 0.0;
+        data.line_effect.halo_width_px = 0.0;
+        data.line_effect.line_color = Color::BLACK;
+        data.validate();
+
+        let scene = SfxGpuScene {
+            data: &data,
+            full_bounds: Rect::from_xywh(16, 16, 224, 224),
+            glyph_em_px: 160.0,
+            face_contours: &[],
+            line_polygons: &[],
+            primary_shtack_polygons: &[],
+            secondary_shtack_polygons: &[],
+            effect_shtack_polygons: &[],
+            seg_contours: Vec::new(),
+            primary_dry_vector_cuts: &[],
+            effect_dry_vector_cuts: &[],
+            shibufude_splatter_polygons: &[],
+            sugomi_hole_polygons: &[],
+            sugomi_inner_teeth_polygons: &[],
+            sugomi_band_w_px: 0.0,
+            sugomi_hw_in_px: 0.0,
+            v3_body_ribbons: vec![SfxGpuRibbonStrip { left, right }],
+            heavy_bite_polygons: &[],
+            heavy_tail_ribbons: Vec::new(),
+            heavy_slit_ribbons: Vec::new(),
+            v3_stroke_w_px: 28.0,
+            kakeami_w_scale: 1.0,
+            kakeami_grad_axis: [0.0, 1.0],
+            kakeami_grad_range: [0.0, 224.0],
+            kakeami_perp_range: [0.0, 224.0],
+        };
+        let surf = g
+            .renderer
+            .render_tiled_to_surface(&g.device, &g.queue, &scene, PixelFormat::RGBA8)
+            .unwrap_or_else(|e| panic!("{label} quad-strip render failed: {}", e.0));
+        // Concave center (128, 128) MUST stay completely transparent (no centroid-fan leak!).
+        assert!(
+            surf.pixel(128, 128)[3] < 0.05,
+            "{label} concave center leaked ink (got {:?}) — quad-strip broken!",
+            surf.pixel(128, 128)
+        );
+        // Point on the left arm of the arc/ring at angle pi -> (58, 128) MUST be solid ink!
+        assert!(
+            surf.pixel(58, 128)[3] > 0.9,
+            "{label} ribbon body missing ink at (58, 128) (got {:?})",
+            surf.pixel(58, 128)
+        );
+    }
+    assert_eq!(health.errors(), 0, "expected 0 uncaptured wgpu errors");
+    assert!(health.fault().is_none(), "expected healthy device, got {:?}", health.fault());
+}
+
+#[test]
+fn gpu_heavy_stack_v3_all_modes_edge_bite_order_and_health() {
+    let Some(mut g) = gpu() else { return };
+    let health = DeviceHealth::watch(&g.device);
+    g.renderer.set_health(health.clone());
+
+    let face = holed_square_contours(48.0, 48.0, 160.0);
+    let body_l = [[52.0_f32, 52.0], [204.0, 52.0], [204.0, 204.0]];
+    let body_r = [[52.0_f32, 82.0], [174.0, 82.0], [174.0, 204.0]];
+    // Bite cuts out a bite around (120..145, 52..78)
+    let bite = vec![vec![(118.0, 48.0), (146.0, 48.0), (146.0, 78.0), (132.0, 84.0), (118.0, 78.0)]];
+    // Tail crosses through (125..140, 60..70) — MUST survive because tails union AFTER edge_bite!
+    let tail_l = [[110.0_f32, 60.0], [156.0, 60.0]];
+    let tail_r = [[110.0_f32, 70.0], [156.0, 70.0]];
+    // Slit cuts inside lower vertical leg at x=188..192, y=120..170
+    let slit_l = [[187.0_f32, 120.0], [187.0, 170.0]];
+    let slit_r = [[192.0_f32, 120.0], [192.0, 170.0]];
+
+    for mode in [
+        SfxHeavyStackMode::Fude,
+        SfxHeavyStackMode::FgsfdsStack,
+        SfxHeavyStackMode::Kin,
+        SfxHeavyStackMode::FgsfdsFence,
+    ] {
+        for edge_bite_pct in [0.0_f32, 65.0] {
+            for edge_mode in [SfxV3EdgeMode::OneBit, SfxV3EdgeMode::Rough] {
+                let mut data = SfxData { fill: SfxFillSource::None, ..SfxData::default() };
+                data.line_effect.style = SfxLineStyle::HeavyStackV3;
+                data.line_effect.heavy_stack_mode = mode;
+                data.line_effect.heavy_stack_edge_bite_pct = edge_bite_pct;
+                data.line_effect.heavy_stack_edge_mode = edge_mode;
+                data.line_effect.line_color = Color::BLACK;
+                data.line_effect.halo_width_px = 0.0;
+                data.validate();
+
+                let scene = SfxGpuScene {
+                    data: &data,
+                    full_bounds: Rect::from_xywh(16, 16, 224, 224),
+                    glyph_em_px: 160.0,
+                    face_contours: &face,
+                    line_polygons: &[],
+                    primary_shtack_polygons: &[],
+                    secondary_shtack_polygons: &[],
+                    effect_shtack_polygons: &[],
+                    seg_contours: Vec::new(),
+                    primary_dry_vector_cuts: &[],
+                    effect_dry_vector_cuts: &[],
+                    shibufude_splatter_polygons: &[],
+                    sugomi_hole_polygons: &[],
+                    sugomi_inner_teeth_polygons: &[],
+                    sugomi_band_w_px: 0.0,
+                    sugomi_hw_in_px: 0.0,
+                    v3_body_ribbons: if mode == SfxHeavyStackMode::Fude {
+                        Vec::new()
+                    } else {
+                        vec![SfxGpuRibbonStrip { left: &body_l, right: &body_r }]
+                    },
+                    heavy_bite_polygons: if edge_bite_pct > 0.0 && mode != SfxHeavyStackMode::FgsfdsFence {
+                        &bite
+                    } else {
+                        &[]
+                    },
+                    heavy_tail_ribbons: if matches!(mode, SfxHeavyStackMode::Fude | SfxHeavyStackMode::FgsfdsStack) {
+                        vec![SfxGpuRibbonStrip { left: &tail_l, right: &tail_r }]
+                    } else {
+                        Vec::new()
+                    },
+                    heavy_slit_ribbons: if mode != SfxHeavyStackMode::FgsfdsFence {
+                        vec![SfxGpuRibbonStrip { left: &slit_l, right: &slit_r }]
+                    } else {
+                        Vec::new()
+                    },
+                    v3_stroke_w_px: 30.0,
+                    kakeami_w_scale: 1.0,
+                    kakeami_grad_axis: [0.0, 1.0],
+                    kakeami_grad_range: [48.0, 160.0],
+                    kakeami_perp_range: [-208.0, 160.0],
+                };
+                let surf = g
+                    .renderer
+                    .render_tiled_to_surface(&g.device, &g.queue, &scene, PixelFormat::RGBA8)
+                    .unwrap_or_else(|e| panic!("HeavyStack {mode:?}/bite={edge_bite_pct}/{edge_mode:?} failed: {}", e.0));
+                assert!(!surf.content_bounds().is_empty(), "HeavyStack {mode:?} rendered empty");
+                if mode == SfxHeavyStackMode::FgsfdsStack && edge_bite_pct > 0.0 && edge_mode == SfxV3EdgeMode::OneBit {
+                    // Tail overlapping the bite zone at (132, 65) must stay SOLID!
+                    assert!(
+                        surf.pixel(132, 65)[3] > 0.5,
+                        "tail was erroneously cut by edge_bite (got {:?})",
+                        surf.pixel(132, 65)
+                    );
+                    // Non-tail bite zone at (132, 54) must be carved out!
+                    assert!(
+                        surf.pixel(132, 54)[3] < 0.2,
+                        "edge_bite did not carve body at (132, 54) (got {:?})",
+                        surf.pixel(132, 54)
+                    );
+                }
+            }
+        }
+    }
+    assert_eq!(health.errors(), 0, "expected 0 uncaptured wgpu errors");
+    assert!(health.fault().is_none(), "expected healthy device, got {:?}", health.fault());
+}
+
+#[test]
+fn gpu_kakeami_v4_all_modes_kake_edge_gradient_and_health() {
+    let Some(mut g) = gpu() else { return };
+    let health = DeviceHealth::watch(&g.device);
+    g.renderer.set_health(health.clone());
+
+    // Solid square glyph [48..208, 48..208]
+    let solid_face = vec![vec![(48.0, 48.0), (208.0, 48.0), (208.0, 208.0), (48.0, 208.0)]];
+    // Synthetic parallel crosshatch ribbons spanning the glyph (denser toward bottom for KakeEdge)
+    let mut rib_storage: Vec<(Vec<[f32; 2]>, Vec<[f32; 2]>)> = Vec::new();
+    for k in 0..14 {
+        let y = 56.0 + (k as f32) * 11.0;
+        let l = vec![[54.0, y - 1.2], [202.0, y - 1.2]];
+        let r = vec![[54.0, y + 1.2], [202.0, y + 1.2]];
+        rib_storage.push((l, r));
+    }
+    let ribbons: Vec<SfxGpuRibbonStrip<'_>> = rib_storage
+        .iter()
+        .map(|(l, r)| SfxGpuRibbonStrip { left: l, right: r })
+        .collect();
+
+    // Synthetic KakeEdge 4-layer cascade ribbons: light in top, crosshatched in mid, dense + beta_mask in bot
+    let mut kake_edge_storage: Vec<(Vec<[f32; 2]>, Vec<[f32; 2]>)> = Vec::new();
+    // Layer 0 (sparse across full height: y = 60, 82, 104, 126, 148, 170, 192)
+    for k in 0..7 {
+        let y = 60.0 + (k as f32) * 22.0;
+        kake_edge_storage.push((vec![[54.0, y - 1.2], [202.0, y - 1.2]], vec![[54.0, y + 1.2], [202.0, y + 1.2]]));
+    }
+    // Layers 1..2 (crosshatch starting from mid: y = 108..200)
+    for k in 0..10 {
+        let x = 60.0 + (k as f32) * 15.0;
+        kake_edge_storage.push((vec![[x - 1.2, 108.0], [x - 1.2, 200.0]], vec![[x + 1.2, 108.0], [x + 1.2, 200.0]]));
+    }
+    let kake_edge_ribbons: Vec<SfxGpuRibbonStrip<'_>> = kake_edge_storage
+        .iter()
+        .map(|(l, r)| SfxGpuRibbonStrip { left: l, right: r })
+        .collect();
+
+    for mode in [SfxKakeamiV4Mode::Kake2, SfxKakeamiV4Mode::Kake4, SfxKakeamiV4Mode::KakeEdge] {
+        for edge_mode in [SfxV3EdgeMode::OneBit, SfxV3EdgeMode::Rough] {
+            let mut data = SfxData { fill: SfxFillSource::None, ..SfxData::default() };
+            data.line_effect.style = SfxLineStyle::KakeamiV4;
+            data.line_effect.kakeami_mode = mode;
+            data.line_effect.kakeami_edge_mode = edge_mode;
+            data.line_effect.line_color = Color::BLACK;
+            data.line_effect.halo_width_px = 0.0;
+            data.validate();
+
+            let scene = SfxGpuScene {
+                data: &data,
+                full_bounds: Rect::from_xywh(16, 16, 224, 224),
+                glyph_em_px: 160.0,
+                face_contours: &solid_face,
+                line_polygons: &[],
+                primary_shtack_polygons: &[],
+                secondary_shtack_polygons: &[],
+                effect_shtack_polygons: &[],
+                seg_contours: Vec::new(),
+                primary_dry_vector_cuts: &[],
+                effect_dry_vector_cuts: &[],
+                shibufude_splatter_polygons: &[],
+                sugomi_hole_polygons: &[],
+                sugomi_inner_teeth_polygons: &[],
+                sugomi_band_w_px: 0.0,
+                sugomi_hw_in_px: 0.0,
+                v3_body_ribbons: if mode == SfxKakeamiV4Mode::KakeEdge {
+                    kake_edge_ribbons.clone()
+                } else {
+                    ribbons.clone()
+                },
+                heavy_bite_polygons: &[],
+                heavy_tail_ribbons: Vec::new(),
+                heavy_slit_ribbons: Vec::new(),
+                v3_stroke_w_px: 40.0,
+                kakeami_w_scale: 1.4,
+                kakeami_grad_axis: [0.0, 1.0],
+                kakeami_grad_range: [48.0, 160.0],
+                kakeami_perp_range: [-208.0, 160.0],
+            };
+            let surf = g
+                .renderer
+                .render_tiled_to_surface(&g.device, &g.queue, &scene, PixelFormat::RGBA8)
+                .unwrap_or_else(|e| panic!("Kakeami {mode:?}/{edge_mode:?} failed: {}", e.0));
+            assert!(!surf.content_bounds().is_empty(), "Kakeami {mode:?}/{edge_mode:?} rendered empty");
+
+            if mode == SfxKakeamiV4Mode::KakeEdge && edge_mode == SfxV3EdgeMode::OneBit {
+                // 1. Full KakeEdge render (hatch cascade + GPU beta_mask) must increase strictly top < mid < bot
+                let band_ink = |y0: i32, y1: i32| -> usize {
+                    let mut c = 0usize;
+                    for y in y0..y1 {
+                        for x in 56..200 {
+                            if surf.pixel(x, y)[3] > 0.5 {
+                                c += 1;
+                            }
+                        }
+                    }
+                    c
+                };
+                let top = band_ink(54, 94);
+                let mid = band_ink(108, 148);
+                let bot = band_ink(160, 200);
+                assert!(
+                    top > 0 && top < mid && mid < bot,
+                    "KakeEdge GPU render must increase top < mid < bot (top={top}, mid={mid}, bot={bot})"
+                );
+
+                // 2. GPU KakeamiBetaMask alone must stay empty at top and paint solid ink core at bottom
+                let beta_scene = SfxGpuScene { v3_body_ribbons: Vec::new(), ..scene };
+                let beta_surf = g
+                    .renderer
+                    .render_tiled_to_surface(&g.device, &g.queue, &beta_scene, PixelFormat::RGBA8)
+                    .expect("KakeEdge beta_mask render");
+                let b_ink = |y0: i32, y1: i32| -> usize {
+                    let mut c = 0usize;
+                    for y in y0..y1 {
+                        for x in 56..200 {
+                            if beta_surf.pixel(x, y)[3] > 0.5 {
+                                c += 1;
+                            }
+                        }
+                    }
+                    c
+                };
+                assert_eq!(b_ink(54, 94), 0, "beta_mask must stay empty at top");
+                assert!(b_ink(160, 200) > 2000, "beta_mask must fill dense bottom ink core");
+            }
+        }
+    }
     assert_eq!(health.errors(), 0, "expected 0 uncaptured wgpu errors");
     assert!(health.fault().is_none(), "expected healthy device, got {:?}", health.fault());
 }

@@ -215,6 +215,18 @@ fn default_34() -> f32 {
     34.0
 }
 
+fn default_42() -> f32 {
+    42.0
+}
+
+fn default_32() -> f32 {
+    32.0
+}
+
+fn default_68() -> f32 {
+    68.0
+}
+
 fn default_48() -> f32 {
     48.0
 }
@@ -286,6 +298,10 @@ pub enum SfxLineStyle {
     ShibufudeV3,
     /// Style 2 — 凄みベタ (`sugomi_v3.py`, rev 5): continuous jagged `fude`/`tate`/`yoko` ring + `Solid`/`Hollow` + compact inner teeth.
     SugomiV3,
+    /// Style 3 — 重みベタ / FGSFDS (`heavy_stack_v3.py`, rev 3): stacked brush stems, arcs, flicks, hollow `Kin`, vertical `Fence`, focal `edge_bite`.
+    HeavyStackV3,
+    /// Style 4 — 凄み黒カケペン (`kakeami_v4.py`): continuous unsegmented phase-locked crosshatch lanes + `KakeEdge` cascade.
+    KakeamiV4,
 }
 
 /// Base band corner profile for [`SfxLineStyle::ShibufudeV3`].
@@ -321,6 +337,34 @@ pub enum SfxSugomiDirection {
     Tate,
     /// Horizontal comb needles (`yoko`).
     Yoko,
+}
+
+/// Brush submode for [`SfxLineStyle::HeavyStackV3`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SfxHeavyStackMode {
+    /// 重みベタ筆: organic heavy SDF body + tangential tails + interior slits.
+    #[default]
+    Fude,
+    /// FGSFDS stacked straight stems + tiled curved arcs + tangential curve flicks + slits.
+    FgsfdsStack,
+    /// 重みベタ均: hollow stacked miter-offset rings + slits.
+    Kin,
+    /// Vertical columnar brush fence with interior counter-hole clearance.
+    FgsfdsFence,
+}
+
+/// Layer density preset for [`SfxLineStyle::KakeamiV4`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SfxKakeamiV4Mode {
+    /// 2-layer crisp crosshatching (`kake_2`).
+    Kake2,
+    /// 4-layer cloud-modulated crosshatching (`kake_4`).
+    #[default]
+    Kake4,
+    /// 4-layer directional gradient cascade + solid beta ink core (`kake_edge`).
+    KakeEdge,
 }
 
 /// Geometric shape of contour spikes in [`SfxLineStyle::Spikes`].
@@ -522,6 +566,45 @@ pub struct SfxLineEffect {
     pub sugomi_sharpness_pct: f32,
     #[serde(default = "default_seed_one")]
     pub sugomi_seed: u32,
+
+    // --- Style 3: Heavy Stacked Brush v3 (重みベタ / FGSFDS, rev 3) ---
+    #[serde(default)]
+    pub heavy_stack_mode: SfxHeavyStackMode,
+    #[serde(default)]
+    pub heavy_stack_edge_mode: SfxV3EdgeMode,
+    /// Brush stroke density / tail & slit intensity (`0..=100%`, default `70%`).
+    #[serde(default = "default_70")]
+    pub heavy_stack_intensity_pct: f32,
+    /// Selective focal wall edge bites (`0..=100%`, default `0%`; `0%` = bit-exact rev 2).
+    #[serde(default)]
+    pub heavy_stack_edge_bite_pct: f32,
+    #[serde(default = "default_42")]
+    pub heavy_stack_dryness_pct: f32,
+    #[serde(default = "default_60")]
+    pub heavy_stack_sharpness_pct: f32,
+    #[serde(default = "default_seed_one")]
+    pub heavy_stack_seed: u32,
+
+    // --- Style 4: Kakeami v4 (凄み黒カケペン, Continuous Unsegmented Lanes) ---
+    #[serde(default)]
+    pub kakeami_mode: SfxKakeamiV4Mode,
+    #[serde(default)]
+    pub kakeami_edge_mode: SfxV3EdgeMode,
+    /// Global rotation offset for all 4 parallel crosshatch layer angles (`-90..=90°`, default `0°`).
+    #[serde(default)]
+    pub kakeami_angle_offset_deg: f32,
+    /// Directional cascade axis for `KakeEdge` (`-180..=180°`, default `90°` = top→bottom).
+    #[serde(default = "default_90")]
+    pub kakeami_gradient_angle_deg: f32,
+    /// Boundary feather overshoot scale (`0..=200%`, default `100%`).
+    #[serde(default = "default_100")]
+    pub kakeami_feather_pct: f32,
+    #[serde(default = "default_32")]
+    pub kakeami_dryness_pct: f32,
+    #[serde(default = "default_68")]
+    pub kakeami_sharpness_pct: f32,
+    #[serde(default = "default_seed_one")]
+    pub kakeami_seed: u32,
 }
 
 impl Default for SfxLineEffect {
@@ -582,6 +665,21 @@ impl Default for SfxLineEffect {
             sugomi_dryness_pct: 48.0,
             sugomi_sharpness_pct: 58.0,
             sugomi_seed: 1,
+            heavy_stack_mode: SfxHeavyStackMode::Fude,
+            heavy_stack_edge_mode: SfxV3EdgeMode::OneBit,
+            heavy_stack_intensity_pct: 70.0,
+            heavy_stack_edge_bite_pct: 0.0,
+            heavy_stack_dryness_pct: 42.0,
+            heavy_stack_sharpness_pct: 60.0,
+            heavy_stack_seed: 1,
+            kakeami_mode: SfxKakeamiV4Mode::Kake4,
+            kakeami_edge_mode: SfxV3EdgeMode::OneBit,
+            kakeami_angle_offset_deg: 0.0,
+            kakeami_gradient_angle_deg: 90.0,
+            kakeami_feather_pct: 100.0,
+            kakeami_dryness_pct: 32.0,
+            kakeami_sharpness_pct: 68.0,
+            kakeami_seed: 1,
         }
     }
 }
@@ -635,6 +733,17 @@ impl SfxLineEffect {
         self.sugomi_cleft_dip_pct = finite_f32(self.sugomi_cleft_dip_pct, 34.0).clamp(0.0, 80.0);
         self.sugomi_dryness_pct = finite_f32(self.sugomi_dryness_pct, 48.0).clamp(0.0, 100.0);
         self.sugomi_sharpness_pct = finite_f32(self.sugomi_sharpness_pct, 58.0).clamp(0.0, 100.0);
+
+        self.heavy_stack_intensity_pct = finite_f32(self.heavy_stack_intensity_pct, 70.0).clamp(0.0, 100.0);
+        self.heavy_stack_edge_bite_pct = finite_f32(self.heavy_stack_edge_bite_pct, 0.0).clamp(0.0, 100.0);
+        self.heavy_stack_dryness_pct = finite_f32(self.heavy_stack_dryness_pct, 42.0).clamp(0.0, 100.0);
+        self.heavy_stack_sharpness_pct = finite_f32(self.heavy_stack_sharpness_pct, 60.0).clamp(0.0, 100.0);
+
+        self.kakeami_angle_offset_deg = finite_f32(self.kakeami_angle_offset_deg, 0.0).clamp(-90.0, 90.0);
+        self.kakeami_gradient_angle_deg = finite_f32(self.kakeami_gradient_angle_deg, 90.0).clamp(-180.0, 180.0);
+        self.kakeami_feather_pct = finite_f32(self.kakeami_feather_pct, 100.0).clamp(0.0, 200.0);
+        self.kakeami_dryness_pct = finite_f32(self.kakeami_dryness_pct, 32.0).clamp(0.0, 100.0);
+        self.kakeami_sharpness_pct = finite_f32(self.kakeami_sharpness_pct, 68.0).clamp(0.0, 100.0);
     }
 }
 

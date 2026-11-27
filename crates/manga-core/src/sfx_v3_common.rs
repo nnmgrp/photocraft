@@ -13,6 +13,50 @@ use crate::sfx_geom::PreparedSfx;
 
 pub type PolyRing = Vec<(f64, f64)>;
 
+/// Tapered open or closed ribbon strip stored as paired `(left, right)` boundary chains.
+///
+/// Rendered directly as a quad strip (`2` triangles per segment: `(L[i], R[i], L[i+1])`,
+/// `(R[i], R[i+1], L[i+1])`) into `BlendOperation::Max` on GPU — ZERO centroid-fan chord
+/// artifacts across curved arcs or closed loops!
+#[derive(Clone, Debug, Default)]
+pub struct RibbonStrip {
+    pub left: Vec<[f32; 2]>,
+    pub right: Vec<[f32; 2]>,
+}
+
+impl RibbonStrip {
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.left.len().min(self.right.len())
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len() < 2
+    }
+
+    pub fn aabb(&self) -> Option<[f64; 4]> {
+        let n = self.len();
+        if n < 2 {
+            return None;
+        }
+        let mut b = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+        for i in 0..n {
+            for p in [self.left[i], self.right[i]] {
+                let x = f64::from(p[0]);
+                let y = f64::from(p[1]);
+                if x.is_finite() && y.is_finite() {
+                    b[0] = b[0].min(x);
+                    b[1] = b[1].min(y);
+                    b[2] = b[2].max(x);
+                    b[3] = b[3].max(y);
+                }
+            }
+        }
+        (b[0] <= b[2] && b[1] <= b[3]).then_some(b)
+    }
+}
+
 // =============================================================================
 // 1. BIT-EXACT DETERMINISTIC HASH, VALUE NOISE & CRISP PAPER GRAIN
 // =============================================================================
@@ -361,6 +405,142 @@ impl VectorGlyphSdf {
         if vote >= 0.0 { 1.0 } else { -1.0 }
     }
 
+    /// Probes inward along `in_dir` until exiting ink (`sdf >= 0.0`), matching `_probe_ink_w`.
+    pub fn probe_ink_w(&self, origin: (f64, f64), in_dir: (f64, f64), smax: f64, step: f64) -> f64 {
+        let st = step.max(0.5);
+        let mut t = 2.0;
+        while t < smax {
+            let p = (origin.0 + in_dir.0 * t, origin.1 + in_dir.1 * t);
+            if !self.is_inside(p) {
+                return t;
+            }
+            t += st;
+        }
+        smax
+    }
+
+    /// Probes outward through air along `dir` until hitting ink (`sdf < 0.0`), matching `_probe_air_clear`.
+    pub fn probe_air_clear(&self, origin: (f64, f64), dir: (f64, f64), smax: f64) -> f64 {
+        let mut t = 2.0;
+        while t <= smax + 0.5 {
+            let p = (origin.0 + dir.0 * t, origin.1 + dir.1 * t);
+            if self.is_inside(p) {
+                return t;
+            }
+            t += 1.5;
+        }
+        smax
+    }
+
+    /// Clips a straight line through `anchor` along `dir` to the glyph interior (`sdf <= sdf_limit`).
+    pub fn clip_line_to_glyph(
+        &self,
+        anchor: (f64, f64),
+        dir: (f64, f64),
+        max_half_len: f64,
+        sdf_limit: f64,
+    ) -> Option<((f64, f64), (f64, f64), f64, f64)> {
+        if self.signed_distance(anchor) > sdf_limit + 1.5 {
+            return None;
+        }
+        let step = 1.5_f64;
+        let march = |sign: f64| -> f64 {
+            let mut prev_t = 0.0_f64;
+            let mut t = 0.0_f64;
+            while t <= max_half_len + 1.0 {
+                let p = (anchor.0 + dir.0 * (sign * t), anchor.1 + dir.1 * (sign * t));
+                if self.signed_distance(p) > sdf_limit {
+                    return if t <= 0.0 { 0.0 } else { prev_t };
+                }
+                prev_t = t;
+                t += step;
+            }
+            prev_t
+        };
+        let tp = march(1.0);
+        let tn = march(-1.0);
+        if tp + tn < 4.0 {
+            return None;
+        }
+        let a = (anchor.0 - dir.0 * tn, anchor.1 - dir.1 * tn);
+        let b = (anchor.0 + dir.0 * tp, anchor.1 + dir.1 * tp);
+        Some((a, b, tn, tp))
+    }
+
+    /// Exact analytical vertical ink runs `[y0, y1]` along vertical column `x` (even-odd per glyph,
+    /// union across glyphs). Eliminates full-canvas rasterization for `FgsfdsFence` at 2400 DPI.
+    pub fn vertical_runs_at_x(&self, x: f64) -> Vec<(f64, f64)> {
+        let mut all_runs: Vec<(f64, f64)> = Vec::new();
+        for (gb, cs) in &self.glyphs {
+            if x < gb[0] || x > gb[2] {
+                continue;
+            }
+            let mut ys: Vec<f64> = Vec::new();
+            for c in cs {
+                if x < c.aabb[0] || x > c.aabb[2] {
+                    continue;
+                }
+                let n = c.pts.len();
+                for i in 0..n {
+                    let a = c.pts[i];
+                    let b = c.pts[(i + 1) % n];
+                    if (a.0 > x) != (b.0 > x) {
+                        let t = (x - a.0) / (b.0 - a.0);
+                        ys.push(a.1 + t * (b.1 - a.1));
+                    }
+                }
+            }
+            ys.sort_by(f64::total_cmp);
+            for pair in ys.chunks_exact(2) {
+                if pair[1] - pair[0] >= 1.0 {
+                    all_runs.push((pair[0], pair[1]));
+                }
+            }
+        }
+        if all_runs.len() <= 1 {
+            return all_runs;
+        }
+        all_runs.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut merged: Vec<(f64, f64)> = Vec::with_capacity(all_runs.len());
+        for r in all_runs {
+            if let Some(last) = merged.last_mut()
+                && r.0 <= last.1 + 0.5
+            {
+                last.1 = last.1.max(r.1);
+                continue;
+            }
+            merged.push(r);
+        }
+        merged
+    }
+
+    /// Exact signed distance `d` and bounding box across all contours.
+    pub fn global_aabb(&self) -> Option<[f64; 4]> {
+        if self.glyphs.is_empty() {
+            return None;
+        }
+        let mut b = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+        for (gb, _) in &self.glyphs {
+            b[0] = b[0].min(gb[0]);
+            b[1] = b[1].min(gb[1]);
+            b[2] = b[2].max(gb[2]);
+            b[3] = b[3].max(gb[3]);
+        }
+        (b[0] <= b[2] && b[1] <= b[3]).then_some(b)
+    }
+
+    /// True when no contours are present.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.glyphs.is_empty()
+    }
+
+    /// Builds an analytical SDF from a flat list of contours (e.g. counter holes).
+    pub fn from_flat_contours(contours: &[PolyRing]) -> Self {
+        let groups: Vec<Vec<PolyRing>> = contours.iter().filter(|c| c.len() >= 3).map(|c| vec![c.clone()]).collect();
+        Self::from_contour_groups(&groups)
+    }
+
     /// Exact ray-segment distance probe from `origin` along unit `dir` in `[start, smax]`.
     /// Finds the smallest hit `t >= start` against any glyph boundary.
     pub fn probe_ray(&self, origin: (f64, f64), dir: (f64, f64), start: f64, smax: f64) -> f64 {
@@ -677,6 +857,172 @@ pub fn rasterize_polygons_max(polys: &[PolyRing], bounds: Rect) -> Vec<f32> {
         }
         let mut ras = Rasterizer::new(false);
         ras.add_component(&[norm], PathOp::Combine, FillRule::NonZero);
+        let cov = ras.render(sub);
+        let sw = sub.width() as usize;
+        let sh = sub.height() as usize;
+        for row in 0..sh {
+            let dst_y = (ry0 - bounds.y0) as usize + row;
+            let dst_x0 = (rx0 - bounds.x0) as usize;
+            let dst_off = dst_y * w + dst_x0;
+            let src_off = row * sw;
+            for x in 0..sw {
+                let v = cov[src_off + x];
+                if v > acc[dst_off + x] {
+                    acc[dst_off + x] = v;
+                }
+            }
+        }
+    }
+    acc
+}
+
+/// Smooth Hermite interpolation in `[0, 1]`.
+#[inline]
+pub fn smoothstep(a: f64, b: f64, x: f64) -> f64 {
+    let t = ((x - a) / (b - a).max(1e-6)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// Uniformly resamples an open polyline to approximately `step` document pixels per segment.
+pub fn resample_open(pts: &[(f64, f64)], step: f64) -> Vec<(f64, f64)> {
+    if pts.len() < 2 {
+        return pts.to_vec();
+    }
+    let mut cum = Vec::with_capacity(pts.len());
+    cum.push(0.0_f64);
+    let mut total = 0.0_f64;
+    for w in pts.windows(2) {
+        total += (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1);
+        cum.push(total);
+    }
+    if total < 1e-6 {
+        return pts[..2].to_vec();
+    }
+    let n = ((total / step.max(0.25)).round() as usize + 1).max(3);
+    let mut out = Vec::with_capacity(n);
+    let mut j = 0usize;
+    for k in 0..n {
+        let t = total * (k as f64) / ((n - 1) as f64);
+        while j + 2 < cum.len() && cum[j + 1] < t {
+            j += 1;
+        }
+        let sl = cum[j + 1] - cum[j];
+        let u = if sl < 1e-12 { 0.0 } else { (t - cum[j]) / sl };
+        out.push((pts[j].0 * (1.0 - u) + pts[j + 1].0 * u, pts[j].1 * (1.0 - u) + pts[j + 1].1 * u));
+    }
+    out
+}
+
+/// Builds a NaN-free quad-strip [`RibbonStrip`] from a centerline `pts` and per-sample `half_w`.
+///
+/// Deduplicates coincident points and guards near-zero tangents (`tl < 1e-6`) so short decimated
+/// spans (`3–4` samples) never emit `NaN`/`Inf` vertices.
+pub fn build_tapered_ribbon_strip(pts: &[(f64, f64)], half_w: &[f64]) -> Option<RibbonStrip> {
+    let raw_m = pts.len().min(half_w.len());
+    if raw_m < 2 {
+        return None;
+    }
+    // Deduplicate consecutive near-coincident points while preserving finite endpoints.
+    let mut clean_p: Vec<(f64, f64)> = Vec::with_capacity(raw_m);
+    let mut clean_hw: Vec<f64> = Vec::with_capacity(raw_m);
+    for i in 0..raw_m {
+        let p = pts[i];
+        let w = half_w[i];
+        if !p.0.is_finite() || !p.1.is_finite() || !w.is_finite() {
+            continue;
+        }
+        if let Some(&last) = clean_p.last()
+            && (p.0 - last.0).hypot(p.1 - last.1) < 1e-5
+        {
+            // Keep max half-width at coinciding point so end tapers stay intact.
+            if let Some(lw) = clean_hw.last_mut() {
+                *lw = lw.max(w);
+            }
+            continue;
+        }
+        clean_p.push(p);
+        clean_hw.push(w.max(0.05));
+    }
+    let m = clean_p.len();
+    if m < 2 {
+        return None;
+    }
+    let mut left = Vec::with_capacity(m);
+    let mut right = Vec::with_capacity(m);
+    let mut last_dir = (1.0_f64, 0.0_f64);
+    for i in 0..m {
+        let (tx, ty) = if i == 0 {
+            (clean_p[1].0 - clean_p[0].0, clean_p[1].1 - clean_p[0].1)
+        } else if i + 1 == m {
+            (clean_p[m - 1].0 - clean_p[m - 2].0, clean_p[m - 1].1 - clean_p[m - 2].1)
+        } else {
+            (clean_p[i + 1].0 - clean_p[i - 1].0, clean_p[i + 1].1 - clean_p[i - 1].1)
+        };
+        let tl = tx.hypot(ty);
+        let dir = if tl >= 1e-6 {
+            let d = (tx / tl, ty / tl);
+            last_dir = d;
+            d
+        } else {
+            last_dir
+        };
+        let nx = -dir.1;
+        let ny = dir.0;
+        let hw = clean_hw[i];
+        let lx = (clean_p[i].0 + nx * hw) as f32;
+        let ly = (clean_p[i].1 + ny * hw) as f32;
+        let rx = (clean_p[i].0 - nx * hw) as f32;
+        let ry = (clean_p[i].1 - ny * hw) as f32;
+        if lx.is_finite() && ly.is_finite() && rx.is_finite() && ry.is_finite() {
+            left.push([lx, ly]);
+            right.push([rx, ry]);
+        }
+    }
+    if left.len() < 2 {
+        return None;
+    }
+    Some(RibbonStrip { left, right })
+}
+
+/// CPU oracle quad-strip rasterizer matching GPU `BlendOperation::Max` quad strips 1:1.
+/// Every segment `(L[i], R[i], R[i+1], L[i+1])` is normalized to positive winding and composited
+/// with `max` inside the ribbon's tight AABB (zero self-cancellation on closed loops or curved arcs).
+pub fn rasterize_ribbons_max(ribbons: &[RibbonStrip], bounds: Rect) -> Vec<f32> {
+    let w = bounds.width() as usize;
+    let h = bounds.height() as usize;
+    let mut acc = vec![0.0_f32; w.saturating_mul(h)];
+    if ribbons.is_empty() || w == 0 || h == 0 {
+        return acc;
+    }
+    for strip in ribbons {
+        let n = strip.len();
+        if n < 2 {
+            continue;
+        }
+        let Some(bb) = strip.aabb() else { continue };
+        let rx0 = (bb[0].floor() as i32 - 1).max(bounds.x0);
+        let ry0 = (bb[1].floor() as i32 - 1).max(bounds.y0);
+        let rx1 = (bb[2].ceil() as i32 + 1).min(bounds.x1);
+        let ry1 = (bb[3].ceil() as i32 + 1).min(bounds.y1);
+        if rx0 >= rx1 || ry0 >= ry1 {
+            continue;
+        }
+        let sub = Rect::new(rx0, ry0, rx1, ry1);
+        let mut quads: Vec<PolyRing> = Vec::with_capacity(n - 1);
+        for i in 0..(n - 1) {
+            let mut q = vec![
+                (f64::from(strip.left[i][0]), f64::from(strip.left[i][1])),
+                (f64::from(strip.right[i][0]), f64::from(strip.right[i][1])),
+                (f64::from(strip.right[i + 1][0]), f64::from(strip.right[i + 1][1])),
+                (f64::from(strip.left[i + 1][0]), f64::from(strip.left[i + 1][1])),
+            ];
+            if signed_area(&q) < 0.0 {
+                q.reverse();
+            }
+            quads.push(q);
+        }
+        let mut ras = Rasterizer::new(false);
+        ras.add_component(&quads, PathOp::Combine, FillRule::NonZero);
         let cov = ras.render(sub);
         let sw = sub.width() as usize;
         let sh = sub.height() as usize;

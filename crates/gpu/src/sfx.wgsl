@@ -851,6 +851,73 @@ fn fs_sugomi_hollow_cut(inp: QuadOut) -> @location(0) vec4<f32> {
     return vec4<f32>(clamp(0.5 - eff_inner, 0.0, 1.0), 0.0, 0.0, 1.0);
 }
 
+@fragment
+fn fs_heavy_stack_perturb(inp: QuadOut) -> @location(0) vec4<f32> {
+    // tex_a = Face mask, tex_b = JfaExt of Face, tex_c = JfaInt of Face
+    // p1.z = scale_px (stroke_w * 0.68), p1.w = amp_mul (0.85), u0.y = seed
+    let p = vec2<i32>(floor(inp.pos.xy));
+    let pf = vec2<f32>(p);
+    let base_cov = load_clamped(tex_a, p).r;
+    let s_ext = load_clamped(tex_b, p);
+    let s_int = load_clamped(tex_c, p);
+    let raw_sdf = signed_dist_doc(base_cov, s_ext, s_int, pf);
+
+    let sc = max(fx.p1.z, 8.0);
+    let inv = 1.0 / sc;
+    let s_mul = fx.u0.y * 139u;
+    let dp = pixel_doc_pos(pf);
+    let n1 = (rot_noise_2d(dp.x, dp.y, 0.33, 0.22 * inv, s_mul + 11u) - 0.5) * 2.0;
+    let n2 = (rot_noise_2d(dp.x, dp.y, 1.21, 0.68 * inv, s_mul + 37u) - 0.5) * 2.0;
+    let n3 = (rot_noise_2d(dp.x, dp.y, 2.19, 1.60 * inv, s_mul + 73u) - 0.5) * 2.0;
+    let disp = clamp((n1 * 0.065 + n2 * 0.048 + n3 * 0.028) * sc * fx.p1.w, -sc * 0.09, sc * 0.11);
+    let eff_sdf = raw_sdf - disp;
+    return vec4<f32>(clamp(0.5 - eff_sdf, 0.0, 1.0), 0.0, 0.0, 1.0);
+}
+
+@fragment
+fn fs_kakeami_beta_mask(inp: QuadOut) -> @location(0) vec4<f32> {
+    // tex_a = Face mask, tex_b = JfaExt of Face, tex_c = JfaInt of Face
+    // p1.z = stroke_w, p1.w = w_scale
+    // p2 = (grad_axis.x, grad_axis.y, grad_range.x, grad_range.y)
+    // p3 = (perp_range.x, perp_range.y, 0, 0), u0.y = seed
+    let p = vec2<i32>(floor(inp.pos.xy));
+    let pf = vec2<f32>(p);
+    let base_cov = load_clamped(tex_a, p).r;
+    let s_ext = load_clamped(tex_b, p);
+    let s_int = load_clamped(tex_c, p);
+    let gs = signed_dist_doc(base_cov, s_ext, s_int, pf);
+
+    let w_scale = max(fx.p1.w, 0.5);
+    let beta_edge = clamp(-1.5 * w_scale - gs, 0.0, 1.0);
+    if beta_edge <= 1e-4 {
+        return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    }
+    let dp = pixel_doc_pos(pf);
+    let inv_sc = 1.0 / w_scale;
+    let f1 = 0.017 * inv_sc;
+    let f2 = 0.043 * inv_sc;
+    let seed = fx.u0.y;
+    let c1 = value_noise_2d((dp.x * 0.88 - dp.y * 0.47) * f1, (dp.x * 0.47 + dp.y * 0.88) * f1, seed * 131u + 17u);
+    let c2 = value_noise_2d((dp.x * 0.39 + dp.y * 0.92) * f2, (-dp.x * 0.92 + dp.y * 0.39) * f2, seed * 197u + 53u);
+    let cloud = c1 * 0.68 + c2 * 0.32;
+    let depth_n = clamp(-gs / max(fx.p1.z * 0.48, 6.0), 0.0, 1.0);
+
+    let gx = fx.p2.x;
+    let gy = fx.p2.y;
+    let px = -gy;
+    let py = gx;
+    let t_grad = clamp((dp.x * gx + dp.y * gy - fx.p2.z) / max(fx.p2.w, 32.0), 0.0, 1.0);
+    let t_perp = clamp((dp.x * px + dp.y * py - fx.p3.x) / max(fx.p3.y, 32.0), 0.0, 1.0);
+    let grad = 0.05 + t_grad * 0.84 + t_perp * 0.14;
+    let d_val = clamp(grad + depth_n * 0.10 + (cloud - 0.50) * 0.28, 0.0, 1.0);
+
+    let f_b = 0.10 * inv_sc;
+    let n_break = value_noise_2d(dp.x * f_b, dp.y * f_b, seed * 317u + 23u);
+    let beta_field = d_val + (n_break - 0.5) * 0.15;
+    let beta_mask = clamp((beta_field - 0.82) * 7.0, 0.0, 1.0) * beta_edge;
+    return vec4<f32>(beta_mask, 0.0, 0.0, 1.0);
+}
+
 // =============================================================================
 // 10. FILL EVALUATION (SOLID / GRADIENT / GENTONIK SCREENTONE) + 13-MODE COMPOSITE
 // =============================================================================

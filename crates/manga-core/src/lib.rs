@@ -5,6 +5,8 @@
 pub mod balloon_fit;
 pub mod comic_screentone;
 pub mod sfx_geom;
+pub mod sfx_heavy_stack;
+pub mod sfx_kakeami;
 pub mod sfx_render;
 pub mod sfx_shibufude;
 mod sfx_stroke_flow;

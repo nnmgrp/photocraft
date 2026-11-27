@@ -27,12 +27,14 @@ use photocraft_vector::{Polyline, Rasterizer, StrokeStyle, stroke_polygons};
 use web_time::Instant;
 
 use crate::sfx_geom::{PreparedSfx, build_sfx_geometry};
+use crate::sfx_heavy_stack::{build_heavy_stack_v3_vector, render_heavy_stack_v3_cpu};
+use crate::sfx_kakeami::{build_kakeami_v4_vector, render_kakeami_v4_cpu};
 use crate::sfx_shibufude::{build_shibufude_v3_vector, effective_shibufude_line_w, render_shibufude_v3_cpu};
 use crate::sfx_stroke_flow::{
     FlowEndKind, FlowStroke, catmull_rom_resample_flow, catmull_rom_sample_closed_sweep, extract_glyph_flow_strokes,
 };
 use crate::sfx_sugomi::{build_sugomi_v3_vector, render_sugomi_v3_cpu};
-use crate::sfx_v3_common::normalize_glyph_winding_by_depth;
+use crate::sfx_v3_common::{RibbonStrip, normalize_glyph_winding_by_depth};
 
 /// A closed ink polygon in document space.
 type InkPolygon = Vec<(f64, f64)>;
@@ -93,6 +95,24 @@ pub struct SfxVectorScene {
     pub sugomi_band_w_px: f32,
     /// Style 2 (`Sugomi v3`) inner cutout inset `hw_in` in document pixels (`band_w * 0.36`).
     pub sugomi_hw_in_px: f32,
+    /// Quad-strip ribbons for Style 3 (`HeavyStackV3` body) and Style 4 (`KakeamiV4` hatch lanes).
+    pub v3_body_ribbons: Vec<RibbonStrip>,
+    /// Style 3 (`HeavyStackV3`) focal dry-ink edge bite pentagons (subtracted BEFORE `heavy_tail_ribbons`).
+    pub heavy_bite_polygons: Vec<SfxPolyRing>,
+    /// Style 3 (`HeavyStackV3`) tangential tails / outer curve flicks (quad-strip ribbons).
+    pub heavy_tail_ribbons: Vec<RibbonStrip>,
+    /// Style 3 (`HeavyStackV3`) interior dry slits (quad-strip ribbons).
+    pub heavy_slit_ribbons: Vec<RibbonStrip>,
+    /// Estimated glyph stroke width in document pixels for `HeavyStackV3` / `KakeamiV4` shaders.
+    pub v3_stroke_w_px: f32,
+    /// Style 4 (`KakeamiV4`) uncapped DPI-safe width scale `max(0.75, stroke_w / 28.0)`.
+    pub kakeami_w_scale: f32,
+    /// Style 4 (`KakeamiV4::KakeEdge`) directional gradient unit axis `(cos, sin)`.
+    pub kakeami_grad_axis: [f32; 2],
+    /// Style 4 (`KakeamiV4::KakeEdge`) `[g_min, g_span]` along `kakeami_grad_axis`.
+    pub kakeami_grad_range: [f32; 2],
+    /// Style 4 (`KakeamiV4::KakeEdge`) `[p_min, p_span]` along perpendicular axis.
+    pub kakeami_perp_range: [f32; 2],
 }
 
 /// Output of rendering an [`SfxData`] stack into document-space surfaces.
@@ -533,6 +553,15 @@ pub fn compute_render_bounds(data: &SfxData, geom: &PreparedSfx) -> Rect {
             let gh = (geom.warped_box[3] - geom.warped_box[1]).abs().max(24.0);
             let amp = (f64::from(le.sugomi_spike_amp_pct).clamp(0.0, 200.0) / 100.0).max(0.8);
             gh * 0.45 * amp + 32.0
+        }
+        SfxLineStyle::HeavyStackV3 => {
+            let gh = (geom.warped_box[3] - geom.warped_box[1]).abs().max(24.0);
+            gh * 0.24 + 36.0
+        }
+        SfxLineStyle::KakeamiV4 => {
+            let gh = (geom.warped_box[3] - geom.warped_box[1]).abs().max(24.0);
+            let feather = f64::from(le.kakeami_feather_pct).clamp(0.0, 200.0) / 100.0;
+            gh * 0.14 * feather.max(0.5) + 20.0
         }
     };
     let gh_box = (geom.warped_box[3] - geom.warped_box[1]).abs().max(24.0);
@@ -4425,6 +4454,22 @@ fn sfx_stage_key(data: &SfxData, dpi: f32, preview: bool) -> Vec<u8> {
     k.push("sugomi_dryness_pct", &le.sugomi_dryness_pct.to_bits());
     k.push("sugomi_sharpness_pct", &le.sugomi_sharpness_pct.to_bits());
     k.push("sugomi_seed", &le.sugomi_seed);
+    // SFX v3 Style 3 (Heavy Stack v3) & Style 4 (Kakeami v4) parameters.
+    k.push("heavy_stack_mode", &format!("{:?}", le.heavy_stack_mode));
+    k.push("heavy_stack_edge_mode", &format!("{:?}", le.heavy_stack_edge_mode));
+    k.push("heavy_stack_intensity_pct", &le.heavy_stack_intensity_pct.to_bits());
+    k.push("heavy_stack_edge_bite_pct", &le.heavy_stack_edge_bite_pct.to_bits());
+    k.push("heavy_stack_dryness_pct", &le.heavy_stack_dryness_pct.to_bits());
+    k.push("heavy_stack_sharpness_pct", &le.heavy_stack_sharpness_pct.to_bits());
+    k.push("heavy_stack_seed", &le.heavy_stack_seed);
+    k.push("kakeami_mode", &format!("{:?}", le.kakeami_mode));
+    k.push("kakeami_edge_mode", &format!("{:?}", le.kakeami_edge_mode));
+    k.push("kakeami_angle_offset_deg", &le.kakeami_angle_offset_deg.to_bits());
+    k.push("kakeami_gradient_angle_deg", &le.kakeami_gradient_angle_deg.to_bits());
+    k.push("kakeami_feather_pct", &le.kakeami_feather_pct.to_bits());
+    k.push("kakeami_dryness_pct", &le.kakeami_dryness_pct.to_bits());
+    k.push("kakeami_sharpness_pct", &le.kakeami_sharpness_pct.to_bits());
+    k.push("kakeami_seed", &le.kakeami_seed);
     k.finish()
 }
 
@@ -4584,8 +4629,21 @@ fn rasterize_uncached_stages(geom: &PreparedSfx, le: &SfxLineEffect, cache_bound
             line = Some(render_sugomi_v3_cpu(geom, &raw, cache_bounds, em, le));
             dry_ms += t.elapsed().as_secs_f64() * 1000.0;
         }
+        SfxLineStyle::HeavyStackV3 => {
+            let t = Instant::now();
+            line = Some(render_heavy_stack_v3_cpu(geom, &raw, cache_bounds, le));
+            dry_ms += t.elapsed().as_secs_f64() * 1000.0;
+        }
+        SfxLineStyle::KakeamiV4 => {
+            let t = Instant::now();
+            line = Some(render_kakeami_v4_cpu(geom, &raw, cache_bounds, le));
+            dry_ms += t.elapsed().as_secs_f64() * 1000.0;
+        }
     }
-    if !matches!(le.style, SfxLineStyle::Shtack | SfxLineStyle::ShibufudeV3 | SfxLineStyle::SugomiV3)
+    if !matches!(
+        le.style,
+        SfxLineStyle::Shtack | SfxLineStyle::ShibufudeV3 | SfxLineStyle::SugomiV3 | SfxLineStyle::HeavyStackV3 | SfxLineStyle::KakeamiV4
+    )
         && le.line_grain_pct > 0.5
         && let Some(lcov) = line.as_mut()
     {
@@ -5037,7 +5095,7 @@ fn build_line_effect_polygons(geom: &PreparedSfx, le: &SfxLineEffect) -> Vec<Ink
         SfxLineStyle::GPenNib => build_gpen_polygons(geom, le),
         SfxLineStyle::BrushStroke => build_brush_stroke_polygons(geom, le),
         SfxLineStyle::Shtack => build_shtack_contour_polygons(geom, le),
-        SfxLineStyle::ShibufudeV3 | SfxLineStyle::SugomiV3 => Vec::new(),
+        SfxLineStyle::ShibufudeV3 | SfxLineStyle::SugomiV3 | SfxLineStyle::HeavyStackV3 | SfxLineStyle::KakeamiV4 => Vec::new(),
     };
     normalize_positive_winding(&mut polys);
     polys
@@ -5086,6 +5144,15 @@ pub fn extract_sfx_vector_scene(data: &SfxData, engine: &mut TextEngine, dpi: f3
             sugomi_inner_teeth_polygons: Vec::new(),
             sugomi_band_w_px: 0.0,
             sugomi_hw_in_px: 0.0,
+            v3_body_ribbons: Vec::new(),
+            heavy_bite_polygons: Vec::new(),
+            heavy_tail_ribbons: Vec::new(),
+            heavy_slit_ribbons: Vec::new(),
+            v3_stroke_w_px: 0.0,
+            kakeami_w_scale: 1.0,
+            kakeami_grad_axis: [0.0, 1.0],
+            kakeami_grad_range: [0.0, 32.0],
+            kakeami_perp_range: [0.0, 32.0],
         };
     }
 
@@ -5106,6 +5173,15 @@ pub fn extract_sfx_vector_scene(data: &SfxData, engine: &mut TextEngine, dpi: f3
     let mut sugomi_inner_teeth_polygons = Vec::new();
     let mut sugomi_band_w_px = 0.0_f32;
     let mut sugomi_hw_in_px = 0.0_f32;
+    let mut v3_body_ribbons = Vec::new();
+    let mut heavy_bite_polygons = Vec::new();
+    let mut heavy_tail_ribbons = Vec::new();
+    let mut heavy_slit_ribbons = Vec::new();
+    let mut v3_stroke_w_px = 0.0_f32;
+    let mut kakeami_w_scale = 1.0_f32;
+    let mut kakeami_grad_axis = [0.0_f32, 1.0];
+    let mut kakeami_grad_range = [0.0_f32, 32.0];
+    let mut kakeami_perp_range = [0.0_f32, 32.0];
     let line_polygons = match data.line_effect.style {
         SfxLineStyle::ShibufudeV3 => {
             let (band_polys, splat_polys) = build_shibufude_v3_vector(&geom, &data.line_effect);
@@ -5121,6 +5197,25 @@ pub fn extract_sfx_vector_scene(data: &SfxData, engine: &mut TextEngine, dpi: f3
             sugomi_band_w_px = sg.band_w;
             sugomi_hw_in_px = sg.hw_in;
             sg.outer_spiky_polys
+        }
+        SfxLineStyle::HeavyStackV3 => {
+            let hg = build_heavy_stack_v3_vector(&geom, &data.line_effect);
+            v3_body_ribbons = hg.body_ribbons;
+            heavy_bite_polygons = hg.bite_polys;
+            heavy_tail_ribbons = hg.tail_ribbons;
+            heavy_slit_ribbons = hg.slit_ribbons;
+            v3_stroke_w_px = hg.stroke_w;
+            Vec::new()
+        }
+        SfxLineStyle::KakeamiV4 => {
+            let kg = build_kakeami_v4_vector(&geom, &data.line_effect);
+            v3_body_ribbons = kg.hatch_ribbons;
+            v3_stroke_w_px = kg.stroke_w;
+            kakeami_w_scale = kg.w_scale;
+            kakeami_grad_axis = kg.grad_axis;
+            kakeami_grad_range = kg.grad_range;
+            kakeami_perp_range = kg.perp_range;
+            Vec::new()
         }
         _ => build_line_effect_polygons(&geom, &data.line_effect),
     };
@@ -5193,6 +5288,15 @@ pub fn extract_sfx_vector_scene(data: &SfxData, engine: &mut TextEngine, dpi: f3
         sugomi_inner_teeth_polygons,
         sugomi_band_w_px,
         sugomi_hw_in_px,
+        v3_body_ribbons,
+        heavy_bite_polygons,
+        heavy_tail_ribbons,
+        heavy_slit_ribbons,
+        v3_stroke_w_px,
+        kakeami_w_scale,
+        kakeami_grad_axis,
+        kakeami_grad_range,
+        kakeami_perp_range,
     }
 }
 
@@ -5284,7 +5388,18 @@ fn sfx_line_vec_sig(le: &SfxLineEffect) -> u64 {
         le.sugomi_cleft_dip_pct.to_bits(),
         le.sugomi_seed,
     );
-    hash_serialize(&(base_part, pen_part, brush_part, shtack_part, v3_part))
+    let v3b_part = (
+        le.heavy_stack_mode,
+        le.heavy_stack_intensity_pct.to_bits(),
+        le.heavy_stack_edge_bite_pct.to_bits(),
+        le.heavy_stack_seed,
+        le.kakeami_mode,
+        le.kakeami_angle_offset_deg.to_bits(),
+        le.kakeami_gradient_angle_deg.to_bits(),
+        le.kakeami_feather_pct.to_bits(),
+        le.kakeami_seed,
+    );
+    hash_serialize(&(base_part, pen_part, brush_part, shtack_part, v3_part, v3b_part))
 }
 
 fn fill_vector_only_sig(fill: &SfxFillSource) -> u64 {

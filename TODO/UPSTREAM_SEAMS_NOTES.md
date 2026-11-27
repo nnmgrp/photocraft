@@ -102,6 +102,18 @@
 
 ---
 
+## Фаза 2B-2 — Style 3 (`Heavy Stacked Brush v3`), Style 4 (`Kakeami v4`), Quad-Strip триангуляция и Wiring Gate
+
+| Файл upstream | Суть правки | Причина | Риск конфликта при rebase |
+|---|---|---|---|
+| `crates/doc/src/sfx.rs` | Расширен `SfxLineStyle` вариантами `HeavyStackV3` и `KakeamiV4`, добавлены `SfxHeavyStackMode` (`Fude`/`FgsfdsStack`/`Kin`/`FgsfdsFence`) и `SfxKakeamiV4Mode` (`Kake2`/`Kake4`/`KakeEdge`), `#[serde(default)]`-поля `heavy_stack_*` и `kakeami_*` и их валидация (DPI-безопасные без двойного масштабирования). | Модель данных Style 3 и Style 4 с обратной совместимостью `.pcraft` | **Отсутствует** (файл добавлен форком) |
+| `crates/manga-core/src/{lib.rs, sfx_v3_common.rs, sfx_heavy_stack.rs, sfx_kakeami.rs, sfx_render.rs}` | Добавлены `RibbonStrip`, `build_tapered_ribbon_strip` (дедупликация + защита `tl < 1e-6`), `rasterize_ribbons_max`, аналитические `vertical_runs_at_x` / `clip_line_to_glyph`; новые модули `sfx_heavy_stack` (4 режима + фокальные выкусы `edge_bite_pct` строго ДО `tails`/`flicks` + иммунитет углов и `!`) и `sfx_kakeami` (3 режима, нулевой `ang_jit`, поворот оси градиента `KakeEdge`, защита коротких 3-сэмпловых спанов, uncapped `w_scale`); интеграция в `SfxVectorScene` и `rasterize_uncached_stages`. | CPU-оракул и O(vertices) векторная экстракция Style 3 & Style 4 | **Отсутствует** (файлы добавлены форком) |
+| `crates/gpu/src/{lib.rs, sfx.wgsl, sfx.rs}`, `crates/gpu/tests/it/sfx.rs` | Добавлен `SfxGpuRibbonStrip` и прямая quad-strip триангуляция (`ribbons_to_quad_strip_verts` → `tri_max_pipe`, без centroid-fan хорд на С-дугах и замкнутых кольцах); шейдеры `fs_heavy_stack_perturb` и `fs_kakeami_beta_mask`; проходы `record_heavy_stack_v3_passes` и `record_kakeami_v4_passes` с 0 алиасинга слотов + GPU-тесты С-дуги, всех режимов, `KakeEdge` top < mid < bot и `DeviceHealth`. | Аппаратный GPU-рендеринг Style 3 & Style 4 | **Отсутствует** (файлы добавлены форком, 1 строка re-export в `lib.rs`) |
+| `crates/ui-egui/src/canvas/sfx_gpu_preview.rs`, `crates/manga-ui/src/sfx_panel.rs` | Проброс `v3_body_ribbons`, `heavy_bite_polygons`, `heavy_tail_ribbons`, `heavy_slit_ribbons`, `v3_stroke_w_px`, `kakeami_*` в `SfxGpuScene`; кнопки `🧱 Heavy Stack v3` и `🕸 Kakeami v4`, все контролы и 4 новых стартовых пресета. | UI и живой 60 FPS GPU-превью Style 3 & Style 4 | **Отсутствует** (файлы добавлены форком) |
+| `crates/format/tests/sfx_v3_kakeami_roundtrip.rs` *(новый)* | Интеграционный тест Wiring Gate: `.pcraft` Save/Load round-trip документа с `LayerContent::Kakeami` и всеми 4 стилями SFX v3 (`ShibufudeV3`, `SugomiV3`, `HeavyStackV3` `edge_bite=65`, `KakeamiV4` `KakeEdge` + `gradient_angle=37°`) с побитовой проверкой всех полей. | Верификация `.pcraft` round-trip Wiring Gate | **Отсутствует** (новый файл теста) |
+
+---
+
 ## Примечания по локальной «чемоданной» части (для полноты контекста)
 * `crates/manga-core/src/comic_screentone.rs` — дедупликация в пользу `crates/algo/src/comic_screentone.rs`.
 * `crates/manga-ui/src/comic_screentone_gizmo.rs`, `comic_screentone_panel.rs`, `i18n/ru.tsv` — единый `screentone_prefers_gpu` и UI для 5 типов градиентов.

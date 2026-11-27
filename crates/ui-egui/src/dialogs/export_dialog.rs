@@ -101,6 +101,7 @@ pub fn open(app: &mut PhotocraftApp) -> Result<u64, String> {
 /// layer Layer › Export As exports. Fitting the document first would replace a remembered pixel
 /// size the document can't take with the percent, even when the layer can take it.
 fn open_sized(app: &mut PhotocraftApp, src_w: u32, src_h: u32) -> Result<u64, String> {
+    crate::manga_seam::flush_pending_sfx_bake(app);
     let mut f = Map::new();
     f.insert("__export".into(), json!(true));
     f.insert("__label".into(), json!("Export As"));

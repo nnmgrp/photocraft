@@ -134,6 +134,7 @@ fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 if main_focused
                     && press.is_some_and(|p| cell.contains(p) && ui.ctx().layer_id_at(p) == Some(ui.layer_id()) && !grips.iter().any(|g| g.contains(p)))
                 {
+                    crate::manga_seam::flush_pending_sfx_bake(app);
                     app.session.set_active(d);
                 }
             }
@@ -144,6 +145,7 @@ fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         return;
     }
     if idx != active_doc && main_focused && ui.input(|i| i.pointer.primary_pressed() && i.pointer.interact_pos().is_some_and(|p| rect.contains(p))) {
+        crate::manga_seam::flush_pending_sfx_bake(app);
         app.session.set_active(idx);
     }
     let view = app.ui.views[idx].clone();
@@ -511,6 +513,7 @@ fn open_tab_clicks(
     cancel_open: Option<photocraft_engine::jobs::JobId>,
 ) {
     if let Some(i) = activate {
+        crate::manga_seam::flush_pending_sfx_bake(app);
         app.session.set_active(i);
         app.jobs.focus = None;
     }
@@ -842,6 +845,7 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
             }
             focused = ui.ctx().input(|i| i.viewport().focused == Some(true));
             if focused && !w.focused && app.session.active_index() != Some(w.document) {
+                crate::manga_seam::flush_pending_sfx_bake(app);
                 app.session.set_active(w.document);
             }
             let (shown, rect) = document_window_canvas(app, ui, &w, view.clone(), focused);

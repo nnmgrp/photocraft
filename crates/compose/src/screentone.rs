@@ -36,8 +36,28 @@ pub(crate) fn render_unmasked(layer: &Layer, st: &ScreentoneLayer, rect: Rect, c
 }
 
 /// Same as [`render_unmasked`], plus multiplies the layer's pixel/vector masks into alpha.
+/// When `backdrop` is supplied for a `Shading` screentone whose `halo_radius() > 0` (e.g.
+/// `preserve_lines = true`), expands the backdrop sample by `halo_radius()` clamped to the canvas
+/// so 256×256 tile and band boundaries stay bit-exact with a monolithic render.
 pub(crate) fn render_masked(layer: &Layer, st: &ScreentoneLayer, rect: Rect, cx: &Ctx, backdrop: Option<&Buffer>) -> Buffer {
-    let mut buf = render_unmasked(layer, st, rect, cx.canvas, backdrop);
+    let halo = st.spec.halo_radius();
+    let padded = if halo > 0
+        && let Some(bd) = backdrop
+        && let Some(doc) = cx.doc
+    {
+        let sample_rect = rect.inflate(halo).intersect(&cx.canvas);
+        if sample_rect != bd.rect && !sample_rect.is_empty() {
+            let mut below = doc.clone();
+            hide_at_and_above(&mut below.layers, layer.id);
+            let tile_side = sample_rect.width().max(sample_rect.height()).max(1) as i32;
+            Some(crate::render_tiled(&below, sample_rect, tile_side))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let mut buf = render_unmasked(layer, st, rect, cx.canvas, padded.as_ref().or(backdrop));
     if let Some(m) = mask_vals(layer, rect, cx) {
         for (p, k) in buf.px.iter_mut().zip(&m) {
             p[3] *= k;
@@ -318,6 +338,83 @@ mod tests {
         assert!(!exported.content_bounds().is_empty());
         assert!(exported.content_bounds().x0 >= 8 && exported.content_bounds().x1 <= 40);
         assert!(exported.content_bounds().y0 >= 8 && exported.content_bounds().y1 <= 40);
+    }
+
+    #[test]
+    fn preserve_lines_render_bands_matches_monolithic_on_seams() {
+        let mut doc = Document::new("seam_check", Size::new(512, 512), ColorMode::Rgb, SampleType::U8);
+        let bounds = doc.bounds();
+        let mut bg = Surface::new(PixelFormat::RGBA8);
+        // White paper with mid-gray shading field and crisp dark lineart crossing x=256 and y=256.
+        bg.fill_rect(bounds, &[0.95, 0.95, 0.95, 1.0]);
+        bg.fill_rect(Rect::new(64, 64, 448, 448), &[0.55, 0.55, 0.55, 1.0]);
+        // Horizontal and vertical ink strokes straddling y=256 and x=256.
+        bg.fill_rect(Rect::new(40, 254, 472, 259), &[0.02, 0.02, 0.02, 1.0]);
+        bg.fill_rect(Rect::new(254, 40, 259, 472), &[0.02, 0.02, 0.02, 1.0]);
+        // Diagonal ink stroke crossing (256, 256).
+        for i in 120..392 {
+            bg.fill_rect(Rect::new(i, i, (i + 3).min(512), (i + 3).min(512)), &[0.03, 0.03, 0.03, 1.0]);
+        }
+        doc.layers.push(Layer::new("art", LayerContent::Raster(bg)));
+
+        let spec = ScreentoneSpec {
+            pattern_type: PatternType::Dots,
+            spacing_x: 12.0,
+            spacing_y: 12.0,
+            dot_size: 4.5,
+            mode: ScreentoneMode::Shading,
+            use_source_luminance: true,
+            preserve_lines: true,
+            line_thickness: 5.0,
+            line_threshold: 0.25,
+            backend: ScreentoneBackend::Gpu,
+            foreground: [0.0, 0.0, 0.0, 1.0],
+            background: [1.0, 1.0, 1.0, 0.0],
+            ..Default::default()
+        };
+        let origin = photocraft_algo::comic_screentone::origin_doc(&spec, bounds);
+        let unbaked = ScreentoneLayer::new(spec, origin, Surface::new(PixelFormat::RGBA8));
+        let mut tone_layer = Layer::new("tone", LayerContent::Screentone(unbaked));
+        tone_layer.blend = photocraft_color::BlendMode::Multiply;
+        doc.layers.push(tone_layer);
+
+        // Monolithic single-tile reference (tile = 512).
+        let mono = crate::render_tiled(&doc, bounds, 512);
+
+        // Banded render with band height <= 256 (internal 256×256 tiles across x=256 and y=256).
+        let mut banded_px = vec![[0.0f32; 4]; 512 * 512];
+        let mut band_count = 0usize;
+        crate::render_bands(&doc, bounds, 256, |band| -> Result<(), ()> {
+            assert!(band.rect.height() <= 256, "expected band height <= 256, got {}", band.rect.height());
+            band_count += 1;
+            let bw = band.rect.width() as usize;
+            for ry in 0..band.rect.height() as usize {
+                let dst_y = (band.rect.y0 as usize + ry) * 512 + band.rect.x0 as usize;
+                let src_y = ry * bw;
+                banded_px[dst_y..dst_y + bw].copy_from_slice(&band.px[src_y..src_y + bw]);
+            }
+            Ok(())
+        })
+        .unwrap();
+        assert!(band_count >= 2, "expected >= 2 bands, got {band_count}");
+
+        let mut total_diff = 0usize;
+        let mut seam_diff = 0usize;
+        for y in 0..512usize {
+            for x in 0..512usize {
+                let idx = y * 512 + x;
+                let a = mono.px[idx];
+                let b = banded_px[idx];
+                if (0..4).any(|c| a[c].to_bits() != b[c].to_bits()) {
+                    total_diff += 1;
+                    if (254..=258).contains(&x) || (254..=258).contains(&y) {
+                        seam_diff += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(seam_diff, 0, "preserve_lines band/tile seam mismatch at x=256/y=256: {seam_diff} seam px ({total_diff} total)");
+        assert_eq!(total_diff, 0, "preserve_lines banded render must match monolithic bit-for-bit, got {total_diff} differing px");
     }
 }
 

@@ -56,6 +56,12 @@ impl PhotocraftApp {
     }
 
     fn run_command_at_depth(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        if id != "sfx.update"
+            && !id.starts_with("view.")
+            && !matches!(id, "command.list" | "document.info" | "document.pixel" | "inspect.document")
+        {
+            crate::manga_seam::flush_pending_sfx_bake(self);
+        }
         if !vector_ui::cancel_stale(self) {
             return Err(self.ui.status.clone());
         }

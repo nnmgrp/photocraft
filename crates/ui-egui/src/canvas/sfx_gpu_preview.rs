@@ -350,6 +350,11 @@ impl SfxGpuAsyncBake {
         self.active.is_some()
     }
 
+    /// Returns the `(doc_id, layer_id)` currently being baked, if any.
+    pub fn active_target(&self) -> Option<(DocId, LayerId)> {
+        self.active.as_ref().map(|a| (a.doc_id, a.layer_id))
+    }
+
     pub fn cancel(&mut self) {
         self.active = None;
         if let Some(r) = self.renderer.as_mut() {
@@ -373,6 +378,10 @@ impl SfxGpuAsyncBake {
         // Cancel any previous in-flight bake first (immediately destroys its staging buffer).
         self.active = None;
         if !is_supported(rs) {
+            return false;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if rs.adapter.get_info().device_type == wgpu::DeviceType::Cpu {
             return false;
         }
         if self.renderer.is_none() {
@@ -468,6 +477,146 @@ impl SfxGpuAsyncBake {
         true
     }
 
+    fn drain_mapped_tile(job: &mut ActiveBake, mut inflight: InFlightTile) {
+        {
+            let slice = inflight.buf.slice(..);
+            if let Ok(mapped) = slice.get_mapped_range() {
+                let iw = inflight.job.inner_w as usize;
+                let ih = inflight.job.inner_h as usize;
+                let apron = inflight.job.apron as usize;
+                let padded_row = inflight.padded_row as usize;
+                let max_y = inflight.pad_h.saturating_sub(1) as usize;
+                let max_x = inflight.pad_w.saturating_sub(1) as usize;
+
+                let mut any = false;
+                'scan: for row in 0..ih {
+                    let src_y = (row + apron).min(max_y);
+                    let row_off = src_y * padded_row;
+                    for col in 0..iw {
+                        let src_x = (col + apron).min(max_x);
+                        let si = row_off + src_x * 4;
+                        if si + 3 < mapped.len() && mapped[si + 3] != 0 {
+                            any = true;
+                            break 'scan;
+                        }
+                    }
+                }
+
+                if any {
+                    let rect = Rect::from_xywh(inflight.job.tx, inflight.job.ty, inflight.job.inner_w as u32, inflight.job.inner_h as u32);
+                    if job.format == PixelFormat::RGBA8 {
+                        let ty = inflight.job.ty;
+                        let tx = inflight.job.tx;
+                        let _ = job.surface.try_write_rows_with(rect, |y, x0, dst| {
+                            let row = (y - ty) as usize;
+                            let col = (x0 - tx) as usize;
+                            let src_y = (row + apron).min(max_y);
+                            let src_x = (col + apron).min(max_x);
+                            let src_off = src_y * padded_row + src_x * 4;
+                            let len = dst.len();
+                            if let Some(src) = mapped.get(src_off..src_off + len) {
+                                dst.copy_from_slice(src);
+                            }
+                        });
+                    } else {
+                        let ch = job.format.channels();
+                        let mut vals = vec![0.0_f32; iw * ih * ch];
+                        for row in 0..ih {
+                            let src_y = (row + apron).min(max_y);
+                            let row_off = src_y * padded_row;
+                            for col in 0..iw {
+                                let src_x = (col + apron).min(max_x);
+                                let si = row_off + src_x * 4;
+                                if si + 3 >= mapped.len() {
+                                    continue;
+                                }
+                                let a = f32::from(mapped[si + 3]) / 255.0;
+                                if a > 1e-6 {
+                                    let px = [
+                                        f32::from(mapped[si]) / 255.0,
+                                        f32::from(mapped[si + 1]) / 255.0,
+                                        f32::from(mapped[si + 2]) / 255.0,
+                                        a,
+                                    ];
+                                    let di = (row * iw + col) * ch;
+                                    from_rgba_into(&job.format, px, &mut vals[di..di + ch]);
+                                }
+                            }
+                        }
+                        job.surface.write_region(rect, &vals);
+                    }
+                }
+            }
+        }
+        if inflight.mapped {
+            inflight.buf.unmap();
+            inflight.mapped = false;
+        }
+        // Drop immediately invokes `inflight.buf.destroy()` so VRAM is freed right away.
+        drop(inflight);
+    }
+
+    /// Synchronously finishes all remaining tiles of the active GPU bake on native targets.
+    /// Used as a hard barrier before mutating document operations (Undo/Redo, Merge, Flatten,
+    /// Save/Export, document switch/close) so no async bake ever races with document state.
+    pub fn flush_blocking(&mut self, rs: &RenderState) -> Option<CompletedGpuBake> {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = rs;
+            self.cancel();
+            return None;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            while self.active.is_some() {
+                if let Some(job) = self.active.as_mut()
+                    && let Some(inflight) = job.in_flight.as_mut()
+                {
+                    if inflight.done.lock().ok().and_then(|g| *g).is_none() {
+                        let _ = rs.device.poll(wgpu::PollType::wait_indefinitely());
+                    }
+                    let status = inflight.done.lock().ok().and_then(|g| *g);
+                    if status != Some(true) {
+                        log::warn!("SFX flush_blocking: map_async failed or timed out");
+                        self.cancel();
+                        return None;
+                    }
+                    inflight.mapped = true;
+                }
+                if let Some(job) = self.active.as_mut()
+                    && let Some(inflight) = job.in_flight.take()
+                {
+                    Self::drain_mapped_tile(job, inflight);
+                }
+                let has_more = self.active.as_ref().is_some_and(|j| !j.pending_tiles.is_empty());
+                if has_more {
+                    let (Some(renderer), Some(job)) = (self.renderer.as_mut(), self.active.as_mut()) else {
+                        self.cancel();
+                        return None;
+                    };
+                    if !Self::launch_next_tile(renderer, rs, job) {
+                        self.cancel();
+                        return None;
+                    }
+                } else {
+                    let mut finished = self.active.take()?;
+                    if let Some(r) = self.renderer.as_mut() {
+                        r.release_targets();
+                    }
+                    finished.surface.prune();
+                    return Some(CompletedGpuBake {
+                        doc_id: finished.doc_id,
+                        layer_id: finished.layer_id,
+                        data: finished.data,
+                        surface: finished.surface,
+                        coalesce: finished.coalesce,
+                    });
+                }
+            }
+            None
+        }
+    }
+
     /// Polls any in-flight GPU tile readback without blocking. Returns `Some(CompletedGpuBake)`
     /// once all tiles have been assembled into the sparse `Surface`.
     pub fn poll(&mut self, rs: &RenderState, ctx: &egui::Context) -> Option<CompletedGpuBake> {
@@ -494,83 +643,8 @@ impl SfxGpuAsyncBake {
                 }
             }
         }
-        if let Some(mut inflight) = job.in_flight.take() {
-            {
-                let slice = inflight.buf.slice(..);
-                if let Ok(mapped) = slice.get_mapped_range() {
-                    let iw = inflight.job.inner_w as usize;
-                    let ih = inflight.job.inner_h as usize;
-                    let apron = inflight.job.apron as usize;
-                    let padded_row = inflight.padded_row as usize;
-                    let max_y = inflight.pad_h.saturating_sub(1) as usize;
-                    let max_x = inflight.pad_w.saturating_sub(1) as usize;
-
-                    let mut any = false;
-                    'scan: for row in 0..ih {
-                        let src_y = (row + apron).min(max_y);
-                        let row_off = src_y * padded_row;
-                        for col in 0..iw {
-                            let src_x = (col + apron).min(max_x);
-                            let si = row_off + src_x * 4;
-                            if si + 3 < mapped.len() && mapped[si + 3] != 0 {
-                                any = true;
-                                break 'scan;
-                            }
-                        }
-                    }
-
-                    if any {
-                        let rect = Rect::from_xywh(inflight.job.tx, inflight.job.ty, inflight.job.inner_w as u32, inflight.job.inner_h as u32);
-                        if job.format == PixelFormat::RGBA8 {
-                            let ty = inflight.job.ty;
-                            let tx = inflight.job.tx;
-                            let _ = job.surface.try_write_rows_with(rect, |y, x0, dst| {
-                                let row = (y - ty) as usize;
-                                let col = (x0 - tx) as usize;
-                                let src_y = (row + apron).min(max_y);
-                                let src_x = (col + apron).min(max_x);
-                                let src_off = src_y * padded_row + src_x * 4;
-                                let len = dst.len();
-                                if let Some(src) = mapped.get(src_off..src_off + len) {
-                                    dst.copy_from_slice(src);
-                                }
-                            });
-                        } else {
-                            let ch = job.format.channels();
-                            let mut vals = vec![0.0_f32; iw * ih * ch];
-                            for row in 0..ih {
-                                let src_y = (row + apron).min(max_y);
-                                let row_off = src_y * padded_row;
-                                for col in 0..iw {
-                                    let src_x = (col + apron).min(max_x);
-                                    let si = row_off + src_x * 4;
-                                    if si + 3 >= mapped.len() {
-                                        continue;
-                                    }
-                                    let a = f32::from(mapped[si + 3]) / 255.0;
-                                    if a > 1e-6 {
-                                        let px = [
-                                            f32::from(mapped[si]) / 255.0,
-                                            f32::from(mapped[si + 1]) / 255.0,
-                                            f32::from(mapped[si + 2]) / 255.0,
-                                            a,
-                                        ];
-                                        let di = (row * iw + col) * ch;
-                                        from_rgba_into(&job.format, px, &mut vals[di..di + ch]);
-                                    }
-                                }
-                            }
-                            job.surface.write_region(rect, &vals);
-                        }
-                    }
-                }
-            }
-            if inflight.mapped {
-                inflight.buf.unmap();
-                inflight.mapped = false;
-            }
-            // Drop immediately invokes `inflight.buf.destroy()` so VRAM is freed right away.
-            drop(inflight);
+        if let Some(inflight) = job.in_flight.take() {
+            Self::drain_mapped_tile(job, inflight);
         }
 
         if !job.pending_tiles.is_empty() {

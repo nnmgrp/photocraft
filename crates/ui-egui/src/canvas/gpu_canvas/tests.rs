@@ -424,3 +424,86 @@ fn a_deferred_redraws_gpu_attempt_is_counted_once_when_it_ends() {
     assert_eq!(perf.gpu_attempt_ms, 7.0);
     assert_eq!(perf.stage.composite_ms + perf.stage.upload_ms, 9.0);
 }
+
+#[test]
+fn preview_key_classification_and_lru_cap() {
+    let doc_key = 42u64;
+    let stream_key = doc_key ^ (1u64 << 57);
+    let preview_a = doc_key ^ (1u64 << 61);
+    let preview_b = doc_key ^ (1u64 << 62);
+    let preview_c = doc_key ^ (1u64 << 60);
+    assert!(!Resources::is_preview_key(doc_key));
+    assert!(!Resources::is_preview_key(stream_key));
+    assert!(Resources::is_preview_key(preview_a));
+    assert!(Resources::is_preview_key(preview_b));
+    assert!(Resources::is_preview_key(preview_c));
+    assert_eq!(resources::MAX_PREVIEW_KEYS, 2);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn preview_keys_composite_on_gpu_with_bounded_lru_and_viewport_pages_avoid_full_doc_alloc() {
+    let _gpu = photocraft_testkit::gpu_lock();
+    let rs = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| egui_kittest::wgpu::create_render_state(wgpu_setup(), Default::default())));
+    let Ok(rs) = rs else {
+        return;
+    };
+    let gpu = GpuCanvas::new(&rs);
+
+    // 1. Preview keys (`bits 58..63`) must composite on GPU instead of falling back to CPU,
+    //    and stay bounded by the 2-entry preview LRU without evicting the live document key.
+    let mut doc = photocraft_doc::Document::new("preview_test", photocraft_doc::Size::new(64, 64), photocraft_color::ColorMode::Rgb, photocraft_doc::SampleType::U8);
+    let mut surf = photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA8);
+    surf.fill_rect(doc.bounds(), &[0.8, 0.2, 0.1, 1.0]);
+    doc.layers.push(photocraft_doc::Layer::new("fill", photocraft_doc::LayerContent::Raster(surf)));
+
+    let live_key = doc.id.0;
+    let r_live = gpu.refresh(live_key, &doc, None, None);
+    assert_eq!(r_live.kind, "gpu-full", "live doc must composite on GPU: {r_live:?}");
+
+    let pv1 = live_key ^ (1u64 << 61);
+    let pv2 = live_key ^ (1u64 << 62);
+    let pv3 = live_key ^ (1u64 << 60);
+    assert_eq!(gpu.refresh(pv1, &doc, None, None).kind, "gpu-full", "preview key 1 must composite on GPU");
+    assert_eq!(gpu.refresh(pv2, &doc, None, None).kind, "gpu-full", "preview key 2 must composite on GPU");
+    assert!(gpu.has(pv1, [64, 64]) && gpu.has(pv2, [64, 64]));
+    assert_eq!(gpu.refresh(pv3, &doc, None, None).kind, "gpu-full", "preview key 3 must composite on GPU");
+    // Bounded LRU(2): pv1 evicted, pv2 & pv3 resident, live document untouched!
+    assert!(!gpu.has(pv1, [64, 64]), "oldest preview key must be evicted by 2-entry LRU");
+    assert!(gpu.has(pv2, [64, 64]) && gpu.has(pv3, [64, 64]), "2 newest preview keys stay resident");
+    assert!(gpu.has(live_key, [64, 64]), "live document key must never be evicted by preview LRU");
+
+    // 2. Giant 17000×25000 16-bit document: `render_page_gpu` renders a single 512×512 page on GPU
+    //    within canvas_budget without allocating a full-document texture set.
+    let mut giant = photocraft_doc::Document::new(
+        "giant_16bit",
+        photocraft_doc::Size::new(17_000, 25_000),
+        photocraft_color::ColorMode::Rgb,
+        photocraft_doc::SampleType::U16,
+    );
+    let mut g_surf = photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA16);
+    g_surf.fill_rect(photocraft_geom::Rect::new(0, 0, 600, 600), &[0.3, 0.5, 0.7, 1.0]);
+    giant.layers.push(photocraft_doc::Layer::new("corner", photocraft_doc::LayerContent::Raster(g_surf)));
+
+    let stream = giant.id.0 ^ (1u64 << 57);
+    let core = photocraft_geom::Rect::new(0, 0, 512, 512);
+    let source = photocraft_geom::Rect::new(0, 0, 513, 513);
+    let bytes = gpu
+        .render_page_gpu(GpuPageRender {
+            key: stream,
+            page: 0,
+            size: [17_000, 25_000],
+            doc: &giant,
+            factor: 1,
+            core,
+            source,
+            region: None,
+            encode_srgb: false,
+        })
+        .expect("17K×25K 16-bit 512×512 viewport page must render on GPU");
+    assert!(bytes <= 514 * 514 * 8, "only single page texture allocated ({bytes} B)");
+    assert!(gpu.texture_info(giant.id.0).is_none(), "no full-document texture set may be allocated for 17K×25K");
+    let (ids, page_bytes) = gpu.pages(stream);
+    assert_eq!(ids, vec![0]);
+    assert_eq!(page_bytes, bytes);
+}

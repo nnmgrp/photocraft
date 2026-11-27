@@ -2450,4 +2450,67 @@ mod tests {
         assert!(!screentone_prefers_gpu(ScreentoneBackend::Gpu, ColorMode::Lab, Rect::from_xywh(0, 0, 2000, 300)));
         assert!(!screentone_prefers_gpu(ScreentoneBackend::Cpu, ColorMode::Rgb, Rect::from_xywh(0, 0, 2000, 300)));
     }
+
+    #[test]
+    fn preserve_lines_tiled_surface_matches_monolithic_on_seams() {
+        let bounds = Rect::new(0, 0, 512, 512);
+        let mut src = Surface::new(photocraft_color::PixelFormat::RGBA8);
+        src.fill_rect(bounds, &[0.95, 0.95, 0.95, 1.0]);
+        src.fill_rect(Rect::new(64, 64, 448, 448), &[0.55, 0.55, 0.55, 1.0]);
+        // High-contrast ink lines crossing x = 256 and y = 256.
+        src.fill_rect(Rect::new(40, 254, 472, 259), &[0.02, 0.02, 0.02, 1.0]);
+        src.fill_rect(Rect::new(254, 40, 259, 472), &[0.02, 0.02, 0.02, 1.0]);
+        for i in 120..392 {
+            src.fill_rect(Rect::new(i, i, (i + 3).min(512), (i + 3).min(512)), &[0.03, 0.03, 0.03, 1.0]);
+        }
+
+        let spec = ScreentoneSpec {
+            pattern_type: PatternType::Dots,
+            spacing_x: 12.0,
+            spacing_y: 12.0,
+            dot_size: 4.5,
+            mode: ScreentoneMode::Shading,
+            use_source_luminance: true,
+            preserve_lines: true,
+            line_thickness: 5.0,
+            line_threshold: 0.25,
+            foreground: [0.0, 0.0, 0.0, 1.0],
+            background: [1.0, 1.0, 1.0, 0.0],
+            ..Default::default()
+        };
+        let origin = origin_doc(&spec, bounds);
+
+        // Monolithic direct kernel evaluation over the whole 512×512 image, quantized through RGBA8
+        // the same way `Surface::new(PixelFormat::RGBA8)` stores pixels.
+        let mono_src_data = src.read_region(bounds);
+        let mono_img = Image { rect: bounds, ch: 4, data: mono_src_data };
+        let mono_spec = sheet_spec(&spec, bounds, origin);
+        let ctx = Ctx { bounds, mode: photocraft_color::ColorMode::Rgb, alpha: true };
+        let mono_f32 = screentone(&mono_img, bounds, &ctx, &mono_spec);
+        let mut mono_surf = Surface::new(photocraft_color::PixelFormat::RGBA8);
+        mono_surf.write_region(bounds, &mono_f32);
+        let mono_px = mono_surf.read_region(bounds);
+
+        // Tiled 256×256 surface path.
+        let mut tiled_surf = src;
+        let written = render_screentone_to_surface(&mut tiled_surf, bounds, &spec, origin);
+        assert_eq!(written, bounds);
+        let tiled_px = tiled_surf.read_region(bounds);
+
+        let mut total_diff = 0usize;
+        let mut seam_diff = 0usize;
+        for y in 0..512usize {
+            for x in 0..512usize {
+                let off = (y * 512 + x) * 4;
+                if (0..4).any(|c| mono_px[off + c].to_bits() != tiled_px[off + c].to_bits()) {
+                    total_diff += 1;
+                    if (254..=258).contains(&x) || (254..=258).contains(&y) {
+                        seam_diff += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(seam_diff, 0, "preserve_lines tiled seam mismatch at x=256/y=256: {seam_diff} seam px ({total_diff} total)");
+        assert_eq!(total_diff, 0, "preserve_lines tiled render must match monolithic bit-for-bit, got {total_diff} differing px");
+    }
 }

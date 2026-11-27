@@ -61,9 +61,23 @@
 
 ---
 
+## Фаза 1C — Уборка оставшихся CPU-призраков + бесшовность `preserve_lines`
+
+| Файл upstream | Суть правки | Причина | Риск конфликта при rebase |
+|---|---|---|---|
+| `crates/compose/src/screentone.rs` | Расширение выборки подложки на `halo_radius()` (с отсечением по `cx.canvas`) внутри `render_masked` для незапечённых `Shading`-скринтонов с `halo_radius() > 0` + регрессионный тест `preserve_lines_render_bands_matches_monolithic_on_seams` (`0 px` на швах `x = 256` и `y = 256`). | Баг (шов на границах `256×256` тайлов/полос при `preserve_lines = true`, `line_thickness = 5.0`) | **Отсутствует** (файл добавлен форком) |
+| `crates/algo/src/comic_screentone.rs` | Добавлен регрессионный тест `preserve_lines_tiled_surface_matches_monolithic_on_seams` (`512×512`, `0 px` расхождений на швах `x = 256` и `y = 256`). | Контроль бесшовности тайлинга после Фазы 1B | **Отсутствует** (файл добавлен форком) |
+| `crates/ui-egui/src/canvas/sfx_gpu_preview.rs` | Добавлены `SfxGpuAsyncBake::active_target()` и синхронный барьер `SfxGpuAsyncBake::flush_blocking(&rs)` (общий `drain_mapped_tile` с `poll()`); на программных CPU-адаптерах Native сохраняется прямой CPU-путь без readback. | Устранение UI-фриза при отпускании `SfxGizmo` на Desktop без гонок состояния | **Отсутствует** (файл добавлен форком) |
+| `crates/ui-egui/src/app/commands.rs`, `crates/ui-egui/src/app/files.rs`, `crates/ui-egui/src/dialogs/export_dialog.rs`, `crates/ui-egui/src/canvas/tabs.rs` | Вызов жёсткого барьера `crate::manga_seam::flush_pending_sfx_bake` перед мутирующими командами (`Undo`/`Redo`, `Merge*`, `Flatten`, удаление/переупорядочивание слоёв), `Save`/`Export` и переключением вкладок/окон документов. | Безопасность Native `SfxGpuAsyncBake` (исключение гонки незавершённого запекания с мутациями документа) | **Низкий** (по 1–6 строк в точках входа) |
+| `crates/ui-egui/src/canvas/gpu_canvas.rs`, `crates/ui-egui/src/canvas/gpu_canvas/resources.rs`, `crates/ui-egui/src/canvas/gpu_canvas/tests.rs` | Вынесен `composite_for(key, ...)` + снят запрет `if key == doc.id.0` для preview-ключей (`bits 58..63`) с ограниченным LRU (`MAX_PREVIEW_KEYS = 2`), чтобы превью не вытесняли рабочие тайлы документа; вынесен общий `take_compositor` с `Compositor::try_new_for_adapter`; добавлены тесты preview LRU и GPU-страниц `17K×25K` 16-bit. | Уборка CPU-призрака на превью-ключах (`upload_composite`) | **Средний** (`gpu_canvas.rs` и `resources.rs` активно развиваются в upstream) |
+| `crates/ui-egui/src/canvas/gpu_canvas/pages.rs`, `crates/ui-egui/src/canvas/viewport_pages.rs` | Добавлен `GpuCanvas::render_page_gpu` (`factor == 1`, включая частичные scissor-обновления, и выровненный `factor == 2` через `mip_pipeline`), работающий строго в рамках одиночных `<= 514×514` текстур и `canvas_budget` без выделения цельной текстуры `17000×25000`; 2 CPU-воркера `pc-viewport-page` оставлены как fallback (CMYK/Lab, `DeviceHealth`, `factor > 2`, бюджет). | Уборка CPU-призрака в `viewport_pages` на больших 16-bit страницах | **Средний** (`viewport_pages.rs` и `pages.rs` — файлы upstream) |
+
+---
+
 ## Примечания по локальной «чемоданной» части (для полноты контекста)
 * `crates/manga-core/src/comic_screentone.rs` — дедупликация в пользу `crates/algo/src/comic_screentone.rs`.
 * `crates/manga-ui/src/comic_screentone_gizmo.rs`, `comic_screentone_panel.rs`, `i18n/ru.tsv` — единый `screentone_prefers_gpu` и UI для 5 типов градиентов.
+* `crates/manga-ui/src/balloon_gizmo.rs` — отказ от `shape.balloon.update` на каждом `Move` (0 CPU-растеризаций `ShapeLayer::cache` при перетаскивании), живой векторный контур через `egui::Painter`, один коммит на `PointerUp`, чистый откат по `Esc` + юнит-тест.
 * `crates/engine/src/cmd/manga_cmds/comic_screentone.rs` — полосный `sample_source_surface`, потайловые `has_source_ink`/`revealed_bounds`, `ensure_*_shading_screentone*_baked`, единый `screentone_prefers_gpu`, регрессионные тесты.
-* `crates/ui-egui/src/manga_seam.rs` — локализация `st.last_damage` в `fill_frame` при live GPU-перетаскивании, обработчик `screentone_drag_finish`.
+* `crates/ui-egui/src/manga_seam.rs` — локализация `st.last_damage` в `fill_frame` при live GPU-перетаскивании, обработчик `screentone_drag_finish`, включение `SfxGpuAsyncBake` на Native + `flush_pending_sfx_bake` + скрытие/отмена `BalloonGizmo` при драге.
 * `TODO/SCREENTONE_AND_MANGANAKAMA_ROADMAP.md` — актуализация статусов Блока A.

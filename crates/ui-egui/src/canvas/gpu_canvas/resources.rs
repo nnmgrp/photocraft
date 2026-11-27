@@ -4,6 +4,12 @@ use super::shaders::{CANVAS_WGSL, ENCODE_WGSL, MIP_WGSL};
 use super::texels::LayerFit;
 use super::{FORMAT, FORMAT_HIGH, HashMap, NonZeroU64, TILE_UNIFORM_SIZE, VIEW_FLOATS, VIEW_UNIFORM_SIZE, wgpu};
 
+/// Keys tagged above bit 57 are previews (filter preview, adjustment proxies, gradients,
+/// thumbnails). Bounded to [`MAX_PREVIEW_KEYS`] in [`Resources::preview_lru`] so previews never
+/// crowd out working document tiles in VRAM.
+pub(super) const PREVIEW_TAG_BITS: u64 = !((1u64 << 58) - 1);
+pub(super) const MAX_PREVIEW_KEYS: usize = 2;
+
 pub(super) struct Resources {
     pub(super) view_bgl: wgpu::BindGroupLayout,
     pub(super) tile_bgl: wgpu::BindGroupLayout,
@@ -17,6 +23,8 @@ pub(super) struct Resources {
     encode_pipeline_high: Option<wgpu::RenderPipeline>,
     pub(super) mip_sampler: wgpu::Sampler,
     pub(super) docs: HashMap<u64, DocTextures>,
+    /// Recently used preview keys (most recent at the back), capped at [`MAX_PREVIEW_KEYS`].
+    pub(super) preview_lru: Vec<u64>,
     pub(super) views: HashMap<u64, ViewGpu>,
     pub(super) out_linear: bool,
     /// Build each mip level in a scratch texture and copy it back instead of rendering into
@@ -380,6 +388,7 @@ impl Resources {
             encode_pipeline_high,
             mip_sampler,
             docs: HashMap::new(),
+            preview_lru: Vec::new(),
             views: HashMap::new(),
             out_linear: target.is_srgb(),
             separate_mip_targets: false,
@@ -406,5 +415,24 @@ impl Resources {
     /// The mip-chain pipeline for `format` tiles.
     pub(super) fn mip_pipeline(&self, format: wgpu::TextureFormat) -> Option<&wgpu::RenderPipeline> {
         if format == FORMAT_HIGH { self.mip_pipeline_high.as_ref() } else { Some(&self.mip_pipeline) }
+    }
+
+    /// Whether `key` is a tagged preview key (bits 58..63 set).
+    pub(super) fn is_preview_key(key: u64) -> bool {
+        key & PREVIEW_TAG_BITS != 0
+    }
+
+    /// Marks `key` as most-recently-used in the bounded preview LRU (cap [`MAX_PREVIEW_KEYS`])
+    /// and evicts any older preview texture sets from `self.docs` without touching live documents.
+    pub(super) fn touch_preview_key(&mut self, key: u64) {
+        if !Self::is_preview_key(key) {
+            return;
+        }
+        self.preview_lru.retain(|&k| k != key);
+        self.preview_lru.push(key);
+        while self.preview_lru.len() > MAX_PREVIEW_KEYS {
+            let oldest = self.preview_lru.remove(0);
+            self.docs.remove(&oldest);
+        }
     }
 }

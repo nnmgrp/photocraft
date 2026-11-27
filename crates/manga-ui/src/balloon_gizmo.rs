@@ -61,6 +61,10 @@ pub struct BalloonGizmoDrag {
     pub hit: GizmoHit,
     /// The balloon as it was when the drag started.
     pub initial_balloon: LiveBalloon,
+    /// Live vector preview geometry updated during `Move` without rasterizing `ShapeLayer::cache`.
+    pub preview_balloon: Option<LiveBalloon>,
+    /// True once at least one `Move` (or tail spawn) altered the balloon geometry.
+    pub dirty: bool,
     /// Where the pointer was when the drag started, in document px.
     pub start_pos_doc: [f64; 2],
     /// Whether Alt/Option was held at drag start (`Alt`+drag scales stipple dot radius).
@@ -90,6 +94,12 @@ impl BalloonGizmoState {
     pub fn alloc_gesture_id(&mut self) -> u64 {
         self.next_gesture_id = self.next_gesture_id.wrapping_add(1);
         self.next_gesture_id
+    }
+
+    /// Returns the layer id whose raster cache should be temporarily hidden while a live vector
+    /// drag preview is active (zero CPU rasterization during drag).
+    pub fn dragging_layer_id(&self) -> Option<LayerId> {
+        self.drag.as_ref().filter(|d| d.dirty).map(|d| LayerId(d.layer_id))
     }
 }
 
@@ -411,6 +421,8 @@ fn on_pointer_down(
             gesture_id,
             layer_id,
             hit: GizmoHit::TailTip { balloon_id, tail_id: new_tail_id },
+            preview_balloon: Some(initial.clone()),
+            dirty: true,
             initial_balloon: initial,
             start_pos_doc: pos_doc,
             alt_held: false,
@@ -418,19 +430,29 @@ fn on_pointer_down(
         return;
     }
 
-    state.drag = Some(BalloonGizmoDrag { gesture_id, layer_id, hit, initial_balloon: balloon.clone(), start_pos_doc: pos_doc, alt_held });
+    state.drag = Some(BalloonGizmoDrag {
+        gesture_id,
+        layer_id,
+        hit,
+        initial_balloon: balloon.clone(),
+        preview_balloon: None,
+        dirty: false,
+        start_pos_doc: pos_doc,
+        alt_held,
+    });
 }
 
-/// Applies the drag to a fresh copy of the balloon, buffers the update command and returns the
-/// hydrated balloon. The whole gesture shares one `coalesce` key, so it is one history step.
-fn on_drag_move(drag: &BalloonGizmoDrag, cur_doc: [f64; 2], cmds: &mut Vec<OutCommand>) -> Option<LiveBalloon> {
+/// Applies the drag to a fresh copy of the balloon in-memory only (zero `shape.balloon.update`
+/// commands and zero CPU `ShapeLayer::cache` rasterization during pointer motion). The single
+/// commit command is emitted on `PointerUp`.
+fn on_drag_move(drag: &mut BalloonGizmoDrag, cur_doc: [f64; 2]) -> Option<LiveBalloon> {
     let mut updated = drag.initial_balloon.clone();
     let dx = cur_doc[0] - drag.start_pos_doc[0];
     let dy = cur_doc[1] - drag.start_pos_doc[1];
     apply_drag(&mut updated, drag, dx, dy, cur_doc);
     log_tail_telemetry(&updated, drag, cur_doc, dx, dy);
-    let coalesce_key = format!("balloon-gizmo-drag-{}-{}", drag.layer_id, drag.gesture_id);
-    cmds.push(OutCommand::new("shape.balloon.update", json!({ "layer": drag.layer_id, "balloon": &updated, "coalesce": coalesce_key })));
+    drag.preview_balloon = Some(updated.clone());
+    drag.dirty = true;
     Some(updated)
 }
 
@@ -601,9 +623,23 @@ fn log_tail_telemetry(updated: &LiveBalloon, drag: &BalloonGizmoDrag, cur_doc: [
     );
 }
 
-/// Ends the drag.
-pub fn on_pointer_up(state: &mut BalloonGizmoState) {
-    state.drag = None;
+/// Cancels an active gizmo drag on Escape without mutating the document, returning the initial
+/// balloon geometry so the host panel can re-hydrate back to its pre-drag values.
+pub fn escape(state: &mut BalloonGizmoState) -> Option<LiveBalloon> {
+    state.drag.take().map(|d| d.initial_balloon)
+}
+
+/// Ends the drag and emits the single deferred commit command if geometry changed.
+pub fn on_pointer_up(state: &mut BalloonGizmoState, cmds: &mut Vec<OutCommand>) -> Option<LiveBalloon> {
+    let drag = state.drag.take()?;
+    if drag.dirty
+        && let Some(final_balloon) = drag.preview_balloon
+    {
+        let coalesce_key = format!("balloon-gizmo-drag-{}-{}", drag.layer_id, drag.gesture_id);
+        cmds.push(OutCommand::new("shape.balloon.update", json!({ "layer": drag.layer_id, "balloon": &final_balloon, "coalesce": coalesce_key })));
+        return Some(final_balloon);
+    }
+    None
 }
 
 /// The balloons of the active layer, when it is a balloon group.
@@ -708,8 +744,8 @@ pub fn pointer(state: &mut BalloonGizmoState, view: &BalloonView<'_>, ev: Canvas
             }
         }
         CanvasToolEvent::Move { x, y, .. } => {
-            if let Some(drag) = state.drag.clone() {
-                out.updated_balloon = on_drag_move(&drag, [x, y], &mut out.commands);
+            if let Some(drag) = state.drag.as_mut() {
+                out.updated_balloon = on_drag_move(drag, [x, y]);
                 out.handled = true;
             } else if view.tool_is_balloon {
                 // No drag: only remember what the pointer is over, so the handles light up.
@@ -721,7 +757,7 @@ pub fn pointer(state: &mut BalloonGizmoState, view: &BalloonView<'_>, ev: Canvas
         }
         CanvasToolEvent::Up { .. } => {
             if state.drag.is_some() {
-                on_pointer_up(state);
+                out.updated_balloon = on_pointer_up(state, &mut out.commands);
                 out.handled = true;
             }
         }
@@ -794,13 +830,46 @@ fn resolve_story_links(doc: &Document, balloons: &[LiveBalloon], explicit: &[([f
     links
 }
 
+/// Draws the live vector contour of a balloon directly via `egui::Painter` during an interactive
+/// drag (zero CPU `ShapeLayer::cache` rasterization).
+fn draw_balloon_vector_preview(painter: &egui::Painter, xf: &CanvasViewXform, balloon: &LiveBalloon) {
+    let step_doc = (4.0 / f64::from(xf.zoom.max(0.05))).clamp(1.0, 24.0);
+    let rings = photocraft_vector::balloon::sample_balloon_contour_for_brush(balloon, step_doc);
+    let stroke_w = ((balloon.stroke_width as f32) * xf.zoom).clamp(1.0, 24.0);
+    let outline = Color32::from_rgba_unmultiplied(24, 24, 28, 235);
+    let fill_tint = Color32::from_rgba_unmultiplied(255, 255, 255, 190);
+    for ring in rings {
+        if ring.len() < 3 {
+            continue;
+        }
+        let pts: Vec<Pos2> = ring.iter().map(|s| xf.to_screen(s.pos[0] as f32, s.pos[1] as f32)).collect();
+        painter.add(egui::Shape::Path(egui::epaint::PathShape {
+            points: pts.clone(),
+            closed: true,
+            fill: fill_tint,
+            stroke: egui::epaint::PathStroke::new(stroke_w, outline),
+        }));
+    }
+}
+
 /// Draws the gizmo for every balloon of the active balloon group, plus `Stories` link overlays.
 pub fn draw(painter: &egui::Painter, state: &BalloonGizmoState, view: &BalloonView<'_>) {
     if !showing(state, view) {
         return;
     }
     let Some(doc) = view.doc else { return };
-    let Some((_, balloons)) = active_balloons_in_doc(doc, view.active_layer) else { return };
+    let Some((layer_id, mut balloons)) = active_balloons_in_doc(doc, view.active_layer) else { return };
+    let live_preview = state.drag.as_ref().filter(|d| d.layer_id == layer_id && d.dirty).and_then(|d| d.preview_balloon.as_ref());
+    if let Some(live) = live_preview {
+        for b in &mut balloons {
+            if b.id == live.id {
+                *b = live.clone();
+            }
+        }
+        for b in &balloons {
+            draw_balloon_vector_preview(painter, &view.view_xform, b);
+        }
+    }
     for b in &balloons {
         draw_balloon_gizmo(painter, &view.view_xform, b, state);
     }
@@ -1077,5 +1146,76 @@ mod tests {
         let unlinked_shapes = out_unlinked.shapes.len();
         out_unlinked.textures_delta.clear();
         assert!(linked_shapes > unlinked_shapes, "dashed story link must add overlay shapes: {linked_shapes} vs {unlinked_shapes}");
+    }
+
+    #[test]
+    fn drag_emits_zero_commands_during_move_and_commits_once_on_up() {
+        use photocraft_doc::{ColorMode, Document, Layer, LayerContent, LayerId, LiveShape, SampleType, ShapeLayer, Size};
+        use photocraft_vector::balloon::LiveBalloonGroupGeom;
+
+        use super::{BalloonView, CanvasToolEvent, draw, escape, pointer};
+
+        let mut doc = Document::new("BalloonDragTest", Size { width: 800, height: 600 }, ColorMode::Rgb, SampleType::U8);
+        let b = balloon();
+        let start_tip = b.tails[0].tip;
+        let group = photocraft_doc::vector::LiveBalloonGroup::new(vec![b]);
+        let path = group.rebuild_group_path();
+        let sh = ShapeLayer { path, live: Some(LiveShape::BalloonGroup { group }), ..Default::default() };
+        let mut bl = Layer::new("B", LayerContent::Shape(sh));
+        bl.id = LayerId(7);
+        doc.layers.push(bl);
+
+        let view = BalloonView {
+            doc_id: None,
+            doc: Some(&doc),
+            active_layer: Some(LayerId(7)),
+            tool_is_balloon: true,
+            view_xform: one_to_one(),
+            story_links: Vec::new(),
+        };
+        let mut state = BalloonGizmoState::default();
+        let mods = egui::Modifiers::NONE;
+
+        let down = pointer(&mut state, &view, CanvasToolEvent::Down { x: start_tip[0], y: start_tip[1], pressure: 1.0 }, mods);
+        assert!(down.handled);
+        assert!(down.commands.is_empty(), "pointer down must not rasterize");
+
+        // Simulate 10 interactive drag moves: 0 rasterize/update commands emitted!
+        let mut drag_commands = 0usize;
+        for step in 1..=10 {
+            let mv = pointer(
+                &mut state,
+                &view,
+                CanvasToolEvent::Move { x: start_tip[0] + f64::from(step) * 5.0, y: start_tip[1] + f64::from(step) * 3.0, pressure: 1.0 },
+                mods,
+            );
+            assert!(mv.handled);
+            drag_commands += mv.commands.len();
+            assert!(mv.updated_balloon.is_some(), "panel still receives live geometry during drag");
+        }
+        assert_eq!(drag_commands, 0, "drag moves must emit 0 update/rasterize commands");
+        assert_eq!(state.dragging_layer_id(), Some(LayerId(7)));
+
+        // Vector preview draws during drag.
+        let ctx = egui::Context::default();
+        let mut paint_out = ctx.run_ui(Default::default(), |ui| draw(ui.painter(), &state, &view));
+        assert!(!paint_out.shapes.is_empty());
+        paint_out.textures_delta.clear();
+
+        // PointerUp commits exactly 1 command with final geometry.
+        let up = pointer(&mut state, &view, CanvasToolEvent::Up { x: start_tip[0] + 50.0, y: start_tip[1] + 30.0 }, mods);
+        assert!(up.handled);
+        assert_eq!(up.commands.len(), 1, "PointerUp must emit exactly 1 commit command");
+        assert_eq!(up.commands[0].id, "shape.balloon.update");
+        assert_eq!(state.dragging_layer_id(), None);
+
+        // Escape mid-drag cancels cleanly with 0 commands and restores initial geometry.
+        let _ = pointer(&mut state, &view, CanvasToolEvent::Down { x: start_tip[0], y: start_tip[1], pressure: 1.0 }, mods);
+        let _ = pointer(&mut state, &view, CanvasToolEvent::Move { x: start_tip[0] + 40.0, y: start_tip[1] + 20.0, pressure: 1.0 }, mods);
+        let restored = escape(&mut state).expect("escape must return initial balloon");
+        assert_eq!(restored.tails[0].tip, start_tip);
+        assert_eq!(state.dragging_layer_id(), None);
+        let up_after_esc = pointer(&mut state, &view, CanvasToolEvent::Up { x: start_tip[0] + 40.0, y: start_tip[1] + 20.0 }, mods);
+        assert!(up_after_esc.commands.is_empty());
     }
 }

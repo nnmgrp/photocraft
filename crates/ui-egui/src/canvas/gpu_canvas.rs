@@ -34,7 +34,7 @@ use eframe::wgpu;
 
 use crate::render_path::CpuReason;
 
-pub use pages::{MAX_PAGE_SIDE, PageUpload};
+pub use pages::{GpuPageRender, MAX_PAGE_SIDE, PageUpload};
 pub use photocraft_gpu::{DeviceHealth, Fault};
 
 mod budget;
@@ -342,6 +342,7 @@ impl GpuCanvas {
             res.compositor = None;
             res.compositor_failed = Some(photocraft_gpu::Unsupported(self.fault().map_or_else(|| "GPU canvas released".into(), |f| f.to_string())));
             res.docs.clear();
+            res.preview_lru.clear();
             res.luts.clear();
             res.display_lut_signatures.clear();
             res.views.clear();
@@ -635,6 +636,7 @@ impl GpuCanvas {
             };
             res.docs.insert(doc, tex);
         }
+        res.touch_preview_key(doc);
         let Some(d) = res.docs.get(&doc) else { return };
         d.write(queue, [0, 0], size, size[0], texels);
         d.regenerate_mips(device, queue, res, [0, 0, size[0], size[1]]);
@@ -689,30 +691,8 @@ impl GpuCanvas {
         self.upload_rect(doc, [r.x0 as u32, r.y0 as u32], [r.width(), r.height()], &texels(format, &buf.px))
     }
 
-    /// Composite `region` of `doc` with the wgpu compositor straight into its display texture
-    /// (no CPU pixels, no upload of the composite). `encode_srgb` stores the sRGB encoding of the
-    /// composite (linear documents, see `photocraft_engine::display_color`). Returns `Err` when the
-    /// document uses features the GPU compositor doesn't cover yet; the caller then falls back to
-    /// the CPU compositor.
-    pub fn composite(
-        &self,
-        doc: &photocraft_doc::Document,
-        region: photocraft_geom::Rect,
-        encode_srgb: bool,
-    ) -> Result<photocraft_gpu::Stats, photocraft_gpu::Unsupported> {
-        let (device, queue) = (&self.rs.device, &self.rs.queue);
-        let size = [doc.size.width, doc.size.height];
-        if size[0] == 0 || size[1] == 0 {
-            return Err(photocraft_gpu::Unsupported("empty document".into()));
-        }
-        if std::env::var_os("PHOTOCRAFT_CPU_COMPOSE").is_some() {
-            return Err(photocraft_gpu::Unsupported("disabled by PHOTOCRAFT_CPU_COMPOSE".into()));
-        }
-        if let Some(f) = self.fault() {
-            return Err(photocraft_gpu::Unsupported(f.to_string()));
-        }
-        let mut renderer = self.rs.renderer.write();
-        let Some(res) = renderer.callback_resources.get_mut::<Resources>() else { return Err(photocraft_gpu::Unsupported("no GPU canvas".into())) };
+    /// Acquires and configures the shared wgpu [`photocraft_gpu::Compositor`] from `res`.
+    fn take_compositor(&self, res: &mut Resources) -> Result<photocraft_gpu::Compositor, photocraft_gpu::Unsupported> {
         // A driver that couldn't build the pipelines once won't later: stay on the CPU compositor.
         if let Some(e) = &res.compositor_failed {
             return Err(e.clone());
@@ -733,9 +713,14 @@ impl GpuCanvas {
                 compositor_build::BuildState::Adopted => (),
             }
         }
+        let (device, queue) = (&self.rs.device, &self.rs.queue);
         let mut comp = match res.compositor.take() {
             Some(c) => c,
-            None => match photocraft_gpu::Compositor::try_new_with_format(device, photocraft_gpu::Compositor::preferred_acc_format(&self.rs.adapter)) {
+            None => match photocraft_gpu::Compositor::try_new_for_adapter(
+                &self.rs.adapter,
+                device,
+                photocraft_gpu::Compositor::preferred_acc_format(&self.rs.adapter),
+            ) {
                 Ok(c) => c,
                 Err(e) => {
                     // `render_path::note` logs it, once, as this document's reason.
@@ -757,7 +742,47 @@ impl GpuCanvas {
         if let Some(enabled) = res.compositor_gpu_screentone {
             comp.set_gpu_screentone(enabled);
         }
-        let key = doc.id.0;
+        Ok(comp)
+    }
+
+    /// Composite `region` of `doc` with the wgpu compositor straight into its display texture
+    /// (no CPU pixels, no upload of the composite). `encode_srgb` stores the sRGB encoding of the
+    /// composite (linear documents, see `photocraft_engine::display_color`). Returns `Err` when the
+    /// document uses features the GPU compositor doesn't cover yet; the caller then falls back to
+    /// the CPU compositor.
+    pub fn composite(
+        &self,
+        doc: &photocraft_doc::Document,
+        region: photocraft_geom::Rect,
+        encode_srgb: bool,
+    ) -> Result<photocraft_gpu::Stats, photocraft_gpu::Unsupported> {
+        self.composite_for(doc.id.0, doc, region, encode_srgb)
+    }
+
+    /// Like [`GpuCanvas::composite`], targeting texture cache slot `key` (supports both live
+    /// document keys `doc.id.0` and tagged preview keys with bits 58..63 set, bounded by a small
+    /// preview LRU so previews never crowd out live document tiles in VRAM).
+    pub fn composite_for(
+        &self,
+        key: u64,
+        doc: &photocraft_doc::Document,
+        region: photocraft_geom::Rect,
+        encode_srgb: bool,
+    ) -> Result<photocraft_gpu::Stats, photocraft_gpu::Unsupported> {
+        let (device, queue) = (&self.rs.device, &self.rs.queue);
+        let size = [doc.size.width, doc.size.height];
+        if size[0] == 0 || size[1] == 0 {
+            return Err(photocraft_gpu::Unsupported("empty document".into()));
+        }
+        if std::env::var_os("PHOTOCRAFT_CPU_COMPOSE").is_some() {
+            return Err(photocraft_gpu::Unsupported("disabled by PHOTOCRAFT_CPU_COMPOSE".into()));
+        }
+        if let Some(f) = self.fault() {
+            return Err(photocraft_gpu::Unsupported(f.to_string()));
+        }
+        let mut renderer = self.rs.renderer.write();
+        let Some(res) = renderer.callback_resources.get_mut::<Resources>() else { return Err(photocraft_gpu::Unsupported("no GPU canvas".into())) };
+        let mut comp = self.take_compositor(res)?;
         let format = self.format_for(doc.depth, size);
         let fresh = res.docs.get(&key).is_none_or(|d| d.size != size || d.format != format);
         let region = if fresh { doc.bounds() } else { region.intersect(&doc.bounds()) };
@@ -788,6 +813,7 @@ impl GpuCanvas {
             };
             res.docs.insert(key, tex);
         }
+        res.touch_preview_key(key);
         let (Some(pipe), Some(d)) = (res.encode_pipeline(format), res.docs.get(&key)) else {
             res.compositor = Some(comp);
             return Err(photocraft_gpu::Unsupported(format!("no {format:?} canvas texture or pipeline")));
@@ -911,7 +937,7 @@ impl GpuCanvas {
         }
         let region = damage.unwrap_or(bounds);
         let encode_srgb = display.is_some_and(|d| d.encode_srgb);
-        let gpu = if key == doc.id.0 { self.composite(doc, region, encode_srgb) } else { Err(photocraft_gpu::Unsupported("preview texture".into())) };
+        let gpu = self.composite_for(key, doc, region, encode_srgb);
         match gpu {
             Ok(stats) => {
                 out.kind = if damage.is_some() { "gpu-rect" } else { "gpu-full" };
@@ -1006,6 +1032,7 @@ impl GpuCanvas {
             };
             res.docs.insert(key, tex);
         }
+        res.touch_preview_key(key);
         Some(format)
     }
 
@@ -1016,6 +1043,7 @@ impl GpuCanvas {
         if res.docs.keys().any(|k| !live.contains(k)) {
             res.docs.retain(|k, _| live.contains(k));
         }
+        res.preview_lru.retain(|k| live.contains(k) && res.docs.contains_key(k));
         // Everything the compositor holds for documents that aren't open, also when their
         // texture entry was dropped earlier (over budget, a failed render), which used to leave
         // their pages and effect maps resident after closing (#4529).

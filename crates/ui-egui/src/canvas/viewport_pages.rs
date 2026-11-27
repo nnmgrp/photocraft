@@ -28,8 +28,10 @@ use crate::PhotocraftApp;
 pub(crate) const PAGE_SIDE: u32 = 512;
 /// The most pages a view asks for: coarser pages are used beyond it.
 const MAX_PAGES: usize = 256;
-/// Pages rendering at once, over all views and documents.
+/// Pages rendering at once, over all views and documents (CPU fallback workers).
 const MAX_JOBS: usize = 2;
+/// Visible pages composited directly on the GPU per frame before yielding to keep pan/zoom smooth.
+const GPU_PAGES_PER_FRAME: usize = 2;
 /// Synchronous pages rendered per frame on `wasm32` so 12K×17K zooms/edits stay responsive
 /// without stalling the single browser UI thread or oversizing WebGPU IPC bursts.
 #[cfg(target_arch = "wasm32")]
@@ -557,6 +559,57 @@ impl Stream {
         })
     }
 
+    /// Returns whether `page` at `size` can be rendered directly on the GPU (1:1 or aligned 2×).
+    pub(crate) fn gpu_eligible(page: PageId, size: [u32; 2], partial: Option<DRect>) -> bool {
+        if page.factor == 1 {
+            return true;
+        }
+        if page.factor == 2 && partial.is_none() {
+            let src = page.source(size);
+            return src.x0 % 2 == 0 && src.y0 % 2 == 0 && src.width().is_multiple_of(2) && src.height().is_multiple_of(2);
+        }
+        false
+    }
+
+    /// Picks up to `cap` wanted pages eligible for direct GPU rendering that are missing or dirty
+    /// and not already queued or failed.
+    pub(crate) fn next_gpu_candidates(&self, wanted: &[PageId], size: [u32; 2], cap: usize) -> Vec<(PageId, u64, Option<DRect>)> {
+        let mut out = Vec::new();
+        for &p in wanted {
+            if out.len() >= cap {
+                break;
+            }
+            let epoch = self.epoch(p);
+            if self.jobs.iter().any(|j| j.page == p && j.epoch == epoch) || self.failed.contains(&(p, epoch)) {
+                continue;
+            }
+            if self.ready.iter().any(|d| d.page == p) || self.pages.get(&p).is_some_and(|q| !q.dirty && q.exact) {
+                continue;
+            }
+            let region = self.pages.get(&p).filter(|q| q.dirty).and_then(|q| q.partial);
+            if !Self::gpu_eligible(p, size, region) {
+                continue;
+            }
+            out.push((p, epoch, region));
+        }
+        out
+    }
+
+    /// Records a viewport page that was composited directly into VRAM by [`GpuCanvas::render_page_gpu`].
+    pub(crate) fn record_gpu_page(&mut self, page: PageId, epoch: u64, region: Option<DRect>, bytes: u64) {
+        self.stats.rendered += 1;
+        self.stats.uploads += 1;
+        self.epochs.remove(&page);
+        if region.is_some()
+            && let Some(entry) = self.pages.get_mut(&page)
+        {
+            (entry.dirty, entry.partial, entry.epoch, entry.touched) = (false, None, epoch, self.clock);
+            self.stats.partial += 1;
+            return;
+        }
+        self.pages.insert(page, Page { dirty: false, exact: true, partial: None, epoch, touched: self.clock, bytes });
+    }
+
     /// The pages this stream believes are on the GPU.
     pub fn resident(&self) -> usize {
         self.pages.len()
@@ -709,8 +762,55 @@ pub(super) fn show(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, xf:
     crate::render_path::note(app, id.0, crate::render_path::Path::Gpu { full: true });
     let stream = app.streams.entry(id).or_default();
     stream.view(ctx.viewport_id().0.value(), &wanted);
+
+    // Prefer direct GPU compositing for visible `factor == 1` (and aligned `factor == 2`) pages
+    // without ever allocating a full-document texture set; fall back to the 2 CPU workers on
+    // unsupported documents (CMYK/Lab), `DeviceHealth` faults, budget pressure, or `factor > 2`.
+    let encode_srgb = display.as_deref().is_some_and(|d| d.encode_srgb);
+    let mut gpu_handled = false;
+    if gpu.supports(&doc) {
+        let candidates = stream.next_gpu_candidates(&wanted, size, GPU_PAGES_PER_FRAME);
+        for (page, epoch, region) in candidates {
+            let source = page.source(size);
+            let pw = (source.width() / page.factor).max(1);
+            let ph = (source.height() / page.factor).max(1);
+            let est_bytes = pw as u64 * ph as u64 * texel_bytes;
+            if region.is_none() {
+                match stream.make_room(page, est_bytes, limit, &wanted) {
+                    None => break,
+                    Some(true) => gpu.retain_pages(key, &stream.ids()),
+                    Some(false) => {}
+                }
+            }
+            match gpu.render_page_gpu(crate::gpu_canvas::GpuPageRender {
+                key,
+                page: page.id(),
+                size,
+                doc: &doc,
+                factor: page.factor,
+                core: page.core(size),
+                source,
+                region,
+                encode_srgb,
+            }) {
+                Ok(bytes) => {
+                    stream.record_gpu_page(page, epoch, region, bytes);
+                    gpu_handled = true;
+                }
+                Err(_) => {
+                    gpu_handled = false;
+                    break;
+                }
+            }
+        }
+    }
+
     let tx = stream.tx.clone();
     stream.update(&wanted, faithful, |page, epoch, exact, cancel, region| {
+        if gpu_handled && Stream::gpu_eligible(page, size, region) {
+            // Defer remaining GPU-eligible pages to the next frame instead of spawning CPU workers.
+            return false;
+        }
         spawn(ctx, tx.clone(), doc.clone(), display.clone(), (page, epoch, exact, region), cancel)
     });
     for d in stream.take_uploads(&wanted, texel_bytes) {

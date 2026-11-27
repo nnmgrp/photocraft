@@ -382,6 +382,82 @@ mod native {
         }
     }
 
+    /// Hard barrier that synchronously finishes and commits any in-flight `SfxGpuAsyncBake` or
+    /// pending live GPU SFX draft before mutating document operations (`Undo`/`Redo`, `Merge*`,
+    /// `Flatten`, `Save`/`Export`, layer delete/reorder, document close/switch).
+    ///
+    /// If the target document or SFX layer has already been deleted/replaced, safely cancels the
+    /// bake and drops the draft without touching the document.
+    pub fn flush_pending_sfx_bake(app: &mut PhotocraftApp) {
+        let active_target = app.manga.sfx_gpu_async_bake.active_target();
+        let has_draft = app.manga.sfx_gpu_live_draft.is_some();
+        if active_target.is_none() && !has_draft {
+            return;
+        }
+
+        let target_exists = |app: &PhotocraftApp, doc_id: DocId, lid: LayerId| -> bool {
+            app.session
+                .documents()
+                .iter()
+                .find(|st| st.doc.id == doc_id)
+                .and_then(|st| st.doc.layer(lid))
+                .is_some_and(|l| l.sfx.is_some())
+        };
+
+        if let Some((doc_id, lid)) = active_target {
+            if !target_exists(app, doc_id, lid) {
+                app.manga.sfx_gpu_async_bake.cancel();
+                app.manga.sfx_gpu_live_draft = None;
+                app.manga.sfx_gpu_layer_cleared = None;
+                return;
+            }
+            if let Some(rs) = app.gpu_render_state.clone()
+                && let Some(done) = app.manga.sfx_gpu_async_bake.flush_blocking(&rs)
+            {
+                let _ = photocraft_engine::cmd::manga_cmds::sfx::commit_sfx_gpu_surface(
+                    &mut app.session,
+                    done.doc_id,
+                    done.layer_id,
+                    done.data,
+                    done.surface,
+                    done.coalesce,
+                );
+                app.manga.sfx_gpu_live_draft = None;
+                app.manga.sfx_gpu_layer_cleared = None;
+                return;
+            }
+            app.manga.sfx_gpu_async_bake.cancel();
+        }
+
+        if let Some((doc_id, lid, sfx)) = app.manga.sfx_gpu_live_draft.take() {
+            app.manga.sfx_gpu_layer_cleared = None;
+            if !target_exists(app, doc_id, lid) {
+                return;
+            }
+            let prev_active = app.session.active_index();
+            let target_idx = app.session.documents().iter().position(|st| st.doc.id == doc_id);
+            if let Some(idx) = target_idx {
+                let switched = prev_active != Some(idx);
+                if switched {
+                    app.session.set_active(idx);
+                }
+                let coalesce = format!("sfx-panel:{}:{}", doc_id.0, lid.0);
+                let _ = app.session.execute(
+                    "sfx.update",
+                    json!({
+                        "layer": lid.0,
+                        "sfx": sfx,
+                        "coalesce": coalesce,
+                        "preview": false,
+                    }),
+                );
+                if switched && let Some(prev) = prev_active {
+                    app.session.set_active(prev);
+                }
+            }
+        }
+    }
+
     fn dispatch_sfx_update(app: &mut PhotocraftApp, cmd: OutCommand) -> Option<Value> {
         let is_preview = cmd.params.get("preview").and_then(Value::as_bool).unwrap_or(false);
         let parsed_sfx = cmd.params.get("sfx").and_then(|v| serde_json::from_value::<SfxData>(v.clone()).ok());
@@ -404,9 +480,9 @@ mod native {
                 return Some(json!({ "ok": true, "layer": lid.0 }));
             }
 
-            // Full commit (`preview: false`): on WASM, keep the live GPU overlay visible and bake
-            // full-res tiles asynchronously on GPU via `map_async` (zero CPU freeze on 12K×17K!).
-            #[cfg(target_arch = "wasm32")]
+            // Full commit (`preview: false`): on both Native and WASM, keep the live GPU overlay
+            // visible and bake full-res tiles asynchronously via `map_async` (1 tile per frame,
+            // zero UI-thread stall on release; guarded by `flush_pending_sfx_bake` before mutations).
             if let Some(rs) = app.gpu_render_state.clone() {
                 clear_sfx_layer_once_for_gpu(app, doc_id, lid, &sfx, coalesce.as_deref());
                 app.manga.sfx_gpu_live_draft = Some((doc_id, lid, sfx.clone()));
@@ -414,8 +490,6 @@ mod native {
                     return Some(json!({ "ok": true, "layer": lid.0 }));
                 }
             }
-            #[cfg(not(target_arch = "wasm32"))]
-            let _ = (fmt, dpi);
         }
 
         // Native full commit (uses the installed native GPU tiled hook!) or CPU fallback.
@@ -1233,15 +1307,23 @@ mod native {
         app.manga.ui.linework_panel.snap_close = snap_close;
     }
 
-    /// Hides the screentone layer being dragged live from the base document composite.
+    /// Hides the screentone or balloon layer being dragged live from the base document composite
+    /// so the stale raster cache is replaced by the live gizmo overlay (0 CPU raster during drag).
     pub fn screentone_display_doc(app: &PhotocraftApp, idx: usize) -> Option<(Arc<Document>, u64)> {
         let seam = app.session.seam_flags();
         if !seam.canvas_gizmos || app.session.active_index() != Some(idx) {
             return None;
         }
         let st = app.session.documents().get(idx)?;
-        let hidden = app.manga.ui.screentone_gizmo.hide_layer_during_drag(BridgeDocId(st.doc.id.0), &st.doc, st.active_layer)?;
-        Some((crate::distort_ui::without_layer(&st.doc, hidden), 1 << 60 | hidden.0))
+        if let Some(hidden) = app.manga.ui.screentone_gizmo.hide_layer_during_drag(BridgeDocId(st.doc.id.0), &st.doc, st.active_layer) {
+            return Some((crate::distort_ui::without_layer(&st.doc, hidden), 1 << 60 | hidden.0));
+        }
+        if let Some(hidden) = app.manga.ui.balloon_gizmo.dragging_layer_id()
+            && st.doc.layer(hidden).is_some()
+        {
+            return Some((crate::distort_ui::without_layer(&st.doc, hidden), 1 << 60 | hidden.0));
+        }
+        None
     }
 
     /// Refreshes the screentone live drag preview texture when handles move.
@@ -1440,14 +1522,18 @@ mod native {
         false
     }
 
-    /// Cancels an active SFX canvas drag on Escape, returning true when consumed.
+    /// Cancels an active SFX or Balloon canvas drag on Escape, returning true when consumed.
     pub fn sfx_escape_key(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
+        let has_balloon_drag = app.manga.ui.balloon_gizmo.drag.is_some();
         let has_create_drag = app.manga.sfx_create_drag.is_some();
-        if !app.manga.ui.sfx_gizmo.has_active_drag() && !has_create_drag {
+        if !has_balloon_drag && !app.manga.ui.sfx_gizmo.has_active_drag() && !has_create_drag {
             return false;
         }
         if !ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             return false;
+        }
+        if let Some(restored) = balloon_gizmo::escape(&mut app.manga.ui.balloon_gizmo) {
+            comic_balloon_panel::hydrate_geometry_from_balloon(&mut app.manga.ui.balloon_ui, &restored);
         }
         app.manga.sfx_create_drag = None;
         if !app.manga.ui.sfx_gizmo.has_active_drag() {
@@ -4396,6 +4482,35 @@ mod native {
             assert_eq!(tone2.spec.grad_type, ScreentoneGradientType::Diamond);
             assert!((tone2.spec.grad_angle - 45.0).abs() < 1e-3, "got {}", tone2.spec.grad_angle);
             assert!(!st2.doc.layer(id2).unwrap().clipped);
+        }
+
+        #[test]
+        fn flush_pending_sfx_bake_commits_live_draft_and_cancels_deleted_target() {
+            let mut app = new_balloon_app();
+            let created = app.run("sfx.create", json!({ "text": "BAM" })).unwrap();
+            let sfx_lid = LayerId(created["layer"].as_u64().unwrap());
+            let doc_id = app.session.active().unwrap().doc.id;
+            let mut edited_sfx = app.session.active().unwrap().doc.layer(sfx_lid).unwrap().sfx.as_deref().unwrap().clone();
+            edited_sfx.text = "BOOM!".into();
+
+            // Simulate an in-flight live GPU SFX draft waiting to be baked.
+            app.manga.sfx_gpu_live_draft = Some((doc_id, sfx_lid, edited_sfx.clone()));
+            app.manga.sfx_gpu_layer_cleared = Some((doc_id, sfx_lid));
+
+            // Running a mutating command (`layer.new.layer` / `edit.undo` / `layer.mergeDown`) must trigger
+            // the barrier first, committing "BOOM!" into the SFX layer and clearing the live draft.
+            flush_pending_sfx_bake(&mut app);
+            assert!(app.manga.sfx_gpu_live_draft.is_none());
+            assert!(app.manga.sfx_gpu_layer_cleared.is_none());
+            let committed_text = app.session.active().unwrap().doc.layer(sfx_lid).unwrap().sfx.as_deref().unwrap().text.clone();
+            assert_eq!(committed_text, "BOOM!", "barrier must commit pending SFX draft before mutations");
+
+            // If the target layer was already deleted, the barrier must cancel cleanly without error.
+            app.manga.sfx_gpu_live_draft = Some((doc_id, LayerId(999_999), edited_sfx));
+            app.manga.sfx_gpu_layer_cleared = Some((doc_id, LayerId(999_999)));
+            flush_pending_sfx_bake(&mut app);
+            assert!(app.manga.sfx_gpu_live_draft.is_none());
+            assert!(app.manga.sfx_gpu_layer_cleared.is_none());
         }
     }
 }

@@ -209,6 +209,7 @@ impl PhotocraftApp {
     /// (a flat file): confirming the document's own file is recorded as a `file.save` step,
     /// which writes whichever file the action is played on, not as a Save As to a fixed path.
     pub(crate) fn save_dialog_flow(&mut self, path: Option<String>, choices: FormatChoices, plain_save: bool) -> Result<Value, String> {
+        crate::manga_seam::flush_pending_sfx_bake(self);
         if self.smart_svg.modal_open() {
             return Err("Answer Edit SVG Contents before starting a save".into());
         }
@@ -278,6 +279,7 @@ impl PhotocraftApp {
 
     /// [`Self::save_as_with`] once the path is known.
     pub(crate) fn save_to(&mut self, path: String, choices: FormatChoices) -> Result<Value, String> {
+        crate::manga_seam::flush_pending_sfx_bake(self);
         if self.smart_svg.modal_open() {
             return Err("Answer Edit SVG Contents before starting a save".into());
         }
@@ -811,6 +813,7 @@ impl PhotocraftApp {
     /// with an alpha channel or transparency, else 24; a DDS texture's: uncompressed without
     /// mipmaps; a JPEG's: the file's own quality, Baseline). Automation saves never prompt.
     pub fn save_automation_with(&mut self, path: Option<String>, choices: FormatChoices) -> Result<Value, String> {
+        crate::manga_seam::flush_pending_sfx_bake(self);
         let target = {
             let state = self.session.active().ok_or("no document")?;
             // As File › Save: without `path` only a layered file is written back (#416).

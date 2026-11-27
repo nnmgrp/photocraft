@@ -31,8 +31,21 @@ pub const CMD_PATTERN: &str = "pattern.screentone";
 pub const COLOR_TAB: usize = 4;
 
 /// The pattern types the panel offers, in the commands' own notation.
-const PATTERNS: [&str; 12] =
-    ["dots", "lines", "crosshatch", "noise", "gaussianNoise", "stipple", "hexgrid", "checker", "concentric", "stars", "hearts", "triangles"];
+const PATTERNS: [&str; 13] = [
+    "dots",
+    "lines",
+    "crosshatch",
+    "noise",
+    "gaussianNoise",
+    "stipple",
+    "hexgrid",
+    "checker",
+    "concentric",
+    "stars",
+    "hearts",
+    "triangles",
+    "focusLines",
+];
 /// The dot shapes the panel offers (the dots' and the satellites').
 const SHAPES: [&str; 4] = ["circle", "square", "diamond", "hexagon"];
 /// The gradient types the panel offers for modulation.
@@ -278,6 +291,10 @@ fn draw_core_grid(ui: &mut egui::Ui, st: &mut ScreentoneUi, t: Tokens) {
         crate::widgets::value_field(ui, &mut st.spec.scrape_strength, 0.0..=1.0, "", 76.0);
         ui.end_row();
 
+        row(ui, t, tl!("Scrape Angle:"));
+        crate::widgets::value_field(ui, &mut st.spec.scrape_angle, -180.0..=180.0, "°", 76.0);
+        ui.end_row();
+
         row(ui, t, &crate::i18n::param_label("spacingX"));
         crate::widgets::value_field(ui, &mut st.spec.spacing_x, 1.0..=2000.0, "px", 76.0);
         ui.end_row();
@@ -307,6 +324,8 @@ fn draw_core_grid(ui: &mut egui::Ui, st: &mut ScreentoneUi, t: Tokens) {
         row(ui, t, &crate::i18n::param_label("crossAngle"));
         crate::widgets::value_field(ui, &mut st.spec.cross_angle, -180.0..=180.0, "°", 76.0);
         ui.end_row();
+
+        draw_block_b_line_rows(ui, st, t);
 
         row(ui, t, &crate::i18n::param_label("roundness"));
         crate::widgets::value_field(ui, &mut st.spec.roundness, 0.0..=1.0, "", 76.0);
@@ -361,6 +380,32 @@ fn draw_core_grid(ui: &mut egui::Ui, st: &mut ScreentoneUi, t: Tokens) {
             draw_shading_rows(ui, st, t);
         }
     });
+}
+
+fn draw_block_b_line_rows(ui: &mut egui::Ui, st: &mut ScreentoneUi, t: Tokens) {
+    if matches!(st.spec.pattern_type, PatternType::Lines | PatternType::Crosshatch | PatternType::FocusLines) {
+        row(ui, t, tl!("Line Wobble:"));
+        crate::widgets::value_field(ui, &mut st.spec.line_wobble, 0.0..=1.0, "", 76.0);
+        ui.end_row();
+
+        row(ui, t, tl!("Wave Freq:"));
+        crate::widgets::value_field(ui, &mut st.spec.line_wave_freq, 0.1..=10.0, "", 76.0);
+        ui.end_row();
+
+        row(ui, t, tl!("Line Dash:"));
+        crate::widgets::value_field(ui, &mut st.spec.line_dash, 0.0..=1.0, "", 76.0);
+        ui.end_row();
+    }
+    if st.spec.pattern_type == PatternType::Crosshatch {
+        row(ui, t, tl!("Progressive:"));
+        crate::widgets::checkbox(ui, &mut st.spec.line_progressive, tl!("3-stage kakeami"));
+        ui.end_row();
+    }
+    if st.spec.pattern_type == PatternType::FocusLines {
+        row(ui, t, tl!("Inner Radius:"));
+        crate::widgets::value_field(ui, &mut st.spec.focus_inner_radius, 0.0..=2000.0, "px", 76.0);
+        ui.end_row();
+    }
 }
 
 fn draw_shading_rows(ui: &mut egui::Ui, st: &mut ScreentoneUi, t: Tokens) {
@@ -862,5 +907,61 @@ mod tests {
         assert_eq!(st.spec.mode, photocraft_algo::ScreentoneMode::Sheet);
         assert!(!st.spec.use_source_luminance);
         let _ = changed;
+    }
+
+    #[test]
+    fn block_b_controls_roundtrip_and_sfx_panel_excludes_block_b() {
+        let mut st = ScreentoneUi::default();
+        st.spec.pattern_type = PatternType::FocusLines;
+        st.spec.line_wobble = 0.45;
+        st.spec.line_wave_freq = 2.2;
+        st.spec.line_dash = 0.35;
+        st.spec.line_progressive = true;
+        st.spec.focus_inner_radius = 85.0;
+        st.spec.scrape_strength = 0.5;
+        st.spec.scrape_angle = 33.0;
+        let p = params(&st);
+        assert_eq!(p["patternType"], json!("focusLines"));
+        assert_eq!(p["lineWobble"], json!(0.45_f32));
+        assert_eq!(p["lineWaveFreq"], json!(2.2_f32));
+        assert_eq!(p["lineDash"], json!(0.35_f32));
+        assert_eq!(p["lineProgressive"], json!(true));
+        assert_eq!(p["focusInnerRadius"], json!(85.0_f32));
+        assert_eq!(p["scrapeAngle"], json!(33.0_f32));
+
+        // Main panel renders all three Block B pattern families cleanly.
+        let ctx = egui::Context::default();
+        let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 1200.0))), ..Default::default() };
+        for pat in [PatternType::Lines, PatternType::Crosshatch, PatternType::FocusLines] {
+            st.spec.pattern_type = pat;
+            let mut out = ctx.run_ui(input.clone(), |ui| {
+                let _ = egui::CentralPanel::default().show(ui, |ui| panel(ui, &mut st, None));
+            });
+            out.textures_delta.clear();
+        }
+
+        // `panel_for_sfx` MUST stay synced with `sfx.wgsl`: it clamps FocusLines to Dots
+        // and exposes zero Block B widgets or pattern options.
+        assert!(!super::SFX_PATTERNS.contains(&"focusLines"));
+        let mut sfx_st = ScreentoneUi::default();
+        sfx_st.spec.pattern_type = PatternType::FocusLines;
+        let banner = super::SfxScreentoneBanner { layer_name: "SFX: DON!", is_secondary: false };
+        let mut out = ctx.run_ui(input, |ui| {
+            let _ = egui::CentralPanel::default().show(ui, |ui| super::panel_for_sfx(ui, &mut sfx_st, &banner));
+        });
+        out.textures_delta.clear();
+        assert_eq!(sfx_st.spec.pattern_type, PatternType::Dots, "panel_for_sfx must clamp unsupported FocusLines back to Dots");
+        let rendered_text: String = out
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                egui::epaint::Shape::Text(t) => Some(t.galley.job.text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        for forbidden in ["Line Wobble", "Wave Freq", "Line Dash", "Progressive", "Inner Radius", "Scrape Angle", "Focus Lines"] {
+            assert!(!rendered_text.contains(forbidden), "panel_for_sfx must not expose Block B control `{forbidden}`");
+        }
     }
 }

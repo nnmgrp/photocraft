@@ -3824,3 +3824,169 @@ fn kakeami_alpha_only_gpu_cpu_parity() {
 
     check(&mut g, &d, "kakeami R8Direct F_ALPHA_ONLY black+colored+mask+multiply");
 }
+
+#[test]
+fn screentone_block_b_gpu_cpu_parity() {
+    use photocraft_doc::{PatternType, ScreentoneBackend, ScreentoneLayer, ScreentoneMode, ScreentoneSpec};
+
+    let Some(mut g) = gpu() else { return };
+    let bounds = Rect::from_xywh(0, 0, 96, 64);
+
+    // 1. Live Lines: line_wobble + line_wave_freq + line_dash + jitter_pos + jitter_size
+    {
+        let mut d = base_doc(96, 64);
+        let spec = ScreentoneSpec {
+            pattern_type: PatternType::Lines,
+            spacing_x: 10.0,
+            spacing_y: 10.0,
+            line_width: 2.8,
+            angle: 22.0,
+            density: 0.9,
+            smoothness: 0.5,
+            jitter_pos: 35.0,
+            jitter_size: 30.0,
+            line_wobble: 0.65,
+            line_wave_freq: 2.5,
+            line_dash: 0.55,
+            mode: ScreentoneMode::Sheet,
+            use_source_luminance: false,
+            backend: ScreentoneBackend::Gpu,
+            seed: 4242,
+            ..Default::default()
+        };
+        let origin = (48.0, 32.0);
+        let tone = ScreentoneLayer::new(spec, origin, photocraft_raster::Surface::new(PixelFormat::RGBA8));
+        d.layers.push(Layer::new("live_lines", LayerContent::Screentone(tone)));
+        check(&mut g, &d, "Block B: Lines wobble+freq+dash+jitter");
+    }
+
+    // 2. Progressive Crosshatch (1 -> 2 -> 3 bisector layers across gradient)
+    {
+        let mut d = Document::new("block_b_prog", Size::new(96, 48), ColorMode::Rgb, SampleType::U8);
+        let b = Rect::from_xywh(0, 0, 96, 48);
+        let mut bg = Layer::raster("grad", PixelFormat::RGBA8);
+        let mut px = vec![0.0f32; 96 * 48 * 4];
+        for y in 0..48 {
+            for x in 0..96 {
+                let v = (1.0 - x as f32 / 95.0).clamp(0.0, 1.0);
+                let i = (y * 96 + x) * 4;
+                px[i] = v;
+                px[i + 1] = v;
+                px[i + 2] = v;
+                px[i + 3] = 1.0;
+            }
+        }
+        bg.surface_mut().unwrap().write_region(b, &px);
+        d.layers.push(bg);
+        let spec = ScreentoneSpec {
+            pattern_type: PatternType::Crosshatch,
+            spacing_x: 8.0,
+            spacing_y: 8.0,
+            line_width: 2.0,
+            angle: 0.0,
+            cross_angle: 90.0,
+            density: 1.0,
+            smoothness: 0.5,
+            line_progressive: true,
+            mode: ScreentoneMode::Shading,
+            use_source_luminance: true,
+            white_threshold: 0.96,
+            black_threshold: 0.04,
+            preserve_lines: false,
+            backend: ScreentoneBackend::Gpu,
+            foreground: [0.0, 0.0, 0.0, 1.0],
+            background: [1.0, 1.0, 1.0, 1.0],
+            ..Default::default()
+        };
+        let origin = (48.0, 24.0);
+        let tone = ScreentoneLayer::new(spec, origin, photocraft_raster::Surface::new(PixelFormat::RGBA8));
+        d.layers.push(Layer::new("prog_crosshatch", LayerContent::Screentone(tone)));
+        check(&mut g, &d, "Block B: Crosshatch line_progressive 1->2->3");
+    }
+
+    // 3. PatternType::FocusLines: clear inner radius + shifted origin
+    {
+        let mut d = Document::new("block_b_focus", Size::new(96, 64), ColorMode::Rgb, SampleType::U8);
+        let spec = ScreentoneSpec {
+            pattern_type: PatternType::FocusLines,
+            spacing_x: 14.0,
+            spacing_y: 8.0,
+            line_width: 2.8,
+            angle: 12.0,
+            density: 0.95,
+            smoothness: 0.5,
+            jitter_pos: 25.0,
+            jitter_size: 30.0,
+            line_dash: 0.25,
+            focus_inner_radius: 18.0,
+            mode: ScreentoneMode::Sheet,
+            use_source_luminance: false,
+            backend: ScreentoneBackend::Gpu,
+            foreground: [0.0, 0.0, 0.0, 1.0],
+            background: [1.0, 1.0, 1.0, 0.0],
+            seed: 5150,
+            ..Default::default()
+        };
+        let origin = (26.0, 20.0);
+        let tone = ScreentoneLayer::new(spec, origin, photocraft_raster::Surface::new(PixelFormat::RGBA8));
+        d.layers.push(Layer::new("focus_lines", LayerContent::Screentone(tone)));
+        check(&mut g, &d, "Block B: FocusLines inner_radius + origin shift");
+        // Verify GPU output respects the clear inner radius around shifted origin.
+        let (gpu_out, _) = photocraft_gpu::render_to_vec_stats(&mut g.comp, &g.device, &g.queue, &d, bounds).unwrap();
+        let mut inner_ink = 0usize;
+        let mut outer_ink = 0usize;
+        for y in 0..64 {
+            for x in 0..96 {
+                let dx = x as f32 + 0.5 - origin.0;
+                let dy = y as f32 + 0.5 - origin.1;
+                let r = (dx * dx + dy * dy).sqrt();
+                let a = gpu_out[y * 96 + x][3];
+                if r < 17.0 {
+                    if a > 0.01 {
+                        inner_ink += 1;
+                    }
+                } else if r > 26.0 && a > 0.2 {
+                    outer_ink += 1;
+                }
+            }
+        }
+        assert_eq!(inner_ink, 0, "GPU FocusLines must keep inner radius clear");
+        assert!(outer_ink > 100, "GPU FocusLines must render rays outside inner radius, got {outer_ink}");
+    }
+
+    // 4. Unified Kezuri + scrape_angle over Lines and Noise
+    for (name, pat) in [("lines_kezuri", PatternType::Lines), ("noise_kezuri", PatternType::Noise)] {
+        let mut d = base_doc(96, 64);
+        let spec = ScreentoneSpec {
+            pattern_type: pat,
+            spacing_x: 8.0,
+            spacing_y: 8.0,
+            dot_size: 3.2,
+            line_width: 3.0,
+            angle: 15.0,
+            density: 0.9,
+            smoothness: 0.5,
+            scrape_strength: 0.55,
+            scrape_angle: 41.0,
+            mode: ScreentoneMode::Sheet,
+            use_source_luminance: false,
+            backend: ScreentoneBackend::Gpu,
+            seed: 7777,
+            ..Default::default()
+        };
+        let origin = (48.0, 32.0);
+        let tone = ScreentoneLayer::new(spec.clone(), origin, photocraft_raster::Surface::new(PixelFormat::RGBA8));
+        d.layers.push(Layer::new(name, LayerContent::Screentone(tone)));
+        check(&mut g, &d, &format!("Block B: unified Kezuri + scrape_angle on {name}"));
+
+        // Also confirm Kezuri actually scrapes pixels compared to scrape_strength = 0.0.
+        let mut spec_zero = spec;
+        spec_zero.scrape_strength = 0.0;
+        let mut d0 = base_doc(96, 64);
+        d0.layers.push(Layer::new("no_kezuri", LayerContent::Screentone(ScreentoneLayer::new(spec_zero, origin, photocraft_raster::Surface::new(PixelFormat::RGBA8)))));
+        let (gpu_scraped, _) = photocraft_gpu::render_to_vec_stats(&mut g.comp, &g.device, &g.queue, &d, bounds).unwrap();
+        let (gpu_clean, _) = photocraft_gpu::render_to_vec_stats(&mut g.comp, &g.device, &g.queue, &d0, bounds).unwrap();
+        let diff_px = gpu_scraped.iter().zip(gpu_clean.iter()).filter(|(a, b)| (a[0] - b[0]).abs() > 0.05).count();
+        assert!(diff_px > 50, "unified Kezuri must visibly scrape {name}, got {diff_px} differing px");
+    }
+}

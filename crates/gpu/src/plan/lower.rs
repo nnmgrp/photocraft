@@ -409,7 +409,7 @@ pub fn mode_index(m: BlendMode) -> i32 {
 
 /// Whether `Planner::content` draws `layer` as one `Planner::content_pass`: not a group's stack,
 /// an adjustment, or a pattern fill painted in passes.
-/// Index of [`PatternType`] (0..=11) for `Kernel::Screentone`.
+/// Index of [`PatternType`] (0..=12) for `Kernel::Screentone`.
 pub fn screentone_pattern_index(p: photocraft_doc::PatternType) -> i32 {
     use photocraft_doc::PatternType;
     match p {
@@ -425,6 +425,7 @@ pub fn screentone_pattern_index(p: photocraft_doc::PatternType) -> i32 {
         PatternType::Stars => 9,
         PatternType::Hearts => 10,
         PatternType::Triangles => 11,
+        PatternType::FocusLines => 12,
     }
 }
 
@@ -526,6 +527,13 @@ pub fn pack_screentone_pass(p: &mut super::types::Pass<'_>, spec: &photocraft_do
     row[30] = if spec.auto_dot_size { 1.0 } else { 0.0 };
     row[31] = spec.posterize_steps.min(32) as f32;
     row[32] = spec.scrape_strength.clamp(0.0, 1.0);
+    // Block B parameters strictly within `lut_at(33..=47)` (leaving `48..=63` free for Block C).
+    row[33] = spec.line_wobble.clamp(0.0, 1.0);
+    row[34] = spec.line_wave_freq.clamp(0.1, 10.0);
+    row[35] = spec.line_dash.clamp(0.0, 1.0);
+    row[36] = if spec.line_progressive { 1.0 } else { 0.0 };
+    row[37] = spec.focus_inner_radius.clamp(0.0, 2000.0);
+    row[38] = spec.scrape_angle.to_radians();
     p.lut = Some(vec![row]);
 }
 

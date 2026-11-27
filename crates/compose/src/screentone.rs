@@ -99,6 +99,7 @@ pub(crate) fn scale_spec_for_downsample(spec: &mut ScreentoneSpec, inv_k: f32) {
     spec.line_width = (spec.line_width * inv_k).clamp(0.0, 200.0);
     spec.satellite_size = (spec.satellite_size * inv_k).clamp(0.0, 500.0);
     spec.satellite_distance = (spec.satellite_distance * inv_k).clamp(0.0, 2000.0);
+    spec.focus_inner_radius = (spec.focus_inner_radius * inv_k).clamp(0.0, 2000.0);
     spec.origin_x *= inv_k;
     spec.origin_y *= inv_k;
 }
@@ -415,6 +416,67 @@ mod tests {
         }
         assert_eq!(seam_diff, 0, "preserve_lines band/tile seam mismatch at x=256/y=256: {seam_diff} seam px ({total_diff} total)");
         assert_eq!(total_diff, 0, "preserve_lines banded render must match monolithic bit-for-bit, got {total_diff} differing px");
+    }
+
+    #[test]
+    fn block_b_wobble_dash_kezuri_render_bands_zero_seam_at_256() {
+        let mut doc = Document::new("block_b_seam", Size::new(512, 512), ColorMode::Rgb, SampleType::U8);
+        let bounds = doc.bounds();
+        let spec = ScreentoneSpec {
+            pattern_type: PatternType::Lines,
+            spacing_x: 10.0,
+            spacing_y: 10.0,
+            line_width: 2.8,
+            angle: 19.0,
+            density: 0.9,
+            smoothness: 0.5,
+            jitter_pos: 30.0,
+            jitter_size: 25.0,
+            line_wobble: 0.6,
+            line_wave_freq: 2.2,
+            line_dash: 0.5,
+            scrape_strength: 0.55,
+            scrape_angle: 42.0,
+            mode: ScreentoneMode::Sheet,
+            use_source_luminance: false,
+            backend: ScreentoneBackend::Gpu,
+            foreground: [0.0, 0.0, 0.0, 1.0],
+            background: [1.0, 1.0, 1.0, 0.0],
+            seed: 9001,
+            ..Default::default()
+        };
+        let origin = photocraft_algo::comic_screentone::origin_doc(&spec, bounds);
+        let unbaked = ScreentoneLayer::new(spec, origin, Surface::new(PixelFormat::RGBA8));
+        doc.layers.push(Layer::new("tone_b", LayerContent::Screentone(unbaked)));
+
+        let mono = crate::render_tiled(&doc, bounds, 512);
+        let mut banded_px = vec![[0.0f32; 4]; 512 * 512];
+        crate::render_bands(&doc, bounds, 256, |band| -> Result<(), ()> {
+            let bw = band.rect.width() as usize;
+            for ry in 0..band.rect.height() as usize {
+                let dst_y = (band.rect.y0 as usize + ry) * 512 + band.rect.x0 as usize;
+                let src_y = ry * bw;
+                banded_px[dst_y..dst_y + bw].copy_from_slice(&band.px[src_y..src_y + bw]);
+            }
+            Ok(())
+        })
+        .unwrap();
+
+        let mut seam_diff = 0usize;
+        let mut total_diff = 0usize;
+        for y in 0..512usize {
+            for x in 0..512usize {
+                let idx = y * 512 + x;
+                if (0..4).any(|c| mono.px[idx][c].to_bits() != banded_px[idx][c].to_bits()) {
+                    total_diff += 1;
+                    if (254..=258).contains(&x) || (254..=258).contains(&y) {
+                        seam_diff += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(seam_diff, 0, "Block B render_bands seam diff at x=256/y=256: {seam_diff}");
+        assert_eq!(total_diff, 0, "Block B render_bands must match monolithic bit-for-bit, got {total_diff}");
     }
 }
 

@@ -2254,6 +2254,183 @@ fn st_delined_luma(loc: vec2<i32>, dims: vec2<i32>, center_luma: f32, line_thres
     return vec2<f32>(0.0, best_luma);
 }
 
+// Smooth deterministic 1D value noise in `[-1.0, 1.0]` anchored to document coordinates
+// (exact mirror of `st_value_noise_1d` in `crates/algo/src/comic_screentone.rs`).
+fn st_value_noise_1d(t: f32, line_idx: i32, seed: u32) -> f32 {
+    let i0 = i32(floor(t));
+    let f = t - f32(i0);
+    let u = f * f * (3.0 - 2.0 * f);
+    let a = hash_coord(i0, line_idx, seed);
+    let b = hash_coord(i0 + 1, line_idx, seed);
+    return mix(a, b, u) * 2.0 - 1.0;
+}
+
+// Tapered manga dash multiplier in `[0.0, 1.0]` along a stroke coordinate `along`
+// (exact mirror of `st_dash_taper` in `crates/algo/src/comic_screentone.rs`).
+fn st_dash_taper(along: f32, sp: f32, line_idx: i32, dash: f32, seed: u32) -> f32 {
+    let period = max(sp * 5.0, 16.0);
+    let dash_phase = hash_coord(line_idx, 89, seed) * period;
+    let u_along = along + dash_phase;
+    let seg_idx = i32(floor(u_along / period));
+    let seg_t = (u_along - f32(seg_idx) * period) / period;
+    let seg_h = hash_coord(seg_idx, line_idx, seed + 211u);
+    let duty = clamp(1.0 - dash * 0.72 * (0.75 + 0.5 * seg_h), 0.14, 0.98);
+    let half_duty = duty * 0.5;
+    let d_center = abs(seg_t - 0.5);
+    if (d_center >= half_duty) {
+        return 0.0;
+    }
+    let edge_dist = (half_duty - d_center) / max(half_duty * 0.35, 1e-4);
+    let taper = clamp(edge_dist, 0.0, 1.0);
+    return taper * taper * (3.0 - 2.0 * taper);
+}
+
+// Live line set with optional wobble, tapered dashes, and jitter (`eval_line_set` mirror).
+fn st_eval_line_set(
+    along: f32,
+    across: f32,
+    sp: f32,
+    base_width: f32,
+    smoothness: f32,
+    wobble: f32,
+    wave_freq: f32,
+    dash: f32,
+    jitter_pos: f32,
+    jitter_size: f32,
+    seed: u32,
+    layer_salt: u32,
+) -> f32 {
+    if (base_width <= 1e-4) {
+        return 0.0;
+    }
+    if (wobble <= 1e-4 && dash <= 1e-4 && jitter_pos <= 1e-4 && jitter_size <= 1e-4) {
+        let dist = abs(rem_euclid(across, sp) - sp * 0.5) - base_width * 0.5;
+        return coverage_from_sdf(dist, smoothness);
+    }
+    let lseed = seed + layer_salt;
+    let base_idx = i32(floor(across / sp));
+    var cov = 0.0;
+    for (var dk = -1; dk <= 1; dk = dk + 1) {
+        let li = base_idx + dk;
+        var center = (f32(li) + 0.5) * sp;
+        if (jitter_pos > 1e-4) {
+            center = center + (hash_coord(li, 17, lseed) - 0.5) * (jitter_pos * 0.005) * sp;
+        }
+        if (wobble > 1e-4) {
+            let freq = clamp(wave_freq, 0.1, 10.0);
+            let phase = hash_coord(li, 31, lseed) * (2.0 * ST_PI);
+            let n1 = sin(along * (0.045 * freq) + phase);
+            let n2 = st_value_noise_1d(along * (0.032 * freq), li, lseed + 101u);
+            center = center + (n1 * 0.55 + n2 * 0.45) * (wobble * sp * 0.35);
+        }
+        var w = base_width;
+        if (jitter_size > 1e-4) {
+            w = w * max(1.0 + (hash_coord(li, 53, lseed) - 0.5) * jitter_size * 0.015, 0.0);
+        }
+        if (dash > 1e-4 && w > 1e-4) {
+            w = w * st_dash_taper(along, sp, li, dash, lseed);
+        }
+        if (w > 1e-4) {
+            cov = max(cov, coverage_from_sdf(abs(across - center) - w * 0.5, smoothness));
+        }
+    }
+    return cov;
+}
+
+// Radial manga focus lines centered at `origin` (`eval_focus_lines` mirror).
+fn st_eval_focus_lines(
+    grid_x: f32,
+    grid_y: f32,
+    spacing_x: f32,
+    spacing_y: f32,
+    base_w: f32,
+    smoothness: f32,
+    focus_inner_radius: f32,
+    wobble: f32,
+    wave_freq: f32,
+    dash: f32,
+    jitter_pos: f32,
+    jitter_size: f32,
+    seed: u32,
+) -> f32 {
+    if (base_w <= 1e-4) {
+        return 0.0;
+    }
+    let r = length(vec2<f32>(grid_x, grid_y));
+    let base_r_in = clamp(focus_inner_radius, 0.0, 2000.0);
+    if (r <= max(base_r_in, 1e-3)) {
+        return 0.0;
+    }
+    let tau = 2.0 * ST_PI;
+    let theta = atan2(grid_y, grid_x);
+    let ang = select(theta, theta + tau, theta < 0.0);
+    let n_rays = clamp(round(720.0 / clamp(spacing_x, 1.0, 2000.0)), 8.0, 360.0);
+    let n_rays_i = i32(n_rays);
+    let sector = tau / n_rays;
+    let base_ray = i32(floor(ang / sector));
+    let taper_len = max(spacing_y * 6.0, 24.0);
+    let r_norm = max(base_r_in + taper_len, 1.0);
+    let freq = clamp(wave_freq, 0.1, 10.0);
+    var cov = 0.0;
+    for (var dk = -1; dk <= 1; dk = dk + 1) {
+        let ri = ((base_ray + dk) % n_rays_i + n_rays_i) % n_rays_i;
+        var ray_a = (f32(ri) + 0.5) * sector;
+        if (jitter_pos > 1e-4) {
+            ray_a = ray_a + (hash_coord(ri, 11, seed) - 0.5) * (jitter_pos * 0.008) * sector;
+        }
+        if (wobble > 1e-4) {
+            let phase = hash_coord(ri, 31, seed) * tau;
+            ray_a = ray_a + sin(r * (0.045 * freq) + phase) * (wobble * sector * 0.25);
+        }
+        let h_len = hash_coord(ri, 23, seed);
+        let r_start = base_r_in + h_len * (jitter_size * 0.01) * max(base_r_in, spacing_y * 4.0);
+        if (r <= r_start) {
+            continue;
+        }
+        var d_ang = ang - ray_a;
+        if (d_ang > ST_PI) { d_ang = d_ang - tau; }
+        if (d_ang < -ST_PI) { d_ang = d_ang + tau; }
+        let arc_d = abs(d_ang) * r;
+        let radial_t = clamp((r - r_start) / taper_len, 0.0, 1.0);
+        let h_wid = hash_coord(ri, 37, seed);
+        let width_jit = max(1.0 + (h_wid - 0.5) * jitter_size * 0.015, 0.0);
+        let cone_scale = 0.65 + 0.35 * min(r / r_norm, 2.5);
+        var w = min(base_w * width_jit * radial_t * cone_scale, sector * r * 0.85);
+        if (dash > 1e-4 && w > 1e-4) {
+            w = w * st_dash_taper(r, max(spacing_y, 1.0), ri, dash, seed + 409u);
+        }
+        if (w > 1e-4) {
+            cov = max(cov, coverage_from_sdf(arc_d - w * 0.5, smoothness));
+        }
+    }
+    return cov;
+}
+
+// Unified post-pattern blade scraping (Kezuri) in document coordinates (`apply_kezuri` mirror).
+fn st_apply_kezuri(cov: f32, local_p: vec2<f32>, ink: f32, strength: f32, scrape_angle_rad: f32, seed: u32) -> f32 {
+    if (strength <= 1e-4 || cov <= 1e-5) {
+        return cov;
+    }
+    let sin_s = sin(scrape_angle_rad);
+    let cos_s = cos(scrape_angle_rad);
+    let sx = local_p.x * cos_s + local_p.y * sin_s;
+    let sy = -local_p.x * sin_s + local_p.y * cos_s;
+    let kseed = seed + 777u;
+    let gy_f = sy * 0.9;
+    let gy0 = i32(floor(gy_f));
+    let fy = gy_f - f32(gy0);
+    let wy = fy * fy * (3.0 - 2.0 * fy);
+    let n0 = st_value_noise_1d(sx * 0.045, gy0, kseed) * 0.5 + 0.5;
+    let n1 = st_value_noise_1d(sx * 0.045, gy0 + 1, kseed) * 0.5 + 0.5;
+    let blade_long = mix(n0, n1, wy);
+    let fine = st_value_noise_1d(sx * 0.16, gy0 * 3 + 11, kseed + 31u) * 0.5 + 0.5;
+    let scratch = blade_long * 0.72 + fine * 0.28;
+    let edge_boost = 1.0 + (1.0 - clamp(ink, 0.0, 1.0)) * 0.65;
+    let cut_thresh = clamp(strength * 0.85 * edge_boost, 0.0, 0.98);
+    let keep = clamp((scratch - cut_thresh) / 0.08 + 0.5, 0.0, 1.0);
+    return cov * keep;
+}
+
 // Core procedural screentone evaluation at document pixel `d`, returning straight-alpha RGBA.
 fn screentone_tone(d: vec2<i32>, loc: vec2<i32>) -> vec4<f32> {
     let doc_x = f32(d.x) + 0.5;
@@ -2329,7 +2506,14 @@ fn screentone_tone(d: vec2<i32>, loc: vec2<i32>) -> vec4<f32> {
     let equalize_area = select(0.0, lut_at(29), has_ext);
     let auto_dot_size = select(0.0, lut_at(30), has_ext);
     let posterize_steps = select(0.0, lut_at(31), has_ext);
-    let scrape_strength = select(0.0, lut_at(32), has_ext);
+    let scrape_strength = clamp(select(0.0, lut_at(32), has_ext), 0.0, 1.0);
+    // Block B extended parameters strictly within `lut_at(33..=47)`.
+    let line_wobble = clamp(select(0.0, lut_at(33), has_ext), 0.0, 1.0);
+    let line_wave_freq = clamp(select(1.0, lut_at(34), has_ext), 0.1, 10.0);
+    let line_dash = clamp(select(0.0, lut_at(35), has_ext), 0.0, 1.0);
+    let line_progressive = select(0.0, lut_at(36), has_ext) > 0.5;
+    let focus_inner_radius = clamp(select(0.0, lut_at(37), has_ext), 0.0, 2000.0);
+    let scrape_angle_rad = select(0.0, lut_at(38), has_ext);
     sat_count = select(sat_count, clamp(i32(lut_at(28)), 1, 8), has_ext);
 
     // 1. Relative coordinate from bounds center in canvas-rotated frame
@@ -2406,29 +2590,73 @@ fn screentone_tone(d: vec2<i32>, loc: vec2<i32>) -> vec4<f32> {
         }
     }
 
-    switch op.kind {
-        case 1: { // PatternType::Lines
-            let width = max(line_width * mod_size * density * ink, 0.0);
-            if (width > 1e-4) {
+    if (!solid_line && ink > 1e-5) {
+        switch op.kind {
+            case 1: { // PatternType::Lines
+                let width = max(line_width * mod_size * density * ink, 0.0);
                 let sp = max(spacing_y, 1.0);
-                let dist = abs(rem_euclid(grid_y, sp) - sp * 0.5) - width * 0.5;
-                cov = coverage_from_sdf(dist, smoothness);
+                cov = st_eval_line_set(
+                    grid_x, grid_y, sp, width, smoothness,
+                    line_wobble, line_wave_freq, line_dash, jitter_pos, jitter_size, seed, 0u,
+                );
             }
-        }
-        case 2: { // PatternType::Crosshatch
-            let a2_rad = angle_rad + cross_angle_rad;
-            let sin2 = sin(a2_rad);
-            let cos2 = cos(a2_rad);
-            let ly1 = grid_y;
-            let ly2 = -local_x * sin2 + local_y * cos2;
-            let width = max(line_width * mod_size * density * ink, 0.0);
-            if (width > 1e-4) {
+            case 2: { // PatternType::Crosshatch
+                let a2_rad = angle_rad + cross_angle_rad;
+                let sin2 = sin(a2_rad);
+                let cos2 = cos(a2_rad);
+                let lx2 = local_x * cos2 + local_y * sin2;
+                let ly2 = -local_x * sin2 + local_y * cos2;
                 let sp = max(spacing_y, 1.0);
-                let d1 = abs(rem_euclid(ly1, sp) - sp * 0.5) - width * 0.5;
-                let d2 = abs(rem_euclid(ly2, sp) - sp * 0.5) - width * 0.5;
-                cov = max(coverage_from_sdf(d1, smoothness), coverage_from_sdf(d2, smoothness));
+                if (!line_progressive) {
+                    let width = max(line_width * mod_size * density * ink, 0.0);
+                    let c1 = st_eval_line_set(
+                        grid_x, grid_y, sp, width, smoothness,
+                        line_wobble, line_wave_freq, line_dash, jitter_pos, jitter_size, seed, 0u,
+                    );
+                    let c2 = st_eval_line_set(
+                        lx2, ly2, sp, width, smoothness,
+                        line_wobble, line_wave_freq, line_dash, jitter_pos, jitter_size, seed, 31337u,
+                    );
+                    cov = max(c1, c2);
+                } else {
+                    let scale = max(line_width * mod_size * density, 0.0);
+                    if (scale > 1e-4) {
+                        if (ink > 0.08) {
+                            let w1 = scale * (0.35 + 0.65 * clamp((ink - 0.08) / 0.30, 0.0, 1.0));
+                            cov = max(cov, st_eval_line_set(
+                                grid_x, grid_y, sp, w1, smoothness,
+                                line_wobble, line_wave_freq, line_dash, jitter_pos, jitter_size, seed, 0u,
+                            ));
+                        }
+                        if (ink > 0.38) {
+                            let w2 = scale * (0.35 + 0.65 * clamp((ink - 0.38) / 0.30, 0.0, 1.0));
+                            cov = max(cov, st_eval_line_set(
+                                lx2, ly2, sp, w2, smoothness,
+                                line_wobble, line_wave_freq, line_dash, jitter_pos, jitter_size, seed, 31337u,
+                            ));
+                        }
+                        if (ink > 0.68) {
+                            let a3_rad = angle_rad + ST_PI * 0.25;
+                            let sin3 = sin(a3_rad);
+                            let cos3 = cos(a3_rad);
+                            let lx3 = local_x * cos3 + local_y * sin3;
+                            let ly3 = -local_x * sin3 + local_y * cos3;
+                            let w3 = scale * (0.35 + 0.65 * clamp((ink - 0.68) / 0.32, 0.0, 1.0));
+                            cov = max(cov, st_eval_line_set(
+                                lx3, ly3, sp, w3, smoothness,
+                                line_wobble, line_wave_freq, line_dash, jitter_pos, jitter_size, seed, 62674u,
+                            ));
+                        }
+                    }
+                }
             }
-        }
+            case 12: { // PatternType::FocusLines
+                let base_w = max(line_width * mod_size * density * ink, 0.0);
+                cov = st_eval_focus_lines(
+                    grid_x, grid_y, spacing_x, spacing_y, base_w, smoothness,
+                    focus_inner_radius, line_wobble, line_wave_freq, line_dash, jitter_pos, jitter_size, seed,
+                );
+            }
         case 3: { // PatternType::Noise
             let cx_idx = i32(floor(grid_x / spacing_x));
             let cy_idx = i32(floor(grid_y / spacing_y));
@@ -2593,107 +2821,100 @@ fn screentone_tone(d: vec2<i32>, loc: vec2<i32>) -> vec4<f32> {
             }
         }
         default: { // PatternType::Dots (0) + Orbital Satellites
-            // Kezuri: scrape the light edge with long thin noise cells along the unrotated X axis.
-            var scraped = false;
             let eff_ink = ink;
-            if (scrape_strength > 0.001 && eff_ink > 0.0 && eff_ink < 0.4) {
-                let fade = (0.4 - eff_ink) / 0.4;
-                let n = hash_coord(i32(floor(local_x * 0.3)), i32(floor(local_y * 1.5)), seed + 777u);
-                if (n < fade * scrape_strength) { scraped = true; }
+            let cov_target = clamp(eff_ink * density, 0.0, 1.0);
+            let calibrated = st_area_ink(eff_ink, equalize_area, auto_dot_size);
+            let k_main = st_area_k(0, dot_shape);
+            let k_sat = st_area_k(0, sat_shape);
+            var base_rad = 0.0;
+            var ssize_base = 0.0;
+            var k_scale = 0.0;
+            if (auto_dot_size > 0.5) {
+                let sat_ratio = select(0.0, sat_size / max(dot_size, 0.05), sat_enabled);
+                let nf = f32(sat_count);
+                let norm = 1.0 / sqrt(1.0 + nf * sat_ratio * sat_ratio * k_sat / k_main);
+                let r = st_auto_size(spacing_x * spacing_y, cov_target, k_main) * norm;
+                base_rad = r;
+                ssize_base = r * sat_ratio;
+                k_scale = sqrt(cov_target);
+            } else {
+                base_rad = dot_size * density * calibrated;
+                ssize_base = sat_size * density * calibrated;
+                k_scale = density * calibrated;
             }
-            if (!scraped) {
-                let cov_target = clamp(eff_ink * density, 0.0, 1.0);
-                let calibrated = st_area_ink(eff_ink, equalize_area, auto_dot_size);
-                let k_main = st_area_k(0, dot_shape);
-                let k_sat = st_area_k(0, sat_shape);
-                var base_rad = 0.0;
-                var ssize_base = 0.0;
-                var k_scale = 0.0;
-                if (auto_dot_size > 0.5) {
-                    let sat_ratio = select(0.0, sat_size / max(dot_size, 0.05), sat_enabled);
-                    let nf = f32(sat_count);
-                    let norm = 1.0 / sqrt(1.0 + nf * sat_ratio * sat_ratio * k_sat / k_main);
-                    let r = st_auto_size(spacing_x * spacing_y, cov_target, k_main) * norm;
-                    base_rad = r;
-                    ssize_base = r * sat_ratio;
-                    k_scale = sqrt(cov_target);
-                } else {
-                    base_rad = dot_size * density * calibrated;
-                    ssize_base = sat_size * density * calibrated;
-                    k_scale = density * calibrated;
-                }
-                let merge = clamp(merge_factor, 0.0, 1.0);
-                let psize = max((base_rad + merge * spacing_x * 0.2 * k_scale) * mod_size, 0.0);
-                let ssize = max((ssize_base + merge * spacing_x * 0.4 * k_scale) * mod_size, 0.0);
-                let sdist = sat_distance * (1.0 - merge * 0.6);
-                let smooth_k = merge * min(spacing_x, spacing_y) * 0.35;
-                let min_sp = max(min(spacing_x, spacing_y), 0.01);
-                let stretch_gain = max(max(mod_aspect_x, mod_aspect_y), 1.0);
-                let sat_gain = 1.0 + max(sat_stretch, 0.0);
-                let jitter_pad = max(jitter_pos, 0.0) * 0.0025 * max(spacing_x, spacing_y);
-                let max_reach = psize * stretch_gain
-                    + select(0.0, sdist + ssize * sat_gain * stretch_gain, sat_enabled && ssize > 0.05)
-                    + jitter_pad + smooth_k;
-                let search_r = clamp(i32(ceil(max_reach / min_sp - 0.5)), 1, 3);
-                let sin_sat = sin(sat_angle_rad);
-                let cos_sat = cos(sat_angle_rad);
-                var cross_dirs = array<vec2<f32>, 4>(
-                    vec2<f32>(0.0, -1.0), vec2<f32>(0.0, 1.0), vec2<f32>(1.0, 0.0), vec2<f32>(-1.0, 0.0)
-                );
+            let merge = clamp(merge_factor, 0.0, 1.0);
+            let psize = max((base_rad + merge * spacing_x * 0.2 * k_scale) * mod_size, 0.0);
+            let ssize = max((ssize_base + merge * spacing_x * 0.4 * k_scale) * mod_size, 0.0);
+            let sdist = sat_distance * (1.0 - merge * 0.6);
+            let smooth_k = merge * min(spacing_x, spacing_y) * 0.35;
+            let min_sp = max(min(spacing_x, spacing_y), 0.01);
+            let stretch_gain = max(max(mod_aspect_x, mod_aspect_y), 1.0);
+            let sat_gain = 1.0 + max(sat_stretch, 0.0);
+            let jitter_pad = max(jitter_pos, 0.0) * 0.0025 * max(spacing_x, spacing_y);
+            let max_reach = psize * stretch_gain
+                + select(0.0, sdist + ssize * sat_gain * stretch_gain, sat_enabled && ssize > 0.05)
+                + jitter_pad + smooth_k;
+            let search_r = clamp(i32(ceil(max_reach / min_sp - 0.5)), 1, 3);
+            let sin_sat = sin(sat_angle_rad);
+            let cos_sat = cos(sat_angle_rad);
+            var cross_dirs = array<vec2<f32>, 4>(
+                vec2<f32>(0.0, -1.0), vec2<f32>(0.0, 1.0), vec2<f32>(1.0, 0.0), vec2<f32>(-1.0, 0.0)
+            );
 
-                let cy_idx = i32(round(grid_y / spacing_y));
-                var min_d = F32_MAX;
-                for (var dy = -search_r; dy <= search_r; dy = dy + 1) {
-                    let iy = cy_idx + dy;
-                    let row_shift = select(0.0, spacing_x * row_offset, (iy & 1) != 0);
-                    let cx_idx = i32(round((grid_x - row_shift) / spacing_x));
-                    for (var dx = -search_r; dx <= search_r; dx = dx + 1) {
-                        let ix = cx_idx + dx;
-                        var dot_cx = f32(ix) * spacing_x + row_shift;
-                        var dot_cy = f32(iy) * spacing_y;
-                        if (jitter_pos > 0.0) {
-                            dot_cx = dot_cx + (hash_coord(ix, iy, seed) - 0.5) * jitter_pos * 0.005 * spacing_x;
-                            dot_cy = dot_cy + (hash_coord(ix + 1000, iy, seed) - 0.5) * jitter_pos * 0.005 * spacing_y;
-                        }
-                        var final_size = psize;
-                        if (jitter_size > 0.0) {
-                            let jval = hash_coord(ix + 5000, iy + 5000, seed);
-                            final_size = final_size * max(1.0 + (jval - 0.5) * jitter_size * 0.02, 0.0);
-                        }
-                        var cell_d = eval_shape_sdf(
-                            grid_p - vec2<f32>(dot_cx, dot_cy), dot_shape, final_size,
-                            mod_aspect_x, mod_aspect_y, roundness, rot_pattern_rad,
-                        );
-                        if (sat_enabled && ssize > 0.05) {
-                            for (var si = 0; si < sat_count; si = si + 1) {
-                                var dir = vec2<f32>(0.0, 0.0);
-                                if (sat_even) {
-                                    let th = sat_angle_rad + 6.283185307 * f32(si) / f32(max(sat_count, 1));
-                                    dir = vec2<f32>(sin(th), -cos(th));
-                                } else {
-                                    let c = cross_dirs[min(si, 3)];
-                                    dir = vec2<f32>(c.x * cos_sat - c.y * sin_sat, c.x * sin_sat + c.y * cos_sat);
-                                }
-                                var sp = grid_p - (vec2<f32>(dot_cx, dot_cy) + dir * sdist);
-                                if (sat_stretch > 0.0) {
-                                    let rot_sx = sp.x * dir.x + sp.y * dir.y;
-                                    let rot_sy = -sp.x * dir.y + sp.y * dir.x;
-                                    let scaled = rot_sx / max(1.0 + sat_stretch, 0.01);
-                                    sp = vec2<f32>(scaled * dir.x - rot_sy * dir.y, scaled * dir.y + rot_sy * dir.x);
-                                }
-                                let ds = eval_shape_sdf(
-                                    sp, sat_shape, ssize,
-                                    mod_aspect_x, mod_aspect_y, roundness, rot_pattern_rad,
-                                );
-                                cell_d = sdf_smooth_min(cell_d, ds, smooth_k);
-                            }
-                        }
-                        min_d = sdf_smooth_min(min_d, cell_d, smooth_k * 0.5);
+            let cy_idx = i32(round(grid_y / spacing_y));
+            var min_d = F32_MAX;
+            for (var dy = -search_r; dy <= search_r; dy = dy + 1) {
+                let iy = cy_idx + dy;
+                let row_shift = select(0.0, spacing_x * row_offset, (iy & 1) != 0);
+                let cx_idx = i32(round((grid_x - row_shift) / spacing_x));
+                for (var dx = -search_r; dx <= search_r; dx = dx + 1) {
+                    let ix = cx_idx + dx;
+                    var dot_cx = f32(ix) * spacing_x + row_shift;
+                    var dot_cy = f32(iy) * spacing_y;
+                    if (jitter_pos > 0.0) {
+                        dot_cx = dot_cx + (hash_coord(ix, iy, seed) - 0.5) * jitter_pos * 0.005 * spacing_x;
+                        dot_cy = dot_cy + (hash_coord(ix + 1000, iy, seed) - 0.5) * jitter_pos * 0.005 * spacing_y;
                     }
+                    var final_size = psize;
+                    if (jitter_size > 0.0) {
+                        let jval = hash_coord(ix + 5000, iy + 5000, seed);
+                        final_size = final_size * max(1.0 + (jval - 0.5) * jitter_size * 0.02, 0.0);
+                    }
+                    var cell_d = eval_shape_sdf(
+                        grid_p - vec2<f32>(dot_cx, dot_cy), dot_shape, final_size,
+                        mod_aspect_x, mod_aspect_y, roundness, rot_pattern_rad,
+                    );
+                    if (sat_enabled && ssize > 0.05) {
+                        for (var si = 0; si < sat_count; si = si + 1) {
+                            var dir = vec2<f32>(0.0, 0.0);
+                            if (sat_even) {
+                                let th = sat_angle_rad + 6.283185307 * f32(si) / f32(max(sat_count, 1));
+                                dir = vec2<f32>(sin(th), -cos(th));
+                            } else {
+                                let c = cross_dirs[min(si, 3)];
+                                dir = vec2<f32>(c.x * cos_sat - c.y * sin_sat, c.x * sin_sat + c.y * cos_sat);
+                            }
+                            var sp = grid_p - (vec2<f32>(dot_cx, dot_cy) + dir * sdist);
+                            if (sat_stretch > 0.0) {
+                                let rot_sx = sp.x * dir.x + sp.y * dir.y;
+                                let rot_sy = -sp.x * dir.y + sp.y * dir.x;
+                                let scaled = rot_sx / max(1.0 + sat_stretch, 0.01);
+                                sp = vec2<f32>(scaled * dir.x - rot_sy * dir.y, scaled * dir.y + rot_sy * dir.x);
+                            }
+                            let ds = eval_shape_sdf(
+                                sp, sat_shape, ssize,
+                                mod_aspect_x, mod_aspect_y, roundness, rot_pattern_rad,
+                            );
+                            cell_d = sdf_smooth_min(cell_d, ds, smooth_k);
+                        }
+                    }
+                    min_d = sdf_smooth_min(min_d, cell_d, smooth_k * 0.5);
                 }
-                cov = coverage_from_sdf(min_d, smoothness);
             }
+            cov = coverage_from_sdf(min_d, smoothness);
         }
+        }
+        cov = st_apply_kezuri(cov, vec2<f32>(local_x, local_y), ink, scrape_strength, scrape_angle_rad, seed);
     }
 
     if (solid_line) {

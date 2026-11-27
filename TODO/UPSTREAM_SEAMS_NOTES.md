@@ -1,4 +1,4 @@
-# Upstream Seam Notes (Блок A + Фаза 1A + Фаза 1B + Фаза 1C + Фаза 2A)
+# Upstream Seam Notes (Блок A + Фаза 1A + Фаза 1B + Фаза 1C + Фаза 2A + Фаза 2B + Фаза 3A)
 
 Ручная карта правок **внутри основной кодовой базы PhotoCraft (upstream)** с объяснением причины и риска конфликта при будущем rebase на `upstream/main`.
 
@@ -111,6 +111,19 @@
 | `crates/gpu/src/{lib.rs, sfx.wgsl, sfx.rs}`, `crates/gpu/tests/it/sfx.rs` | Добавлен `SfxGpuRibbonStrip` и прямая quad-strip триангуляция (`ribbons_to_quad_strip_verts` → `tri_max_pipe`, без centroid-fan хорд на С-дугах и замкнутых кольцах); шейдеры `fs_heavy_stack_perturb` и `fs_kakeami_beta_mask`; проходы `record_heavy_stack_v3_passes` и `record_kakeami_v4_passes` с 0 алиасинга слотов + GPU-тесты С-дуги, всех режимов, `KakeEdge` top < mid < bot и `DeviceHealth`. | Аппаратный GPU-рендеринг Style 3 & Style 4 | **Отсутствует** (файлы добавлены форком, 1 строка re-export в `lib.rs`) |
 | `crates/ui-egui/src/canvas/sfx_gpu_preview.rs`, `crates/manga-ui/src/sfx_panel.rs` | Проброс `v3_body_ribbons`, `heavy_bite_polygons`, `heavy_tail_ribbons`, `heavy_slit_ribbons`, `v3_stroke_w_px`, `kakeami_*` в `SfxGpuScene`; кнопки `🧱 Heavy Stack v3` и `🕸 Kakeami v4`, все контролы и 4 новых стартовых пресета. | UI и живой 60 FPS GPU-превью Style 3 & Style 4 | **Отсутствует** (файлы добавлены форком) |
 | `crates/format/tests/sfx_v3_kakeami_roundtrip.rs` *(новый)* | Интеграционный тест Wiring Gate: `.pcraft` Save/Load round-trip документа с `LayerContent::Kakeami` и всеми 4 стилями SFX v3 (`ShibufudeV3`, `SugomiV3`, `HeavyStackV3` `edge_bite=65`, `KakeamiV4` `KakeEdge` + `gradient_angle=37°`) с побитовой проверкой всех полей. | Верификация `.pcraft` round-trip Wiring Gate | **Отсутствует** (новый файл теста) |
+
+---
+
+## Фаза 3A — `QA_TEST_PLAN.md` + Блок B (`ScreentoneSpec` / `compose.wgsl`: живые линии, `FocusLines`, общий `Kezuri`) + Wiring Gate
+
+| Файл upstream | Суть правки | Причина | Риск конфликта при rebase |
+|---|---|---|---|
+| `crates/algo/src/comic_screentone.rs` | Добавлены живые линии `eval_line_set` (`line_wobble`, `line_wave_freq`, `line_dash` с конусным taper и фазой по линии, подключение `jitter_pos`/`jitter_size`), 3-ступенчатый прогрессивный какеами (`line_progressive` в `Crosshatch`: `ink > 0.08 / 0.38 / 0.68` биссектриса `+45°`), радиальный паттерн `PatternType::FocusLines` (`focus_inner_radius` от `origin`) и общий пост-`eval` `apply_kezuri` (`scrape_angle` + 1D-шум лезвия в документных координатах для всех паттернов) + регрессионные и шовные тесты. | Блок B скринтонов (CPU-эталон 1:1 с WGSL, 0 швов на `256 px`, 100% обратная совместимость при нейтральных значениях) | **Отсутствует** (файл добавлен форком) |
+| `crates/compose/src/screentone.rs` | Масштабирование `focus_inner_radius` в `scale_spec_for_downsample` + тест бесшовности на `x = 256`/`y = 256` для `wobble` + `dash` + `Kezuri` при `render_bands`. | Прокси/вьюпорт-масштабирование `FocusLines` и проверка бесшовности полосного рендера | **Отсутствует** (файл добавлен форком) |
+| `crates/gpu/src/plan/lower.rs` | Маппинг `PatternType::FocusLines => 12` (слоты `13..=14` свободны под Блок C); упаковка параметров Блока B строго в `lut_at(33..=38)` (`33=line_wobble`, `34=line_wave_freq`, `35=line_dash`, `36=line_progressive`, `37=focus_inner_radius`, `38=scrape_angle_rad`; `0..=32` не тронуты, `48..=63` и биты `dot_shape` свободны под Блок C). | Передача параметров Блока B в `Kernel::Screentone` | **Низкий** (локальная функция `pack_screentone_pass`) |
+| `crates/gpu/src/compose.wgsl` | WGSL-зеркало 1:1: `st_value_noise_1d`, `st_dash_taper`, `st_eval_line_set`, `st_eval_focus_lines` (`case 12`), 3-ступенчатый `Crosshatch` и единый пост-`eval` `st_apply_kezuri` поверх всех паттернов. | GPU/CPU паритет Блока B | **Средний** (локализовано в блоке `screentone_tone` / `st_*`) |
+| `crates/gpu/tests/it/parity.rs` | 4 интеграционных GPU/CPU-теста паритета Блока B: живые `Lines` (`wobble`+`freq`+`dash`+`jitter`), прогрессивный `Crosshatch` (1→2→3 слоя), `FocusLines` (`focus_inner_radius` + сдвиг `origin`), общий `Kezuri` + `scrape_angle` на `Lines` и `Noise`. | Верификация GPU/CPU паритета Блока B | **Низкий** (добавлены в конец файла) |
+| `crates/format/tests/screentone_block_b_roundtrip.rs` *(новый)* | Интеграционный тест `.pcraft` Save/Load round-trip для `LayerContent::Screentone` с `PatternType::FocusLines` и всеми полями Блока B. | Верификация `.pcraft` round-trip Wiring Gate | **Отсутствует** (новый файл теста) |
 
 ---
 

@@ -1167,6 +1167,66 @@ fn build_sat_dirs(spec: &ScreentoneSpec, sin_sat: f32, cos_sat: f32) -> ([(f32, 
     }
 }
 
+/// Smooth deterministic 1D value noise in `[-1.0, 1.0]` anchored to document coordinates.
+/// Bit-equivalent to `st_value_noise_1d` in `crates/gpu/src/compose.wgsl`.
+#[inline]
+fn st_value_noise_1d(t: f32, line_idx: i32, seed: u32) -> f32 {
+    let i0 = t.floor() as i32;
+    let f = t - i0 as f32;
+    let u = f * f * (3.0 - 2.0 * f);
+    let a = hash_coord(i0, line_idx, seed);
+    let b = hash_coord(i0.wrapping_add(1), line_idx, seed);
+    (a + (b - a) * u) * 2.0 - 1.0
+}
+
+/// Tapered manga dash multiplier in `[0.0, 1.0]` along a stroke coordinate `along`.
+/// Bit-equivalent to `st_dash_taper` in `crates/gpu/src/compose.wgsl`.
+#[inline]
+fn st_dash_taper(along: f32, sp: f32, line_idx: i32, dash: f32, seed: u32) -> f32 {
+    let period = (sp * 5.0).max(16.0);
+    let dash_phase = hash_coord(line_idx, 89, seed) * period;
+    let u_along = along + dash_phase;
+    let seg_idx = (u_along / period).floor() as i32;
+    let seg_t = (u_along - seg_idx as f32 * period) / period;
+    let seg_h = hash_coord(seg_idx, line_idx, seed.wrapping_add(211));
+    let duty = (1.0 - dash * 0.72 * (0.75 + 0.5 * seg_h)).clamp(0.14, 0.98);
+    let half_duty = duty * 0.5;
+    let d_center = (seg_t - 0.5).abs();
+    if d_center >= half_duty {
+        return 0.0;
+    }
+    let edge_dist = (half_duty - d_center) / (half_duty * 0.35).max(1e-4);
+    let taper = edge_dist.clamp(0.0, 1.0);
+    taper * taper * (3.0 - 2.0 * taper)
+}
+
+/// Unified post-pattern blade scraping (Kezuri) in document coordinates (`local_x, local_y`).
+/// Completely skipped when `strength <= 1e-4` for bit-exact backward compatibility.
+/// Bit-equivalent to `st_apply_kezuri` in `crates/gpu/src/compose.wgsl`.
+#[inline]
+fn apply_kezuri(cov: f32, local: (f32, f32), ink: f32, strength: f32, rot_sc: (f32, f32), seed: u32) -> f32 {
+    if strength <= 1e-4 || cov <= 1e-5 {
+        return cov;
+    }
+    let (sin_s, cos_s) = rot_sc;
+    let sx = local.0 * cos_s + local.1 * sin_s;
+    let sy = -local.0 * sin_s + local.1 * cos_s;
+    let kseed = seed.wrapping_add(777);
+    let gy_f = sy * 0.9;
+    let gy0 = gy_f.floor() as i32;
+    let fy = gy_f - gy0 as f32;
+    let wy = fy * fy * (3.0 - 2.0 * fy);
+    let n0 = st_value_noise_1d(sx * 0.045, gy0, kseed) * 0.5 + 0.5;
+    let n1 = st_value_noise_1d(sx * 0.045, gy0.wrapping_add(1), kseed) * 0.5 + 0.5;
+    let blade_long = n0 + (n1 - n0) * wy;
+    let fine = st_value_noise_1d(sx * 0.16, gy0.wrapping_mul(3).wrapping_add(11), kseed.wrapping_add(31)) * 0.5 + 0.5;
+    let scratch = blade_long * 0.72 + fine * 0.28;
+    let edge_boost = 1.0 + (1.0 - ink.clamp(0.0, 1.0)) * 0.65;
+    let cut_thresh = (strength * 0.85 * edge_boost).clamp(0.0, 0.98);
+    let keep = ((scratch - cut_thresh) / 0.08 + 0.5).clamp(0.0, 1.0);
+    cov * keep
+}
+
 struct PatternEvalCtx<'a> {
     spec: &'a ScreentoneSpec,
     xf: ShapeXform,
@@ -1177,6 +1237,8 @@ struct PatternEvalCtx<'a> {
     inv_sat_stretch: f32,
     sin_x: f32,
     cos_x: f32,
+    sin_b: f32,
+    cos_b: f32,
 }
 
 impl PatternEvalCtx<'_> {
@@ -1301,16 +1363,8 @@ impl PatternEvalCtx<'_> {
         cov
     }
 
-    fn eval_dots(&self, grid_x: f32, grid_y: f32, shifted: (f32, f32), mod_size: f32, ink: f32) -> f32 {
-        // Kezuri: long thin noise cells along the unrotated X axis scrape the light edge.
+    fn eval_dots(&self, grid_x: f32, grid_y: f32, mod_size: f32, ink: f32) -> f32 {
         let eff_ink = ink;
-        if self.spec.scrape_strength > 0.001 && eff_ink > 0.0 && eff_ink < 0.4 {
-            let fade = (0.4 - eff_ink) / 0.4;
-            let n = hash_coord((shifted.0 * 0.3).floor() as i32, (shifted.1 * 1.5).floor() as i32, self.spec.seed.wrapping_add(777));
-            if n < fade * self.spec.scrape_strength {
-                return 0.0;
-            }
-        }
         let cov_target = (eff_ink * self.spec.density).clamp(0.0, 1.0);
         let auto = self.spec.auto_dot_size;
         let eff_ink = if auto { eff_ink } else { area_ink(self.spec, eff_ink) };
@@ -1387,29 +1441,167 @@ impl PatternEvalCtx<'_> {
         coverage_from_sdf(min_dist, self.spec.smoothness)
     }
 
+    fn eval_single_line(&self, along: f32, across: f32, base_width: f32, li: i32, lseed: u32) -> f32 {
+        let sp = self.spacing_y.max(1.0);
+        let wobble = self.spec.line_wobble.clamp(0.0, 1.0);
+        let dash = self.spec.line_dash.clamp(0.0, 1.0);
+        let jpos = self.spec.jitter_pos.clamp(0.0, 100.0);
+        let jsize = self.spec.jitter_size.clamp(0.0, 100.0);
+        let mut center = (li as f32 + 0.5) * sp;
+        if jpos > 1e-4 {
+            center += (hash_coord(li, 17, lseed) - 0.5) * (jpos * 0.005) * sp;
+        }
+        if wobble > 1e-4 {
+            let freq = self.spec.line_wave_freq.clamp(0.1, 10.0);
+            let phase = hash_coord(li, 31, lseed) * std::f32::consts::TAU;
+            let n1 = (along * (0.045 * freq) + phase).sin();
+            let n2 = st_value_noise_1d(along * (0.032 * freq), li, lseed.wrapping_add(101));
+            center += (n1 * 0.55 + n2 * 0.45) * (wobble * sp * 0.35);
+        }
+        let mut w = base_width;
+        if jsize > 1e-4 {
+            w *= (1.0 + (hash_coord(li, 53, lseed) - 0.5) * jsize * 0.015).max(0.0);
+        }
+        if dash > 1e-4 && w > 1e-4 {
+            w *= st_dash_taper(along, sp, li, dash, lseed);
+        }
+        if w <= 1e-4 {
+            return 0.0;
+        }
+        coverage_from_sdf((across - center).abs() - w * 0.5, self.spec.smoothness)
+    }
+
+    fn eval_line_set(&self, along: f32, across: f32, base_width: f32, layer_salt: u32) -> f32 {
+        if base_width <= 1e-4 {
+            return 0.0;
+        }
+        let sp = self.spacing_y.max(1.0);
+        let wobble = self.spec.line_wobble.clamp(0.0, 1.0);
+        let dash = self.spec.line_dash.clamp(0.0, 1.0);
+        let jpos = self.spec.jitter_pos.clamp(0.0, 100.0);
+        let jsize = self.spec.jitter_size.clamp(0.0, 100.0);
+        if wobble <= 1e-4 && dash <= 1e-4 && jpos <= 1e-4 && jsize <= 1e-4 {
+            return coverage_from_sdf((((across % sp) + sp) % sp - sp * 0.5).abs() - base_width * 0.5, self.spec.smoothness);
+        }
+        let lseed = self.spec.seed.wrapping_add(layer_salt);
+        let base_idx = (across / sp).floor() as i32;
+        let mut cov = 0.0f32;
+        for dk in -1..=1 {
+            let li = base_idx.wrapping_add(dk);
+            cov = cov.max(self.eval_single_line(along, across, base_width, li, lseed));
+        }
+        cov
+    }
+
+    fn eval_crosshatch(&self, local: (f32, f32), grid: (f32, f32), mod_size: f32, ink: f32) -> f32 {
+        let lx2 = local.0 * self.cos_x + local.1 * self.sin_x;
+        let ly2 = -local.0 * self.sin_x + local.1 * self.cos_x;
+        if !self.spec.line_progressive {
+            let width = (self.spec.line_width * mod_size * self.spec.density * ink).max(0.0);
+            if width <= 1e-4 {
+                return 0.0;
+            }
+            return self.eval_line_set(grid.0, grid.1, width, 0).max(self.eval_line_set(lx2, ly2, width, 31_337));
+        }
+        let scale = (self.spec.line_width * mod_size * self.spec.density).max(0.0);
+        if scale <= 1e-4 {
+            return 0.0;
+        }
+        let mut cov = 0.0f32;
+        if ink > 0.08 {
+            let w1 = scale * (0.35 + 0.65 * ((ink - 0.08) / 0.30).clamp(0.0, 1.0));
+            cov = cov.max(self.eval_line_set(grid.0, grid.1, w1, 0));
+        }
+        if ink > 0.38 {
+            let w2 = scale * (0.35 + 0.65 * ((ink - 0.38) / 0.30).clamp(0.0, 1.0));
+            cov = cov.max(self.eval_line_set(lx2, ly2, w2, 31_337));
+        }
+        if ink > 0.68 {
+            let lx3 = local.0 * self.cos_b + local.1 * self.sin_b;
+            let ly3 = -local.0 * self.sin_b + local.1 * self.cos_b;
+            let w3 = scale * (0.35 + 0.65 * ((ink - 0.68) / 0.32).clamp(0.0, 1.0));
+            cov = cov.max(self.eval_line_set(lx3, ly3, w3, 62_674));
+        }
+        cov
+    }
+
+    fn eval_focus_ray(&self, r: f32, ang: f32, base_w: f32, ri: i32, sector: f32) -> f32 {
+        let seed = self.spec.seed;
+        let base_r_in = self.spec.focus_inner_radius.clamp(0.0, 2000.0);
+        let jpos = self.spec.jitter_pos.clamp(0.0, 100.0);
+        let jsize = self.spec.jitter_size.clamp(0.0, 100.0);
+        let wobble = self.spec.line_wobble.clamp(0.0, 1.0);
+        let freq = self.spec.line_wave_freq.clamp(0.1, 10.0);
+        let dash = self.spec.line_dash.clamp(0.0, 1.0);
+        let mut ray_a = (ri as f32 + 0.5) * sector;
+        if jpos > 1e-4 {
+            ray_a += (hash_coord(ri, 11, seed) - 0.5) * (jpos * 0.008) * sector;
+        }
+        if wobble > 1e-4 {
+            let phase = hash_coord(ri, 31, seed) * std::f32::consts::TAU;
+            ray_a += (r * (0.045 * freq) + phase).sin() * (wobble * sector * 0.25);
+        }
+        let h_len = hash_coord(ri, 23, seed);
+        let r_start = base_r_in + h_len * (jsize * 0.01) * base_r_in.max(self.spacing_y * 4.0);
+        if r <= r_start {
+            return 0.0;
+        }
+        let mut d_ang = ang - ray_a;
+        if d_ang > std::f32::consts::PI {
+            d_ang -= std::f32::consts::TAU;
+        }
+        if d_ang < -std::f32::consts::PI {
+            d_ang += std::f32::consts::TAU;
+        }
+        let arc_d = d_ang.abs() * r;
+        let taper_len = (self.spacing_y * 6.0).max(24.0);
+        let radial_t = ((r - r_start) / taper_len).clamp(0.0, 1.0);
+        let h_wid = hash_coord(ri, 37, seed);
+        let width_jit = (1.0 + (h_wid - 0.5) * jsize * 0.015).max(0.0);
+        let cone_scale = 0.65 + 0.35 * (r / (base_r_in + taper_len).max(1.0)).min(2.5);
+        let mut w = (base_w * width_jit * radial_t * cone_scale).min(sector * r * 0.85);
+        if dash > 1e-4 && w > 1e-4 {
+            w *= st_dash_taper(r, self.spacing_y.max(1.0), ri, dash, seed.wrapping_add(409));
+        }
+        if w <= 1e-4 {
+            return 0.0;
+        }
+        coverage_from_sdf(arc_d - w * 0.5, self.spec.smoothness)
+    }
+
+    fn eval_focus_lines(&self, grid_x: f32, grid_y: f32, mod_size: f32, ink: f32) -> f32 {
+        let base_w = (self.spec.line_width * mod_size * self.spec.density * ink).max(0.0);
+        if base_w <= 1e-4 {
+            return 0.0;
+        }
+        let r = sdist2(grid_x, grid_y);
+        let base_r_in = self.spec.focus_inner_radius.clamp(0.0, 2000.0);
+        if r <= base_r_in.max(1e-3) {
+            return 0.0;
+        }
+        let theta = grid_y.atan2(grid_x);
+        let ang = if theta < 0.0 { theta + std::f32::consts::TAU } else { theta };
+        let n_rays = (720.0 / self.spacing_x.clamp(1.0, 2000.0)).round().clamp(8.0, 360.0);
+        let n_rays_i = n_rays as i32;
+        let sector = std::f32::consts::TAU / n_rays;
+        let base_ray = (ang / sector).floor() as i32;
+        let mut cov = 0.0f32;
+        for dk in -1..=1 {
+            let ri = ((base_ray + dk) % n_rays_i + n_rays_i) % n_rays_i;
+            cov = cov.max(self.eval_focus_ray(r, ang, base_w, ri, sector));
+        }
+        cov
+    }
+
     fn eval(&self, local: (f32, f32), grid: (f32, f32), mod_size: f32, ink: f32) -> f32 {
-        let (local_x, local_y) = local;
         let (grid_x, grid_y) = grid;
         match self.spec.pattern_type {
             PatternType::Lines => {
                 let width = (self.spec.line_width * mod_size * self.spec.density * ink).max(0.0);
-                if width <= 1e-4 {
-                    return 0.0;
-                }
-                let sp = self.spacing_y.max(1.0);
-                coverage_from_sdf((((grid_y % sp) + sp) % sp - sp * 0.5).abs() - width * 0.5, self.spec.smoothness)
+                self.eval_line_set(grid_x, grid_y, width, 0)
             }
-            PatternType::Crosshatch => {
-                let ly2 = -local_x * self.sin_x + local_y * self.cos_x;
-                let width = (self.spec.line_width * mod_size * self.spec.density * ink).max(0.0);
-                if width <= 1e-4 {
-                    return 0.0;
-                }
-                let sp = self.spacing_y.max(1.0);
-                let d1 = (((grid_y % sp) + sp) % sp - sp * 0.5).abs() - width * 0.5;
-                let d2 = (((ly2 % sp) + sp) % sp - sp * 0.5).abs() - width * 0.5;
-                coverage_from_sdf(d1, self.spec.smoothness).max(coverage_from_sdf(d2, self.spec.smoothness))
-            }
+            PatternType::Crosshatch => self.eval_crosshatch(local, grid, mod_size, ink),
+            PatternType::FocusLines => self.eval_focus_lines(grid_x, grid_y, mod_size, ink),
             PatternType::Concentric => {
                 let width = (self.spec.line_width * mod_size * self.spec.density * ink).max(0.0);
                 if width <= 1e-4 {
@@ -1436,7 +1628,7 @@ impl PatternEvalCtx<'_> {
             PatternType::GaussianNoise => self.eval_gaussian_noise(grid_x, grid_y, mod_size, ink),
             PatternType::Stipple => self.eval_stipple(grid_x, grid_y, mod_size, ink),
             PatternType::Stars | PatternType::Hearts | PatternType::Triangles => self.eval_special_shapes(grid_x, grid_y, mod_size, ink),
-            PatternType::Dots => self.eval_dots(grid_x, grid_y, local, mod_size, ink),
+            PatternType::Dots => self.eval_dots(grid_x, grid_y, mod_size, ink),
         }
     }
 }
@@ -1452,6 +1644,9 @@ pub fn screentone(src: &Image, out: Rect, ctx: &Ctx, spec: &ScreentoneSpec) -> V
     let (sin_sat, cos_sat) = spec.satellite_angle.to_radians().sin_cos();
     let (sin_p, cos_p) = spec.rot_pattern.to_radians().sin_cos();
     let (sin_x, cos_x) = (spec.angle + spec.cross_angle).to_radians().sin_cos();
+    let (sin_b, cos_b) = (spec.angle + 45.0).to_radians().sin_cos();
+    let (sin_scrape, cos_scrape) = spec.scrape_angle.to_radians().sin_cos();
+    let scrape_strength = spec.scrape_strength.clamp(0.0, 1.0);
     let (spacing_x, spacing_y) = (spec.spacing_x.clamp(1.0, 2000.0), spec.spacing_y.clamp(1.0, 2000.0));
     let (sat_dirs, sat_n) = build_sat_dirs(spec, sin_sat, cos_sat);
     let inv_sat_stretch = 1.0 / (1.0 + spec.satellite_stretch.max(0.0)).max(0.01);
@@ -1500,8 +1695,11 @@ pub fn screentone(src: &Image, out: Rect, ctx: &Ctx, spec: &ScreentoneSpec) -> V
                     inv_sat_stretch,
                     sin_x,
                     cos_x,
+                    sin_b,
+                    cos_b,
                 };
-                eval_ctx.eval((local_x, local_y), grid, mod_size, ink).clamp(0.0, 1.0)
+                let raw_cov = eval_ctx.eval((local_x, local_y), grid, mod_size, ink);
+                apply_kezuri(raw_cov, (local_x, local_y), ink, scrape_strength, (sin_scrape, cos_scrape), spec.seed).clamp(0.0, 1.0)
             } else {
                 0.0
             }
@@ -2512,5 +2710,154 @@ mod tests {
         }
         assert_eq!(seam_diff, 0, "preserve_lines tiled seam mismatch at x=256/y=256: {seam_diff} seam px ({total_diff} total)");
         assert_eq!(total_diff, 0, "preserve_lines tiled render must match monolithic bit-for-bit, got {total_diff} differing px");
+    }
+
+    #[test]
+    fn block_b_focus_lines_inner_radius_and_origin_shift() {
+        let bounds = Rect::new(0, 0, 128, 128);
+        let spec = ScreentoneSpec {
+            pattern_type: PatternType::FocusLines,
+            spacing_x: 12.0,
+            spacing_y: 8.0,
+            line_width: 3.0,
+            density: 1.0,
+            smoothness: 0.0,
+            focus_inner_radius: 24.0,
+            mode: ScreentoneMode::Sheet,
+            use_source_luminance: false,
+            foreground: [0.0, 0.0, 0.0, 1.0],
+            background: [1.0, 1.0, 1.0, 0.0],
+            ..Default::default()
+        };
+        let origin = (40.0, 52.0);
+        let mut surf = Surface::new(photocraft_color::PixelFormat::RGBA8);
+        let _ = render_screentone_to_surface(&mut surf, bounds, &spec, origin);
+        let mut inner_ink = 0usize;
+        let mut outer_ink = 0usize;
+        for y in 0..128 {
+            for x in 0..128 {
+                let dx = x as f32 + 0.5 - origin.0;
+                let dy = y as f32 + 0.5 - origin.1;
+                let r = (dx * dx + dy * dy).sqrt();
+                let a = surf.pixel(x, y)[3];
+                if r < 23.0 {
+                    if a > 0.01 {
+                        inner_ink += 1;
+                    }
+                } else if r > 32.0 && a > 0.5 {
+                    outer_ink += 1;
+                }
+            }
+        }
+        assert_eq!(inner_ink, 0, "FocusLines must leave focus_inner_radius around origin completely clear");
+        assert!(outer_ink > 200, "FocusLines must draw radial rays outside inner radius, got {outer_ink}");
+    }
+
+    #[test]
+    fn block_b_progressive_crosshatch_stages_1_2_3_by_ink() {
+        let bounds = Rect::new(0, 0, 96, 32);
+        // 4 vertical strips: white (ink=0), light gray (ink~0.25 -> 1 layer),
+        // mid gray (ink~0.55 -> 2 layers), dark gray (ink~0.85 -> 3 layers incl. bisector +45°).
+        let mut src = Surface::new(photocraft_color::PixelFormat::RGBA8);
+        src.fill_rect(Rect::new(0, 0, 24, 32), &[0.98, 0.98, 0.98, 1.0]);
+        src.fill_rect(Rect::new(24, 0, 48, 32), &[0.75, 0.75, 0.75, 1.0]);
+        src.fill_rect(Rect::new(48, 0, 72, 32), &[0.45, 0.45, 0.45, 1.0]);
+        src.fill_rect(Rect::new(72, 0, 96, 32), &[0.15, 0.15, 0.15, 1.0]);
+        let spec = ScreentoneSpec {
+            pattern_type: PatternType::Crosshatch,
+            spacing_y: 8.0,
+            line_width: 2.0,
+            angle: 0.0,
+            cross_angle: 90.0,
+            density: 1.0,
+            smoothness: 0.0,
+            line_progressive: true,
+            mode: ScreentoneMode::Shading,
+            use_source_luminance: true,
+            white_threshold: 0.95,
+            black_threshold: 0.05,
+            preserve_lines: false,
+            foreground: [0.0, 0.0, 0.0, 1.0],
+            background: [1.0, 1.0, 1.0, 0.0],
+            ..Default::default()
+        };
+        let origin = (48.0, 16.0);
+        let mut out = src;
+        let _ = render_screentone_to_surface(&mut out, bounds, &spec, origin);
+        let count_ink = |x0: i32, x1: i32| -> usize {
+            let mut n = 0;
+            for y in 0..32 {
+                for x in x0..x1 {
+                    if out.pixel(x, y)[3] > 0.5 {
+                        n += 1;
+                    }
+                }
+            }
+            n
+        };
+        let c0 = count_ink(0, 24);
+        let c1 = count_ink(24, 48);
+        let c2 = count_ink(48, 72);
+        let c3 = count_ink(72, 96);
+        assert_eq!(c0, 0, "white band must have 0 ink");
+        assert!(c1 > 40, "stage 1 (ink~0.25) must render base lines, got {c1}");
+        assert!(c2 > c1 + 40, "stage 2 (ink~0.55) must add crosshatch lines: c1={c1}, c2={c2}");
+        assert!(c3 > c2 + 40, "stage 3 (ink~0.85) must add +45° bisector lines: c2={c2}, c3={c3}");
+    }
+
+    #[test]
+    fn block_b_wobble_dash_kezuri_tiled_zero_seam_at_256() {
+        let bounds = Rect::new(0, 0, 512, 512);
+        let spec = ScreentoneSpec {
+            pattern_type: PatternType::Lines,
+            spacing_x: 12.0,
+            spacing_y: 12.0,
+            line_width: 3.0,
+            angle: 23.0,
+            density: 0.9,
+            smoothness: 0.5,
+            jitter_pos: 35.0,
+            jitter_size: 30.0,
+            line_wobble: 0.65,
+            line_wave_freq: 2.4,
+            line_dash: 0.55,
+            scrape_strength: 0.5,
+            scrape_angle: 37.0,
+            mode: ScreentoneMode::Sheet,
+            use_source_luminance: false,
+            foreground: [0.0, 0.0, 0.0, 1.0],
+            background: [1.0, 1.0, 1.0, 0.0],
+            seed: 1337,
+            ..Default::default()
+        };
+        let origin = origin_doc(&spec, bounds);
+
+        let empty = Image { rect: Rect::EMPTY, ch: 4, data: Vec::new() };
+        let mono_spec = sheet_spec(&spec, bounds, origin);
+        let ctx = Ctx { bounds, mode: photocraft_color::ColorMode::Rgb, alpha: true };
+        let mono_f32 = screentone(&empty, bounds, &ctx, &mono_spec);
+        let mut mono_surf = Surface::new(photocraft_color::PixelFormat::RGBA8);
+        mono_surf.write_region(bounds, &mono_f32);
+        let mono_px = mono_surf.read_region(bounds);
+
+        let mut tiled_surf = Surface::new(photocraft_color::PixelFormat::RGBA8);
+        let _ = render_screentone_to_surface(&mut tiled_surf, bounds, &spec, origin);
+        let tiled_px = tiled_surf.read_region(bounds);
+
+        let mut seam_diff = 0usize;
+        let mut total_diff = 0usize;
+        for y in 0..512usize {
+            for x in 0..512usize {
+                let off = (y * 512 + x) * 4;
+                if (0..4).any(|c| mono_px[off + c].to_bits() != tiled_px[off + c].to_bits()) {
+                    total_diff += 1;
+                    if (254..=258).contains(&x) || (254..=258).contains(&y) {
+                        seam_diff += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(seam_diff, 0, "Block B wobble+dash+kezuri seam diff at x=256/y=256: {seam_diff}");
+        assert_eq!(total_diff, 0, "Block B tiled render must match monolithic bit-for-bit, got {total_diff}");
     }
 }

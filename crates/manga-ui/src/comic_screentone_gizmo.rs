@@ -592,6 +592,11 @@ pub fn draw(painter: &egui::Painter, view: &GizmoView<'_>, st: &ScreentoneUi, gi
     painter.line_segment([hs[0] - vec2(10.0, 0.0), hs[0] + vec2(10.0, 0.0)], stroke);
     painter.line_segment([hs[0] - vec2(0.0, 10.0), hs[0] + vec2(0.0, 10.0)], stroke);
     painter.circle_stroke(hs[0], 5.0, stroke);
+    if st.spec.pattern_type == photocraft_algo::PatternType::FocusLines && st.spec.focus_inner_radius > 0.5 {
+        let r_screen = st.spec.focus_inner_radius * view.xf.zoom;
+        let guide = egui::Stroke::new(1.0, tokens.accent.linear_multiply(0.6));
+        painter.circle_stroke(hs[0], r_screen, guide);
+    }
     painter.line_segment([hs[0], hs[1]], stroke);
     painter.line_segment([hs[0], hs[2]], stroke);
     for q in [hs[1], hs[2]] {
@@ -983,5 +988,56 @@ mod tests {
         g.bind_layer(BridgeDocId(42), cmyk_id);
         st.spec = ScreentoneSpec { backend: ScreentoneBackend::Gpu, ..spec() };
         assert!(!gizmo_uses_gpu(&view(&cmyk, &xf, cmyk_id), &st, &g));
+    }
+
+    #[test]
+    fn focus_lines_origin_drag_moves_focus_center_live_on_gpu() {
+        let mut doc = Document::new("focus_gizmo", Size::new(512, 512), ColorMode::Rgb, SampleType::U8);
+        let focus_spec = ScreentoneSpec {
+            pattern_type: photocraft_algo::PatternType::FocusLines,
+            focus_inner_radius: 64.0,
+            line_width: 3.0,
+            spacing_x: 12.0,
+            spacing_y: 12.0,
+            backend: ScreentoneBackend::Gpu,
+            mode: ScreentoneMode::Sheet,
+            use_source_luminance: false,
+            ..spec()
+        };
+        let tone = photocraft_doc::ScreentoneLayer::new(focus_spec.clone(), (256.0, 256.0), Surface::new(photocraft_color::PixelFormat::RGBA8));
+        let id = doc.insert_above(None, Layer::new("focus", LayerContent::Screentone(tone)));
+        let mut st = ScreentoneUi { spec: focus_spec, ..Default::default() };
+        let mut g = ScreentoneGizmoState::default();
+        g.bind_layer(BridgeDocId(42), id);
+        let xf = CanvasViewXform {
+            rect: Rect::from_min_size(pos2(0.0, 0.0), vec2(512.0, 512.0)),
+            zoom: 1.0,
+            center: [256.0, 256.0],
+            flip: false,
+            rotation: 0.0,
+            aspect: 1.0,
+        };
+        let v = view(&doc, &xf, id);
+        assert!(gizmo_uses_gpu(&v, &st, &g));
+
+        // Grab Origin at canvas center (256, 256) and drag by (+40, -30).
+        let mut out = Vec::new();
+        assert!(pointer(CanvasToolEvent::Down { x: 256.0, y: 256.0, pressure: 1.0 }, egui::Modifiers::NONE, &v, &mut st, &mut g, &mut out));
+        assert!(pointer(CanvasToolEvent::Move { x: 296.0, y: 226.0, pressure: 1.0 }, egui::Modifiers::NONE, &v, &mut st, &mut g, &mut out));
+        assert_eq!(out.len(), 1, "GPU FocusLines Origin drag must emit live restyle command");
+        assert_eq!(out[0].id, CMD_LAYER);
+        assert_eq!(out[0].params["patternType"], json!("focusLines"));
+        assert_eq!(out[0].params["focusInnerRadius"], json!(64.0));
+        assert!((st.spec.origin_x - 40.0).abs() < 1e-3);
+        assert!((st.spec.origin_y + 30.0).abs() < 1e-3);
+
+        // Verify gizmo draw renders FocusLines inner-radius guide cleanly.
+        let ctx = egui::Context::default();
+        let input = egui::RawInput { screen_rect: Some(xf.rect), ..Default::default() };
+        let mut egui_out = ctx.run_ui(input, |ui| {
+            let painter = ui.painter();
+            super::draw(painter, &v, &st, &g);
+        });
+        egui_out.textures_delta.clear();
     }
 }

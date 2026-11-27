@@ -9,7 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// 12 pattern types supported by the comic screentone engine.
+/// 13 pattern types supported by the comic screentone engine.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum PatternType {
@@ -26,6 +26,7 @@ pub enum PatternType {
     Stars,
     Hearts,
     Triangles,
+    FocusLines,
 }
 
 /// Placement of orbit satellites around the main dot.
@@ -182,8 +183,22 @@ pub struct ScreentoneSpec {
     pub posterize_steps: u8,
     /// Blade scraping (Kezuri) strength at the light edge of the tone (0.0..=1.0).
     pub scrape_strength: f32,
+    /// Blade scraping (Kezuri) scratch angle in degrees (-180.0..=180.0, default 0.0).
+    pub scrape_angle: f32,
     /// Satellite placement mode. `Cross` preserves every older document's layout.
     pub satellite_layout: SatelliteLayout,
+
+    // ---- Block B: Live Lines & FocusLines ----
+    /// Hand-drawn wave/wobble amplitude for `Lines`, `Crosshatch`, and `FocusLines` (0.0..=1.0).
+    pub line_wobble: f32,
+    /// Frequency multiplier for `line_wobble` (0.1..=10.0, default 1.0).
+    pub line_wave_freq: f32,
+    /// Manga dashed strokes with tapered tips (0.0..=1.0, default 0.0 = continuous lines).
+    pub line_dash: f32,
+    /// 3-stage progressive kakeami in `Crosshatch` (base -> cross -> bisector +45° by ink).
+    pub line_progressive: bool,
+    /// Clear inner radius in document pixels around `origin` for `PatternType::FocusLines`.
+    pub focus_inner_radius: f32,
 }
 
 impl Default for ScreentoneSpec {
@@ -250,7 +265,13 @@ impl Default for ScreentoneSpec {
             auto_dot_size: false,
             posterize_steps: 0,
             scrape_strength: 0.0,
+            scrape_angle: 0.0,
             satellite_layout: SatelliteLayout::Cross,
+            line_wobble: 0.0,
+            line_wave_freq: 1.0,
+            line_dash: 0.0,
+            line_progressive: false,
+            focus_inner_radius: 0.0,
         }
     }
 }

@@ -7,10 +7,10 @@
 
 | Параметр | Значение |
 |---|---|
-| Ветка / HEAD | `manga/0.23-sfx` (`89ab16ad1`) |
+| Ветка / HEAD | `manga/0.23-sfx` (`2abae8b1d`) |
 | База апстрима (merge-base) | `5bdbcc118` — Merge pull request #14595 from davidmann4/fix/14592-main-green |
-| Изменено файлов апстрима (`M`) | **202** (`+9358 / -1099` строк, **869** швов/hunk-ов) |
-| Добавлено новых файлов вне чемодана (`A`) | **73** |
+| Изменено файлов апстрима (`M`) | **205** (`+10052 / -1131` строк, **902** швов/hunk-ов) |
+| Добавлено новых файлов вне чемодана (`A`) | **74** |
 | Как обновить отчёт | `powershell -ExecutionPolicy Bypass -File scripts/seam_inspector.ps1` |
 
 ## Карта швов по крейтам (изменённые файлы апстрима)
@@ -20,15 +20,15 @@
 | `(root)` | 5 | 27 | `+180 / -455` |
 | `apps/photocraft-web` | 3 | 12 | `+85 / -3` |
 | `crates/algo` | 3 | 17 | `+46 / -5` |
-| `crates/compose` | 16 | 84 | `+546 / -84` |
+| `crates/compose` | 17 | 87 | `+567 / -86` |
 | `crates/doc` | 5 | 44 | `+1395 / -4` |
-| `crates/engine` | 41 | 129 | `+660 / -104` |
+| `crates/engine` | 43 | 156 | `+929 / -132` |
 | `crates/format` | 6 | 25 | `+192 / -27` |
-| `crates/gpu` | 16 | 54 | `+2262 / -30` |
+| `crates/gpu` | 16 | 56 | `+2660 / -32` |
 | `crates/io` | 12 | 34 | `+339 / -16` |
 | `crates/raster` | 1 | 1 | `+1 / -1` |
 | `crates/text` | 6 | 15 | `+418 / -6` |
-| `crates/ui-egui` | 83 | 408 | `+3047 / -313` |
+| `crates/ui-egui` | 83 | 409 | `+3053 / -313` |
 | `crates/vector` | 5 | 19 | `+187 / -51` |
 
 ## 1. Изменённые файлы апстрима — пофайлово и построчно (`M`)
@@ -134,7 +134,7 @@
 #### `crates/compose/src/cmyk_split.rs` (`+4 / -0`, 1 швов)
 - **`L259-L262`** (`+4/-0`) · `fn stand_in_layer(l: &mut Layer, planes: Planes, depth: SampleType, canvas: Rect` — `+ LayerContent::Screentone(s) => s.surface = stand_in_surface(&s.surface, planes),`
 
-#### `crates/compose/src/composite.rs` (`+82 / -9`, 10 швов)
+#### `crates/compose/src/composite.rs` (`+84 / -11`, 12 швов)
 - **`L5`** (`+1/-1`) · `use super::fx_cache::effect_maps;` — `- use super::{BlendMode, Buffer, Fill, Layer, LayerContent, Rect, Surface, advanced, blend, ...`
 - **`L130`** (`+1/-0`) · `pub fn occludes_below(layer: &Layer, mode: photocraft_color::ColorMode) -> bool` — `+ && !masks::has_second_mask(layer)`
 - **`L315-L317`** (`+3/-1`) · `pub(crate) fn pixel_surface(layer: &Layer) -> Option<&Surface> {` — `- if matches!(layer.content, LayerContent::Group(_) | LayerContent::Fill(_) | LayerContent::...`
@@ -143,12 +143,14 @@
 - **`L520-L522`** (`+3/-1`) · `pub(crate) fn composite_layer_plain(layer: &Layer, clipped: &[Layer], backdrop:` — `- let Some(mut content) = render_content(layer, rect, cx) else { return };`
 - **`L527-L538`** (`+12/-0`) · `pub(crate) fn composite_layer_plain(layer: &Layer, clipped: &[Layer], backdrop:` — `+ fn render_layer_or_screentone(layer: &Layer, rect: Rect, cx: &Ctx, backdrop: &Buffer) -> O...`
 - **`L548-L550`** (`+3/-1`) · `fn composite_layer_effects(layer: &Layer, clipped: &[Layer], backdrop: &mut Buff` — `- let Some(content) = render_content(layer, rect, cx) else { return };`
+- **`L675`** (`+1/-1`) · `fn composite_atop_any(layer: &Layer, base: &mut Buffer, cx: &Ctx) {` — `- let opacity = layer.opacity * layer.fill_opacity;`
 - **`L686-L688`** (`+3/-2`) · `fn composite_atop_any(layer: &Layer, base: &mut Buffer, cx: &Ctx) {` — `- let x = rect.x0 + (i as i32 % rect.width() as i32);`
+- **`L712`** (`+1/-1`) · `fn blend_layer_into(backdrop: &mut Buffer, src: &Buffer, layer: &Layer, cx: &Ctx` — `- let (mode, opacity, fill) = (layer.blend, layer.opacity, layer.fill_opacity);`
 - **`L783-L836`** (`+54/-0`) · `fn blend_span_g(dst: &mut [[f32; 4]], src: &[[f32; 4]], x0: i32, y: i32, mode: B` — `+ #[cfg(test)]`
 
-#### `crates/compose/src/content.rs` (`+16 / -4`, 2 швов)
-- **`L52-L53`** (`+2/-0`) · `pub(crate) fn render_content(layer: &Layer, rect: Rect, cx: &Ctx) -> Option<Buff` — `+ LayerContent::Screentone(st) if st.surface.tile_count() == 0 => crate::screentone::render_...`
-- **`L178-L191`** (`+14/-4`) · `pub(crate) fn empty_in(layer: &Layer, rect: Rect) -> bool {` — `- LayerContent::Raster(_) | LayerContent::Text(_) | LayerContent::Shape(_) | LayerContent::S...`
+#### `crates/compose/src/content.rs` (`+18 / -4`, 2 швов)
+- **`L52-L55`** (`+4/-0`) · `pub(crate) fn render_content(layer: &Layer, rect: Rect, cx: &Ctx) -> Option<Buff` — `+ LayerContent::Screentone(st) if crate::screentone::needs_live_eval(layer) => {`
+- **`L180-L193`** (`+14/-4`) · `pub(crate) fn empty_in(layer: &Layer, rect: Rect) -> bool {` — `- LayerContent::Raster(_) | LayerContent::Text(_) | LayerContent::Shape(_) | LayerContent::S...`
 
 #### `crates/compose/src/extents.rs` (`+11 / -4`, 5 швов)
 - **`L35-L39`** (`+5/-0`) · `pub fn layer_bounds(layer: &Layer, canvas: Rect) -> Rect {` — `+ LayerContent::Screentone(st) => {`
@@ -221,6 +223,9 @@
 #### `crates/compose/src/native_lab.rs` (`+2 / -0`, 2 швов)
 - **`L34`** (`+1/-0`) · `fn simple(layer: &Layer) -> bool {` — `+ && !crate::masks::has_second_mask(layer)`
 - **`L70`** (`+1/-0`) · `fn collect<'a>(layers: &'a [Layer], depth: SampleType, adjustments: bool, items:` — `+ && !crate::masks::has_second_mask(layer)`
+
+#### `crates/compose/src/pattern.rs` (`+17 / -0`, 1 швов)
+- **`L328-L344`** (`+17/-0`) · `impl Tile {` — `+ }`
 
 #### `crates/compose/src/proxy.rs` (`+16 / -0`, 2 швов)
 - **`L68-L70`** (`+3/-0`) · `fn shrink_layer(l: &mut Layer, k: u32) {` — `+ if let Some(m) = &mut l.second_mask {`
@@ -307,15 +312,41 @@
 - **`L459-L460`** (`+2/-0`) · `fn remap_pixels(doc: &mut Document, map: &dyn Fn(i32, i32) -> (i32, i32)) {` — `+ LayerContent::Screentone(s) => re(&mut s.surface),`
 - **`L478-L479`** (`+2/-0`) · `pub(crate) fn turn_canvas(doc: &mut Document, turn: Turn) {` — `+ crate::manga_cmds::comic_screentone::ensure_doc_screentones_baked(doc);`
 
-#### `crates/engine/src/cmd.rs` (`+4 / -1`, 4 швов)
+#### `crates/engine/src/cmd.rs` (`+8 / -2`, 5 швов)
 - **`L126`** (`+1/-0`) · `pub mod magnetic_cmds;` — `+ pub mod manga_cmds;`
-- **`L192`** (`+1/-1`) · `pub use adjust_params::{adjustment_from_params, adjustment_kind};` — `- pub(crate) use enabled::{always, check_all_unlocked, check_pixels_unlocked, has_paintable,...`
-- **`L883`** (`+1/-0`) · `fn build() -> Vec<CommandSpec> {` — `+ // 'flatten_to_surface' evaluates unbaked Sheet & Shading screentones live in bands.`
-- **`L1466`** (`+1/-0`) · `fn build() -> Vec<CommandSpec> {` — `+ v.extend(crate::cmd::manga_cmds::specs());`
+- **`L192-L195`** (`+4/-1`) · `pub use adjust_params::{adjustment_from_params, adjustment_kind};` — `- pub(crate) use enabled::{always, check_all_unlocked, check_pixels_unlocked, has_paintable,...`
+- **`L886`** (`+1/-0`) · `fn build() -> Vec<CommandSpec> {` — `+ // 'flatten_to_surface' evaluates unbaked Sheet & Shading screentones live in bands.`
+- **`L1057`** (`+1/-1`) · `fn build() -> Vec<CommandSpec> {` — `- has_paintable,`
+- **`L1469`** (`+1/-0`) · `fn build() -> Vec<CommandSpec> {` — `+ v.extend(crate::cmd::manga_cmds::specs());`
 
 #### `crates/engine/src/cmd/adjust_params.rs` (`+2 / -1`, 2 швов)
 - **`L9`** (`+1/-1`) · `use super::{Adjustment, ColorMode, EngineError, Layer, LayerContent, Result, Ses` — `- pub(super) fn new_adjustment(s: &mut Session, adj: Adjustment, p: &Value, cmd: &str) -> Re...`
 - **`L145`** (`+1/-0`) · `pub fn adjustment_kind(a: &Adjustment) -> &'static str {` — `+ Adjustment::Grain { .. } => "grain",`
+
+#### `crates/engine/src/cmd/brush_cmds.rs` (`+85 / -24`, 23 швов)
+- **`L20`** (`+1/-1`) · `use serde_json::{Value, json};` — `- use crate::commands::{CommandSpec, has_paintable, is_mask_target, paint_surface};`
+- **`L253-L294`** (`+42/-4`) · `fn damage_json(s: &mut Session, dmg: Rect) -> Value {` — `- /// The target layer ('None' for a channel), brush and zoom of a stroke. On a mask or chan...`
+- **`L296-L316`** (`+21/-3`) · `fn stroke_target(s: &Session, p: &Value, brush: BrushSettings) -> Result<(Option` — `- let brush =`
+- **`L341`** (`+1/-1`) · `fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS` — `- let (id, brush, zoom) = stroke_target(s, p, brush)?;`
+- **`L349`** (`+1/-0`) · `fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS` — `+ ensure_auto_mask(doc, id, auto_mask)?;`
+- **`L351`** (`+1/-1`) · `fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS` — `- let (surf, _) = crate::channel_cmds::target_surface(doc, id, p)?;`
+- **`L356`** (`+1/-1`) · `fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS` — `- let table = crate::mode_cmds::paint_color_table(doc, p);`
+- **`L358`** (`+1/-1`) · `fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS` — `- let (surf, lock) = crate::channel_cmds::target_surface(doc, id, p)?;`
+- **`L543`** (`+1/-1`) · `fn fill_region(s: &mut Session, p: &Value, label: &str, brush: BrushSettings, pt` — `- let (id, brush, _zoom) = stroke_target(s, p, brush)?;`
+- **`L554`** (`+1/-0`) · `fn fill_region(s: &mut Session, p: &Value, label: &str, brush: BrushSettings, pt` — `+ ensure_auto_mask(doc, id, auto_mask)?;`
+- **`L557`** (`+1/-1`) · `fn fill_region(s: &mut Session, p: &Value, label: &str, brush: BrushSettings, pt` — `- let (surf, lock) = crate::channel_cmds::target_surface(doc, id, p)?;`
+- **`L631`** (`+1/-0`) · `pub struct LiveStroke {` — `+ effective_params: Value,`
+- **`L692`** (`+1/-1`) · `impl LiveStroke {` — `- has_paintable(s).map_err(EngineError::Other)?;`
+- **`L701`** (`+1/-1`) · `impl LiveStroke {` — `- let (layer, mut brush, zoom) = stroke_target(s, p, brush)?;`
+- **`L705`** (`+1/-0`) · `impl LiveStroke {` — `+ ensure_auto_mask(&mut doc, layer, auto_mask)?;`
+- **`L707`** (`+1/-1`) · `impl LiveStroke {` — `- let table = crate::mode_cmds::paint_color_table(&doc, p);`
+- **`L709`** (`+1/-1`) · `impl LiveStroke {` — `- let (surf, lock) = crate::channel_cmds::target_surface(&mut doc, layer, p)?;`
+- **`L733`** (`+1/-1`) · `impl LiveStroke {` — `- colors: crate::color_channels::target(s, p)?,`
+- **`L738`** (`+1/-0`) · `impl LiveStroke {` — `+ effective_params: eff_p,`
+- **`L751`** (`+1/-1`) · `impl LiveStroke {` — `- let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc...`
+- **`L799`** (`+1/-1`) · `impl LiveStroke {` — `- let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc...`
+- **`L835-L836`** (`+2/-2`) · `impl LiveStroke {` — `- if let Some(table) = crate::mode_cmds::paint_color_table(&self.doc, &self.params) {`
+- **`L1454`** (`+1/-1`) · `pub fn specs() -> Vec<CommandSpec> {` — `- has_paintable,`
 
 #### `crates/engine/src/cmd/channel_cmds/refs.rs` (`+9 / -0`, 3 швов)
 - **`L19-L20`** (`+2/-0`) · `pub enum ChanRef {` — `+ /// The layer's second pixel mask ('Layer::second_mask').`
@@ -335,11 +366,12 @@
 #### `crates/engine/src/cmd/edit_cmds.rs` (`+1 / -0`, 1 швов)
 - **`L768`** (`+1/-0`) · `fn merge_visible(s: &mut Session) -> Result<Value> {` — `+ // 'composite_layers' evaluates unbaked Sheet & Shading screentones live band-by-band.`
 
-#### `crates/engine/src/cmd/enabled.rs` (`+10 / -5`, 4 швов)
-- **`L39`** (`+1/-1`) · `pub(crate) fn has_paintable(s: &Session) -> std::result::Result<(), String> {` — `- if matches!(l.content, LayerContent::Raster(_)) || l.mask.is_some() {`
-- **`L59`** (`+1/-1`) · `pub(crate) fn paint_surface<'a>(doc: &'a mut Document, id: LayerId, p: &Value) -` — `- l.mask.as_mut().map(|m| &mut m.surface).ok_or_else(|| EngineError::Other("layer has no mas...`
-- **`L84-L85`** (`+2/-2`) · `pub(crate) fn check_pixels_unlocked(doc: &Document, id: LayerId) -> Result<()> {` — `- /// The params target a grayscale mask of the layer: its layer mask ('"mask"') or, on a smart`
-- **`L87-L92`** (`+6/-1`) · `pub(crate) fn is_mask_target(p: &Value) -> bool {` — `- matches!(p.get("target").and_then(Value::as_str), Some("mask" | "filterMask"))`
+#### `crates/engine/src/cmd/enabled.rs` (`+40 / -5`, 5 швов)
+- **`L33-L62`** (`+30/-0`) · `pub(super) fn has_pixel_or_channel(s: &Session) -> std::result::Result<(), Strin` — `+ /// Whether a brush/eraser stroke targeting '"pixels"' on 'layer' automatically redirects ...`
+- **`L69`** (`+1/-1`) · `pub(crate) fn has_paintable(s: &Session) -> std::result::Result<(), String> {` — `- if matches!(l.content, LayerContent::Raster(_)) || l.mask.is_some() {`
+- **`L89`** (`+1/-1`) · `pub(crate) fn paint_surface<'a>(doc: &'a mut Document, id: LayerId, p: &Value) -` — `- l.mask.as_mut().map(|m| &mut m.surface).ok_or_else(|| EngineError::Other("layer has no mas...`
+- **`L114-L115`** (`+2/-2`) · `pub(crate) fn check_pixels_unlocked(doc: &Document, id: LayerId) -> Result<()> {` — `- /// The params target a grayscale mask of the layer: its layer mask ('"mask"') or, on a smart`
+- **`L117-L122`** (`+6/-1`) · `pub(crate) fn is_mask_target(p: &Value) -> bool {` — `- matches!(p.get("target").and_then(Value::as_str), Some("mask" | "filterMask"))`
 
 #### `crates/engine/src/cmd/extra_cmds.rs` (`+36 / -0`, 2 швов)
 - **`L747-L748`** (`+2/-0`) · `pub(crate) fn kind_of(s: &Session, id: LayerId) -> Option<&'static str> {` — `+ LayerContent::Screentone(_) => "screentone",`
@@ -503,6 +535,10 @@
 - **`L178`** (`+1/-0`) · `pub const TOOLS: &[(&str, &str, Option<&str>)] = &[` — `+ ("tools.select.vectorCurve", "Vector Curve Tool", None),`
 - **`L188-L190`** (`+3/-0`) · `pub const TOOLS: &[(&str, &str, Option<&str>)] = &[` — `+ ("tools.select.balloon", "Balloon Tool", Some("U")),`
 
+#### `crates/engine/src/tests.rs` (`+150 / -3`, 2 швов)
+- **`L1496-L1498`** (`+3/-3`) · `fn painting_can_target_the_layer_mask() {` — `- // Eraser on a mask paints the background colour (white).`
+- **`L1504-L1650`** (`+147/-0`) · `fn painting_can_target_the_layer_mask() {` — `+ #[test]`
+
 ### `crates/format`
 
 #### `crates/format/Cargo.toml` (`+1 / -0`, 1 швов)
@@ -547,13 +583,13 @@
 #### `crates/gpu/src/batch.rs` (`+3 / -1`, 1 швов)
 - **`L128-L130`** (`+3/-1`) · `pub(crate) fn batch_runs(plan: &Plan<'_>) -> Vec<usize> {` — `- let extra = |p: &plan::Pass<'_>| lead(p) && p.mask.is_none() && p.flags & plan::F_TEXT_GAM...`
 
-#### `crates/gpu/src/compose.wgsl` (`+1380 / -1`, 6 швов)
+#### `crates/gpu/src/compose.wgsl` (`+1580 / -1`, 6 швов)
 - **`L65`** (`+1/-0`) · `const F_LAYER_SHAPE: u32 = 1048576u; // fx merge: B is the shape; layer = its co` — `+ const F_ALPHA_ONLY: u32 = 4194304u;  // layer_texel: layer_tex is R8Unorm alpha, tinted by...`
 - **`L527-L565`** (`+39/-0`) · `fn lut3(n: i32, r: i32, g: i32, b: i32) -> vec3<f32> {` — `+ // Grain: compose::adjust::{grain_hash, grain_lattice, grain_value, grain_noise}, integer-...`
 - **`L826-L832`** (`+7/-0`) · `fn adjust(c: vec3<f32>) -> vec3<f32> {` — `+ case 18: {                                                             // Grain (compose::...`
 - **`L895-L899`** (`+5/-1`) · `fn layer_texel(d: vec2<i32>) -> vec4<f32> {` — `- return textureLoad(layer_tex, q, 0);`
 - **`L902-L904`** (`+3/-0`) · `fn layer_texel(d: vec2<i32>) -> vec4<f32> {` — `+ if ((op.flags & F_ALPHA_ONLY) != 0u) {`
-- **`L1634-L2958`** (`+1325/-0`) · `fn fs_mstroke(in: VOut) -> @location(0) vec4<f32> {` — `+ // ---- comic_screentone procedural screentone -------------------------------------------...`
+- **`L1634-L3158`** (`+1525/-0`) · `fn fs_mstroke(in: VOut) -> @location(0) vec4<f32> {` — `+ // ---- comic_screentone procedural screentone -------------------------------------------...`
 
 #### `crates/gpu/src/encode.rs` (`+2 / -2`, 2 швов)
 - **`L7`** (`+1/-1`) · `use super::textures::{ChunkOut, FxKey, ResKey, Resident, Stats};` — `- use super::{Compositor, Document, LayerId, Plan, Rect, Surface, Unsupported, plan, timing};`
@@ -578,21 +614,23 @@
 - **`L62-L66`** (`+5/-0`) · `pub fn plan(doc: &Document) -> Result<Plan<'_>, Unsupported> {` — `+ plan_with_options(doc, true)`
 - **`L70`** (`+1/-1`) · `pub fn plan(doc: &Document) -> Result<Plan<'_>, Unsupported> {` — `- let mut p = Planner::new(DocCtx::of(doc));`
 
-#### `crates/gpu/src/plan/lower.rs` (`+139 / -1`, 3 швов)
+#### `crates/gpu/src/plan/lower.rs` (`+169 / -1`, 3 швов)
 - **`L330-L339`** (`+10/-1`) · `pub fn adjustment_program(adj: &Adjustment, transfer: Transfer, depth: photocraf` — `- // Identity on the CPU too (not evaluated there).`
-- **`L412-L539`** (`+128/-0`) · `pub fn mode_index(m: BlendMode) -> i32 {` — `+ /// Index of ['PatternType'] (0..=12) for 'Kernel::Screentone'.`
-- **`L543`** (`+1/-0`) · `pub(super) fn single_content_pass(layer: &Layer) -> bool {` — `+ LayerContent::Screentone(tone) => tone.spec.backend == photocraft_doc::ScreentoneBackend::...`
+- **`L412-L565`** (`+154/-0`) · `pub fn mode_index(m: BlendMode) -> i32 {` — `+ /// Index of ['PatternType'] (0..=14) for 'Kernel::Screentone'.`
+- **`L569-L573`** (`+5/-0`) · `pub(super) fn single_content_pass(layer: &Layer) -> bool {` — `+ LayerContent::Screentone(tone) => {`
 
-#### `crates/gpu/src/plan/planner.rs` (`+60 / -4`, 9 швов)
+#### `crates/gpu/src/plan/planner.rs` (`+77 / -6`, 11 швов)
 - **`L2-L3`** (`+2/-1`) · `use super::lower::{` — `- Paint, adjustment_on_gpu, adjustment_program, check_gradient_stops, gradient_rows, placeme...`
 - **`L7`** (`+1/-0`) · `use super::{Adjustment, BlendMode, Effect, Fill, FxPaint, Glow, Layer, LayerCont` — `+ use photocraft_doc::{ScreentoneLayer, ScreentoneMode};`
 - **`L127-L129`** (`+3/-0`) · `pub const F_LAYER_SHAPE: u32 = 1_048_576;` — `+ /// 'layer_texel': 'layer_tex' holds single-channel 'R8Unorm' alpha tinted by straight-alp...`
 - **`L447`** (`+1/-1`) · `impl<'a> Planner<'a> {` — `- if opacity < 1.0 || layer.mask.is_some() || layer.vector_mask.is_some() {`
 - **`L566-L578`** (`+13/-0`) · `impl<'a> Planner<'a> {` — `+ if let LayerContent::Screentone(tone) = &layer.content`
-- **`L658`** (`+1/-1`) · `impl<'a> Planner<'a> {` — `- if layer.mask.is_some() || layer.vector_mask.is_some() {`
-- **`L686`** (`+1/-1`) · `impl<'a> Planner<'a> {` — `- if layer.mask.is_some() || layer.vector_mask.is_some() {`
-- **`L710-L733`** (`+24/-0`) · `impl<'a> Planner<'a> {` — `+ // Screentone GPU shader lands in S5; fall back to CPU compositing in S2.`
-- **`L751-L764`** (`+14/-0`) · `impl<'a> Planner<'a> {` — `+ /// Whether 'tone' should be evaluated procedurally via 'Kernel::Screentone' on the GPU.`
+- **`L596-L597`** (`+2/-1`) · `impl<'a> Planner<'a> {` — `- p.opacity = layer.opacity;`
+- **`L659`** (`+1/-1`) · `impl<'a> Planner<'a> {` — `- if layer.mask.is_some() || layer.vector_mask.is_some() {`
+- **`L687`** (`+1/-1`) · `impl<'a> Planner<'a> {` — `- if layer.mask.is_some() || layer.vector_mask.is_some() {`
+- **`L711-L747`** (`+37/-0`) · `impl<'a> Planner<'a> {` — `+ // Screentone GPU shader lands in S5; fall back to CPU compositing in S2.`
+- **`L765-L778`** (`+14/-0`) · `impl<'a> Planner<'a> {` — `+ /// Whether 'tone' should be evaluated procedurally via 'Kernel::Screentone' on the GPU.`
+- **`L852-L853`** (`+2/-1`) · `impl<'a> Planner<'a> {` — `- p.opacity = opacity;`
 
 #### `crates/gpu/src/plan/tests.rs` (`+75 / -0`, 1 швов)
 - **`L550-L624`** (`+75/-0`) · `fn planning_reads_cached_rows_instead_of_rebuilding_them() {` — `+ #[test]`
@@ -622,10 +660,10 @@
 #### `crates/gpu/tests/it/main.rs` (`+1 / -0`, 1 швов)
 - **`L40`** (`+1/-0`) · `mod pipelines;` — `+ mod sfx;`
 
-#### `crates/gpu/tests/it/parity.rs` (`+522 / -0`, 3 швов)
+#### `crates/gpu/tests/it/parity.rs` (`+673 / -0`, 3 швов)
 - **`L753-L755`** (`+3/-0`) · `fn adjustments() -> Vec<Adjustment> {` — `+ Adjustment::Grain { amount: 60.0, size: 34.0, roughness: 50.0 },`
 - **`L833-L835`** (`+3/-0`) · `fn adjustment_layers() {` — `+ // Grain: the same position hash as the CPU's, float values over white kept in 32-bit.`
-- **`L3477-L3992`** (`+516/-0`) · `fn sibling_compositors_have_independent_residency_and_configuration() {` — `+ #[test]`
+- **`L3477-L4143`** (`+667/-0`) · `fn sibling_compositors_have_independent_residency_and_configuration() {` — `+ #[test]`
 
 #### `crates/gpu/tests/it/pipelines.rs` (`+1 / -1`, 1 швов)
 - **`L49`** (`+1/-1`) · `fn every_compositor_pipeline_builds() {` — `- if let Err(e) = photocraft_gpu::Compositor::try_new_with_format(&device, format) {`
@@ -989,8 +1027,9 @@
 #### `crates/ui-egui/src/dialogs/mask_trash_prompt.rs` (`+5 / -1`, 1 швов)
 - **`L33-L37`** (`+5/-1`) · `pub fn drop_action(layer: u64, kind: MaskKind) -> (String, Value) {` — `- let command = if kind == MaskKind::Vector { VECTOR_MASK_DELETE } else { LAYER_MASK_DELETE };`
 
-#### `crates/ui-egui/src/dialogs/rasterize_prompt.rs` (`+1 / -1`, 1 швов)
+#### `crates/ui-egui/src/dialogs/rasterize_prompt.rs` (`+7 / -1`, 2 швов)
 - **`L75`** (`+1/-1`) · `pub fn paints_pixels(app: &PhotocraftApp, tool: Tool) -> bool {` — `- || matches!(tool, Tool::PaintBucket | Tool::MagicEraser | Tool::RedEye)`
+- **`L116-L121`** (`+6/-0`) · `pub fn intercept(app: &mut PhotocraftApp, tool: Tool, x: f64, y: f64, pressure:` — `+ // Non-destructive CSP Eraser on shapes/balloons auto-creates and erases into a GRAY8 mask`
 
 #### `crates/ui-egui/src/dock.rs` (`+13 / -2`, 11 швов)
 - **`L36-L37`** (`+2/-0`) · `pub enum Group {` — `+ /// Balloons | Screentones | Linework | TypeR Manga | Pages | Timelapse | SFX.`
@@ -1341,11 +1380,11 @@
 | `apps/photocraft-web/src/autosave_bridge.rs` | `+499` |
 | `apps/photocraft-web/src/web_autosave.rs` | `+456` |
 | `assets/icons/fill-tool.svg` | `+16` |
-| `crates/algo/src/comic_screentone.rs` | `+2863` |
+| `crates/algo/src/comic_screentone.rs` | `+3182` |
 | `crates/algo/src/fill.rs` | `+859` |
 | `crates/algo/src/fill/tests.rs` | `+533` |
 | `crates/compose/src/kakeami.rs` | `+483` |
-| `crates/compose/src/screentone.rs` | `+482` |
+| `crates/compose/src/screentone.rs` | `+637` |
 | `crates/doc/src/sfx.rs` | `+2634` |
 | `crates/doc/src/vector_brush.rs` | `+305` |
 | `crates/engine/src/cmd/manga_cmds.rs` | `+53` |
@@ -1353,7 +1392,7 @@
 | `crates/engine/src/cmd/manga_cmds/balloon.rs` | `+1449` |
 | `crates/engine/src/cmd/manga_cmds/balloon/tests.rs` | `+684` |
 | `crates/engine/src/cmd/manga_cmds/brush_preset_items.rs` | `+590` |
-| `crates/engine/src/cmd/manga_cmds/comic_screentone.rs` | `+1781` |
+| `crates/engine/src/cmd/manga_cmds/comic_screentone.rs` | `+1822` |
 | `crates/engine/src/cmd/manga_cmds/fill_tool.rs` | `+651` |
 | `crates/engine/src/cmd/manga_cmds/fill_tool/tests.rs` | `+419` |
 | `crates/engine/src/cmd/manga_cmds/gigapixel.rs` | `+840` |
@@ -1376,8 +1415,9 @@
 | `crates/engine/src/cmd/manga_cmds/vector_brush.rs` | `+604` |
 | `crates/engine/src/cmd/manga_cmds/vector_curve.rs` | `+655` |
 | `crates/format/tests/screentone_block_b_roundtrip.rs` | `+60` |
+| `crates/format/tests/screentone_block_c_roundtrip.rs` | `+94` |
 | `crates/format/tests/sfx_v3_kakeami_roundtrip.rs` | `+123` |
-| `crates/gpu/src/sfx.rs` | `+3432` |
+| `crates/gpu/src/sfx.rs` | `+3433` |
 | `crates/gpu/src/sfx.wgsl` | `+1050` |
 | `crates/gpu/tests/it/sfx.rs` | `+1293` |
 | `crates/io/src/tpl.rs` | `+262` |
@@ -1401,7 +1441,7 @@
 | `crates/ui-egui/src/canvas/ruler_autoscroll_tests.rs` | `+59` |
 | `crates/ui-egui/src/canvas/sfx_gpu_preview.rs` | `+945` |
 | `crates/ui-egui/src/dialogs/gigapixel_ui.rs` | `+946` |
-| `crates/ui-egui/src/manga_seam.rs` | `+4551` |
+| `crates/ui-egui/src/manga_seam.rs` | `+4565` |
 | `crates/ui-egui/src/panels/timelapse_ui.rs` | `+1512` |
 | `crates/ui-egui/src/tools/fill_tool_ui.rs` | `+619` |
 | `crates/ui-egui/src/tools/fill_tool_ui/tests.rs` | `+286` |
